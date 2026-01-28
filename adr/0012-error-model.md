@@ -23,7 +23,7 @@ All gateway-generated errors use the **RFC 9457** format (`application/problem+j
 
 ```json
 {
-  "type": "https://docs.barbacane.dev/errors/validation-failed",
+  "type": "urn:barbacane:error:validation-failed",
   "title": "Validation Failed",
   "status": 400,
   "detail": "Request body does not conform to the expected schema.",
@@ -55,7 +55,7 @@ Errors expose **minimal detail** — enough for the consumer to understand what 
 
 ```json
 {
-  "type": "https://docs.barbacane.dev/errors/validation-failed",
+  "type": "urn:barbacane:error:validation-failed",
   "title": "Validation Failed",
   "status": 400,
   "detail": "Request body does not conform to the expected schema.",
@@ -71,7 +71,7 @@ Errors include **full diagnostic detail** via an `extensions` block:
 
 ```json
 {
-  "type": "https://docs.barbacane.dev/errors/validation-failed",
+  "type": "urn:barbacane:error:validation-failed",
   "title": "Validation Failed",
   "status": 400,
   "detail": "Request body does not conform to the expected schema.",
