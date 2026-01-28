@@ -1,0 +1,23 @@
+# Rust
+target/
+**/*.rs.bk
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+
+# Coverage
+coverage/
+*.profraw
+*.profdata
+
+# OS
+.DS_Store
+Thumbs.db
