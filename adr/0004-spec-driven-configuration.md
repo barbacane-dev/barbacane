@@ -73,8 +73,8 @@ Where OpenAPI/AsyncAPI lack expressiveness, we use `x-barbacane-*` vendor extens
 
 ```yaml
 x-barbacane-ratelimit:
-  rate: 100
-  per: minute
+  quota: 100
+  window: 60
   key: header:x-api-key
 
 x-barbacane-cache:

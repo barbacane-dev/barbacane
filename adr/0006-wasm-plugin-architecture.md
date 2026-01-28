@@ -68,8 +68,8 @@ x-barbacane-middlewares:
       audiences: [api.example.com]
   - name: rate-limit
     config:
-      rate: 100
-      per: minute
+      quota: 100
+      window: 60
       key: header:x-api-key
   - name: request-logger
 ```
@@ -85,8 +85,8 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            rate: 1000
-            per: minute
+            quota: 1000
+            window: 60
       x-barbacane-dispatch:
         name: http-upstream
         config:

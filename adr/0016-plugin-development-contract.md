@@ -47,22 +47,33 @@ Example `config-schema.json` for the `rate-limit` plugin:
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["rate", "per"],
+  "required": ["quota", "window"],
   "properties": {
-    "rate": {
+    "quota": {
       "type": "integer",
       "minimum": 1,
-      "description": "Maximum number of requests allowed"
+      "description": "Maximum quota units allowed in the window"
     },
-    "per": {
+    "window": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Time window in seconds"
+    },
+    "quota_unit": {
       "type": "string",
-      "enum": ["second", "minute", "hour"],
-      "description": "Time window for the rate"
+      "enum": ["requests", "content-bytes", "concurrent-requests"],
+      "default": "requests",
+      "description": "Unit of measurement for the quota"
     },
     "key": {
       "type": "string",
-      "description": "Request attribute to use as rate limit key (e.g. header:x-api-key, context:auth.sub)",
+      "description": "Partition key for rate limiting (e.g. header:x-api-key, context:auth.sub)",
       "default": "client_ip"
+    },
+    "policy_name": {
+      "type": "string",
+      "default": "default",
+      "description": "Policy identifier, appears in RateLimit-Policy response header"
     }
   },
   "additionalProperties": false
@@ -164,8 +175,8 @@ x-barbacane-middlewares:
       jwks_uri: https://auth.example.com/.well-known/jwks.json
   - name: rate-limit
     config:
-      rate: 100
-      per: minute
+      quota: 100
+      window: 60
       key: context:auth.sub
 
 paths:
@@ -183,8 +194,8 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            rate: 1000
-            per: minute
+            quota: 1000
+            window: 60
       x-barbacane-dispatch:
         name: mock
         config:
@@ -208,10 +219,10 @@ If anything fails, compilation stops. The spec author gets a clear error:
 error[E0016]: invalid config for plugin "rate-limit" at path /public/health GET
   --> user-api.yaml:42:9
    |
-   | rate: "fast"
-   |       ^^^^^^ expected integer, got string
+   | quota: "fast"
+   |         ^^^^^^ expected integer, got string
    |
-   = schema: rate-limit/config-schema.json#/properties/rate
+   = schema: rate-limit/config-schema.json#/properties/quota
 ```
 
 #### Step 3 — Data plane loads
@@ -239,13 +250,19 @@ use barbacane_plugin_sdk::prelude::*;
 
 #[derive(Deserialize)]
 struct RateLimitConfig {
-    rate: u32,
-    per: String,
+    quota: u32,
+    window: u32,
+    #[serde(default = "default_quota_unit")]
+    quota_unit: String,
     #[serde(default = "default_key")]
     key: String,
+    #[serde(default = "default_policy_name")]
+    policy_name: String,
 }
 
-fn default_key() -> String { "client_ip".to_string() }
+fn default_quota_unit() -> String { "requests".into() }
+fn default_key() -> String { "client_ip".into() }
+fn default_policy_name() -> String { "default".into() }
 
 #[barbacane_middleware]
 fn on_request(req: &Request, config: &RateLimitConfig) -> Action<Request> {
@@ -255,8 +272,13 @@ fn on_request(req: &Request, config: &RateLimitConfig) -> Action<Request> {
         _ => req.client_ip(),
     };
 
-    if is_rate_limited(&key_value, config.rate, &config.per) {
-        Action::ShortCircuit(Response::new(429).body(r#"{"error": "rate limited"}"#))
+    let remaining = get_remaining(&key_value, config.quota, config.window);
+
+    if remaining == 0 {
+        Action::ShortCircuit(Response::new(429)
+            .header("content-type", "application/problem+json")
+            .header("retry-after", &get_reset_seconds(&key_value, config.window).to_string())
+            .body(r#"{"type":"urn:barbacane:error:rate-limited","title":"Too Many Requests","status":429}"#))
     } else {
         Action::Continue(req.clone())
     }
