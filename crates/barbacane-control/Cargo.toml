@@ -1,0 +1,14 @@
+[package]
+name = "barbacane-control"
+description = "Barbacane control plane — spec compilation and management CLI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+barbacane-compiler = { workspace = true }
+barbacane-spec-parser = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

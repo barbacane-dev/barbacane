@@ -1,0 +1,14 @@
+[package]
+name = "barbacane-test"
+description = "Test harnesses for Barbacane gateway and plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+barbacane-compiler = { workspace = true }
+barbacane-spec-parser = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

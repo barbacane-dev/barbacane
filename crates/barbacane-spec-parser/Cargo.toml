@@ -1,0 +1,12 @@
+[package]
+name = "barbacane-spec-parser"
+description = "OpenAPI 3.x and AsyncAPI 3.x spec parser with x-barbacane-* extension extraction"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }

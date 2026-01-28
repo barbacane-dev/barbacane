@@ -1,0 +1,54 @@
+[workspace]
+members = [
+    "crates/barbacane",
+    "crates/barbacane-control",
+    "crates/barbacane-spec-parser",
+    "crates/barbacane-compiler",
+    "crates/barbacane-router",
+    "crates/barbacane-plugin-sdk",
+    "crates/barbacane-test",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server-graceful"] }
+http-body-util = "0.1"
+http = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+
+# Crypto
+sha2 = "0.10"
+
+# Archive
+flate2 = "1"
+tar = "0.4"
+
+# HTTP client (for tests)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Workspace crates
+barbacane-spec-parser = { path = "crates/barbacane-spec-parser" }
+barbacane-compiler = { path = "crates/barbacane-compiler" }
+barbacane-router = { path = "crates/barbacane-router" }
+barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk" }
+barbacane-test = { path = "crates/barbacane-test" }

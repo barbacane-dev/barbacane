@@ -1,0 +1,8 @@
+[package]
+name = "barbacane-router"
+description = "Prefix-trie HTTP request router with path parameter capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
