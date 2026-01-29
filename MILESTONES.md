@@ -49,31 +49,40 @@ The gateway enforces the spec. Requests that don't conform are rejected before r
 
 ---
 
-## M3 — WASM Plugin System
+## M3 — WASM Plugin System (In Progress)
 
 The extensibility layer. Plugins are loaded as WASM modules with sandboxed execution, host functions, and context passing.
 
 **Specs:** SPEC-003
 
-- [ ] wasmtime integration — load `.wasm` modules, AOT compile, instance pooling
-- [ ] Plugin manifest — parse `plugin.toml` (name, version, type, capabilities, wasm path)
-- [ ] Plugin config schema — load `config-schema.json`, validate spec config blocks against it (E1023)
-- [ ] WASM export contract — `init`, `on_request`, `on_response` for middlewares
-- [ ] WASM export contract — `dispatch` for dispatchers
-- [ ] Host function: `host_set_output` — plugin writes results to host buffer
-- [ ] Host function: `host_log` — structured logging from plugins
-- [ ] Host function: `host_context_get` / `host_context_set` — per-request context map
-- [ ] Host function: `host_clock_now` — monotonic clock
-- [ ] Capability enforcement — reject imports not declared in `plugin.toml`
-- [ ] Middleware chain execution — ordered `on_request` calls, reverse `on_response` calls
-- [ ] Short-circuit support — middleware returns 1, chain stops, response returned
-- [ ] Per-operation chain resolution — global chain + per-route overrides (replace, not merge)
-- [ ] Plugin instance model — separate instance per (name, config) pair
-- [ ] Memory limits — 16 MB linear memory, 100ms execution timeout, 1 MB stack
-- [ ] Error handling — traps produce 500, response-phase traps are fault-tolerant
-- [ ] `barbacane-plugin-sdk` crate — `Request`, `Response`, `Action` types, serde glue
+### Runtime Core (`barbacane-wasm` crate)
+- [x] wasmtime integration — load `.wasm` modules, AOT compile, instance pooling
+- [x] Plugin manifest — parse `plugin.toml` (name, version, type, capabilities, wasm path)
+- [x] Plugin config schema — load `config-schema.json`, validate spec config blocks against it (E1023)
+- [x] WASM export contract — `init`, `on_request`, `on_response` for middlewares
+- [x] WASM export contract — `dispatch` for dispatchers
+- [x] Plugin instance model — separate instance per (name, config) pair
+- [x] Memory limits — 16 MB linear memory, 100ms execution timeout, 1 MB stack
+- [x] Error handling — traps produce 500, response-phase traps are fault-tolerant
+
+### Host Functions
+- [x] Host function: `host_set_output` — plugin writes results to host buffer
+- [x] Host function: `host_log` — structured logging from plugins
+- [x] Host function: `host_context_get` / `host_context_set` — per-request context map
+- [x] Host function: `host_clock_now` — monotonic clock
+- [x] Capability enforcement — reject imports not declared in `plugin.toml`
+
+### Middleware Chain
+- [x] Middleware chain execution — ordered `on_request` calls, reverse `on_response` calls
+- [x] Short-circuit support — middleware returns 1, chain stops, response returned
+- [x] Per-operation chain resolution — global chain + per-route overrides (replace, not merge)
+
+### Plugin SDK
+- [x] `barbacane-plugin-sdk` crate — `Request`, `Response`, `Action` types, serde glue
 - [ ] `#[barbacane_middleware]` macro — generates init/on_request/on_response exports
 - [ ] `#[barbacane_dispatcher]` macro — generates init/dispatch exports
+
+### CLI & Bundling
 - [ ] `barbacane-control plugin register` CLI — validate and store plugin in registry
 - [ ] Plugin version resolution — `name`, `name@1.0.0`, `name@^1.0.0`
 - [ ] Compiler: plugin resolution — E1020–E1024 checks

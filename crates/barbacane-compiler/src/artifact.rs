@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use tar::Builder;
 
 use barbacane_spec_parser::{
-    parse_spec_file, ApiSpec, DispatchConfig, Parameter, RequestBody, SpecFormat,
+    parse_spec_file, ApiSpec, DispatchConfig, MiddlewareConfig, Parameter, RequestBody, SpecFormat,
 };
 
 use crate::error::CompileError;
@@ -60,6 +60,11 @@ pub struct CompiledOperation {
     /// Request body schema for validation.
     pub request_body: Option<RequestBody>,
     pub dispatch: DispatchConfig,
+    /// Resolved middleware chain for this operation.
+    /// If the operation has its own middlewares, uses those.
+    /// Otherwise, uses the global middlewares from the spec.
+    #[serde(default)]
+    pub middlewares: Vec<MiddlewareConfig>,
 }
 
 /// Compile one or more spec files into a .bca artifact.
@@ -100,6 +105,12 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
                 ))
             })?;
 
+            // Resolve middleware chain: operation-level overrides global
+            let middlewares = op
+                .middlewares
+                .clone()
+                .unwrap_or_else(|| spec.global_middlewares.clone());
+
             operations.push(CompiledOperation {
                 index: operations.len(),
                 path: op.path.clone(),
@@ -108,6 +119,7 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
                 parameters: op.parameters.clone(),
                 request_body: op.request_body.clone(),
                 dispatch,
+                middlewares,
             });
         }
     }
