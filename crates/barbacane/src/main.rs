@@ -20,9 +20,12 @@ use tokio::net::TcpListener;
 
 use std::collections::HashMap;
 
-use barbacane_compiler::{compile, load_manifest, load_routes, load_specs, CompiledOperation, Manifest};
+use barbacane_compiler::{
+    compile, load_manifest, load_routes, load_specs, CompiledOperation, Manifest,
+};
 use barbacane_router::{RouteEntry, RouteMatch, Router};
 use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits};
+use barbacane_wasm::{PluginLimits, WasmEngine};
 
 #[derive(Parser, Debug)]
 #[command(name = "barbacane", about = "Barbacane API gateway", version)]
@@ -106,6 +109,12 @@ struct Gateway {
     /// Request limits (body size, headers, URI length).
     limits: RequestLimits,
     dev_mode: bool,
+    /// WASM engine for plugin execution.
+    #[allow(dead_code)]
+    wasm_engine: Arc<WasmEngine>,
+    /// Plugin resource limits.
+    #[allow(dead_code)]
+    plugin_limits: PluginLimits,
 }
 
 impl Gateway {
@@ -120,6 +129,11 @@ impl Gateway {
         let specs = load_specs(artifact_path)
             .map_err(|e| format!("failed to load specs: {}", e))?;
 
+        // Initialize WASM engine
+        let plugin_limits = PluginLimits::default();
+        let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
+            .map_err(|e| format!("failed to create WASM engine: {}", e))?;
+
         let mut router = Router::new();
         let mut validators = Vec::new();
 
@@ -133,11 +147,19 @@ impl Gateway {
             );
 
             // Pre-compile validator for this operation
-            let validator = OperationValidator::new(
-                &op.parameters,
-                op.request_body.as_ref(),
-            );
+            let validator = OperationValidator::new(&op.parameters, op.request_body.as_ref());
             validators.push(validator);
+
+            // Log middleware chain for this operation (informational)
+            if !op.middlewares.is_empty() && dev_mode {
+                let names: Vec<_> = op.middlewares.iter().map(|m| m.name.as_str()).collect();
+                tracing::debug!(
+                    path = %op.path,
+                    method = %op.method,
+                    middlewares = ?names,
+                    "configured middleware chain"
+                );
+            }
         }
 
         Ok(Gateway {
@@ -148,6 +170,8 @@ impl Gateway {
             specs,
             limits,
             dev_mode,
+            wasm_engine: Arc::new(wasm_engine),
+            plugin_limits,
         })
     }
 
@@ -227,7 +251,7 @@ impl Gateway {
                     return Ok(self.validation_error_response(&errors));
                 }
 
-                self.dispatch(operation, params).await
+                self.dispatch(operation, params, &body_bytes, &headers).await
             }
             RouteMatch::MethodNotAllowed { allowed } => {
                 Ok(self.method_not_allowed_response(allowed))
@@ -241,17 +265,28 @@ impl Gateway {
         &self,
         operation: &CompiledOperation,
         _params: Vec<(String, String)>,
+        _request_body: &[u8],
+        _headers: &HashMap<String, String>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let dispatch = &operation.dispatch;
 
-        // For M1, only mock dispatcher is implemented
+        // Log middleware chain (M3 feature - actual execution requires bundled plugins)
+        if !operation.middlewares.is_empty() {
+            tracing::debug!(
+                middlewares = ?operation.middlewares.iter().map(|m| &m.name).collect::<Vec<_>>(),
+                "middleware chain for operation (not yet executed - requires bundled plugins)"
+            );
+        }
+
+        // Built-in dispatchers
         match dispatch.name.as_str() {
             "mock" => self.dispatch_mock(&dispatch.config),
             _ => {
-                // Unknown dispatcher
+                // WASM dispatcher - requires plugin bundled in artifact
+                // For now, return error until plugin bundling is implemented
                 let body = if self.dev_mode {
                     format!(
-                        r#"{{"error":"unknown dispatcher","dispatcher":"{}"}}"#,
+                        r#"{{"error":"unknown dispatcher","dispatcher":"{}","hint":"WASM plugins must be bundled in artifact"}}"#,
                         dispatch.name
                     )
                 } else {

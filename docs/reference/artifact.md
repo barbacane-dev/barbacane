@@ -10,8 +10,11 @@ A `.bca` file is a gzip-compressed tar archive containing:
 artifact.bca (tar.gz)
 ├── manifest.json       # Artifact metadata
 ├── routes.json         # Compiled routing table
-└── specs/              # Embedded source specifications
-    ├── api.yaml
+├── specs/              # Embedded source specifications
+│   ├── api.yaml
+│   └── ...
+└── plugins/            # Bundled WASM plugins (optional)
+    ├── rate-limit.wasm
     └── ...
 ```
 
@@ -34,6 +37,15 @@ Metadata about the artifact.
       "version": "3.1.0"
     }
   ],
+  "bundled_plugins": [
+    {
+      "name": "rate-limit",
+      "version": "1.0.0",
+      "plugin_type": "middleware",
+      "wasm_path": "plugins/rate-limit.wasm",
+      "sha256": "789abc..."
+    }
+  ],
   "routes_count": 12,
   "checksums": {
     "routes.json": "sha256:def456..."
@@ -49,6 +61,7 @@ Metadata about the artifact.
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
 | `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
+| `bundled_plugins` | array | List of bundled WASM plugins (optional) |
 | `routes_count` | integer | Number of compiled routes |
 | `checksums` | object | SHA-256 checksums for integrity |
 
@@ -60,6 +73,16 @@ Metadata about the artifact.
 | `sha256` | string | Hash of source content |
 | `type` | string | Spec type (`openapi` or `asyncapi`) |
 | `version` | string | Spec version (e.g., `3.1.0`) |
+
+#### bundled_plugins entry
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Plugin name (kebab-case) |
+| `version` | string | Plugin version (semver) |
+| `plugin_type` | string | Plugin type (`middleware` or `dispatcher`) |
+| `wasm_path` | string | Path to WASM file within artifact |
+| `sha256` | string | SHA-256 hash of WASM file |
 
 ### routes.json
 
@@ -138,6 +161,8 @@ manifest.json
 routes.json
 specs/
 specs/api.yaml
+plugins/
+plugins/rate-limit.wasm
 ```
 
 ### Extract and View
@@ -189,7 +214,7 @@ Future versions will support:
 ### Rust
 
 ```rust
-use barbacane_compiler::{load_manifest, load_routes, load_specs};
+use barbacane_compiler::{load_manifest, load_routes, load_specs, load_plugins};
 use std::path::Path;
 
 let path = Path::new("artifact.bca");
@@ -208,6 +233,12 @@ for op in &routes.operations {
 let specs = load_specs(path)?;
 for (name, content) in &specs {
     println!("Spec: {} ({} bytes)", name, content.len());
+}
+
+// Load plugins
+let plugins = load_plugins(path)?;
+for (name, wasm_bytes) in &plugins {
+    println!("Plugin: {} ({} bytes)", name, wasm_bytes.len());
 }
 ```
 
