@@ -41,6 +41,8 @@ pub struct Operation {
     pub operation_id: Option<String>,
     /// Path parameters defined on this operation.
     pub parameters: Vec<Parameter>,
+    /// Request body definition (for POST, PUT, PATCH).
+    pub request_body: Option<RequestBody>,
     /// The dispatcher configuration from `x-barbacane-dispatch`.
     pub dispatch: Option<DispatchConfig>,
     /// Operation-level middlewares (replaces global chain if present).
@@ -80,4 +82,20 @@ pub struct MiddlewareConfig {
     /// Plugin-specific configuration.
     #[serde(default)]
     pub config: serde_json::Value,
+}
+
+/// Request body definition from `requestBody`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestBody {
+    /// Whether the request body is required.
+    pub required: bool,
+    /// Content types and their schemas (e.g., "application/json" -> schema).
+    pub content: BTreeMap<String, ContentSchema>,
+}
+
+/// Content schema for a specific media type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentSchema {
+    /// The JSON Schema for this content type.
+    pub schema: Option<serde_json::Value>,
 }

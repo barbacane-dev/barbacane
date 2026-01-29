@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 barbacane-compiler = { workspace = true }
 barbacane-router = { workspace = true }
+barbacane-validator = { workspace = true }
+barbacane-spec-parser = { workspace = true }
 tokio = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }

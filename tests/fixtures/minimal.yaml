@@ -22,7 +22,7 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            type: string
       x-barbacane-dispatch:
         name: mock
         config:
