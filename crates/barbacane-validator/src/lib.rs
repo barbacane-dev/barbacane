@@ -283,7 +283,7 @@ impl OperationValidator {
             let compiled = CompiledParam {
                 name: param.name.clone(),
                 required: param.required || param.location == "path", // Path params always required
-                schema: param.schema.as_ref().and_then(|s| compile_schema_with_formats(s)),
+                schema: param.schema.as_ref().and_then(compile_schema_with_formats),
             };
 
             match param.location.as_str() {
@@ -300,7 +300,7 @@ impl OperationValidator {
                 let schema = content_schema
                     .schema
                     .as_ref()
-                    .and_then(|s| compile_schema_with_formats(s));
+                    .and_then(compile_schema_with_formats);
                 content.insert(media_type.clone(), schema);
             }
             CompiledRequestBody {
