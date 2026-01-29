@@ -59,13 +59,10 @@ pub fn validate_imports(
         }
     }
 
-    // Check each import
+    // Check each import from the "barbacane" module
     for import in module.imports() {
-        // Only check imports from the "barbacane" module
-        if import.module() == "barbacane" {
-            if !allowed.contains(import.name()) {
-                return Err(WasmError::UndeclaredImport(import.name().into()));
-            }
+        if import.module() == "barbacane" && !allowed.contains(import.name()) {
+            return Err(WasmError::UndeclaredImport(import.name().into()));
         }
     }
 
