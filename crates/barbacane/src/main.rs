@@ -703,7 +703,7 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
 
 /// Run the compile command.
 fn run_compile(specs: &[String], output: &str) -> ExitCode {
-    let spec_paths: Vec<&Path> = specs.iter().map(|s| Path::new(s)).collect();
+    let spec_paths: Vec<&Path> = specs.iter().map(Path::new).collect();
     let output_path = Path::new(output);
 
     // Check that all spec files exist

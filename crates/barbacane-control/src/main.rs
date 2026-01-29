@@ -74,7 +74,7 @@ fn main() -> ExitCode {
                 eprintln!("Compiling {} spec(s)...", specs.len());
             }
 
-            let spec_paths: Vec<&Path> = specs.iter().map(|s| Path::new(s)).collect();
+            let spec_paths: Vec<&Path> = specs.iter().map(Path::new).collect();
 
             // Check all spec files exist
             for path in &spec_paths {
