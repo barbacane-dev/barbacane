@@ -46,23 +46,31 @@ The project is organized as a Cargo workspace with specialized crates:
 ```
 crates/
 ├── barbacane/              # Main CLI (compile, validate, serve)
+├── barbacane-control/      # Control plane CLI (spec upload, plugin register)
 ├── barbacane-compiler/     # Spec compilation & artifact format
 ├── barbacane-spec-parser/  # OpenAPI/AsyncAPI parsing
 ├── barbacane-router/       # Prefix trie request routing
 ├── barbacane-validator/    # Request validation
+├── barbacane-wasm/         # WASM plugin runtime (wasmtime)
 ├── barbacane-plugin-sdk/   # WASM plugin development kit
+├── barbacane-plugin-macros/# Proc macros for plugin development
 └── barbacane-test/         # Integration test harness
 ```
 
 ### Crate Dependencies
 
 ```
-barbacane (CLI)
+barbacane (CLI / data plane)
     ├── barbacane-compiler
     │   ├── barbacane-spec-parser
     │   └── barbacane-router
     ├── barbacane-validator
-    └── barbacane-router
+    ├── barbacane-router
+    └── barbacane-wasm
+        └── barbacane-plugin-sdk
+
+barbacane-plugin-sdk
+    └── barbacane-plugin-macros
 
 barbacane-test
     └── barbacane-compiler
@@ -113,10 +121,13 @@ Compiles parsed specs into deployable artifacts.
 **Artifact format (.bca):**
 ```
 artifact.bca (tar.gz)
-├── manifest.json       # Metadata, checksums
+├── manifest.json       # Metadata, checksums, bundled plugins
 ├── routes.json         # Compiled operations
-└── specs/              # Embedded source specs
-    ├── api.yaml
+├── specs/              # Embedded source specs
+│   ├── api.yaml
+│   └── ...
+└── plugins/            # Bundled WASM plugins (optional)
+    ├── rate-limit.wasm
     └── ...
 ```
 
@@ -140,14 +151,46 @@ Data plane binary - the actual gateway.
 6. Apply response middlewares
 7. Send response
 
+### barbacane-wasm
+
+WASM plugin runtime built on wasmtime.
+
+**Key types:**
+- `WasmEngine` - Configured wasmtime engine with AOT compilation
+- `InstancePool` - Instance pooling per (plugin_name, config_hash)
+- `PluginInstance` - Single WASM instance with host function bindings
+- `MiddlewareChain` - Ordered middleware execution
+
+**Host functions:**
+- `host_set_output` - Plugin writes result to host buffer
+- `host_log` - Structured logging with trace context
+- `host_context_get/set` - Per-request key-value store
+- `host_clock_now` - Monotonic time in milliseconds
+
+**Resource limits:**
+- 16 MB linear memory
+- 1 MB stack
+- 100ms execution timeout (via fuel)
+
 ### barbacane-plugin-sdk
 
 SDK for developing WASM plugins (dispatchers and middlewares).
 
 **Provides:**
-- Rust types and macros
-- Host function bindings
-- Configuration schema types
+- `Request`, `Response`, `Action` types
+- `#[barbacane_middleware]` macro - generates WASM exports for middlewares
+- `#[barbacane_dispatcher]` macro - generates WASM exports for dispatchers
+- Host function FFI bindings
+
+### barbacane-plugin-macros
+
+Proc macros for plugin development (used by barbacane-plugin-sdk).
+
+**Generates:**
+- `init(ptr, len) -> i32` - Initialize with JSON config
+- `on_request(ptr, len) -> i32` - Process request (0=continue, 1=short-circuit)
+- `on_response(ptr, len) -> i32` - Process response
+- `dispatch(ptr, len) -> i32` - Handle request and return response
 
 ### barbacane-test
 
