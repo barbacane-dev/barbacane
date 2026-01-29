@@ -1,0 +1,540 @@
+# OpenAPI 3.0.x Test Fixture
+# Tests 3.0-specific features: nullable, example (not examples), no const, no license.identifier
+openapi: "3.0.3"
+info:
+  title: Train Travel API
+  description: API for finding and booking train trips across Europe.
+  version: "1.0.0"
+  contact:
+    name: Train Support
+    url: https://example.com/support
+    email: support@example.com
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0  # 3.0 uses url, not identifier
+
+servers:
+  - url: https://api.trains.example.com/v1
+    description: Production
+    x-barbacane-upstream:
+      name: trains-backend
+      timeout: 30s
+
+# Global Barbacane middlewares
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      requests_per_minute: 100
+  - name: cors
+    config:
+      allowed_origins: ["https://app.example.com"]
+
+tags:
+  - name: Stations
+    description: Find and filter train stations across Europe.
+  - name: Trips
+    description: Timetables and routes for train trips.
+  - name: Bookings
+    description: Create and manage bookings for train trips.
+
+paths:
+  /stations:
+    get:
+      summary: Get a list of train stations
+      operationId: getStations
+      tags:
+        - Stations
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: trains-backend
+          path: /api/stations
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 300
+      parameters:
+        - name: page
+          in: query
+          description: Page number
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: country
+          in: query
+          description: Filter by country code (ISO 3166-1 alpha-2)
+          required: false
+          schema:
+            type: string
+            pattern: "^[A-Z]{2}$"
+          example: DE  # 3.0 uses example, not examples
+        - name: search
+          in: query
+          description: Search stations by name
+          required: false
+          schema:
+            type: string
+            minLength: 2
+      responses:
+        "200":
+          description: A list of stations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Station"
+                  meta:
+                    $ref: "#/components/schemas/PaginationMeta"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /stations/{stationId}:
+    get:
+      summary: Get a specific station
+      operationId: getStation
+      tags:
+        - Stations
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: trains-backend
+          path: /api/stations/{stationId}
+      parameters:
+        - name: stationId
+          in: path
+          required: true
+          description: Station UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Station details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Station"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /trips:
+    get:
+      summary: Search for available trips
+      operationId: searchTrips
+      tags:
+        - Trips
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: trains-backend
+          path: /api/trips
+          timeout: 10s
+      parameters:
+        - name: origin
+          in: query
+          required: true
+          description: Origin station ID
+          schema:
+            type: string
+            format: uuid
+        - name: destination
+          in: query
+          required: true
+          description: Destination station ID
+          schema:
+            type: string
+            format: uuid
+        - name: date
+          in: query
+          required: true
+          description: Travel date
+          schema:
+            type: string
+            format: date
+        - name: passengers
+          in: query
+          required: false
+          description: Number of passengers
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 9
+            default: 1
+      responses:
+        "200":
+          description: Available trips
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Trip"
+
+  /bookings:
+    get:
+      summary: List user bookings
+      operationId: listBookings
+      tags:
+        - Bookings
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: trains-backend
+          path: /api/bookings
+      x-barbacane-middlewares:
+        - name: auth-jwt
+          config:
+            required: true
+      responses:
+        "200":
+          description: List of bookings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Booking"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      summary: Create a new booking
+      operationId: createBooking
+      tags:
+        - Bookings
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: trains-backend
+          path: /api/bookings
+          method: POST
+      x-barbacane-middlewares:
+        - name: auth-jwt
+          config:
+            required: true
+            scopes: ["bookings:write"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingRequest"
+      responses:
+        "201":
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /bookings/{bookingId}:
+    parameters:
+      - name: bookingId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get booking details
+      operationId: getBooking
+      tags:
+        - Bookings
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: trains-backend
+          path: /api/bookings/{bookingId}
+      x-barbacane-middlewares:
+        - name: auth-jwt
+          config:
+            required: true
+      responses:
+        "200":
+          description: Booking details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      summary: Cancel a booking
+      operationId: cancelBooking
+      tags:
+        - Bookings
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: trains-backend
+          path: /api/bookings/{bookingId}
+          method: DELETE
+      x-barbacane-middlewares:
+        - name: auth-jwt
+          config:
+            required: true
+            scopes: ["bookings:write"]
+      responses:
+        "204":
+          description: Booking cancelled
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  schemas:
+    Station:
+      type: object
+      required:
+        - id
+        - name
+        - country_code
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique station identifier
+        name:
+          type: string
+          description: Station name
+          example: Berlin Hauptbahnhof
+        address:
+          type: string
+          description: Full address
+          # 3.0 uses nullable instead of type array
+          nullable: true
+        country_code:
+          type: string
+          description: ISO 3166-1 alpha-2 country code
+          pattern: "^[A-Z]{2}$"
+          example: DE
+        timezone:
+          type: string
+          description: IANA timezone
+          example: Europe/Berlin
+        coordinates:
+          $ref: "#/components/schemas/Coordinates"
+
+    Coordinates:
+      type: object
+      properties:
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+
+    Trip:
+      type: object
+      required:
+        - id
+        - origin
+        - destination
+        - departure_time
+        - arrival_time
+        - price
+      properties:
+        id:
+          type: string
+          format: uuid
+        origin:
+          $ref: "#/components/schemas/Station"
+        destination:
+          $ref: "#/components/schemas/Station"
+        departure_time:
+          type: string
+          format: date-time
+        arrival_time:
+          type: string
+          format: date-time
+        duration_minutes:
+          type: integer
+          minimum: 1
+        operator:
+          type: string
+          example: Deutsche Bahn
+        price:
+          $ref: "#/components/schemas/Price"
+        available_seats:
+          type: integer
+          minimum: 0
+          nullable: true
+        amenities:
+          type: array
+          items:
+            type: string
+            # 3.0 uses enum instead of const for single values
+            enum:
+              - wifi
+              - restaurant
+              - power_outlets
+              - bicycle_storage
+              - pet_friendly
+
+    Price:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: number
+          # 3.0 uses minimum + exclusiveMinimum: true
+          minimum: 0
+          exclusiveMinimum: true
+        currency:
+          type: string
+          enum: [EUR, GBP, CHF]
+
+    Booking:
+      type: object
+      required:
+        - id
+        - trip_id
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        trip_id:
+          type: string
+          format: uuid
+        passenger_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        passenger_email:
+          type: string
+          format: email
+        status:
+          type: string
+          enum:
+            - pending
+            - confirmed
+            - cancelled
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    BookingRequest:
+      type: object
+      required:
+        - trip_id
+        - passenger_name
+        - passenger_email
+      properties:
+        trip_id:
+          type: string
+          format: uuid
+        passenger_name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        passenger_email:
+          type: string
+          format: email
+        seat_preference:
+          type: string
+          enum:
+            - window
+            - aisle
+            - no_preference
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        total_pages:
+          type: integer
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    TooManyRequests:
+      description: Too Many Requests
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

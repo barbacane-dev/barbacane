@@ -29,6 +29,7 @@ hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server-graceful"] }
 http-body-util = "0.1"
 http = "1"
+bytes = "1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

@@ -6,4 +6,4 @@
 
 pub mod trie;
 
-pub use trie::Router;
+pub use trie::{normalize_path, RouteEntry, RouteMatch, Router};
