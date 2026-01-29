@@ -16,15 +16,13 @@ git clone https://github.com/barbacane/barbacane.git
 cd barbacane
 cargo build --release
 
-# Binaries are in target/release/
-# - barbacane-control (compiler CLI)
-# - barbacane (data plane)
+# Binary is in target/release/barbacane
 ```
 
 ### Using Cargo (coming soon)
 
 ```bash
-cargo install barbacane barbacane-control
+cargo install barbacane
 ```
 
 ## Your First Gateway
@@ -97,29 +95,25 @@ The key additions are:
 ### 2. Validate the Spec
 
 ```bash
-barbacane-control validate --specs api.yaml --verbose
+barbacane validate --spec api.yaml
 ```
 
 Output:
 ```
-Validating 1 spec(s)...
-  api.yaml - OK (openapi 3.1.0, 3 operations)
-All specs valid.
+✓ api.yaml is valid
+
+validated 1 spec(s): 1 valid, 0 invalid
 ```
 
 ### 3. Compile to Artifact
 
 ```bash
-barbacane-control compile --specs api.yaml --output api.bca --verbose
+barbacane compile --spec api.yaml --output api.bca
 ```
 
 Output:
 ```
-barbacane-control 0.1.0 (artifact version 1)
-Compiling 1 spec(s)...
-Compiled 3 route(s)
-  - api.yaml (openapi 3.1.0)
-Artifact written to: api.bca
+compiled 1 spec(s) to api.bca (3 routes)
 ```
 
 The `.bca` (Barbacane Compiled Artifact) file contains:
@@ -130,7 +124,7 @@ The `.bca` (Barbacane Compiled Artifact) file contains:
 ### 4. Run the Gateway
 
 ```bash
-barbacane --artifact api.bca --listen 127.0.0.1:8080 --dev
+barbacane serve --artifact api.bca --listen 127.0.0.1:8080 --dev
 ```
 
 Output:
@@ -178,5 +172,5 @@ The `--dev` flag enables:
 
 For production, omit the flag:
 ```bash
-barbacane --artifact api.bca --listen 0.0.0.0:8080
+barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```

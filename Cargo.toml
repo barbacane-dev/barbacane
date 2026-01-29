@@ -5,6 +5,7 @@ members = [
     "crates/barbacane-spec-parser",
     "crates/barbacane-compiler",
     "crates/barbacane-router",
+    "crates/barbacane-validator",
     "crates/barbacane-plugin-sdk",
     "crates/barbacane-test",
 ]
@@ -47,9 +48,13 @@ tar = "0.4"
 # HTTP client (for tests)
 reqwest = { version = "0.12", features = ["json"] }
 
+# JSON Schema validation
+jsonschema = "0.26"
+
 # Workspace crates
 barbacane-spec-parser = { path = "crates/barbacane-spec-parser" }
 barbacane-compiler = { path = "crates/barbacane-compiler" }
 barbacane-router = { path = "crates/barbacane-router" }
+barbacane-validator = { path = "crates/barbacane-validator" }
 barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk" }
 barbacane-test = { path = "crates/barbacane-test" }

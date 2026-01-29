@@ -50,13 +50,13 @@ cargo test -p barbacane-router trie::tests::static_takes_precedence
 
 ```bash
 # Validate a spec
-cargo run -p barbacane-control -- validate --specs tests/fixtures/minimal.yaml --verbose
+cargo run --bin barbacane -- validate --spec tests/fixtures/minimal.yaml
 
 # Compile a spec
-cargo run -p barbacane-control -- compile --specs tests/fixtures/minimal.yaml --output test.bca
+cargo run --bin barbacane -- compile --spec tests/fixtures/minimal.yaml --output test.bca
 
 # Run the gateway
-cargo run -p barbacane -- --artifact test.bca --listen 127.0.0.1:8080 --dev
+cargo run --bin barbacane -- serve --artifact test.bca --listen 127.0.0.1:8080 --dev
 ```
 
 ## Project Structure
@@ -69,12 +69,7 @@ barbacane/
 ├── README.md
 │
 ├── crates/
-│   ├── barbacane/          # Data plane binary
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       └── main.rs
-│   │
-│   ├── barbacane-control/  # Control plane CLI
+│   ├── barbacane/          # Main CLI (compile, validate, serve)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── main.rs
@@ -296,10 +291,10 @@ if cfg!(debug_assertions) {
 
 ```bash
 # Gateway with dev mode
-cargo run -p barbacane -- --artifact test.bca --dev
+cargo run --bin barbacane -- serve --artifact test.bca --dev
 
-# Control plane with verbose
-cargo run -p barbacane-control -- compile --specs api.yaml --verbose
+# Compile with output
+cargo run --bin barbacane -- compile --spec api.yaml --output api.bca
 ```
 
 ### Integration Test Debugging

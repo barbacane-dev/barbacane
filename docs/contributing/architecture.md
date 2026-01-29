@@ -45,11 +45,11 @@ The project is organized as a Cargo workspace with specialized crates:
 
 ```
 crates/
-├── barbacane/              # Data plane binary
-├── barbacane-control/      # Control plane CLI
+├── barbacane/              # Main CLI (compile, validate, serve)
 ├── barbacane-compiler/     # Spec compilation & artifact format
 ├── barbacane-spec-parser/  # OpenAPI/AsyncAPI parsing
 ├── barbacane-router/       # Prefix trie request routing
+├── barbacane-validator/    # Request validation
 ├── barbacane-plugin-sdk/   # WASM plugin development kit
 └── barbacane-test/         # Integration test harness
 ```
@@ -57,13 +57,11 @@ crates/
 ### Crate Dependencies
 
 ```
-barbacane-control
-    └── barbacane-compiler
-        ├── barbacane-spec-parser
-        └── barbacane-router
-
-barbacane (data plane)
-    ├── barbacane-compiler (for loading artifacts)
+barbacane (CLI)
+    ├── barbacane-compiler
+    │   ├── barbacane-spec-parser
+    │   └── barbacane-router
+    ├── barbacane-validator
     └── barbacane-router
 
 barbacane-test
@@ -122,15 +120,14 @@ artifact.bca (tar.gz)
     └── ...
 ```
 
-### barbacane-control
+### barbacane
 
-Control plane CLI for operators.
-
-**Commands:**
+Main CLI with three subcommands:
 - `compile` - Compile specs to artifact
 - `validate` - Validate specs without compilation
+- `serve` - Run the gateway
 
-### barbacane
+### barbacane (serve)
 
 Data plane binary - the actual gateway.
 

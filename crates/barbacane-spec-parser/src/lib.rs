@@ -8,5 +8,8 @@ pub mod model;
 pub mod parser;
 
 pub use error::ParseError;
-pub use model::{ApiSpec, DispatchConfig, MiddlewareConfig, Operation, Parameter, SpecFormat};
+pub use model::{
+    ApiSpec, ContentSchema, DispatchConfig, MiddlewareConfig, Operation, Parameter, RequestBody,
+    SpecFormat,
+};
 pub use parser::{parse_spec, parse_spec_file};

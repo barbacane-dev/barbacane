@@ -1,0 +1,16 @@
+[package]
+name = "barbacane-validator"
+description = "Request validation for Barbacane gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonschema = { workspace = true }
+thiserror = { workspace = true }
+
+barbacane-spec-parser = { workspace = true }
+
+[dev-dependencies]

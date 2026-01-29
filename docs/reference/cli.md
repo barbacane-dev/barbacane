@@ -1,176 +1,237 @@
 # CLI Reference
 
-Barbacane provides two command-line tools:
+Barbacane provides a unified command-line tool with subcommands for compilation, validation, and running the gateway.
 
-- **`barbacane-control`** - Compile and validate specs (control plane)
-- **`barbacane`** - Run the gateway (data plane)
+## barbacane
 
-## barbacane-control
+```bash
+barbacane <COMMAND> [OPTIONS]
+```
 
-The control plane CLI for spec compilation and validation.
+### Commands
 
-### compile
+| Command | Description |
+|---------|-------------|
+| `compile` | Compile OpenAPI spec(s) into a `.bca` artifact |
+| `validate` | Validate spec(s) without compiling |
+| `serve` | Run the gateway server |
+
+---
+
+## barbacane compile
 
 Compile one or more OpenAPI specs into a `.bca` artifact.
 
 ```bash
-barbacane-control compile --specs <FILES>... [OPTIONS]
+barbacane compile --spec <FILES>... --output <PATH>
 ```
 
-#### Arguments
+### Options
 
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--specs` | Yes | One or more spec files (YAML or JSON) |
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--spec`, `-s` | Yes | - | One or more spec files (YAML or JSON) |
+| `--output`, `-o` | Yes | - | Output artifact path |
 
-#### Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--output` | `artifact.bca` | Output artifact path |
-| `--production` | `true` | Enable production checks |
-| `--development` | `false` | Disable production checks |
-| `--verbose` | `false` | Show detailed output |
-
-#### Examples
+### Examples
 
 ```bash
 # Compile single spec
-barbacane-control compile --specs api.yaml
+barbacane compile --spec api.yaml --output api.bca
 
 # Compile multiple specs
-barbacane-control compile --specs users.yaml orders.yaml payments.yaml
+barbacane compile -s users.yaml -s orders.yaml -o combined.bca
 
-# Custom output path
-barbacane-control compile --specs api.yaml --output my-gateway.bca
-
-# Verbose output
-barbacane-control compile --specs api.yaml --verbose
+# Short form
+barbacane compile -s api.yaml -o api.bca
 ```
 
-#### Exit Codes
+### Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Validation error (missing dispatch, routing conflict) |
-| 2 | Plugin resolution error |
-| 3 | I/O error (file not found, write failed) |
-
-### validate
-
-Validate specs without full compilation.
-
-```bash
-barbacane-control validate --specs <FILES>... [OPTIONS]
-```
-
-#### Arguments
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--specs` | Yes | One or more spec files to validate |
-
-#### Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--verbose` | `false` | Show detailed output per spec |
-
-#### Examples
-
-```bash
-# Validate single spec
-barbacane-control validate --specs api.yaml
-
-# Validate multiple specs
-barbacane-control validate --specs users.yaml orders.yaml
-
-# Verbose output
-barbacane-control validate --specs api.yaml --verbose
-```
-
-#### Output
-
-```bash
-# Success (non-verbose)
-All specs valid.
-
-# Success (verbose)
-Validating 2 spec(s)...
-  users.yaml - OK (openapi 3.1.0, 5 operations)
-  orders.yaml - OK (openapi 3.1.0, 8 operations)
-
-# Error
-error[E1020]: operation has no x-barbacane-dispatch: GET /users in 'users.yaml'
-```
+| 1 | Compilation error (validation failed, routing conflict, missing dispatch) |
 
 ---
 
-## barbacane
+## barbacane validate
 
-The data plane - runs the gateway and processes HTTP requests.
-
-### Usage
+Validate specs without full compilation. Checks for spec validity and extension errors.
 
 ```bash
-barbacane --artifact <PATH> [OPTIONS]
+barbacane validate --spec <FILES>... [OPTIONS]
 ```
 
-#### Arguments
+### Options
 
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--artifact` | Yes | Path to the `.bca` artifact file |
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--spec`, `-s` | Yes | - | One or more spec files to validate |
+| `--format` | No | `text` | Output format: `text` or `json` |
 
-#### Options
+### Error Codes
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--listen` | `0.0.0.0:8080` | Listen address (ip:port) |
-| `--dev` | `false` | Enable development mode |
-| `--log-level` | `info` | Log level (trace, debug, info, warn, error) |
+| Code | Category | Description |
+|------|----------|-------------|
+| E1001 | Spec validity | Not a valid OpenAPI 3.x or AsyncAPI 3.x |
+| E1002 | Spec validity | YAML/JSON parse error |
+| E1003 | Spec validity | Unresolved `$ref` reference |
+| E1004 | Spec validity | Schema validation error (missing info, etc.) |
+| E1010 | Extension | Routing conflict (same path+method in multiple specs) |
+| E1011 | Extension | Middleware entry missing `name` |
+| E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
+| E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 
-#### Examples
+### Examples
+
+```bash
+# Validate single spec
+barbacane validate --spec api.yaml
+
+# Validate multiple specs (checks for routing conflicts)
+barbacane validate -s users.yaml -s orders.yaml
+
+# JSON output (for CI/tooling)
+barbacane validate --spec api.yaml --format json
+```
+
+### Output Examples
+
+**Text format (default):**
+```
+✓ api.yaml is valid
+
+validated 1 spec(s): 1 valid, 0 invalid
+```
+
+**Text format with errors:**
+```
+✗ api.yaml has 1 error(s)
+  E1004 [api.yaml]: E1004: schema validation error: missing 'info' object
+
+validated 1 spec(s): 0 valid, 1 invalid
+```
+
+**JSON format:**
+```json
+{
+  "results": [
+    {
+      "file": "api.yaml",
+      "valid": true,
+      "errors": [],
+      "warnings": []
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "valid": 1,
+    "invalid": 0
+  }
+}
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | All specs valid |
+| 1 | One or more specs have errors |
+
+---
+
+## barbacane serve
+
+Run the gateway server, loading routes from a compiled artifact.
+
+```bash
+barbacane serve --artifact <PATH> [OPTIONS]
+```
+
+### Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--artifact` | Yes | - | Path to the `.bca` artifact file |
+| `--listen` | No | `0.0.0.0:8080` | Listen address (ip:port) |
+| `--dev` | No | `false` | Enable development mode |
+| `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
+| `--max-body-size` | No | `1048576` | Maximum request body size in bytes (1MB) |
+| `--max-headers` | No | `100` | Maximum number of request headers |
+| `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
+| `--max-uri-length` | No | `8192` | Maximum URI length in characters (8KB) |
+
+### Examples
 
 ```bash
 # Run with defaults
-barbacane --artifact api.bca
+barbacane serve --artifact api.bca
 
 # Custom port
-barbacane --artifact api.bca --listen 127.0.0.1:3000
+barbacane serve --artifact api.bca --listen 127.0.0.1:3000
 
-# Development mode
-barbacane --artifact api.bca --dev
+# Development mode (verbose errors)
+barbacane serve --artifact api.bca --dev
 
-# Production with custom address
-barbacane --artifact api.bca --listen 0.0.0.0:80
+# Production with custom limits
+barbacane serve --artifact api.bca \
+  --max-body-size 5242880 \
+  --max-headers 50
+
+# All options
+barbacane serve --artifact api.bca \
+  --listen 0.0.0.0:8080 \
+  --log-level info \
+  --max-body-size 1048576 \
+  --max-headers 100 \
+  --max-header-size 8192 \
+  --max-uri-length 8192
 ```
 
-#### Development Mode
+### Development Mode
 
 The `--dev` flag enables:
-- Verbose error messages (includes dispatcher name, internal details)
-- Detailed request logging
-- Relaxed production checks
+- Verbose error messages with field names, locations, and detailed reasons
+- Extended RFC 9457 problem details with `errors` array
+- Useful for debugging but **do not use in production** - it may expose internal information
 
-**Do not use in production** - it may expose internal information.
+### Request Limits
 
-#### Exit Codes
+The gateway enforces request limits to protect against abuse:
+
+| Limit | Default | Description |
+|-------|---------|-------------|
+| Body size | 1 MB | Requests with larger bodies are rejected with 400 |
+| Header count | 100 | Requests with more headers are rejected with 400 |
+| Header size | 8 KB | Individual headers larger than this are rejected |
+| URI length | 8 KB | URIs longer than this are rejected with 400 |
+
+Requests exceeding limits receive an RFC 9457 problem details response:
+
+```json
+{
+  "type": "urn:barbacane:error:validation-failed",
+  "title": "Request validation failed",
+  "status": 400,
+  "detail": "request body too large: 2000000 bytes exceeds limit of 1048576 bytes"
+}
+```
+
+### Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | Clean shutdown |
-| 1 | Startup error (artifact not found, invalid config) |
+| 1 | Startup error (artifact not found, bind failed) |
 
 ---
 
 ## Environment Variables
 
-| Variable | Used By | Description |
-|----------|---------|-------------|
-| `RUST_LOG` | Both | Override log level (e.g., `RUST_LOG=debug`) |
-| `BARBACANE_DEV` | barbacane | Enable dev mode (alternative to `--dev`) |
+| Variable | Description |
+|----------|-------------|
+| `RUST_LOG` | Override log level (e.g., `RUST_LOG=debug`) |
 
 ---
 
@@ -182,48 +243,59 @@ The `--dev` flag enables:
 # Edit spec
 vim api.yaml
 
-# Validate
-barbacane-control validate --specs api.yaml --verbose
+# Validate (quick check)
+barbacane validate --spec api.yaml
 
 # Compile
-barbacane-control compile --specs api.yaml --output api.bca
+barbacane compile --spec api.yaml --output api.bca
 
-# Run
-barbacane --artifact api.bca --dev
+# Run in dev mode
+barbacane serve --artifact api.bca --dev
 ```
 
 ### CI/CD Pipeline
 
 ```bash
-# Validate in CI
-barbacane-control validate --specs specs/*.yaml
-if [ $? -ne 0 ]; then
-  echo "Spec validation failed"
-  exit 1
-fi
+#!/bin/bash
+set -e
+
+# Validate all specs
+barbacane validate --spec specs/*.yaml --format json > validation.json
 
 # Compile artifact
-barbacane-control compile \
-  --specs specs/*.yaml \
-  --output dist/gateway.bca \
-  --production
+barbacane compile \
+  --spec specs/users.yaml \
+  --spec specs/orders.yaml \
+  --output dist/gateway.bca
 
-# Deploy artifact to production server
-scp dist/gateway.bca server:/opt/barbacane/
-ssh server "systemctl restart barbacane"
+echo "Artifact built: dist/gateway.bca"
 ```
 
 ### Multi-Spec Gateway
 
 ```bash
 # Compile multiple specs into one artifact
-barbacane-control compile \
-  --specs users-api.yaml \
-  --specs orders-api.yaml \
-  --specs payments-api.yaml \
-  --output combined.bca \
-  --verbose
+barbacane compile \
+  --spec users-api.yaml \
+  --spec orders-api.yaml \
+  --spec payments-api.yaml \
+  --output combined.bca
 
 # Routes from all specs are merged
-# Conflicts (same path+method) cause compilation error
+# Conflicts (same path+method) cause E1010 error
+```
+
+### Testing Locally
+
+```bash
+# Start gateway
+barbacane serve --artifact api.bca --dev --listen 127.0.0.1:8080 &
+
+# Test endpoints
+curl http://localhost:8080/health
+curl http://localhost:8080/__barbacane/health
+curl http://localhost:8080/__barbacane/openapi
+
+# Stop gateway
+kill %1
 ```

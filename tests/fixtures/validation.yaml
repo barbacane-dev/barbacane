@@ -1,0 +1,111 @@
+openapi: "3.1.0"
+info:
+  title: Validation Test API
+  version: "1.0.0"
+
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[1-9][0-9]*$"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[1-9][0-9]?$|^100$"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"users":[]}'
+
+    post:
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                email:
+                  type: string
+                  format: email
+                age:
+                  type: integer
+                  minimum: 0
+                  maximum: 150
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{"id":"123"}'
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"123","name":"Test"}'
+
+    put:
+      operationId: updateUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"updated":true}'
+
+  /health:
+    get:
+      operationId: healthCheck
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'

@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::Builder;
 
-use barbacane_spec_parser::{parse_spec_file, ApiSpec, DispatchConfig, SpecFormat};
+use barbacane_spec_parser::{
+    parse_spec_file, ApiSpec, DispatchConfig, Parameter, RequestBody, SpecFormat,
+};
 
 use crate::error::CompileError;
 
@@ -53,6 +55,10 @@ pub struct CompiledOperation {
     pub path: String,
     pub method: String,
     pub operation_id: Option<String>,
+    /// Parameters for validation (path, query, header).
+    pub parameters: Vec<Parameter>,
+    /// Request body schema for validation.
+    pub request_body: Option<RequestBody>,
     pub dispatch: DispatchConfig,
 }
 
@@ -99,6 +105,8 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
                 path: op.path.clone(),
                 method: op.method.clone(),
                 operation_id: op.operation_id.clone(),
+                parameters: op.parameters.clone(),
+                request_body: op.request_body.clone(),
                 dispatch,
             });
         }

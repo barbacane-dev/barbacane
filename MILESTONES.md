@@ -4,48 +4,48 @@ Each milestone produces a testable increment. Stories are ordered within a miles
 
 ---
 
-## M1 — Compile and Route
+## M1 — Compile and Route ✅
 
 The minimum viable loop: parse an OpenAPI spec, compile it into an artifact, load it in the data plane, and route requests to a built-in mock response. No WASM, no validation, no auth — just prove the pipeline works end to end.
 
 **Specs:** SPEC-001 (partial), SPEC-002 (partial)
 
-- [ ] Set up Rust workspace (`barbacane`, `barbacane-control`, `barbacane-plugin-sdk`)
-- [ ] OpenAPI 3.x parser — read YAML/JSON, extract `paths`, `servers`, `x-barbacane-*` extensions
-- [ ] Routing trie — compile `paths` into a prefix trie with static/param segments and method sets
-- [ ] Artifact format — produce a `.bca` archive with `manifest.json` and `routes.fb` (FlatBuffers)
-- [ ] `barbacane-control compile` CLI — accepts `--specs`, outputs `.bca`
-- [ ] Data plane binary — loads `.bca`, memory-maps FlatBuffers, binds to port
-- [ ] Request routing — trie lookup, path parameter capture, method matching
-- [ ] Mock dispatcher — hardcoded in the data plane (not yet a plugin), returns the config body
-- [ ] `x-barbacane-dispatch` extraction — read dispatcher name + config from spec
-- [ ] 404 and 405 responses — `route-not-found`, `method-not-allowed` with RFC 9457 format
-- [ ] Health endpoint — `GET /__barbacane/health`
-- [ ] Path normalization — strip trailing slashes, collapse double slashes
-- [ ] Integration test — compile a fixture spec, boot a `TestGateway`, send requests, assert status codes
+- [x] Set up Rust workspace (`barbacane`, `barbacane-control`, `barbacane-plugin-sdk`)
+- [x] OpenAPI 3.x parser — read YAML/JSON, extract `paths`, `servers`, `x-barbacane-*` extensions
+- [x] Routing trie — compile `paths` into a prefix trie with static/param segments and method sets
+- [x] Artifact format — produce a `.bca` archive with `manifest.json` and `routes.json`
+- [x] `barbacane compile` CLI — accepts `--spec`, outputs `.bca`
+- [x] Data plane binary — loads `.bca`, binds to port
+- [x] Request routing — trie lookup, path parameter capture, method matching
+- [x] Mock dispatcher — hardcoded in the data plane (not yet a plugin), returns the config body
+- [x] `x-barbacane-dispatch` extraction — read dispatcher name + config from spec
+- [x] 404 and 405 responses — `route-not-found`, `method-not-allowed` with RFC 9457 format
+- [x] Health endpoint — `GET /__barbacane/health`
+- [x] Path normalization — strip trailing slashes, collapse double slashes
+- [x] Integration test — compile a fixture spec, boot a `TestGateway`, send requests, assert status codes
 
 ---
 
-## M2 — Request Validation
+## M2 — Request Validation ✅
 
 The gateway enforces the spec. Requests that don't conform are rejected before reaching any dispatcher.
 
 **Specs:** SPEC-001 (section 8), SPEC-002 (section 4.5)
 
-- [ ] JSON Schema compilation — precompile schemas from spec into `schemas.fb`
-- [ ] Path parameter validation — type, format, enum constraints
-- [ ] Query parameter validation — required check, schema validation
-- [ ] Header validation — required headers, schema validation
-- [ ] Content-Type check — reject if not in `requestBody.content`
-- [ ] Request body validation — JSON Schema validation against matched content type
-- [ ] Fail-fast behavior — stop at first failure, return 400
-- [ ] Error model — RFC 9457 responses with `urn:barbacane:error:*` URNs
-- [ ] Development mode — `--dev` flag, verbose error details (field, reason, expected, spec, operation)
-- [ ] Request limits — max body size, header count/size, URI length
-- [ ] `format` validation — date-time, email, uuid, uri, ipv4, ipv6
-- [ ] `barbacane-control validate` CLI — quick spec validation without plugin resolution
-- [ ] Compiler validation — E1001–E1004 (spec validity), E1010–E1015 (extension validity)
-- [ ] Integration tests — validation acceptance/rejection for each constraint type
+- [x] JSON Schema compilation — precompile schemas at gateway startup using `jsonschema` crate
+- [x] Path parameter validation — type constraints (as strings with pattern validation)
+- [x] Query parameter validation — required check, schema validation
+- [x] Header validation — required headers, schema validation
+- [x] Content-Type check — reject if not in `requestBody.content`
+- [x] Request body validation — JSON Schema validation against matched content type
+- [x] Fail-fast behavior — stop at first failure category, return 400
+- [x] Error model — RFC 9457 responses with `urn:barbacane:error:*` URNs
+- [x] Development mode — `--dev` flag, verbose error details (field, location, reason)
+- [x] Request limits — max body size, header count/size, URI length
+- [x] `format` validation — date-time, email, uuid, uri, ipv4, ipv6
+- [x] `barbacane validate` CLI — quick spec validation without plugin resolution
+- [x] Compiler validation — E1001–E1004 (spec validity), E1010–E1015 (extension validity)
+- [x] Integration tests — validation acceptance/rejection for each constraint type
 
 ---
 

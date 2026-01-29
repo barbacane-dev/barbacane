@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use crate::error::ParseError;
 use crate::model::{
-    ApiSpec, DispatchConfig, MiddlewareConfig, Operation, Parameter, SpecFormat,
+    ApiSpec, ContentSchema, DispatchConfig, MiddlewareConfig, Operation, Parameter, RequestBody,
+    SpecFormat,
 };
 
 /// HTTP methods we recognize in OpenAPI paths.
@@ -151,6 +152,8 @@ fn parse_openapi_paths(root: &serde_json::Map<String, Value>) -> Result<Vec<Oper
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let request_body = parse_request_body(op_obj);
+
                 let dispatch = extract_dispatch(op_obj);
 
                 let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
@@ -166,6 +169,7 @@ fn parse_openapi_paths(root: &serde_json::Map<String, Value>) -> Result<Vec<Oper
                     method: method.to_uppercase(),
                     operation_id,
                     parameters: params,
+                    request_body,
                     dispatch,
                     middlewares,
                     extensions,
@@ -197,6 +201,31 @@ fn parse_parameters(obj: &serde_json::Map<String, Value>) -> Vec<Parameter> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Parse request body from an operation object.
+fn parse_request_body(obj: &serde_json::Map<String, Value>) -> Option<RequestBody> {
+    let body = obj.get("requestBody")?.as_object()?;
+
+    let required = body
+        .get("required")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let content_obj = body.get("content")?.as_object()?;
+
+    let mut content = BTreeMap::new();
+    for (media_type, media_obj) in content_obj {
+        let schema = media_obj
+            .as_object()
+            .and_then(|o| o.get("schema").cloned());
+        content.insert(
+            media_type.clone(),
+            ContentSchema { schema },
+        );
+    }
+
+    Some(RequestBody { required, content })
 }
 
 /// Parse AsyncAPI 3.x channels into operations (stub for M9).
@@ -379,5 +408,45 @@ paths:
 
         let op = &spec.operations[0];
         assert!(op.extensions.contains_key("x-barbacane-cache"));
+    }
+
+    #[test]
+    fn parse_request_body() {
+        let yaml = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users:
+    post:
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        let op = &spec.operations[0];
+
+        let body = op.request_body.as_ref().expect("should have request body");
+        assert!(body.required);
+        assert!(body.content.contains_key("application/json"));
+
+        let json_content = &body.content["application/json"];
+        let schema = json_content.schema.as_ref().expect("should have schema");
+        assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
     }
 }

@@ -47,7 +47,7 @@ Metadata about the artifact.
 |-------|------|-------------|
 | `barbacane_artifact_version` | integer | Format version (currently `1`) |
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
-| `compiler_version` | string | Version of `barbacane-control` |
+| `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
 | `routes_count` | integer | Number of compiled routes |
 | `checksums` | object | SHA-256 checksums for integrity |
@@ -232,13 +232,13 @@ Don't commit `.bca` files to git. Instead:
 
 ```bash
 # Compile in CI
-barbacane-control compile \
-  --specs specs/*.yaml \
+barbacane compile \
+  --spec specs/*.yaml \
   --output dist/gateway-${VERSION}.bca
 
 # Upload to registry
 aws s3 cp dist/gateway-${VERSION}.bca s3://artifacts/
 
 # Deploy
-ssh prod "barbacane --artifact /opt/barbacane/gateway.bca"
+ssh prod "barbacane serve --artifact /opt/barbacane/gateway.bca"
 ```

@@ -299,7 +299,7 @@ paths:
 The compiler validates your spec:
 
 ```bash
-barbacane-control validate --specs api.yaml --verbose
+barbacane validate --spec api.yaml
 ```
 
 Errors you might see:

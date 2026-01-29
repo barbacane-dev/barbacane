@@ -13,14 +13,14 @@
 
 ```bash
 # Install (coming soon)
-cargo install barbacane barbacane-control
+cargo install barbacane
 
 # Add x-barbacane-dispatch to your OpenAPI spec
 # Compile
-barbacane-control compile --specs api.yaml --output api.bca
+barbacane compile --spec api.yaml --output api.bca
 
 # Run
-barbacane --artifact api.bca --listen 0.0.0.0:8080
+barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
 ## Documentation

@@ -27,7 +27,7 @@ Returns the gateway health status.
 |-------|------|-------------|
 | `status` | string | Always `"healthy"` if responding |
 | `artifact_version` | integer | `.bca` format version |
-| `compiler_version` | string | `barbacane-control` version that compiled the artifact |
+| `compiler_version` | string | `barbacane` version that compiled the artifact |
 | `routes_count` | integer | Number of routes loaded |
 
 ### Usage
