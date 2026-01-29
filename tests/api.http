@@ -1,0 +1,147 @@
+### Barbacane M2 Validation Test Scenarios
+### Usage: Start gateway first with:
+###   cargo build
+###   ./target/debug/barbacane compile --spec tests/fixtures/validation.yaml --output /tmp/test.bca
+###   ./target/debug/barbacane serve --artifact /tmp/test.bca --dev
+
+@baseUrl = http://localhost:8080
+
+### ================================
+### Health & Basic Routes
+### ================================
+
+### Health check (should return 200)
+GET {{baseUrl}}/health
+
+### Internal health endpoint
+GET {{baseUrl}}/__barbacane/health
+
+
+### Internal spec endpoint
+GET {{baseUrl}}/__barbacane/openapi
+
+### ================================
+### Request Body Validation
+### ================================
+
+### Missing required body (400)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+### Missing required field 'name' (400)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"email": "test@example.com"}
+
+### Valid request body (201)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"name": "Test User", "email": "test@example.com"}
+
+### Valid request with all fields (201)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"name": "Test User", "email": "test@example.com", "age": 25}
+
+### ================================
+### Content-Type Validation
+### ================================
+
+### Wrong content type (400)
+POST {{baseUrl}}/users
+Content-Type: text/plain
+
+name=Test
+
+### Wrong content type - XML (400)
+POST {{baseUrl}}/users
+Content-Type: application/xml
+
+<user><name>Test</name></user>
+
+### ================================
+### Header Validation
+### ================================
+
+### Missing required X-Request-ID header (400)
+PUT {{baseUrl}}/users/123
+Content-Type: application/json
+
+{"name": "Updated"}
+
+### With required X-Request-ID header (200)
+PUT {{baseUrl}}/users/123
+Content-Type: application/json
+X-Request-ID: abc-123
+
+{"name": "Updated"}
+
+### ================================
+### Query Parameter Validation
+### ================================
+
+### No query params (200)
+GET {{baseUrl}}/users
+
+### Valid query params (200)
+GET {{baseUrl}}/users?page=1&limit=10
+
+### Valid page only (200)
+GET {{baseUrl}}/users?page=5
+
+### Valid limit only (200)
+GET {{baseUrl}}/users?limit=50
+
+### Invalid page format - zero (400)
+GET {{baseUrl}}/users?page=0
+
+### Invalid page format - negative (400)
+GET {{baseUrl}}/users?page=-1
+
+### Invalid page format - letters (400)
+GET {{baseUrl}}/users?page=abc
+
+### Invalid limit - over 100 (400)
+GET {{baseUrl}}/users?limit=101
+
+### ================================
+### Path Parameter Validation
+### ================================
+
+### Valid path param (200)
+GET {{baseUrl}}/users/123
+
+### ================================
+### 404 & 405 Errors
+### ================================
+
+### Non-existent route (404)
+GET {{baseUrl}}/nonexistent
+
+### Method not allowed (405)
+DELETE {{baseUrl}}/health
+
+### ================================
+### JSON Schema Validation
+### ================================
+
+### Invalid JSON syntax (400)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{invalid json}
+
+### Wrong type for field (400)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"name": 123, "email": "test@example.com"}
+
+### Name too short - minLength violation (400 - if minLength is enforced)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"name": "", "email": "test@example.com"}
