@@ -14,6 +14,7 @@ mod pool;
 mod schema;
 mod trap;
 mod validate;
+pub mod version;
 
 pub use chain::{
     execute_on_request, execute_on_response, execute_on_response_partial, ChainResult,

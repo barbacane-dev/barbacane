@@ -1,0 +1,14 @@
+[package]
+name = "barbacane-plugin-macros"
+description = "Proc macros for building Barbacane WASM plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+proc-macro2 = "1"

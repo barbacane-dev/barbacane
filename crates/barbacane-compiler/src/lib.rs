@@ -7,8 +7,9 @@ pub mod artifact;
 pub mod error;
 
 pub use artifact::{
-    compile, load_manifest, load_routes, load_specs, CompiledOperation, CompiledRoutes, Manifest,
-    SourceSpec, ARTIFACT_VERSION, COMPILER_VERSION,
+    compile, compile_with_plugins, load_manifest, load_plugins, load_routes, load_specs,
+    BundledPlugin, CompiledOperation, CompiledRoutes, Manifest, PluginBundle, SourceSpec,
+    ARTIFACT_VERSION, COMPILER_VERSION,
 };
 pub use error::CompileError;
 // Re-export validation types from spec-parser

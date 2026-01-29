@@ -49,7 +49,7 @@ The gateway enforces the spec. Requests that don't conform are rejected before r
 
 ---
 
-## M3 — WASM Plugin System (In Progress)
+## M3 — WASM Plugin System ✅
 
 The extensibility layer. Plugins are loaded as WASM modules with sandboxed execution, host functions, and context passing.
 
@@ -77,17 +77,17 @@ The extensibility layer. Plugins are loaded as WASM modules with sandboxed execu
 - [x] Short-circuit support — middleware returns 1, chain stops, response returned
 - [x] Per-operation chain resolution — global chain + per-route overrides (replace, not merge)
 
-### Plugin SDK
+### Plugin SDK (`barbacane-plugin-macros` crate)
 - [x] `barbacane-plugin-sdk` crate — `Request`, `Response`, `Action` types, serde glue
-- [ ] `#[barbacane_middleware]` macro — generates init/on_request/on_response exports
-- [ ] `#[barbacane_dispatcher]` macro — generates init/dispatch exports
+- [x] `#[barbacane_middleware]` macro — generates init/on_request/on_response exports
+- [x] `#[barbacane_dispatcher]` macro — generates init/dispatch exports
 
 ### CLI & Bundling
-- [ ] `barbacane-control plugin register` CLI — validate and store plugin in registry
-- [ ] Plugin version resolution — `name`, `name@1.0.0`, `name@^1.0.0`
-- [ ] Compiler: plugin resolution — E1020–E1024 checks
-- [ ] Artifact bundling — copy `.wasm` files into `plugins/` directory of `.bca`
-- [ ] Integration tests — middleware chain, short-circuit, context passing, plugin crash handling
+- [x] Plugin version resolution — `name`, `name@1.0.0`, `name@^1.0.0`
+- [x] Artifact bundling — copy `.wasm` files into `plugins/` directory of `.bca`
+- [ ] `barbacane-control plugin register` CLI — validate and store plugin in registry (deferred to M8)
+- [ ] Compiler: plugin resolution — E1020–E1024 checks (deferred to M8)
+- [ ] Integration tests — middleware chain with real WASM plugins (requires M4 for http-upstream)
 
 ---
 
