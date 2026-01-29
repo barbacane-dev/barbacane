@@ -8,7 +8,7 @@ pub mod error;
 
 pub use artifact::{
     compile, compile_with_options, compile_with_plugins, load_manifest, load_plugins, load_routes,
-    load_specs, BundledPlugin, CompiledOperation, CompiledRoutes, CompileOptions, Manifest,
+    load_specs, BundledPlugin, CompileOptions, CompiledOperation, CompiledRoutes, Manifest,
     PluginBundle, SourceSpec, ARTIFACT_VERSION, COMPILER_VERSION,
 };
 pub use error::CompileError;

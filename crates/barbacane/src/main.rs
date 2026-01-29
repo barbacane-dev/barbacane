@@ -132,14 +132,14 @@ impl Gateway {
         limits: RequestLimits,
         allow_plaintext_upstream: bool,
     ) -> Result<Self, String> {
-        let manifest = load_manifest(artifact_path)
-            .map_err(|e| format!("failed to load manifest: {}", e))?;
+        let manifest =
+            load_manifest(artifact_path).map_err(|e| format!("failed to load manifest: {}", e))?;
 
-        let routes = load_routes(artifact_path)
-            .map_err(|e| format!("failed to load routes: {}", e))?;
+        let routes =
+            load_routes(artifact_path).map_err(|e| format!("failed to load routes: {}", e))?;
 
-        let specs = load_specs(artifact_path)
-            .map_err(|e| format!("failed to load specs: {}", e))?;
+        let specs =
+            load_specs(artifact_path).map_err(|e| format!("failed to load specs: {}", e))?;
 
         // Initialize WASM engine
         let plugin_limits = PluginLimits::default();
@@ -220,9 +220,7 @@ impl Gateway {
         let headers: HashMap<String, String> = req
             .headers()
             .iter()
-            .filter_map(|(k, v)| {
-                Some((k.as_str().to_string(), v.to_str().ok()?.to_string()))
-            })
+            .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
             .collect();
 
         // Check header limits
@@ -272,7 +270,8 @@ impl Gateway {
                     return Ok(self.validation_error_response(&errors));
                 }
 
-                self.dispatch(operation, params, &body_bytes, &headers).await
+                self.dispatch(operation, params, &body_bytes, &headers)
+                    .await
             }
             RouteMatch::MethodNotAllowed { allowed } => {
                 Ok(self.method_not_allowed_response(allowed))
@@ -303,8 +302,14 @@ impl Gateway {
         match dispatch.name.as_str() {
             "mock" => self.dispatch_mock(&dispatch.config),
             "http-upstream" => {
-                self.dispatch_http_upstream(&dispatch.config, operation, _params, _request_body, _headers)
-                    .await
+                self.dispatch_http_upstream(
+                    &dispatch.config,
+                    operation,
+                    _params,
+                    _request_body,
+                    _headers,
+                )
+                .await
             }
             _ => {
                 // WASM dispatcher - requires plugin bundled in artifact
@@ -390,11 +395,7 @@ impl Gateway {
 
         // Construct the full URL
         let full_url = if upstream_url.ends_with('/') || upstream_path.starts_with('/') {
-            format!(
-                "{}{}",
-                upstream_url.trim_end_matches('/'),
-                upstream_path
-            )
+            format!("{}{}", upstream_url.trim_end_matches('/'), upstream_path)
         } else {
             format!("{}{}", upstream_url, upstream_path)
         };
@@ -434,9 +435,8 @@ impl Gateway {
         // Execute the request
         match self.http_client.call(request).await {
             Ok(response) => {
-                let mut builder = Response::builder().status(
-                    StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK),
-                );
+                let mut builder = Response::builder()
+                    .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK));
 
                 // Add response headers, stripping hop-by-hop headers
                 for (key, value) in &response.headers {
@@ -464,7 +464,9 @@ impl Gateway {
                 };
 
                 match e {
-                    HttpClientError::Timeout => Ok(self.gateway_timeout_response(detail.as_deref())),
+                    HttpClientError::Timeout => {
+                        Ok(self.gateway_timeout_response(detail.as_deref()))
+                    }
                     HttpClientError::CircuitOpen(_) => {
                         Ok(self.service_unavailable_response(detail.as_deref()))
                     }
@@ -801,9 +803,14 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                                     code: "E1011".to_string(),
                                     message: format!(
                                         "middleware #{} in {} {} is missing 'name'",
-                                        idx + 1, op.method, op.path
+                                        idx + 1,
+                                        op.method,
+                                        op.path
                                     ),
-                                    location: Some(format!("{}:{} {}", spec_path, op.path, op.method)),
+                                    location: Some(format!(
+                                        "{}:{} {}",
+                                        spec_path, op.path, op.method
+                                    )),
                                 });
                                 has_errors = true;
                             }
@@ -940,7 +947,11 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
             if result.valid && result.warnings.is_empty() {
                 eprintln!("✓ {} is valid", result.file);
             } else if result.valid {
-                eprintln!("✓ {} is valid (with {} warning(s))", result.file, result.warnings.len());
+                eprintln!(
+                    "✓ {} is valid (with {} warning(s))",
+                    result.file,
+                    result.warnings.len()
+                );
             } else {
                 eprintln!("✗ {} has {} error(s)", result.file, result.errors.len());
             }
@@ -965,8 +976,12 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
         let valid_count = results.iter().filter(|r| r.valid).count();
         let total = results.len();
         eprintln!();
-        eprintln!("validated {} spec(s): {} valid, {} invalid",
-            total, valid_count, total - valid_count);
+        eprintln!(
+            "validated {} spec(s): {} valid, {} invalid",
+            total,
+            valid_count,
+            total - valid_count
+        );
     }
 
     if has_errors {
@@ -991,7 +1006,12 @@ fn run_compile(specs: &[String], output: &str) -> ExitCode {
 
     match compile(&spec_paths, output_path) {
         Ok(manifest) => {
-            eprintln!("compiled {} spec(s) to {} ({} routes)", specs.len(), output, manifest.routes_count);
+            eprintln!(
+                "compiled {} spec(s) to {} ({} routes)",
+                specs.len(),
+                output,
+                manifest.routes_count
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {

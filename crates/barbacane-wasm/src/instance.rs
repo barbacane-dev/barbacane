@@ -10,7 +10,9 @@ use wasmtime::{Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
 
 use crate::engine::CompiledModule;
 use crate::error::WasmError;
-use crate::http_client::{HttpClient, HttpRequest as HttpClientRequest, HttpResponse as HttpClientResponse};
+use crate::http_client::{
+    HttpClient, HttpRequest as HttpClientRequest, HttpResponse as HttpClientResponse,
+};
 use crate::limits::PluginLimits;
 
 /// Per-request context passed to plugins.
@@ -468,8 +470,10 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 // Read data first, then mutate
                 let data = memory.data(&caller);
                 if key_end <= data.len() && val_end <= data.len() {
-                    let key_result = std::str::from_utf8(&data[key_start..key_end]).map(String::from);
-                    let val_result = std::str::from_utf8(&data[val_start..val_end]).map(String::from);
+                    let key_result =
+                        std::str::from_utf8(&data[key_start..key_end]).map(String::from);
+                    let val_result =
+                        std::str::from_utf8(&data[val_start..val_end]).map(String::from);
 
                     if let (Ok(key), Ok(value)) = (key_result, val_result) {
                         caller.data_mut().context.values.insert(key, value);
@@ -537,9 +541,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     Ok(handle) => {
                         handle.block_on(async {
                             match http_client.call(request).await {
-                                Ok(response) => {
-                                    serde_json::to_vec(&response).ok()
-                                }
+                                Ok(response) => serde_json::to_vec(&response).ok(),
                                 Err(e) => {
                                     tracing::error!("HTTP call failed: {}", e);
                                     // Return error response
@@ -560,22 +562,20 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                                                 &format!("Circuit breaker open for {}", host),
                                             )
                                         }
-                                        crate::http_client::HttpClientError::ConnectionFailed(_) => {
-                                            HttpClientResponse::error(
-                                                502,
-                                                "urn:barbacane:error:upstream-unavailable",
-                                                "Bad Gateway",
-                                                "Failed to connect to upstream",
-                                            )
-                                        }
-                                        _ => {
-                                            HttpClientResponse::error(
-                                                502,
-                                                "urn:barbacane:error:upstream-unavailable",
-                                                "Bad Gateway",
-                                                &e.to_string(),
-                                            )
-                                        }
+                                        crate::http_client::HttpClientError::ConnectionFailed(
+                                            _,
+                                        ) => HttpClientResponse::error(
+                                            502,
+                                            "urn:barbacane:error:upstream-unavailable",
+                                            "Bad Gateway",
+                                            "Failed to connect to upstream",
+                                        ),
+                                        _ => HttpClientResponse::error(
+                                            502,
+                                            "urn:barbacane:error:upstream-unavailable",
+                                            "Bad Gateway",
+                                            &e.to_string(),
+                                        ),
                                     };
                                     serde_json::to_vec(&error_response).ok()
                                 }

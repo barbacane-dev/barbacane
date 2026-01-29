@@ -25,9 +25,9 @@ pub struct PluginLimits {
 impl Default for PluginLimits {
     fn default() -> Self {
         Self {
-            max_memory_bytes: 16 * 1024 * 1024,  // 16 MB
-            max_stack_bytes: 1024 * 1024,         // 1 MB
-            max_execution_ms: 100,                // 100 ms
+            max_memory_bytes: 16 * 1024 * 1024, // 16 MB
+            max_stack_bytes: 1024 * 1024,       // 1 MB
+            max_execution_ms: 100,              // 100 ms
             // Fuel is calibrated experimentally. This value gives roughly 100ms
             // on typical hardware. May need adjustment based on benchmarks.
             max_fuel: 100_000_000,

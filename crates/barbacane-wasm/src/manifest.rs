@@ -128,7 +128,10 @@ impl PluginManifest {
 
     /// Check if this plugin declares a specific capability.
     pub fn has_capability(&self, capability: &str) -> bool {
-        self.capabilities.host_functions.iter().any(|c| c == capability)
+        self.capabilities
+            .host_functions
+            .iter()
+            .any(|c| c == capability)
     }
 }
 
@@ -263,7 +266,10 @@ host_functions = ["unknown_function"]
 "#;
         let result = PluginManifest::from_toml(manifest_str);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), WasmError::UnknownCapability(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            WasmError::UnknownCapability(_)
+        ));
     }
 
     #[test]

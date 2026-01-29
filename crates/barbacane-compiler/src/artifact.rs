@@ -182,7 +182,10 @@ pub fn compile_with_options(
     let source_specs: Vec<SourceSpec> = specs
         .iter()
         .map(|(spec, _, sha256)| SourceSpec {
-            file: spec.filename.clone().unwrap_or_else(|| "unknown".to_string()),
+            file: spec
+                .filename
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
             sha256: sha256.clone(),
             spec_type: match spec.format {
                 SpecFormat::OpenApi => "openapi".to_string(),
@@ -193,7 +196,10 @@ pub fn compile_with_options(
         .collect();
 
     let mut checksums = HashMap::new();
-    checksums.insert("routes.json".to_string(), format!("sha256:{}", routes_sha256));
+    checksums.insert(
+        "routes.json".to_string(),
+        format!("sha256:{}", routes_sha256),
+    );
 
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
@@ -312,7 +318,9 @@ pub fn load_specs(artifact_path: &Path) -> Result<HashMap<String, String>, Compi
 
 /// Load all bundled plugins from a .bca artifact.
 /// Returns a map of plugin name -> (version, WASM bytes).
-pub fn load_plugins(artifact_path: &Path) -> Result<HashMap<String, (String, Vec<u8>)>, CompileError> {
+pub fn load_plugins(
+    artifact_path: &Path,
+) -> Result<HashMap<String, (String, Vec<u8>)>, CompileError> {
     // First load manifest to get plugin metadata
     let manifest = load_manifest(artifact_path)?;
 
@@ -421,7 +429,10 @@ pub fn compile_with_plugins(
     // Build plugin metadata
     let mut bundled_plugins = Vec::new();
     let mut checksums = HashMap::new();
-    checksums.insert("routes.json".to_string(), format!("sha256:{}", routes_sha256));
+    checksums.insert(
+        "routes.json".to_string(),
+        format!("sha256:{}", routes_sha256),
+    );
 
     for plugin in plugins {
         let wasm_path = format!("plugins/{}.wasm", plugin.name);
@@ -442,7 +453,10 @@ pub fn compile_with_plugins(
     let source_specs: Vec<SourceSpec> = specs
         .iter()
         .map(|(spec, _, sha256)| SourceSpec {
-            file: spec.filename.clone().unwrap_or_else(|| "unknown".to_string()),
+            file: spec
+                .filename
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
             sha256: sha256.clone(),
             spec_type: match spec.format {
                 SpecFormat::OpenApi => "openapi".to_string(),
@@ -808,7 +822,9 @@ paths:
         let result = compile_with_options(
             &[spec_path.as_path()],
             &output_path,
-            &CompileOptions { allow_plaintext: true },
+            &CompileOptions {
+                allow_plaintext: true,
+            },
         );
         assert!(result.is_ok());
     }
@@ -869,7 +885,8 @@ paths:
             wasm_bytes: fake_wasm.clone(),
         }];
 
-        let manifest = compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
+        let manifest =
+            compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
 
         assert_eq!(manifest.plugins.len(), 1);
         assert_eq!(manifest.plugins[0].name, "test-plugin");

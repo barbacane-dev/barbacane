@@ -42,7 +42,11 @@ pub enum ValidationError2 {
     UriTooLong { length: usize, limit: usize },
 
     #[error("header '{name}' too large: {size} bytes exceeds limit of {limit} bytes")]
-    HeaderTooLarge { name: String, size: usize, limit: usize },
+    HeaderTooLarge {
+        name: String,
+        size: usize,
+        limit: usize,
+    },
 }
 
 /// RFC 9457 problem details for validation errors.
@@ -74,20 +78,33 @@ impl ProblemDetails {
                         ValidationError2::MissingRequiredParameter { name, location } => {
                             detail.insert("field".into(), Value::String(name.clone()));
                             detail.insert("location".into(), Value::String(location.clone()));
-                            detail.insert("reason".into(), Value::String("missing required parameter".into()));
+                            detail.insert(
+                                "reason".into(),
+                                Value::String("missing required parameter".into()),
+                            );
                         }
-                        ValidationError2::InvalidParameter { name, location, reason } => {
+                        ValidationError2::InvalidParameter {
+                            name,
+                            location,
+                            reason,
+                        } => {
                             detail.insert("field".into(), Value::String(name.clone()));
                             detail.insert("location".into(), Value::String(location.clone()));
                             detail.insert("reason".into(), Value::String(reason.clone()));
                         }
                         ValidationError2::MissingRequiredBody => {
                             detail.insert("field".into(), Value::String("body".into()));
-                            detail.insert("reason".into(), Value::String("missing required request body".into()));
+                            detail.insert(
+                                "reason".into(),
+                                Value::String("missing required request body".into()),
+                            );
                         }
                         ValidationError2::UnsupportedContentType(ct) => {
                             detail.insert("field".into(), Value::String("content-type".into()));
-                            detail.insert("reason".into(), Value::String(format!("unsupported: {}", ct)));
+                            detail.insert(
+                                "reason".into(),
+                                Value::String(format!("unsupported: {}", ct)),
+                            );
                         }
                         ValidationError2::InvalidBody(reason) => {
                             detail.insert("field".into(), Value::String("body".into()));
@@ -95,19 +112,44 @@ impl ProblemDetails {
                         }
                         ValidationError2::BodyTooLarge { size, limit } => {
                             detail.insert("field".into(), Value::String("body".into()));
-                            detail.insert("reason".into(), Value::String(format!("body too large: {} bytes exceeds {} byte limit", size, limit)));
+                            detail.insert(
+                                "reason".into(),
+                                Value::String(format!(
+                                    "body too large: {} bytes exceeds {} byte limit",
+                                    size, limit
+                                )),
+                            );
                         }
                         ValidationError2::TooManyHeaders { count, limit } => {
                             detail.insert("field".into(), Value::String("headers".into()));
-                            detail.insert("reason".into(), Value::String(format!("too many headers: {} exceeds {} limit", count, limit)));
+                            detail.insert(
+                                "reason".into(),
+                                Value::String(format!(
+                                    "too many headers: {} exceeds {} limit",
+                                    count, limit
+                                )),
+                            );
                         }
                         ValidationError2::UriTooLong { length, limit } => {
                             detail.insert("field".into(), Value::String("uri".into()));
-                            detail.insert("reason".into(), Value::String(format!("URI too long: {} chars exceeds {} char limit", length, limit)));
+                            detail.insert(
+                                "reason".into(),
+                                Value::String(format!(
+                                    "URI too long: {} chars exceeds {} char limit",
+                                    length, limit
+                                )),
+                            );
                         }
                         ValidationError2::HeaderTooLarge { name, size, limit } => {
-                            detail.insert("field".into(), Value::String(format!("header:{}", name)));
-                            detail.insert("reason".into(), Value::String(format!("header too large: {} bytes exceeds {} byte limit", size, limit)));
+                            detail
+                                .insert("field".into(), Value::String(format!("header:{}", name)));
+                            detail.insert(
+                                "reason".into(),
+                                Value::String(format!(
+                                    "header too large: {} bytes exceeds {} byte limit",
+                                    size, limit
+                                )),
+                            );
                         }
                     }
                     Value::Object(detail)
@@ -155,10 +197,10 @@ pub struct RequestLimits {
 impl Default for RequestLimits {
     fn default() -> Self {
         Self {
-            max_body_size: 1024 * 1024,      // 1 MB
+            max_body_size: 1024 * 1024, // 1 MB
             max_headers: 100,
-            max_header_size: 8 * 1024,       // 8 KB
-            max_uri_length: 8 * 1024,        // 8 KB
+            max_header_size: 8 * 1024, // 8 KB
+            max_uri_length: 8 * 1024,  // 8 KB
         }
     }
 }
@@ -176,7 +218,10 @@ impl RequestLimits {
     }
 
     /// Validate header count and individual header sizes.
-    pub fn validate_headers(&self, headers: &HashMap<String, String>) -> Result<(), ValidationError2> {
+    pub fn validate_headers(
+        &self,
+        headers: &HashMap<String, String>,
+    ) -> Result<(), ValidationError2> {
         if headers.len() > self.max_headers {
             return Err(ValidationError2::TooManyHeaders {
                 count: headers.len(),
@@ -335,7 +380,8 @@ impl OperationValidator {
 
                         let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
                         if !validation_errors.is_empty() {
-                            let reasons: Vec<String> = validation_errors.iter().map(|e| e.to_string()).collect();
+                            let reasons: Vec<String> =
+                                validation_errors.iter().map(|e| e.to_string()).collect();
                             errors.push(ValidationError2::InvalidParameter {
                                 name: param.name.clone(),
                                 location: "path".into(),
@@ -377,10 +423,7 @@ impl OperationValidator {
                 let mut parts = pair.splitn(2, '=');
                 let key = parts.next()?;
                 let value = parts.next().unwrap_or("");
-                Some((
-                    urlencoding_decode(key),
-                    urlencoding_decode(value),
-                ))
+                Some((urlencoding_decode(key), urlencoding_decode(value)))
             })
             .collect();
 
@@ -394,7 +437,8 @@ impl OperationValidator {
 
                         let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
                         if !validation_errors.is_empty() {
-                            let reasons: Vec<String> = validation_errors.iter().map(|e| e.to_string()).collect();
+                            let reasons: Vec<String> =
+                                validation_errors.iter().map(|e| e.to_string()).collect();
                             errors.push(ValidationError2::InvalidParameter {
                                 name: param.name.clone(),
                                 location: "query".into(),
@@ -428,10 +472,8 @@ impl OperationValidator {
         let mut errors = Vec::new();
 
         // Normalize header names to lowercase for comparison
-        let headers_lower: HashMap<String, &String> = headers
-            .iter()
-            .map(|(k, v)| (k.to_lowercase(), v))
-            .collect();
+        let headers_lower: HashMap<String, &String> =
+            headers.iter().map(|(k, v)| (k.to_lowercase(), v)).collect();
 
         for param in &self.header_params {
             let header_name = param.name.to_lowercase();
@@ -442,7 +484,8 @@ impl OperationValidator {
 
                         let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
                         if !validation_errors.is_empty() {
-                            let reasons: Vec<String> = validation_errors.iter().map(|e| e.to_string()).collect();
+                            let reasons: Vec<String> =
+                                validation_errors.iter().map(|e| e.to_string()).collect();
                             errors.push(ValidationError2::InvalidParameter {
                                 name: param.name.clone(),
                                 location: "header".into(),
@@ -519,7 +562,8 @@ impl OperationValidator {
 
                 let validation_errors: Vec<_> = schema.iter_errors(&json_body).collect();
                 if !validation_errors.is_empty() {
-                    let reasons: Vec<String> = validation_errors.iter().map(|e| e.to_string()).collect();
+                    let reasons: Vec<String> =
+                        validation_errors.iter().map(|e| e.to_string()).collect();
                     return Err(vec![ValidationError2::InvalidBody(reasons.join("; "))]);
                 }
             }
@@ -572,8 +616,8 @@ fn urlencoding_decode(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::compile_schema_with_formats;
+    use super::*;
 
     fn make_param(name: &str, location: &str, required: bool, schema: Option<Value>) -> Parameter {
         Parameter {
@@ -643,8 +687,8 @@ mod tests {
 
     #[test]
     fn validate_required_body() {
-        use std::collections::BTreeMap;
         use barbacane_spec_parser::ContentSchema;
+        use std::collections::BTreeMap;
 
         let mut content = BTreeMap::new();
         content.insert(
@@ -670,8 +714,8 @@ mod tests {
 
     #[test]
     fn validate_body_schema() {
-        use std::collections::BTreeMap;
         use barbacane_spec_parser::ContentSchema;
+        use std::collections::BTreeMap;
 
         let schema = serde_json::json!({
             "type": "object",
@@ -684,7 +728,9 @@ mod tests {
         let mut content = BTreeMap::new();
         content.insert(
             "application/json".to_string(),
-            ContentSchema { schema: Some(schema) },
+            ContentSchema {
+                schema: Some(schema),
+            },
         );
 
         let request_body = RequestBody {
@@ -705,8 +751,8 @@ mod tests {
 
     #[test]
     fn validate_unsupported_content_type() {
-        use std::collections::BTreeMap;
         use barbacane_spec_parser::ContentSchema;
+        use std::collections::BTreeMap;
 
         let mut content = BTreeMap::new();
         content.insert(
@@ -725,7 +771,10 @@ mod tests {
         assert!(result.is_err());
 
         if let Err(errors) = result {
-            assert!(matches!(errors[0], ValidationError2::UnsupportedContentType(_)));
+            assert!(matches!(
+                errors[0],
+                ValidationError2::UnsupportedContentType(_)
+            ));
         }
     }
 
@@ -779,7 +828,10 @@ mod tests {
         let uri = "/api/users/123456789";
         let result = limits.validate_uri(uri);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError2::UriTooLong { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError2::UriTooLong { .. }
+        ));
     }
 
     #[test]
@@ -802,7 +854,10 @@ mod tests {
             .collect();
         let result = limits.validate_headers(&headers);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError2::TooManyHeaders { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError2::TooManyHeaders { .. }
+        ));
     }
 
     #[test]
@@ -823,7 +878,10 @@ mod tests {
         headers.insert("X-Very-Long-Header".to_string(), "a".repeat(100));
         let result = limits.validate_headers(&headers);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError2::HeaderTooLarge { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError2::HeaderTooLarge { .. }
+        ));
     }
 
     #[test]
@@ -840,7 +898,10 @@ mod tests {
         };
         let result = limits.validate_body_size(1000);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError2::BodyTooLarge { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError2::BodyTooLarge { .. }
+        ));
     }
 
     // ========================
