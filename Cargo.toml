@@ -7,6 +7,7 @@ members = [
     "crates/barbacane-router",
     "crates/barbacane-validator",
     "crates/barbacane-plugin-sdk",
+    "crates/barbacane-plugin-macros",
     "crates/barbacane-wasm",
     "crates/barbacane-test",
 ]
@@ -68,11 +69,17 @@ dashmap = "6"
 # Logging
 tracing = "0.1"
 
+# Proc macros
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+proc-macro2 = "1"
+
 # Workspace crates
 barbacane-spec-parser = { path = "crates/barbacane-spec-parser" }
 barbacane-compiler = { path = "crates/barbacane-compiler" }
 barbacane-router = { path = "crates/barbacane-router" }
 barbacane-validator = { path = "crates/barbacane-validator" }
 barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk" }
+barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros" }
 barbacane-wasm = { path = "crates/barbacane-wasm" }
 barbacane-test = { path = "crates/barbacane-test" }
