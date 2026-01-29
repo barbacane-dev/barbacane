@@ -18,6 +18,14 @@ use crate::error::CompileError;
 /// Current artifact format version.
 pub const ARTIFACT_VERSION: u32 = 1;
 
+/// Options for compilation.
+#[derive(Debug, Clone, Default)]
+pub struct CompileOptions {
+    /// Allow plaintext HTTP upstream URLs (development only).
+    /// If false, compilation fails with E1031 for http:// URLs.
+    pub allow_plaintext: bool,
+}
+
 /// Compiler version (from Cargo.toml).
 pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -86,7 +94,18 @@ pub struct CompiledOperation {
 }
 
 /// Compile one or more spec files into a .bca artifact.
+///
+/// Uses default options (plaintext http:// URLs are not allowed).
 pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileError> {
+    compile_with_options(spec_paths, output, &CompileOptions::default())
+}
+
+/// Compile one or more spec files into a .bca artifact with options.
+pub fn compile_with_options(
+    spec_paths: &[&Path],
+    output: &Path,
+    options: &CompileOptions,
+) -> Result<Manifest, CompileError> {
     // Parse all specs
     let mut specs: Vec<(ApiSpec, String, String)> = Vec::new(); // (spec, content, sha256)
 
@@ -122,6 +141,18 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
                     op.method, op.path, spec_file
                 ))
             })?;
+
+            // Check for plaintext HTTP upstream URLs (E1031)
+            if !options.allow_plaintext {
+                if let Some(url) = extract_upstream_url(&dispatch.config) {
+                    if url.starts_with("http://") {
+                        return Err(CompileError::PlaintextUpstream(format!(
+                            "{} {} in '{}' - upstream URL: {}",
+                            op.method, op.path, spec_file, url
+                        )));
+                    }
+                }
+            }
 
             // Resolve middleware chain: operation-level overrides global
             let middlewares = op
@@ -556,6 +587,28 @@ fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
+/// Extract upstream URL from dispatch config, if present.
+///
+/// Looks for common URL fields in the dispatch config:
+/// - `url` (e.g., for http-upstream dispatcher)
+/// - `upstream` (alternative field name)
+fn extract_upstream_url(config: &serde_json::Value) -> Option<String> {
+    // Check for "url" field
+    if let Some(url) = config.get("url").and_then(|v| v.as_str()) {
+        return Some(url.to_string());
+    }
+
+    // Check for "upstream" field (which could be a URL or a name)
+    if let Some(upstream) = config.get("upstream").and_then(|v| v.as_str()) {
+        // Only return if it looks like a URL
+        if upstream.starts_with("http://") || upstream.starts_with("https://") {
+            return Some(upstream.to_string());
+        }
+    }
+
+    None
+}
+
 // Need to add hex encoding manually since we don't have the hex crate
 mod hex {
     const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
@@ -725,6 +778,64 @@ paths:
 
         let routes = load_routes(&output_path).unwrap();
         assert_eq!(routes.operations.len(), 2);
+    }
+
+    #[test]
+    fn compile_rejects_plaintext_http_url() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /proxy:
+    get:
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://backend.internal:8080/api"
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        // Default options reject plaintext HTTP
+        let result = compile(&[spec_path.as_path()], &output_path);
+        assert!(matches!(result, Err(CompileError::PlaintextUpstream(_))));
+
+        // With allow_plaintext, it should succeed
+        let result = compile_with_options(
+            &[spec_path.as_path()],
+            &output_path,
+            &CompileOptions { allow_plaintext: true },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn compile_allows_https_url() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /proxy:
+    get:
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://backend.internal:8080/api"
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        // HTTPS should be allowed by default
+        let result = compile(&[spec_path.as_path()], &output_path);
+        assert!(result.is_ok());
     }
 
     #[test]
