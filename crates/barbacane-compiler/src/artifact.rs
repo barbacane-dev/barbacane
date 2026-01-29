@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use tar::Builder;
 
 use barbacane_spec_parser::{
-    parse_spec_file, ApiSpec, DispatchConfig, Parameter, RequestBody, SpecFormat,
+    parse_spec_file, ApiSpec, DispatchConfig, MiddlewareConfig, Parameter, RequestBody, SpecFormat,
 };
 
 use crate::error::CompileError;
@@ -30,6 +30,24 @@ pub struct Manifest {
     pub source_specs: Vec<SourceSpec>,
     pub routes_count: usize,
     pub checksums: HashMap<String, String>,
+    /// Bundled plugins (empty if no plugins bundled).
+    #[serde(default)]
+    pub plugins: Vec<BundledPlugin>,
+}
+
+/// Metadata about a bundled plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundledPlugin {
+    /// Plugin name.
+    pub name: String,
+    /// Plugin version.
+    pub version: String,
+    /// Plugin type (middleware or dispatcher).
+    pub plugin_type: String,
+    /// Path within the artifact (e.g., "plugins/rate-limit.wasm").
+    pub wasm_path: String,
+    /// SHA-256 hash of the WASM file.
+    pub sha256: String,
 }
 
 /// Metadata about a source spec included in the artifact.
@@ -60,6 +78,11 @@ pub struct CompiledOperation {
     /// Request body schema for validation.
     pub request_body: Option<RequestBody>,
     pub dispatch: DispatchConfig,
+    /// Resolved middleware chain for this operation.
+    /// If the operation has its own middlewares, uses those.
+    /// Otherwise, uses the global middlewares from the spec.
+    #[serde(default)]
+    pub middlewares: Vec<MiddlewareConfig>,
 }
 
 /// Compile one or more spec files into a .bca artifact.
@@ -100,6 +123,12 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
                 ))
             })?;
 
+            // Resolve middleware chain: operation-level overrides global
+            let middlewares = op
+                .middlewares
+                .clone()
+                .unwrap_or_else(|| spec.global_middlewares.clone());
+
             operations.push(CompiledOperation {
                 index: operations.len(),
                 path: op.path.clone(),
@@ -108,6 +137,7 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
                 parameters: op.parameters.clone(),
                 request_body: op.request_body.clone(),
                 dispatch,
+                middlewares,
             });
         }
     }
@@ -141,6 +171,7 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
         source_specs,
         routes_count: routes.operations.len(),
         checksums,
+        plugins: Vec::new(), // No plugins bundled in basic compile
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
@@ -248,10 +279,208 @@ pub fn load_specs(artifact_path: &Path) -> Result<HashMap<String, String>, Compi
     Ok(specs)
 }
 
+/// Load all bundled plugins from a .bca artifact.
+/// Returns a map of plugin name -> (version, WASM bytes).
+pub fn load_plugins(artifact_path: &Path) -> Result<HashMap<String, (String, Vec<u8>)>, CompileError> {
+    // First load manifest to get plugin metadata
+    let manifest = load_manifest(artifact_path)?;
+
+    let file = File::open(artifact_path)?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+
+    let mut plugins = HashMap::new();
+
+    // Build a map of wasm_path -> (name, version) from manifest
+    let plugin_info: HashMap<String, (String, String)> = manifest
+        .plugins
+        .iter()
+        .map(|p| (p.wasm_path.clone(), (p.name.clone(), p.version.clone())))
+        .collect();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path_str = entry.path()?.to_string_lossy().into_owned();
+
+        if let Some((name, version)) = plugin_info.get(&path_str) {
+            let mut wasm_bytes = Vec::new();
+            entry.read_to_end(&mut wasm_bytes)?;
+            plugins.insert(name.clone(), (version.clone(), wasm_bytes));
+        }
+    }
+
+    Ok(plugins)
+}
+
+/// A plugin to be bundled into an artifact.
+pub struct PluginBundle {
+    /// Plugin name.
+    pub name: String,
+    /// Plugin version.
+    pub version: String,
+    /// Plugin type ("middleware" or "dispatcher").
+    pub plugin_type: String,
+    /// WASM binary content.
+    pub wasm_bytes: Vec<u8>,
+}
+
+/// Compile specs with bundled plugins into a .bca artifact.
+pub fn compile_with_plugins(
+    spec_paths: &[&Path],
+    plugins: &[PluginBundle],
+    output: &Path,
+) -> Result<Manifest, CompileError> {
+    // Parse all specs
+    let mut specs: Vec<(ApiSpec, String, String)> = Vec::new();
+
+    for path in spec_paths {
+        let content = std::fs::read_to_string(path)?;
+        let sha256 = compute_sha256(&content);
+        let spec = parse_spec_file(path)?;
+        specs.push((spec, content, sha256));
+    }
+
+    // Validate and collect operations
+    let mut operations: Vec<CompiledOperation> = Vec::new();
+    let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
+
+    for (spec, _, _) in &specs {
+        let spec_file = spec.filename.as_deref().unwrap_or("unknown");
+
+        for op in &spec.operations {
+            let key = (op.path.clone(), op.method.clone());
+            if let Some(other_spec) = seen_routes.get(&key) {
+                return Err(CompileError::RoutingConflict(format!(
+                    "{} {} declared in both '{}' and '{}'",
+                    op.method, op.path, other_spec, spec_file
+                )));
+            }
+            seen_routes.insert(key, spec_file.to_string());
+
+            let dispatch = op.dispatch.clone().ok_or_else(|| {
+                CompileError::MissingDispatch(format!(
+                    "{} {} in '{}'",
+                    op.method, op.path, spec_file
+                ))
+            })?;
+
+            let middlewares = op
+                .middlewares
+                .clone()
+                .unwrap_or_else(|| spec.global_middlewares.clone());
+
+            operations.push(CompiledOperation {
+                index: operations.len(),
+                path: op.path.clone(),
+                method: op.method.clone(),
+                operation_id: op.operation_id.clone(),
+                parameters: op.parameters.clone(),
+                request_body: op.request_body.clone(),
+                dispatch,
+                middlewares,
+            });
+        }
+    }
+
+    // Build routes.json
+    let routes = CompiledRoutes { operations };
+    let routes_json = serde_json::to_string_pretty(&routes)?;
+    let routes_sha256 = compute_sha256(&routes_json);
+
+    // Build plugin metadata
+    let mut bundled_plugins = Vec::new();
+    let mut checksums = HashMap::new();
+    checksums.insert("routes.json".to_string(), format!("sha256:{}", routes_sha256));
+
+    for plugin in plugins {
+        let wasm_path = format!("plugins/{}.wasm", plugin.name);
+        let sha256 = compute_sha256_bytes(&plugin.wasm_bytes);
+
+        checksums.insert(wasm_path.clone(), format!("sha256:{}", sha256));
+
+        bundled_plugins.push(BundledPlugin {
+            name: plugin.name.clone(),
+            version: plugin.version.clone(),
+            plugin_type: plugin.plugin_type.clone(),
+            wasm_path,
+            sha256,
+        });
+    }
+
+    // Build manifest
+    let source_specs: Vec<SourceSpec> = specs
+        .iter()
+        .map(|(spec, _, sha256)| SourceSpec {
+            file: spec.filename.clone().unwrap_or_else(|| "unknown".to_string()),
+            sha256: sha256.clone(),
+            spec_type: match spec.format {
+                SpecFormat::OpenApi => "openapi".to_string(),
+                SpecFormat::AsyncApi => "asyncapi".to_string(),
+            },
+            version: spec.version.clone(),
+        })
+        .collect();
+
+    let manifest = Manifest {
+        barbacane_artifact_version: ARTIFACT_VERSION,
+        compiled_at: chrono_lite_now(),
+        compiler_version: COMPILER_VERSION.to_string(),
+        source_specs,
+        routes_count: routes.operations.len(),
+        checksums,
+        plugins: bundled_plugins,
+    };
+
+    let manifest_json = serde_json::to_string_pretty(&manifest)?;
+
+    // Create the .bca archive
+    let file = File::create(output)?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut archive = Builder::new(encoder);
+
+    // Add manifest.json
+    add_file_to_tar(&mut archive, "manifest.json", manifest_json.as_bytes())?;
+
+    // Add routes.json
+    add_file_to_tar(&mut archive, "routes.json", routes_json.as_bytes())?;
+
+    // Add source specs
+    for (spec, content, _) in &specs {
+        let filename = spec
+            .filename
+            .as_deref()
+            .and_then(|p| Path::new(p).file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("spec.yaml");
+        let archive_path = format!("specs/{}", filename);
+        add_file_to_tar(&mut archive, &archive_path, content.as_bytes())?;
+    }
+
+    // Add plugins
+    for plugin in plugins {
+        let wasm_path = format!("plugins/{}.wasm", plugin.name);
+        add_file_to_tar(&mut archive, &wasm_path, &plugin.wasm_bytes)?;
+    }
+
+    // Finish the archive
+    let encoder = archive.into_inner()?;
+    encoder.finish()?;
+
+    Ok(manifest)
+}
+
 /// Compute SHA-256 hash of a string.
 fn compute_sha256(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(result)
+}
+
+/// Compute SHA-256 hash of bytes.
+fn compute_sha256_bytes(content: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content);
     let result = hasher.finalize();
     hex::encode(result)
 }
@@ -496,5 +725,52 @@ paths:
 
         let routes = load_routes(&output_path).unwrap();
         assert_eq!(routes.operations.len(), 2);
+    }
+
+    #[test]
+    fn compile_with_bundled_plugins() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        // Create a fake plugin (minimal valid WASM)
+        let fake_wasm = vec![
+            0x00, 0x61, 0x73, 0x6d, // magic
+            0x01, 0x00, 0x00, 0x00, // version
+        ];
+
+        let plugins = vec![PluginBundle {
+            name: "test-plugin".to_string(),
+            version: "1.0.0".to_string(),
+            plugin_type: "middleware".to_string(),
+            wasm_bytes: fake_wasm.clone(),
+        }];
+
+        let manifest = compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
+
+        assert_eq!(manifest.plugins.len(), 1);
+        assert_eq!(manifest.plugins[0].name, "test-plugin");
+        assert_eq!(manifest.plugins[0].version, "1.0.0");
+        assert_eq!(manifest.plugins[0].plugin_type, "middleware");
+        assert_eq!(manifest.plugins[0].wasm_path, "plugins/test-plugin.wasm");
+
+        // Load plugins back
+        let loaded = load_plugins(&output_path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        let (version, wasm_bytes) = loaded.get("test-plugin").unwrap();
+        assert_eq!(version, "1.0.0");
+        assert_eq!(wasm_bytes, &fake_wasm);
     }
 }

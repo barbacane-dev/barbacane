@@ -7,6 +7,8 @@ members = [
     "crates/barbacane-router",
     "crates/barbacane-validator",
     "crates/barbacane-plugin-sdk",
+    "crates/barbacane-plugin-macros",
+    "crates/barbacane-wasm",
     "crates/barbacane-test",
 ]
 resolver = "2"
@@ -37,9 +39,11 @@ clap = { version = "4", features = ["derive"] }
 
 # Error handling
 thiserror = "2"
+anyhow = "1"
 
 # Crypto
 sha2 = "0.10"
+hex = "0.4"
 
 # Archive
 flate2 = "1"
@@ -51,10 +55,31 @@ reqwest = { version = "0.12", features = ["json"] }
 # JSON Schema validation
 jsonschema = "0.26"
 
+# WASM runtime
+wasmtime = { version = "28", features = ["async", "cranelift", "pooling-allocator"] }
+
+# Plugin manifest
+toml = "0.8"
+semver = "1"
+regex-lite = "0.1"
+
+# Concurrency
+dashmap = "6"
+
+# Logging
+tracing = "0.1"
+
+# Proc macros
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+proc-macro2 = "1"
+
 # Workspace crates
 barbacane-spec-parser = { path = "crates/barbacane-spec-parser" }
 barbacane-compiler = { path = "crates/barbacane-compiler" }
 barbacane-router = { path = "crates/barbacane-router" }
 barbacane-validator = { path = "crates/barbacane-validator" }
 barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk" }
+barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros" }
+barbacane-wasm = { path = "crates/barbacane-wasm" }
 barbacane-test = { path = "crates/barbacane-test" }
