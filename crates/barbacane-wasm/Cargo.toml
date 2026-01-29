@@ -31,6 +31,12 @@ anyhow.workspace = true
 # Logging
 tracing.workspace = true
 
+# HTTP client (for host_http_call)
+reqwest.workspace = true
+
+# Sync primitives (for circuit breaker)
+parking_lot.workspace = true
+
 # JSON Schema validation (for config schemas)
 jsonschema.workspace = true
 
