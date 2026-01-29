@@ -12,4 +12,4 @@ pub use artifact::{
 };
 pub use error::CompileError;
 // Re-export validation types from spec-parser
-pub use barbacane_spec_parser::{ContentSchema, Parameter, RequestBody};
+pub use barbacane_spec_parser::{ContentSchema, MiddlewareConfig, Parameter, RequestBody};

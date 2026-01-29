@@ -1,0 +1,45 @@
+[package]
+name = "barbacane-wasm"
+description = "WASM plugin runtime for Barbacane API gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# WASM runtime
+wasmtime.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Plugin manifest
+toml.workspace = true
+semver.workspace = true
+regex-lite.workspace = true
+
+# Concurrency
+dashmap.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# JSON Schema validation (for config schemas)
+jsonschema.workspace = true
+
+# Hashing (for config deduplication)
+sha2.workspace = true
+hex.workspace = true
+
+# Workspace crates
+barbacane-plugin-sdk.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
