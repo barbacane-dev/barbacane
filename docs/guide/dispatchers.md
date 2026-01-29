@@ -63,43 +63,43 @@ x-barbacane-dispatch:
     status: 204
 ```
 
-### http
+### http-upstream
 
-Proxies requests to an HTTP upstream backend.
+Reverse proxy to an HTTP/HTTPS upstream backend. Supports connection pooling, circuit breakers, and automatic TLS.
 
 ```yaml
 x-barbacane-dispatch:
-  name: http
+  name: http-upstream
   config:
-    upstream: my-backend
-    path: /api/v2/resource
+    url: "https://api.example.com"
+    path: "/api/v2/resource"
+    timeout: 30.0
 ```
 
 #### Configuration
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `upstream` | string | Yes | - | Upstream name (from server's `x-barbacane-upstream`) |
-| `path` | string | No | Same as operation | Backend path template |
-| `method` | string | No | Same as operation | Override HTTP method |
-| `timeout` | duration | No | Upstream default | Request timeout |
+| `url` | string | Yes | - | Base URL of the upstream (must be HTTPS in production) |
+| `path` | string | No | Same as operation path | Upstream path template with `{param}` substitution |
+| `timeout` | number | No | 30.0 | Request timeout in seconds |
 
 #### Path Parameters
 
-Path parameters from the OpenAPI spec are automatically substituted:
+Path parameters from the OpenAPI spec are automatically substituted in the `path` template:
 
 ```yaml
-# OpenAPI path
+# OpenAPI path: /users/{userId}/orders/{orderId}
 /users/{userId}/orders/{orderId}:
   get:
     x-barbacane-dispatch:
-      name: http
+      name: http-upstream
       config:
-        upstream: backend
-        path: /api/users/{userId}/orders/{orderId}
+        url: "https://backend.internal"
+        path: "/api/users/{userId}/orders/{orderId}"
 
 # Request: GET /users/123/orders/456
-# Backend: GET /api/users/123/orders/456
+# Backend: GET https://backend.internal/api/users/123/orders/456
 ```
 
 #### Path Rewriting
@@ -108,44 +108,67 @@ Map frontend paths to different backend paths:
 
 ```yaml
 # Frontend: /v2/products
-# Backend: /api/v1/catalog/products
+# Backend: https://catalog.internal/api/v1/catalog/products
 /v2/products:
   get:
     x-barbacane-dispatch:
-      name: http
+      name: http-upstream
       config:
-        upstream: catalog-service
-        path: /api/v1/catalog/products
+        url: "https://catalog.internal"
+        path: "/api/v1/catalog/products"
 ```
 
-#### Method Override
+#### Wildcard Proxy
 
-Useful for legacy backends:
+Proxy any path to upstream:
 
 ```yaml
-/resources/{id}:
-  delete:
+/proxy/{path}:
+  get:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
     x-barbacane-dispatch:
-      name: http
+      name: http-upstream
       config:
-        upstream: legacy-api
-        path: /resources/{id}/delete
-        method: POST  # Backend doesn't support DELETE
+        url: "https://httpbin.org"
+        path: "/{path}"
+        timeout: 10.0
 ```
 
 #### Timeout Override
 
-Per-operation timeout:
+Per-operation timeout for long-running operations:
 
 ```yaml
 /reports/generate:
   post:
     x-barbacane-dispatch:
-      name: http
+      name: http-upstream
       config:
-        upstream: reports
-        timeout: 120s  # Long-running operation
+        url: "https://reports.internal"
+        path: "/generate"
+        timeout: 120.0  # 2 minutes for report generation
 ```
+
+#### Error Handling
+
+The dispatcher returns RFC 9457 error responses:
+
+| Status | Condition |
+|--------|-----------|
+| 502 Bad Gateway | Connection failed or upstream returned invalid response |
+| 503 Service Unavailable | Circuit breaker is open |
+| 504 Gateway Timeout | Request exceeded configured timeout |
+
+#### Security
+
+- **HTTPS required in production**: `http://` URLs are rejected by the compiler (E1031)
+- **Development mode**: Use `--allow-plaintext-upstream` flag to allow `http://` URLs
+- **TLS**: Uses rustls with system CA roots by default
 
 ---
 
@@ -216,24 +239,6 @@ trait Dispatcher {
 
 ## Best Practices
 
-### Use Meaningful Upstreams
-
-Name upstreams by service, not by URL:
-
-```yaml
-# Good
-servers:
-  - url: https://users.internal.example.com
-    x-barbacane-upstream:
-      name: user-service
-
-# Bad
-servers:
-  - url: https://users.internal.example.com
-    x-barbacane-upstream:
-      name: https-users-internal  # Don't embed URL in name
-```
-
 ### Set Appropriate Timeouts
 
 - Fast endpoints (health, simple reads): 5-10s
@@ -242,10 +247,10 @@ servers:
 
 ```yaml
 x-barbacane-dispatch:
-  name: http
+  name: http-upstream
   config:
-    upstream: backend
-    timeout: 10s  # Quick timeout for simple operation
+    url: "https://backend.internal"
+    timeout: 10.0  # Quick timeout for simple operation
 ```
 
 ### Mock for Development
@@ -268,8 +273,20 @@ Then switch to real backend:
 /users/{id}:
   get:
     x-barbacane-dispatch:
-      name: http
+      name: http-upstream
       config:
-        upstream: user-service
-        path: /api/users/{id}
+        url: "https://user-service.internal"
+        path: "/api/users/{id}"
+```
+
+### Use HTTPS in Production
+
+The compiler rejects `http://` URLs by default (E1031). For development with local services:
+
+```bash
+# Compile allows http:// - the check happens at runtime
+barbacane compile --spec api.yaml --output api.bca
+
+# Serve with plaintext upstream allowed (dev only!)
+barbacane serve --artifact api.bca --dev --allow-plaintext-upstream
 ```

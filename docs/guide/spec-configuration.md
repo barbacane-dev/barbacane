@@ -38,13 +38,14 @@ servers:
 | `timeout` | duration | No | Request timeout (default: 30s) |
 | `retries` | integer | No | Number of retry attempts (default: 0) |
 
-Reference upstreams by name in dispatchers:
+Upstreams are a design pattern for named backends. The `http-upstream` dispatcher uses the `url` config directly:
 
 ```yaml
 x-barbacane-dispatch:
-  name: http
+  name: http-upstream
   config:
-    upstream: main-backend  # References the upstream by name
+    url: "https://api.example.com"  # Direct URL to backend
+    path: /api/resource
 ```
 
 ## Dispatchers
@@ -56,9 +57,9 @@ paths:
   /users:
     get:
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: main-backend
+          url: "https://api.example.com"
           path: /api/v2/users
 ```
 
@@ -88,26 +89,24 @@ x-barbacane-dispatch:
 | `status` | integer | 200 | HTTP status code |
 | `body` | string | "" | Response body |
 
-#### `http` - Proxy to HTTP Backend
+#### `http-upstream` - Proxy to HTTP Backend
 
 Forward requests to an upstream:
 
 ```yaml
 x-barbacane-dispatch:
-  name: http
+  name: http-upstream
   config:
-    upstream: main-backend
+    url: "https://api.example.com"
     path: /api/users/{id}
-    method: GET
-    timeout: 10s
+    timeout: 10.0
 ```
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
-| `upstream` | string | Required | Upstream name |
-| `path` | string | Same as operation | Backend path (supports parameters) |
-| `method` | string | Same as operation | Override HTTP method |
-| `timeout` | duration | Upstream default | Override timeout |
+| `url` | string | Required | Base URL of upstream (HTTPS required in production) |
+| `path` | string | Same as operation | Backend path (supports `{param}` substitution) |
+| `timeout` | number | 30.0 | Request timeout in seconds |
 
 Path parameters from the OpenAPI spec are substituted automatically:
 
@@ -115,11 +114,11 @@ Path parameters from the OpenAPI spec are substituted automatically:
 # OpenAPI path: /users/{userId}/orders/{orderId}
 # Request: GET /users/123/orders/456
 x-barbacane-dispatch:
-  name: http
+  name: http-upstream
   config:
-    upstream: backend
+    url: "https://api.example.com"
     path: /api/v2/users/{userId}/orders/{orderId}
-    # Becomes: GET /api/v2/users/123/orders/456
+    # Becomes: GET https://api.example.com/api/v2/users/123/orders/456
 ```
 
 ## Middlewares
@@ -162,9 +161,9 @@ paths:
             required: true
             scopes: ["admin:read"]
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
 ```
 
 ### Middleware Override
@@ -248,9 +247,9 @@ paths:
           config:
             ttl: 300
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: shop-backend
+          url: "https://api.shop.example.com"
           path: /api/products
       responses:
         "200":
@@ -267,11 +266,10 @@ paths:
           config:
             header: Idempotency-Key
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: shop-backend
+          url: "https://api.shop.example.com"
           path: /api/orders
-          method: POST
       responses:
         "201":
           description: Order created
@@ -284,11 +282,11 @@ paths:
           config:
             required: true
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: payments  # Different backend!
+          url: "https://payments.example.com"  # Different backend!
           path: /process/{orderId}
-          timeout: 45s
+          timeout: 45.0
       responses:
         "200":
           description: Payment processed
@@ -308,6 +306,7 @@ Errors you might see:
 |------------|---------|
 | E1010 | Routing conflict (same path+method in multiple specs) |
 | E1020 | Missing `x-barbacane-dispatch` on operation |
+| E1031 | Plaintext `http://` upstream URL (use HTTPS or `--allow-plaintext-upstream`) |
 
 ## Next Steps
 

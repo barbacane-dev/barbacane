@@ -60,9 +60,9 @@ paths:
     get:
       operationId: listUsers
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
           path: /api/users
       responses:
         "200":
@@ -72,9 +72,9 @@ paths:
     get:
       operationId: getUser
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
           path: /api/users/{id}
       parameters:
         - name: id
@@ -89,7 +89,6 @@ paths:
 ```
 
 The key additions are:
-- `x-barbacane-upstream` on the server: defines a named upstream backend
 - `x-barbacane-dispatch` on each operation: tells Barbacane how to handle the request
 
 ### 2. Validate the Spec
