@@ -5,4 +5,4 @@
 
 pub mod gateway;
 
-pub use gateway::TestGateway;
+pub use gateway::{TestError, TestGateway};

@@ -21,3 +21,5 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+test.bca
+target/

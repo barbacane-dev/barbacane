@@ -6,4 +6,8 @@
 pub mod artifact;
 pub mod error;
 
+pub use artifact::{
+    compile, load_manifest, load_routes, load_specs, CompiledOperation, CompiledRoutes, Manifest,
+    SourceSpec, ARTIFACT_VERSION, COMPILER_VERSION,
+};
 pub use error::CompileError;
