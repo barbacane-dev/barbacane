@@ -1,0 +1,424 @@
+# Spec Extensions Reference
+
+Complete reference for all `x-barbacane-*` OpenAPI extensions.
+
+## Summary
+
+| Extension | Location | Required | Purpose |
+|-----------|----------|----------|---------|
+| [`x-barbacane-upstream`](#x-barbacane-upstream) | Server | No | Define backend connection |
+| [`x-barbacane-dispatch`](#x-barbacane-dispatch) | Operation | Yes | Route to dispatcher |
+| [`x-barbacane-middlewares`](#x-barbacane-middlewares) | Root / Operation | No | Apply middleware chain |
+
+---
+
+## x-barbacane-upstream
+
+Defines a named upstream backend connection.
+
+### Location
+
+Server object in `servers` array.
+
+### Schema
+
+```yaml
+x-barbacane-upstream:
+  name: string          # Required. Unique upstream identifier
+  timeout: duration     # Optional. Request timeout (default: 30s)
+  retries: integer      # Optional. Retry attempts (default: 0)
+```
+
+### Properties
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `name` | string | Yes | - | Unique identifier for this upstream |
+| `timeout` | duration | No | `30s` | Request timeout |
+| `retries` | integer | No | `0` | Number of retry attempts |
+
+### Duration Format
+
+Durations support:
+- `5s` - seconds
+- `100ms` - milliseconds
+- `1m` - minutes
+- `1h` - hours
+
+### Example
+
+```yaml
+servers:
+  - url: https://api.example.com
+    description: Production API
+    x-barbacane-upstream:
+      name: main-api
+      timeout: 30s
+      retries: 2
+
+  - url: https://payments.example.com
+    description: Payment Service
+    x-barbacane-upstream:
+      name: payments
+      timeout: 60s
+      retries: 3
+```
+
+---
+
+## x-barbacane-dispatch
+
+Specifies how to handle a request for an operation.
+
+### Location
+
+Operation object (`get`, `post`, `put`, `delete`, `patch`, `options`, `head`).
+
+### Schema
+
+```yaml
+x-barbacane-dispatch:
+  name: string    # Required. Dispatcher name
+  config: object  # Optional. Dispatcher-specific configuration
+```
+
+### Properties
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `name` | string | Yes | Name of the dispatcher (e.g., `mock`, `http`) |
+| `config` | object | No | Configuration passed to the dispatcher |
+
+### Dispatcher: `mock`
+
+Returns static responses.
+
+```yaml
+x-barbacane-dispatch:
+  name: mock
+  config:
+    status: integer   # HTTP status (default: 200)
+    body: string      # Response body (default: "")
+```
+
+### Dispatcher: `http`
+
+Proxies to HTTP backend.
+
+```yaml
+x-barbacane-dispatch:
+  name: http
+  config:
+    upstream: string    # Required. Upstream name
+    path: string        # Optional. Backend path (default: operation path)
+    method: string      # Optional. HTTP method (default: operation method)
+    timeout: duration   # Optional. Override timeout
+```
+
+### Examples
+
+**Mock response:**
+```yaml
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+```
+
+**HTTP proxy:**
+```yaml
+paths:
+  /users/{id}:
+    get:
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: user-service
+          path: /api/v2/users/{id}
+```
+
+**HTTP proxy with method override:**
+```yaml
+paths:
+  /legacy/{id}:
+    delete:
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: legacy-api
+          path: /resource/{id}/remove
+          method: POST
+```
+
+---
+
+## x-barbacane-middlewares
+
+Defines a middleware chain.
+
+### Location
+
+- **Root level**: Applies to all operations (global)
+- **Operation level**: Applies to specific operation (after global)
+
+### Schema
+
+```yaml
+x-barbacane-middlewares:
+  - name: string    # Required. Middleware name
+    config: object  # Optional. Middleware-specific configuration
+```
+
+### Properties
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `name` | string | Yes | Name of the middleware plugin |
+| `config` | object | No | Configuration passed to the middleware |
+
+### Middleware Override
+
+When an operation defines a middleware with the same name as a global one, the operation config overrides the global config for that middleware.
+
+### Examples
+
+**Global middlewares:**
+```yaml
+openapi: "3.1.0"
+info:
+  title: My API
+  version: "1.0.0"
+
+x-barbacane-middlewares:
+  - name: request-id
+    config:
+      header: X-Request-ID
+  - name: rate-limit
+    config:
+      requests_per_minute: 100
+  - name: cors
+    config:
+      allowed_origins: ["https://app.example.com"]
+
+paths:
+  /users:
+    get:
+      # Inherits all global middlewares
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: backend
+```
+
+**Operation-specific middlewares:**
+```yaml
+paths:
+  /admin:
+    get:
+      x-barbacane-middlewares:
+        - name: auth-jwt
+          config:
+            required: true
+            scopes: ["admin:read"]
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: backend
+```
+
+**Override global config:**
+```yaml
+# Global: 100 req/min
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      requests_per_minute: 100
+
+paths:
+  /high-traffic:
+    get:
+      # Override: 1000 req/min for this endpoint
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            requests_per_minute: 1000
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: backend
+```
+
+---
+
+## Common Middleware Configurations
+
+### auth-jwt
+
+```yaml
+- name: auth-jwt
+  config:
+    required: true
+    header: Authorization
+    scheme: Bearer
+    issuer: https://auth.example.com
+    audience: my-api
+    scopes: ["read"]
+```
+
+### rate-limit
+
+```yaml
+- name: rate-limit
+  config:
+    requests_per_minute: 100
+    burst: 20
+    key: header:Authorization
+```
+
+### cors
+
+```yaml
+- name: cors
+  config:
+    allowed_origins: ["https://app.example.com"]
+    allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+    allowed_headers: ["Authorization", "Content-Type"]
+    max_age: 86400
+```
+
+### cache
+
+```yaml
+- name: cache
+  config:
+    ttl: 300
+    vary: ["Accept-Language"]
+```
+
+### request-id
+
+```yaml
+- name: request-id
+  config:
+    header: X-Request-ID
+    generate_if_missing: true
+```
+
+### idempotency
+
+```yaml
+- name: idempotency
+  config:
+    header: Idempotency-Key
+    ttl: 86400
+```
+
+---
+
+## Validation Errors
+
+| Code | Message | Cause |
+|------|---------|-------|
+| E1010 | Routing conflict | Same path+method in multiple specs |
+| E1020 | Missing dispatch | Operation has no `x-barbacane-dispatch` |
+
+---
+
+## Complete Example
+
+```yaml
+openapi: "3.1.0"
+info:
+  title: Complete Example API
+  version: "1.0.0"
+
+servers:
+  - url: https://api.example.com
+    x-barbacane-upstream:
+      name: main-backend
+      timeout: 30s
+      retries: 2
+
+x-barbacane-middlewares:
+  - name: request-id
+    config:
+      header: X-Request-ID
+  - name: cors
+    config:
+      allowed_origins: ["*"]
+  - name: rate-limit
+    config:
+      requests_per_minute: 100
+
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"healthy"}'
+      responses:
+        "200":
+          description: OK
+
+  /users:
+    get:
+      operationId: listUsers
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 60
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: main-backend
+          path: /api/users
+      responses:
+        "200":
+          description: User list
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: main-backend
+          path: /api/users/{id}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User details
+
+  /admin/users:
+    get:
+      operationId: adminListUsers
+      x-barbacane-middlewares:
+        - name: auth-jwt
+          config:
+            required: true
+            scopes: ["admin:read"]
+        - name: rate-limit
+          config:
+            requests_per_minute: 50
+      x-barbacane-dispatch:
+        name: http
+        config:
+          upstream: main-backend
+          path: /api/admin/users
+      responses:
+        "200":
+          description: Admin user list
+```

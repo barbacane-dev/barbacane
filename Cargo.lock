@@ -68,16 +68,16 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 name = "barbacane"
 version = "0.1.0"
 dependencies = [
+ "barbacane-compiler",
  "barbacane-router",
+ "bytes",
  "clap",
- "flate2",
  "http",
  "http-body-util",
  "hyper",
  "hyper-util",
  "serde",
  "serde_json",
- "tar",
  "thiserror",
  "tokio",
 ]
@@ -93,6 +93,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tar",
+ "tempfile",
  "thiserror",
 ]
 
@@ -139,6 +140,8 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
  "tokio",
 ]
 
