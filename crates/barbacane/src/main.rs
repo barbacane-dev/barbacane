@@ -203,7 +203,7 @@ impl Gateway {
             let content_type = if filename.ends_with(".json") {
                 "application/json"
             } else {
-                "application/x-yaml"
+                "text/yaml"
             };
 
             return Response::builder()
@@ -243,7 +243,7 @@ impl Gateway {
             let content_type = if filename.ends_with(".json") {
                 "application/json"
             } else {
-                "application/x-yaml"
+                "text/yaml"
             };
 
             Response::builder()

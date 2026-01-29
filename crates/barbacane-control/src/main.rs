@@ -27,7 +27,7 @@ enum Command {
         specs: Vec<String>,
 
         /// Output artifact path.
-        #[arg(long, default_value = "artifact.bca")]
+        #[arg(short = 'o', long, default_value = "artifact.bca")]
         output: String,
 
         /// Enable production checks (reject http:// upstreams).
