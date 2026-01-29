@@ -106,7 +106,8 @@ fn main() -> ExitCode {
                     match e {
                         barbacane_compiler::CompileError::Parse(_)
                         | barbacane_compiler::CompileError::RoutingConflict(_)
-                        | barbacane_compiler::CompileError::MissingDispatch(_) => ExitCode::from(1),
+                        | barbacane_compiler::CompileError::MissingDispatch(_)
+                        | barbacane_compiler::CompileError::PlaintextUpstream(_) => ExitCode::from(1),
                         barbacane_compiler::CompileError::Io(_) => ExitCode::from(3),
                         barbacane_compiler::CompileError::Json(_) => ExitCode::from(1),
                     }

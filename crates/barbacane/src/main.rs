@@ -25,7 +25,7 @@ use barbacane_compiler::{
 };
 use barbacane_router::{RouteEntry, RouteMatch, Router};
 use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits};
-use barbacane_wasm::{PluginLimits, WasmEngine};
+use barbacane_wasm::{HttpClient, HttpClientConfig, HttpClientError, PluginLimits, WasmEngine};
 
 #[derive(Parser, Debug)]
 #[command(name = "barbacane", about = "Barbacane API gateway", version)]
@@ -94,6 +94,11 @@ enum Commands {
         /// Maximum URI length in characters (default: 8192 = 8KB).
         #[arg(long, default_value = "8192")]
         max_uri_length: usize,
+
+        /// Allow plaintext HTTP upstream connections (development only).
+        /// In production, only HTTPS upstreams are allowed.
+        #[arg(long)]
+        allow_plaintext_upstream: bool,
     },
 }
 
@@ -115,11 +120,18 @@ struct Gateway {
     /// Plugin resource limits.
     #[allow(dead_code)]
     plugin_limits: PluginLimits,
+    /// HTTP client for upstream requests.
+    http_client: Arc<HttpClient>,
 }
 
 impl Gateway {
     /// Load a gateway from a .bca artifact.
-    fn load(artifact_path: &Path, dev_mode: bool, limits: RequestLimits) -> Result<Self, String> {
+    fn load(
+        artifact_path: &Path,
+        dev_mode: bool,
+        limits: RequestLimits,
+        allow_plaintext_upstream: bool,
+    ) -> Result<Self, String> {
         let manifest = load_manifest(artifact_path)
             .map_err(|e| format!("failed to load manifest: {}", e))?;
 
@@ -133,6 +145,14 @@ impl Gateway {
         let plugin_limits = PluginLimits::default();
         let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
+
+        // Initialize HTTP client for upstream requests
+        let http_client_config = HttpClientConfig {
+            allow_plaintext: allow_plaintext_upstream,
+            ..Default::default()
+        };
+        let http_client = HttpClient::new(http_client_config)
+            .map_err(|e| format!("failed to create HTTP client: {}", e))?;
 
         let mut router = Router::new();
         let mut validators = Vec::new();
@@ -172,6 +192,7 @@ impl Gateway {
             dev_mode,
             wasm_engine: Arc::new(wasm_engine),
             plugin_limits,
+            http_client: Arc::new(http_client),
         })
     }
 
@@ -281,23 +302,23 @@ impl Gateway {
         // Built-in dispatchers
         match dispatch.name.as_str() {
             "mock" => self.dispatch_mock(&dispatch.config),
+            "http-upstream" => {
+                self.dispatch_http_upstream(&dispatch.config, operation, _params, _request_body, _headers)
+                    .await
+            }
             _ => {
                 // WASM dispatcher - requires plugin bundled in artifact
                 // For now, return error until plugin bundling is implemented
-                let body = if self.dev_mode {
-                    format!(
-                        r#"{{"error":"unknown dispatcher","dispatcher":"{}","hint":"WASM plugins must be bundled in artifact"}}"#,
+                let detail = if self.dev_mode {
+                    Some(format!(
+                        "unknown dispatcher '{}' - WASM plugins must be bundled in artifact",
                         dispatch.name
-                    )
+                    ))
                 } else {
-                    r#"{"error":"internal server error"}"#.to_string()
+                    None
                 };
 
-                Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .header("content-type", "application/json")
-                    .body(Full::new(Bytes::from(body)))
-                    .unwrap())
+                Ok(self.internal_error_response(detail.as_deref()))
             }
         }
     }
@@ -331,6 +352,129 @@ impl Gateway {
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body)))
             .unwrap())
+    }
+
+    /// HTTP upstream dispatcher: reverse proxy to upstream server.
+    async fn dispatch_http_upstream(
+        &self,
+        config: &serde_json::Value,
+        operation: &CompiledOperation,
+        params: Vec<(String, String)>,
+        request_body: &[u8],
+        headers: &HashMap<String, String>,
+    ) -> Result<Response<Full<Bytes>>, Infallible> {
+        // Extract upstream URL from config
+        let upstream_url = match config.get("url").and_then(|v| v.as_str()) {
+            Some(url) => url.to_string(),
+            None => {
+                return Ok(self.internal_error_response(Some(
+                    "http-upstream dispatcher requires 'url' in config",
+                )));
+            }
+        };
+
+        // Build the upstream path
+        // If config.path is specified, use it as a template
+        // Otherwise, use the operation path template
+        let path_template = config
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| operation.path.clone());
+
+        // Replace path parameters in the template
+        let mut upstream_path = path_template;
+        for (key, value) in &params {
+            upstream_path = upstream_path.replace(&format!("{{{}}}", key), value);
+        }
+
+        // Construct the full URL
+        let full_url = if upstream_url.ends_with('/') || upstream_path.starts_with('/') {
+            format!(
+                "{}{}",
+                upstream_url.trim_end_matches('/'),
+                upstream_path
+            )
+        } else {
+            format!("{}{}", upstream_url, upstream_path)
+        };
+
+        // Build request
+        let mut http_headers = HashMap::new();
+        for (key, value) in headers {
+            // Skip hop-by-hop headers
+            if !matches!(
+                key.to_lowercase().as_str(),
+                "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
+            ) {
+                http_headers.insert(key.clone(), value.clone());
+            }
+        }
+
+        // Add X-Forwarded headers
+        if let Some(host) = headers.get("host") {
+            http_headers.insert("x-forwarded-host".to_string(), host.clone());
+        }
+
+        let request = barbacane_wasm::HttpRequest {
+            method: operation.method.clone(),
+            url: full_url.clone(),
+            headers: http_headers,
+            body: if request_body.is_empty() {
+                None
+            } else {
+                Some(request_body.to_vec())
+            },
+            timeout: config
+                .get("timeout")
+                .and_then(|v| v.as_f64())
+                .map(std::time::Duration::from_secs_f64),
+        };
+
+        // Execute the request
+        match self.http_client.call(request).await {
+            Ok(response) => {
+                let mut builder = Response::builder().status(
+                    StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK),
+                );
+
+                // Add response headers, stripping hop-by-hop headers
+                for (key, value) in &response.headers {
+                    if !matches!(
+                        key.as_str(),
+                        "connection"
+                            | "keep-alive"
+                            | "transfer-encoding"
+                            | "te"
+                            | "trailer"
+                            | "upgrade"
+                    ) {
+                        builder = builder.header(key.as_str(), value.as_str());
+                    }
+                }
+
+                let body_bytes = response.body.unwrap_or_default();
+                Ok(builder.body(Full::new(Bytes::from(body_bytes))).unwrap())
+            }
+            Err(e) => {
+                let detail = if self.dev_mode {
+                    Some(format!("upstream error: {}", e))
+                } else {
+                    None
+                };
+
+                match e {
+                    HttpClientError::Timeout => Ok(self.gateway_timeout_response(detail.as_deref())),
+                    HttpClientError::CircuitOpen(_) => {
+                        Ok(self.service_unavailable_response(detail.as_deref()))
+                    }
+                    HttpClientError::ConnectionFailed(_) | HttpClientError::RequestFailed(_) => {
+                        Ok(self.bad_gateway_response(detail.as_deref()))
+                    }
+                    _ => Ok(self.bad_gateway_response(detail.as_deref())),
+                }
+            }
+        }
     }
 
     /// Handle reserved /__barbacane/* endpoints.
@@ -481,6 +625,102 @@ impl Gateway {
             .status(StatusCode::BAD_REQUEST)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(problem.to_json())))
+            .unwrap()
+    }
+
+    /// Build a 500 Internal Server Error response (RFC 9457).
+    fn internal_error_response(&self, detail: Option<&str>) -> Response<Full<Bytes>> {
+        let body = if self.dev_mode {
+            serde_json::json!({
+                "type": "urn:barbacane:error:internal-error",
+                "title": "Internal Server Error",
+                "status": 500,
+                "detail": detail.unwrap_or("An internal error occurred"),
+            })
+        } else {
+            serde_json::json!({
+                "type": "urn:barbacane:error:internal-error",
+                "title": "Internal Server Error",
+                "status": 500,
+            })
+        };
+
+        Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .unwrap()
+    }
+
+    /// Build a 502 Bad Gateway response (RFC 9457).
+    fn bad_gateway_response(&self, detail: Option<&str>) -> Response<Full<Bytes>> {
+        let body = if self.dev_mode {
+            serde_json::json!({
+                "type": "urn:barbacane:error:upstream-unavailable",
+                "title": "Bad Gateway",
+                "status": 502,
+                "detail": detail.unwrap_or("Failed to connect to upstream"),
+            })
+        } else {
+            serde_json::json!({
+                "type": "urn:barbacane:error:upstream-unavailable",
+                "title": "Bad Gateway",
+                "status": 502,
+            })
+        };
+
+        Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .unwrap()
+    }
+
+    /// Build a 503 Service Unavailable response (RFC 9457).
+    fn service_unavailable_response(&self, detail: Option<&str>) -> Response<Full<Bytes>> {
+        let body = if self.dev_mode {
+            serde_json::json!({
+                "type": "urn:barbacane:error:circuit-open",
+                "title": "Service Unavailable",
+                "status": 503,
+                "detail": detail.unwrap_or("Circuit breaker is open"),
+            })
+        } else {
+            serde_json::json!({
+                "type": "urn:barbacane:error:circuit-open",
+                "title": "Service Unavailable",
+                "status": 503,
+            })
+        };
+
+        Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .unwrap()
+    }
+
+    /// Build a 504 Gateway Timeout response (RFC 9457).
+    fn gateway_timeout_response(&self, detail: Option<&str>) -> Response<Full<Bytes>> {
+        let body = if self.dev_mode {
+            serde_json::json!({
+                "type": "urn:barbacane:error:upstream-timeout",
+                "title": "Gateway Timeout",
+                "status": 504,
+                "detail": detail.unwrap_or("Upstream request timed out"),
+            })
+        } else {
+            serde_json::json!({
+                "type": "urn:barbacane:error:upstream-timeout",
+                "title": "Gateway Timeout",
+                "status": 504,
+            })
+        };
+
+        Response::builder()
+            .status(StatusCode::GATEWAY_TIMEOUT)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
             .unwrap()
     }
 }
@@ -762,14 +1002,20 @@ fn run_compile(specs: &[String], output: &str) -> ExitCode {
 }
 
 /// Run the serve command.
-async fn run_serve(artifact: &str, listen: &str, dev: bool, limits: RequestLimits) -> ExitCode {
+async fn run_serve(
+    artifact: &str,
+    listen: &str,
+    dev: bool,
+    limits: RequestLimits,
+    allow_plaintext_upstream: bool,
+) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
         eprintln!("error: artifact not found: {}", artifact);
         return ExitCode::from(1);
     }
 
-    let gateway = match Gateway::load(artifact_path, dev, limits) {
+    let gateway = match Gateway::load(artifact_path, dev, limits, allow_plaintext_upstream) {
         Ok(g) => Arc::new(g),
         Err(e) => {
             eprintln!("error: {}", e);
@@ -843,6 +1089,7 @@ async fn main() -> ExitCode {
             max_headers,
             max_header_size,
             max_uri_length,
+            allow_plaintext_upstream,
             ..
         } => {
             let limits = RequestLimits {
@@ -851,7 +1098,7 @@ async fn main() -> ExitCode {
                 max_header_size,
                 max_uri_length,
             };
-            run_serve(&artifact, &listen, dev, limits).await
+            run_serve(&artifact, &listen, dev, limits, allow_plaintext_upstream).await
         }
     }
 }
