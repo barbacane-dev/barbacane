@@ -47,6 +47,13 @@ pub enum RouteMatch {
     NotFound,
 }
 
+/// A parsed path segment.
+#[derive(Debug, Clone)]
+enum Segment {
+    Static(String),
+    Param(String),
+}
+
 impl Router {
     /// Create a new empty router.
     pub fn new() -> Self {
@@ -54,19 +61,123 @@ impl Router {
     }
 
     /// Insert a route into the trie.
-    pub fn insert(
-        &mut self,
-        _path: &str,
-        _method: &str,
-        _entry: RouteEntry,
-    ) {
-        todo!("M1: implement trie insertion")
+    ///
+    /// Path should be a template like "/users/{id}/orders".
+    /// Method should be uppercase (e.g. "GET", "POST").
+    pub fn insert(&mut self, path: &str, method: &str, entry: RouteEntry) {
+        let segments = parse_path_template(path);
+        let node = self.traverse_or_create(&segments);
+        node.methods.insert(method.to_uppercase(), entry);
     }
 
     /// Look up a request path and method.
-    pub fn lookup(&self, _path: &str, _method: &str) -> RouteMatch {
-        todo!("M1: implement trie lookup")
+    ///
+    /// Path should be an actual request path (not a template).
+    /// Method should be uppercase.
+    pub fn lookup(&self, path: &str, method: &str) -> RouteMatch {
+        let normalized = normalize_path(path);
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let mut params = Vec::new();
+        match self.traverse_and_match(&self.root, &segments, &mut params) {
+            Some(node) => {
+                if let Some(entry) = node.methods.get(&method.to_uppercase()) {
+                    RouteMatch::Found {
+                        entry: entry.clone(),
+                        params,
+                    }
+                } else if node.methods.is_empty() {
+                    RouteMatch::NotFound
+                } else {
+                    let mut allowed: Vec<String> = node.methods.keys().cloned().collect();
+                    allowed.sort();
+                    RouteMatch::MethodNotAllowed { allowed }
+                }
+            }
+            None => RouteMatch::NotFound,
+        }
     }
+
+    /// Traverse or create nodes for a path template.
+    fn traverse_or_create(&mut self, segments: &[Segment]) -> &mut Node {
+        let mut current = &mut self.root;
+
+        for segment in segments {
+            current = match segment {
+                Segment::Static(name) => {
+                    current.static_children
+                        .entry(name.clone())
+                        .or_default()
+                }
+                Segment::Param(name) => {
+                    if current.param_child.is_none() {
+                        current.param_child = Some(Box::new(ParamNode {
+                            name: name.clone(),
+                            node: Node::default(),
+                        }));
+                    }
+                    &mut current.param_child.as_mut().unwrap().node
+                }
+            };
+        }
+
+        current
+    }
+
+    /// Traverse the trie matching actual path segments, capturing parameters.
+    /// Returns the terminal node if the path matches, None otherwise.
+    fn traverse_and_match<'a>(
+        &'a self,
+        node: &'a Node,
+        segments: &[&str],
+        params: &mut Vec<(String, String)>,
+    ) -> Option<&'a Node> {
+        if segments.is_empty() {
+            return Some(node);
+        }
+
+        let segment = segments[0];
+        let remaining = &segments[1..];
+
+        // Static children take precedence (more specific match)
+        if let Some(child) = node.static_children.get(segment) {
+            if let Some(result) = self.traverse_and_match(child, remaining, params) {
+                return Some(result);
+            }
+        }
+
+        // Try parameter child
+        if let Some(param_child) = &node.param_child {
+            let param_len = params.len();
+            params.push((param_child.name.clone(), segment.to_string()));
+
+            if let Some(result) = self.traverse_and_match(&param_child.node, remaining, params) {
+                return Some(result);
+            }
+
+            // Backtrack if this path didn't work
+            params.truncate(param_len);
+        }
+
+        None
+    }
+}
+
+/// Parse a path template into segments.
+fn parse_path_template(path: &str) -> Vec<Segment> {
+    path.split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if s.starts_with('{') && s.ends_with('}') {
+                Segment::Param(s[1..s.len() - 1].to_string())
+            } else {
+                Segment::Static(s.to_string())
+            }
+        })
+        .collect()
 }
 
 /// Normalize a request path: strip trailing slashes, collapse double slashes.
@@ -102,6 +213,8 @@ pub fn normalize_path(path: &str) -> String {
 mod tests {
     use super::*;
 
+    // === Normalization tests ===
+
     #[test]
     fn normalize_strips_trailing_slash() {
         assert_eq!(normalize_path("/users/"), "/users");
@@ -120,5 +233,161 @@ mod tests {
     #[test]
     fn normalize_combined() {
         assert_eq!(normalize_path("/users//123//orders/"), "/users/123/orders");
+    }
+
+    // === Routing tests ===
+
+    #[test]
+    fn route_static_path() {
+        let mut router = Router::new();
+        router.insert("/health", "GET", RouteEntry { operation_index: 0 });
+
+        match router.lookup("/health", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert!(params.is_empty());
+            }
+            _ => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn route_with_parameter() {
+        let mut router = Router::new();
+        router.insert("/users/{id}", "GET", RouteEntry { operation_index: 0 });
+
+        match router.lookup("/users/123", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(params, vec![("id".to_string(), "123".to_string())]);
+            }
+            _ => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn route_with_multiple_parameters() {
+        let mut router = Router::new();
+        router.insert("/users/{userId}/orders/{orderId}", "GET", RouteEntry { operation_index: 0 });
+
+        match router.lookup("/users/42/orders/99", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(params, vec![
+                    ("userId".to_string(), "42".to_string()),
+                    ("orderId".to_string(), "99".to_string()),
+                ]);
+            }
+            _ => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn route_not_found() {
+        let mut router = Router::new();
+        router.insert("/users", "GET", RouteEntry { operation_index: 0 });
+
+        match router.lookup("/posts", "GET") {
+            RouteMatch::NotFound => {}
+            _ => panic!("expected NotFound"),
+        }
+    }
+
+    #[test]
+    fn route_method_not_allowed() {
+        let mut router = Router::new();
+        router.insert("/users", "GET", RouteEntry { operation_index: 0 });
+        router.insert("/users", "POST", RouteEntry { operation_index: 1 });
+
+        match router.lookup("/users", "DELETE") {
+            RouteMatch::MethodNotAllowed { allowed } => {
+                assert!(allowed.contains(&"GET".to_string()));
+                assert!(allowed.contains(&"POST".to_string()));
+            }
+            _ => panic!("expected MethodNotAllowed"),
+        }
+    }
+
+    #[test]
+    fn static_takes_precedence_over_param() {
+        let mut router = Router::new();
+        router.insert("/users/me", "GET", RouteEntry { operation_index: 0 });
+        router.insert("/users/{id}", "GET", RouteEntry { operation_index: 1 });
+
+        // "/users/me" should match the static route
+        match router.lookup("/users/me", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert!(params.is_empty());
+            }
+            _ => panic!("expected Found for static"),
+        }
+
+        // "/users/123" should match the param route
+        match router.lookup("/users/123", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 1);
+                assert_eq!(params, vec![("id".to_string(), "123".to_string())]);
+            }
+            _ => panic!("expected Found for param"),
+        }
+    }
+
+    #[test]
+    fn route_root_path() {
+        let mut router = Router::new();
+        router.insert("/", "GET", RouteEntry { operation_index: 0 });
+
+        match router.lookup("/", "GET") {
+            RouteMatch::Found { entry, .. } => {
+                assert_eq!(entry.operation_index, 0);
+            }
+            _ => panic!("expected Found for root"),
+        }
+    }
+
+    #[test]
+    fn route_normalizes_request_path() {
+        let mut router = Router::new();
+        router.insert("/users/{id}", "GET", RouteEntry { operation_index: 0 });
+
+        // Trailing slash should still match
+        match router.lookup("/users/123/", "GET") {
+            RouteMatch::Found { params, .. } => {
+                assert_eq!(params, vec![("id".to_string(), "123".to_string())]);
+            }
+            _ => panic!("expected Found"),
+        }
+
+        // Double slashes should still match
+        match router.lookup("/users//456", "GET") {
+            RouteMatch::Found { params, .. } => {
+                assert_eq!(params, vec![("id".to_string(), "456".to_string())]);
+            }
+            _ => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn multiple_methods_same_path() {
+        let mut router = Router::new();
+        router.insert("/users", "GET", RouteEntry { operation_index: 0 });
+        router.insert("/users", "POST", RouteEntry { operation_index: 1 });
+        router.insert("/users", "DELETE", RouteEntry { operation_index: 2 });
+
+        match router.lookup("/users", "GET") {
+            RouteMatch::Found { entry, .. } => assert_eq!(entry.operation_index, 0),
+            _ => panic!("expected Found for GET"),
+        }
+
+        match router.lookup("/users", "POST") {
+            RouteMatch::Found { entry, .. } => assert_eq!(entry.operation_index, 1),
+            _ => panic!("expected Found for POST"),
+        }
+
+        match router.lookup("/users", "DELETE") {
+            RouteMatch::Found { entry, .. } => assert_eq!(entry.operation_index, 2),
+            _ => panic!("expected Found for DELETE"),
+        }
     }
 }
