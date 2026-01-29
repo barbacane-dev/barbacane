@@ -161,6 +161,7 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--max-headers` | No | `100` | Maximum number of request headers |
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
 | `--max-uri-length` | No | `8192` | Maximum URI length in characters (8KB) |
+| `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
 
 ### Examples
 
