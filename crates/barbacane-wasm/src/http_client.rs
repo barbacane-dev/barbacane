@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
-use reqwest::{Client, StatusCode};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -226,7 +226,10 @@ impl HttpResponse {
         });
 
         let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "application/problem+json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "application/problem+json".to_string(),
+        );
 
         Self {
             status,

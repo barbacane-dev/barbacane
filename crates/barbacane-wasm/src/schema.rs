@@ -136,7 +136,9 @@ mod tests {
         // The important thing is we handle errors gracefully
         match result {
             Ok(_) => {} // Some schemas are permissive
-            Err(e) => assert!(e.to_string().contains("Schema") || e.to_string().contains("invalid")),
+            Err(e) => {
+                assert!(e.to_string().contains("Schema") || e.to_string().contains("invalid"))
+            }
         }
     }
 }
