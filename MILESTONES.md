@@ -165,10 +165,10 @@ HTTPS termination and JWT authentication — the most common production security
 **Specs:** SPEC-004 (partial)
 
 ### TLS Termination
-- [ ] TLS termination — rustls ingress, cert/key from file paths
-- [ ] TLS settings — TLS 1.2 min, 1.3 preferred, modern cipher suites
-- [ ] ALPN — HTTP/1.1 and HTTP/2 negotiation
-- [ ] `--tls-cert` and `--tls-key` CLI flags
+- [x] TLS termination — rustls ingress, cert/key from file paths
+- [x] TLS settings — TLS 1.2 min, 1.3 preferred, modern cipher suites
+- [x] ALPN — HTTP/1.1 and HTTP/2 negotiation
+- [x] `--tls-cert` and `--tls-key` CLI flags
 - [ ] `--tls-config` for advanced settings (min version, cipher suites)
 
 ### JWT Authentication
