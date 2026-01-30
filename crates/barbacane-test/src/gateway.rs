@@ -58,17 +58,14 @@ pub struct TestCertificates {
 
 /// Generate self-signed test certificates.
 pub fn generate_test_certificates(temp_dir: &Path) -> Result<TestCertificates, TestError> {
-    use rcgen::{CertifiedKey, generate_simple_self_signed};
+    use rcgen::{generate_simple_self_signed, CertifiedKey};
 
     // Install the default crypto provider for rustls (required before any TLS operations).
     // This may fail if already installed, which is fine - we ignore the error.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // Generate self-signed certificate for localhost
-    let subject_alt_names = vec![
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-    ];
+    let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
 
     let CertifiedKey { cert, key_pair } = generate_simple_self_signed(subject_alt_names)
         .map_err(|e| TestError::StartupFailed(format!("failed to generate certificate: {}", e)))?;
@@ -283,6 +280,12 @@ impl TestGateway {
     ) -> Result<reqwest::Response, TestError> {
         let url = format!("{}{}", self.base_url(), path);
         Ok(self.client.request(method, &url).send().await?)
+    }
+
+    /// Create a request builder for customizing headers etc.
+    pub fn request_builder(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let url = format!("{}{}", self.base_url(), path);
+        self.client.request(method, &url)
     }
 
     /// Make a PUT request to the given path.
@@ -820,5 +823,221 @@ mod tests {
         // 404 response over HTTPS
         let resp = gateway.get("/nonexistent").await.unwrap();
         assert_eq!(resp.status(), 404);
+    }
+
+    // JWT Authentication Tests
+
+    /// Helper to create a JWT token for testing.
+    /// Creates unsigned tokens since we use skip_signature_validation: true in tests.
+    fn create_test_jwt(sub: &str, iss: &str, aud: &str, exp: u64, nbf: Option<u64>) -> String {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+        let header = serde_json::json!({"alg": "RS256", "typ": "JWT"});
+        let mut claims = serde_json::json!({
+            "sub": sub,
+            "iss": iss,
+            "aud": aud,
+            "exp": exp
+        });
+        if let Some(nbf_val) = nbf {
+            claims["nbf"] = serde_json::json!(nbf_val);
+        }
+
+        let header_b64 = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
+        let claims_b64 = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
+        // Signature is just filler since we skip validation
+        let sig_b64 = URL_SAFE_NO_PAD.encode(b"test_signature");
+
+        format!("{}.{}.{}", header_b64, claims_b64, sig_b64)
+    }
+
+    /// Get current Unix timestamp.
+    fn now_timestamp() -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_missing_token() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request without Authorization header should get 401
+        let resp = gateway.get("/protected").await.unwrap();
+        assert_eq!(resp.status(), 401);
+
+        // Check WWW-Authenticate header
+        let www_auth = resp.headers().get("www-authenticate");
+        assert!(www_auth.is_some(), "expected WWW-Authenticate header");
+        let www_auth_val = www_auth.unwrap().to_str().unwrap();
+        assert!(
+            www_auth_val.contains("Bearer"),
+            "expected Bearer scheme in WWW-Authenticate"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_invalid_header_format() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request with invalid Authorization format should get 401
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", "Basic dXNlcjpwYXNz")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_malformed_token() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request with malformed token should get 401
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", "Bearer not.a.valid.jwt")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_valid_token() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Create a valid token
+        let exp = now_timestamp() + 3600; // Expires in 1 hour
+        let token = create_test_jwt("user-123", "test-issuer", "test-audience", exp, None);
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Access granted");
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_expired_token() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Create an expired token (expired 2 minutes ago, beyond 60s clock skew)
+        let exp = now_timestamp() - 120;
+        let token = create_test_jwt("user-123", "test-issuer", "test-audience", exp, None);
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        // Check error response body
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("expired"));
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_not_yet_valid() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Create a token that's not valid yet (starts 2 minutes from now)
+        let exp = now_timestamp() + 3600;
+        let nbf = now_timestamp() + 120;
+        let token = create_test_jwt("user-123", "test-issuer", "test-audience", exp, Some(nbf));
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("not yet valid"));
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_invalid_issuer() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Create a token with wrong issuer
+        let exp = now_timestamp() + 3600;
+        let token = create_test_jwt("user-123", "wrong-issuer", "test-audience", exp, None);
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("issuer"));
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_invalid_audience() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Create a token with wrong audience
+        let exp = now_timestamp() + 3600;
+        let token = create_test_jwt("user-123", "test-issuer", "wrong-audience", exp, None);
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("audience"));
+    }
+
+    #[tokio::test]
+    async fn test_jwt_auth_public_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/jwt-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Public endpoint should work without a token
+        let resp = gateway.get("/public").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Public access");
     }
 }

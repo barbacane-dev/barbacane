@@ -171,3 +171,19 @@ pub mod telemetry {
     pub const SPAN_END: &str = "host_span_end";
     pub const SPAN_SET_ATTRIBUTE: &str = "host_span_set_attribute";
 }
+
+/// Host function for Unix timestamp.
+///
+/// ```text
+/// host_get_unix_timestamp() -> u64
+/// ```
+///
+/// Returns current Unix timestamp in seconds since epoch.
+/// Used by JWT middleware for token expiration validation.
+pub mod unix_timestamp {
+    /// The capability name (none - always available for security).
+    pub const CAPABILITY: Option<&str> = None;
+
+    /// The function name.
+    pub const FUNCTION_NAME: &str = "host_get_unix_timestamp";
+}

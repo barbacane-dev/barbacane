@@ -172,18 +172,20 @@ HTTPS termination and JWT authentication — the most common production security
 - [ ] `--tls-config` for advanced settings (min version, cipher suites)
 
 ### JWT Authentication
-- [ ] `jwt-auth` middleware plugin — RS256/ES256 token validation
-- [ ] JWKS fetch — load public keys from `jwks_uri`
-- [ ] JWKS caching — configurable refresh interval, retain previous on failure
-- [ ] Token extraction — `Authorization: Bearer` header
-- [ ] Claims validation — `iss`, `aud`, `exp`, `nbf` checks
-- [ ] Context output — `context:auth.sub`, `context:auth.claims.*`
-- [ ] Auth rejection — 401 with `WWW-Authenticate` header
+- [x] `jwt-auth` middleware plugin — RS256/ES256 token validation (signature validation scaffolded)
+- [ ] JWKS fetch — load public keys from `jwks_uri` (deferred)
+- [ ] JWKS caching — configurable refresh interval, retain previous on failure (deferred)
+- [x] Token extraction — `Authorization: Bearer` header
+- [x] Claims validation — `iss`, `aud`, `exp`, `nbf` checks
+- [x] Context output — `x-auth-sub`, `x-auth-claims` headers to downstream
+- [x] Auth rejection — 401 with `WWW-Authenticate` header
+- [x] Middleware chain execution — on_request/on_response chain implemented
+- [x] `host_get_unix_timestamp` host function — for token expiration validation
 
 ### Integration
-- [ ] Auth context convention — standardized `context:auth.*` keys
+- [x] Auth context convention — `x-auth-*` headers for downstream
 - [ ] Security defaults — strict validation enabled by default
-- [ ] Integration tests — valid/invalid JWT, expired token, wrong audience
+- [x] Integration tests — valid/invalid JWT, expired token, wrong audience, missing token, malformed token
 
 ---
 
