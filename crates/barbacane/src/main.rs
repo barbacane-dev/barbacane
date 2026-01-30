@@ -25,7 +25,14 @@ use barbacane_compiler::{
 };
 use barbacane_router::{RouteEntry, RouteMatch, Router};
 use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits};
-use barbacane_wasm::{HttpClient, HttpClientConfig, HttpClientError, PluginLimits, WasmEngine};
+use barbacane_wasm::{
+    HttpClient, HttpClientConfig, HttpClientError, InstancePool, PluginLimits, TlsConfig,
+    WasmEngine,
+};
+
+/// Embedded mock dispatcher WASM plugin.
+/// This is a built-in plugin that's always available.
+static MOCK_PLUGIN_WASM: &[u8] = include_bytes!("../../../plugins/mock/mock.wasm");
 
 #[derive(Parser, Debug)]
 #[command(name = "barbacane", about = "Barbacane API gateway", version)]
@@ -114,10 +121,12 @@ struct Gateway {
     /// Request limits (body size, headers, URI length).
     limits: RequestLimits,
     dev_mode: bool,
-    /// WASM engine for plugin execution.
+    /// WASM engine for plugin execution (kept for future plugin compilation).
     #[allow(dead_code)]
     wasm_engine: Arc<WasmEngine>,
-    /// Plugin resource limits.
+    /// Plugin instance pool.
+    plugin_pool: Arc<InstancePool>,
+    /// Plugin resource limits (kept for future dynamic limit adjustment).
     #[allow(dead_code)]
     plugin_limits: PluginLimits,
     /// HTTP client for upstream requests.
@@ -145,6 +154,16 @@ impl Gateway {
         let plugin_limits = PluginLimits::default();
         let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
+        let wasm_engine = Arc::new(wasm_engine);
+
+        // Create plugin instance pool
+        let plugin_pool = InstancePool::new(wasm_engine.clone(), plugin_limits.clone());
+
+        // Register built-in mock dispatcher plugin
+        let mock_module = wasm_engine
+            .compile(MOCK_PLUGIN_WASM, "mock".to_string(), "0.1.0".to_string())
+            .map_err(|e| format!("failed to compile mock plugin: {}", e))?;
+        plugin_pool.register_module(mock_module);
 
         // Initialize HTTP client for upstream requests
         let http_client_config = HttpClientConfig {
@@ -190,7 +209,8 @@ impl Gateway {
             specs,
             limits,
             dev_mode,
-            wasm_engine: Arc::new(wasm_engine),
+            wasm_engine,
+            plugin_pool: Arc::new(plugin_pool),
             plugin_limits,
             http_client: Arc::new(http_client),
         })
@@ -284,9 +304,9 @@ impl Gateway {
     async fn dispatch(
         &self,
         operation: &CompiledOperation,
-        _params: Vec<(String, String)>,
-        _request_body: &[u8],
-        _headers: &HashMap<String, String>,
+        params: Vec<(String, String)>,
+        request_body: &[u8],
+        headers: &HashMap<String, String>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let dispatch = &operation.dispatch;
 
@@ -298,25 +318,37 @@ impl Gateway {
             );
         }
 
-        // Built-in dispatchers
+        // Check if dispatcher is available as a WASM plugin
+        if self.plugin_pool.has_plugin(&dispatch.name) {
+            return self
+                .dispatch_wasm_plugin(
+                    &dispatch.name,
+                    &dispatch.config,
+                    operation,
+                    params,
+                    request_body,
+                    headers,
+                )
+                .await;
+        }
+
+        // Built-in dispatchers (fallback for http-upstream which is not yet a WASM plugin)
         match dispatch.name.as_str() {
-            "mock" => self.dispatch_mock(&dispatch.config),
             "http-upstream" => {
                 self.dispatch_http_upstream(
                     &dispatch.config,
                     operation,
-                    _params,
-                    _request_body,
-                    _headers,
+                    params,
+                    request_body,
+                    headers,
                 )
                 .await
             }
             _ => {
-                // WASM dispatcher - requires plugin bundled in artifact
-                // For now, return error until plugin bundling is implemented
+                // Unknown dispatcher
                 let detail = if self.dev_mode {
                     Some(format!(
-                        "unknown dispatcher '{}' - WASM plugins must be bundled in artifact",
+                        "unknown dispatcher '{}' - not found in plugin pool",
                         dispatch.name
                     ))
                 } else {
@@ -328,35 +360,114 @@ impl Gateway {
         }
     }
 
-    /// Mock dispatcher: returns configured status and body.
-    fn dispatch_mock(
+    /// Dispatch via a WASM plugin.
+    async fn dispatch_wasm_plugin(
         &self,
+        plugin_name: &str,
         config: &serde_json::Value,
+        operation: &CompiledOperation,
+        params: Vec<(String, String)>,
+        request_body: &[u8],
+        headers: &HashMap<String, String>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
-        let status_code = config
-            .get("status")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u16)
-            .unwrap_or(200);
+        // Create instance key for this (plugin, config) pair
+        let instance_key = barbacane_wasm::InstanceKey::new(plugin_name, config);
 
-        let body = config
-            .get("body")
-            .map(|v| {
-                if v.is_string() {
-                    v.as_str().unwrap().to_string()
+        // Register config if not already registered
+        let config_json = serde_json::to_vec(config).unwrap_or_default();
+        self.plugin_pool
+            .register_config(instance_key.clone(), config_json);
+
+        // Get a plugin instance
+        let mut instance = match self.plugin_pool.get_instance(&instance_key) {
+            Ok(i) => i,
+            Err(e) => {
+                let detail = if self.dev_mode {
+                    Some(format!("failed to get plugin instance: {}", e))
                 } else {
-                    v.to_string()
-                }
-            })
-            .unwrap_or_default();
+                    None
+                };
+                return Ok(self.internal_error_response(detail.as_deref()));
+            }
+        };
 
-        let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::OK);
+        // Build the Request object for the plugin (using BTreeMap for WASM compatibility)
+        let path_params: std::collections::BTreeMap<String, String> = params.into_iter().collect();
+        let headers_btree: std::collections::BTreeMap<String, String> = headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let plugin_request = barbacane_wasm::Request {
+            method: operation.method.clone(),
+            path: operation.path.clone(),
+            query: None, // TODO: pass query string
+            headers: headers_btree,
+            body: if request_body.is_empty() {
+                None
+            } else {
+                String::from_utf8(request_body.to_vec()).ok()
+            },
+            client_ip: "0.0.0.0".to_string(), // TODO: get actual client IP
+            path_params,
+        };
 
-        Ok(Response::builder()
-            .status(status)
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body)))
-            .unwrap())
+        // Serialize request for the plugin
+        let request_json = match serde_json::to_vec(&plugin_request) {
+            Ok(j) => j,
+            Err(e) => {
+                let detail = if self.dev_mode {
+                    Some(format!("failed to serialize request: {}", e))
+                } else {
+                    None
+                };
+                return Ok(self.internal_error_response(detail.as_deref()));
+            }
+        };
+
+        // Call the dispatch function
+        if let Err(e) = instance.dispatch(&request_json) {
+            let detail = if self.dev_mode {
+                Some(format!("plugin dispatch failed: {}", e))
+            } else {
+                None
+            };
+            return Ok(self.internal_error_response(detail.as_deref()));
+        }
+
+        // Get the output
+        let output = instance.take_output();
+        if output.is_empty() {
+            let detail = if self.dev_mode {
+                Some("plugin returned empty output".to_string())
+            } else {
+                None
+            };
+            return Ok(self.internal_error_response(detail.as_deref()));
+        }
+
+        // Parse the response
+        let plugin_response: barbacane_wasm::Response = match serde_json::from_slice(&output) {
+            Ok(r) => r,
+            Err(e) => {
+                let detail = if self.dev_mode {
+                    Some(format!("failed to parse plugin response: {}", e))
+                } else {
+                    None
+                };
+                return Ok(self.internal_error_response(detail.as_deref()));
+            }
+        };
+
+        // Build HTTP response
+        let status = StatusCode::from_u16(plugin_response.status).unwrap_or(StatusCode::OK);
+        let mut builder = Response::builder().status(status);
+
+        for (key, value) in &plugin_response.headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+
+        let body = plugin_response.body.unwrap_or_default();
+        Ok(builder.body(Full::new(Bytes::from(body))).unwrap())
     }
 
     /// HTTP upstream dispatcher: reverse proxy to upstream server.
@@ -432,8 +543,17 @@ impl Gateway {
                 .map(std::time::Duration::from_secs_f64),
         };
 
+        // Extract TLS config for mTLS if specified
+        let tls_config: Option<TlsConfig> = config
+            .get("tls")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+
         // Execute the request
-        match self.http_client.call(request).await {
+        match self
+            .http_client
+            .call_with_tls(request, tls_config.as_ref())
+            .await
+        {
             Ok(response) => {
                 let mut builder = Response::builder()
                     .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK));
@@ -472,6 +592,10 @@ impl Gateway {
                     }
                     HttpClientError::ConnectionFailed(_) | HttpClientError::RequestFailed(_) => {
                         Ok(self.bad_gateway_response(detail.as_deref()))
+                    }
+                    HttpClientError::TlsConfig(_) => {
+                        // TLS configuration errors are internal server errors
+                        Ok(self.internal_error_response(detail.as_deref()))
                     }
                     _ => Ok(self.bad_gateway_response(detail.as_deref())),
                 }

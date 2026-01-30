@@ -143,6 +143,7 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
 
         /// Helper to set output via host function.
         fn set_output(data: &[u8]) {
+            #[link(wasm_import_module = "barbacane")]
             extern "C" {
                 fn host_set_output(ptr: i32, len: i32);
             }
@@ -205,7 +206,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     // Return error response
                     let error_resp = barbacane_plugin_sdk::prelude::Response {
                         status: 500,
-                        headers: std::collections::HashMap::new(),
+                        headers: std::collections::BTreeMap::new(),
                         body: Some(r#"{"error":"failed to parse request"}"#.to_string()),
                     };
                     if let Ok(output) = serde_json::to_vec(&error_resp) {
@@ -221,7 +222,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     None => {
                         let error_resp = barbacane_plugin_sdk::prelude::Response {
                             status: 500,
-                            headers: std::collections::HashMap::new(),
+                            headers: std::collections::BTreeMap::new(),
                             body: Some(r#"{"error":"plugin not initialized"}"#.to_string()),
                         };
                         if let Ok(output) = serde_json::to_vec(&error_resp) {
@@ -243,6 +244,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
 
         /// Helper to set output via host function.
         fn set_output(data: &[u8]) {
+            #[link(wasm_import_module = "barbacane")]
             extern "C" {
                 fn host_set_output(ptr: i32, len: i32);
             }

@@ -1,0 +1,9 @@
+[plugin]
+name = "mock"
+version = "0.1.0"
+type = "dispatcher"
+description = "Returns static responses for testing and health checks"
+wasm = "mock.wasm"
+
+[capabilities]
+host_functions = []

@@ -1,8 +1,10 @@
-### Barbacane M2 Validation Test Scenarios
+### Barbacane API Test Scenarios (M2-M4)
 ### Usage: Start gateway first with:
 ###   cargo build
 ###   ./target/debug/barbacane compile --spec tests/fixtures/validation.yaml --output /tmp/test.bca
 ###   ./target/debug/barbacane serve --artifact /tmp/test.bca --dev
+###
+### Note: Mock dispatcher now runs as a WASM plugin (M4)
 
 @baseUrl = http://localhost:8080
 
@@ -147,14 +149,61 @@ Content-Type: application/json
 {"name": "", "email": "test@example.com"}
 
 ### ================================================================
+### M4: Mock Dispatcher (WASM Plugin)
+### ================================================================
+### The mock dispatcher is now a WASM plugin that returns static responses
+### configured in the OpenAPI spec. Features:
+### - Custom status codes (status)
+### - Custom response bodies (body)
+### - Custom headers (headers)
+### - Content-Type configuration (content_type)
+
+### Mock health check - returns {"status":"ok"} (WASM plugin)
+# Expected: 200 OK
+GET {{baseUrl}}/health
+
+###
+
+### Mock user list - returns {"users":[]}
+# Expected: 200 OK
+GET {{baseUrl}}/users
+
+###
+
+### Mock create user - returns {"id":"123"} with 201
+# Expected: 201 Created
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"name": "Test User", "email": "test@example.com"}
+
+###
+
+### Mock get user - UUID format required
+# Expected: 200 OK
+GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
+
+###
+
+### Mock update user - returns {"updated":true}
+# Expected: 200 OK
+PUT {{baseUrl}}/users/123
+Content-Type: application/json
+X-Request-ID: req-abc-123
+
+{"name": "Updated User"}
+
+###
+
+### ================================================================
 ### M4: HTTP Upstream Proxy Tests
 ### ================================================================
 ### Usage: Start gateway with proxy.yaml:
 ###   cargo build
 ###   ./target/debug/barbacane compile --spec tests/fixtures/proxy.yaml --output /tmp/proxy.bca
-###   ./target/debug/barbacane serve --artifact /tmp/proxy.bca --dev
+###   ./target/debug/barbacane serve --artifact /tmp/proxy.bca --dev --allow-plaintext-upstream
 
-### Local health check (mock dispatcher)
+### Local health check (mock dispatcher via WASM)
 GET {{baseUrl}}/health
 
 ### ================================

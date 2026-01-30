@@ -109,7 +109,7 @@ Move dispatchers from hardcoded to WASM plugins. Add real HTTP upstream proxying
 
 ### Dispatchers
 - [x] `http-upstream` dispatcher — reverse proxy (built-in, uses `url`, `path`, `timeout` config)
-- [ ] `mock` dispatcher — static response from config (as WASM plugin, currently hardcoded)
+- [x] `mock` dispatcher — static response from config (WASM plugin)
 - [ ] `lambda` dispatcher — invoke AWS Lambda via `host_http_call`
 
 ### Compiler & CLI
@@ -117,7 +117,7 @@ Move dispatchers from hardcoded to WASM plugins. Add real HTTP upstream proxying
 - [x] `--allow-plaintext-upstream` flag — dev only
 
 ### Remaining
-- [ ] Upstream mTLS — `tls.client_cert`, `tls.client_key`, `tls.ca` config
+- [x] Upstream mTLS — `tls.client_cert`, `tls.client_key`, `tls.ca` config
 - [x] Integration tests — upstream proxying (httpbin.org tests)
 
 ---
