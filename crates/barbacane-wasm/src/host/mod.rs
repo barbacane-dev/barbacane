@@ -187,3 +187,43 @@ pub mod unix_timestamp {
     /// The function name.
     pub const FUNCTION_NAME: &str = "host_get_unix_timestamp";
 }
+
+/// Host functions for rate limiting.
+///
+/// ```text
+/// host_rate_limit_check(key_ptr: i32, key_len: i32, quota: u32, window_secs: u32) -> i32
+/// host_rate_limit_read_result(buf_ptr: i32, buf_len: i32) -> i32
+/// ```
+///
+/// Returns the length of the JSON result, or -1 on error.
+/// Result contains: { allowed: bool, remaining: u32, reset: u64, limit: u32, retry_after?: u64 }
+pub mod rate_limit {
+    /// The capability name.
+    pub const CAPABILITY: &str = "rate_limit";
+
+    /// The function names.
+    pub const CHECK_FUNCTION: &str = "host_rate_limit_check";
+    pub const READ_RESULT_FUNCTION: &str = "host_rate_limit_read_result";
+}
+
+/// Host functions for response caching.
+///
+/// ```text
+/// host_cache_get(key_ptr: i32, key_len: i32) -> i32
+/// host_cache_set(key_ptr: i32, key_len: i32, entry_ptr: i32, entry_len: i32, ttl_secs: u32) -> i32
+/// host_cache_read_result(buf_ptr: i32, buf_len: i32) -> i32
+/// ```
+///
+/// host_cache_get returns the length of the JSON result, or -1 on error.
+/// Result contains: { hit: bool, entry?: { status: u16, headers: {}, body?: string } }
+///
+/// host_cache_set returns 0 on success, -1 on error.
+pub mod cache {
+    /// The capability name.
+    pub const CAPABILITY: &str = "cache";
+
+    /// The function names.
+    pub const GET_FUNCTION: &str = "host_cache_get";
+    pub const SET_FUNCTION: &str = "host_cache_set";
+    pub const READ_RESULT_FUNCTION: &str = "host_cache_read_result";
+}

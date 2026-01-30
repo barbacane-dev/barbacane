@@ -12,3 +12,7 @@ plugins:
     path: ../../plugins/apikey-auth/apikey-auth.wasm
   oauth2-auth:
     path: ../../plugins/oauth2-auth/oauth2-auth.wasm
+  rate-limit:
+    path: ../../plugins/rate-limit/rate-limit.wasm
+  cache:
+    path: ../../plugins/cache/cache.wasm

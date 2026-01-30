@@ -6,6 +6,7 @@
 // Allow dead code for M3 host function scaffolding not yet integrated
 #![allow(dead_code)]
 
+pub mod cache;
 mod chain;
 mod circuit_breaker;
 mod engine;
@@ -16,6 +17,7 @@ mod instance;
 mod limits;
 mod manifest;
 mod pool;
+pub mod rate_limiter;
 mod schema;
 pub mod secrets;
 mod trap;
@@ -39,6 +41,12 @@ pub use secrets::{
 };
 pub use trap::{TrapContext, TrapResult};
 pub use validate::{validate_exports, validate_imports};
+
+// Rate limiter for host_rate_limit_check
+pub use rate_limiter::{RateLimitResult, RateLimiter, RateLimiterStats};
+
+// Response cache for host_cache_get/set
+pub use cache::{CacheEntry, CacheResult, CacheStats, ResponseCache};
 
 // HTTP client for host_http_call
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};

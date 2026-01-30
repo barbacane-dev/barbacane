@@ -1,0 +1,71 @@
+openapi: "3.1.0"
+info:
+  title: Cache Test API
+  version: "1.0.0"
+
+paths:
+  /cached:
+    get:
+      operationId: cachedEndpoint
+      summary: Cached endpoint with 60s TTL
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 60
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"cached response","timestamp":"{{timestamp}}"}'
+      responses:
+        "200":
+          description: Success
+
+  /cached-with-vary:
+    get:
+      operationId: cachedWithVary
+      summary: Cached endpoint with Accept-Language vary header
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 60
+            vary:
+              - "accept-language"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"localized response"}'
+      responses:
+        "200":
+          description: Success
+
+  /uncached:
+    get:
+      operationId: uncachedEndpoint
+      summary: Endpoint without caching
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"not cached"}'
+      responses:
+        "200":
+          description: Success
+
+  /post-not-cached:
+    post:
+      operationId: postNotCached
+      summary: POST requests are not cached by default
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 60
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"post response"}'
+      responses:
+        "200":
+          description: Success

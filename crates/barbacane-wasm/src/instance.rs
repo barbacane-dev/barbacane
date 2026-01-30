@@ -85,6 +85,18 @@ pub struct PluginState {
 
     /// Result buffer for host_secret_read_result.
     pub last_secret_result: Option<Vec<u8>>,
+
+    /// Rate limiter (shared across instances).
+    pub rate_limiter: Option<crate::rate_limiter::RateLimiter>,
+
+    /// Result buffer for host_rate_limit_read_result.
+    pub last_rate_limit_result: Option<Vec<u8>>,
+
+    /// Response cache (shared across instances).
+    pub response_cache: Option<crate::cache::ResponseCache>,
+
+    /// Result buffer for host_cache_read_result.
+    pub last_cache_result: Option<Vec<u8>>,
 }
 
 impl PluginState {
@@ -99,6 +111,10 @@ impl PluginState {
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
             last_secret_result: None,
+            rate_limiter: None,
+            last_rate_limit_result: None,
+            response_cache: None,
+            last_cache_result: None,
         }
     }
 
@@ -117,6 +133,10 @@ impl PluginState {
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
             last_secret_result: None,
+            rate_limiter: None,
+            last_rate_limit_result: None,
+            response_cache: None,
+            last_cache_result: None,
         }
     }
 
@@ -136,6 +156,35 @@ impl PluginState {
             last_http_result: None,
             secrets,
             last_secret_result: None,
+            rate_limiter: None,
+            last_rate_limit_result: None,
+            response_cache: None,
+            last_cache_result: None,
+        }
+    }
+
+    /// Create new plugin state with all options.
+    pub fn with_all_options(
+        plugin_name: String,
+        limits: &PluginLimits,
+        http_client: Option<Arc<HttpClient>>,
+        secrets: crate::secrets::SecretsStore,
+        rate_limiter: Option<crate::rate_limiter::RateLimiter>,
+        response_cache: Option<crate::cache::ResponseCache>,
+    ) -> Self {
+        Self {
+            plugin_name,
+            output_buffer: Vec::new(),
+            context: RequestContext::default(),
+            max_memory: limits.max_memory_bytes,
+            http_client,
+            last_http_result: None,
+            secrets,
+            last_secret_result: None,
+            rate_limiter,
+            last_rate_limit_result: None,
+            response_cache,
+            last_cache_result: None,
         }
     }
 
@@ -214,18 +263,27 @@ impl PluginInstance {
         http_client: Option<Arc<HttpClient>>,
         secrets: Option<crate::secrets::SecretsStore>,
     ) -> Result<Self, WasmError> {
-        let state = match (http_client, secrets) {
-            (Some(client), Some(secrets)) => PluginState::with_http_client_and_secrets(
-                module.name.clone(),
-                &limits,
-                client,
-                secrets,
-            ),
-            (Some(client), None) => {
-                PluginState::with_http_client(module.name.clone(), &limits, client)
-            }
-            _ => PluginState::new(module.name.clone(), &limits),
-        };
+        Self::new_with_all_options(engine, module, limits, http_client, secrets, None, None)
+    }
+
+    /// Create a new plugin instance with all options including rate limiter and cache.
+    pub fn new_with_all_options(
+        engine: &Engine,
+        module: &CompiledModule,
+        limits: PluginLimits,
+        http_client: Option<Arc<HttpClient>>,
+        secrets: Option<crate::secrets::SecretsStore>,
+        rate_limiter: Option<crate::rate_limiter::RateLimiter>,
+        response_cache: Option<crate::cache::ResponseCache>,
+    ) -> Result<Self, WasmError> {
+        let state = PluginState::with_all_options(
+            module.name.clone(),
+            &limits,
+            http_client,
+            secrets.unwrap_or_default(),
+            rate_limiter,
+            response_cache,
+        );
         let mut store = Store::new(engine, state);
 
         // Set fuel for execution limiting
@@ -816,6 +874,236 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| {
             WasmError::Instantiation(format!("failed to add host_secret_read_result: {}", e))
+        })?;
+
+    // host_rate_limit_check - check rate limit for a key
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_rate_limit_check",
+            |mut caller: Caller<'_, PluginState>,
+             key_ptr: i32,
+             key_len: i32,
+             quota: u32,
+             window_secs: u32|
+             -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = key_ptr as usize;
+                let end = start + key_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                // Read the partition key from plugin memory
+                let key = match std::str::from_utf8(&data[start..end]) {
+                    Ok(k) => k.to_string(),
+                    Err(_) => return -1,
+                };
+
+                // Get the rate limiter
+                let rate_limiter = match &caller.data().rate_limiter {
+                    Some(rl) => rl.clone(),
+                    None => {
+                        tracing::error!("rate limiter not available");
+                        return -1;
+                    }
+                };
+
+                // Check the rate limit
+                let result = rate_limiter.check(&key, quota, window_secs as u64);
+
+                // Serialize the result
+                match serde_json::to_vec(&result) {
+                    Ok(json) => {
+                        let len = json.len() as i32;
+                        caller.data_mut().last_rate_limit_result = Some(json);
+                        len
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to serialize rate limit result: {}", e);
+                        -1
+                    }
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_rate_limit_check: {}", e))
+        })?;
+
+    // host_rate_limit_read_result - read rate limit result into plugin memory
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_rate_limit_read_result",
+            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let result = caller.data_mut().last_rate_limit_result.take();
+                if let Some(data) = result {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
+
+                    if memory
+                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
+                        .is_ok()
+                    {
+                        return copy_len as i32;
+                    }
+                }
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_rate_limit_read_result: {}", e))
+        })?;
+
+    // host_cache_get - look up a cached response
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_cache_get",
+            |mut caller: Caller<'_, PluginState>, key_ptr: i32, key_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = key_ptr as usize;
+                let end = start + key_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                // Read the cache key from plugin memory
+                let key = match std::str::from_utf8(&data[start..end]) {
+                    Ok(k) => k.to_string(),
+                    Err(_) => return -1,
+                };
+
+                // Get the response cache
+                let cache = match &caller.data().response_cache {
+                    Some(c) => c.clone(),
+                    None => {
+                        tracing::error!("response cache not available");
+                        return -1;
+                    }
+                };
+
+                // Check the cache
+                let result = cache.get(&key);
+
+                // Serialize the result
+                match serde_json::to_vec(&result) {
+                    Ok(json) => {
+                        let len = json.len() as i32;
+                        caller.data_mut().last_cache_result = Some(json);
+                        len
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to serialize cache result: {}", e);
+                        -1
+                    }
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_cache_get: {}", e)))?;
+
+    // host_cache_set - store a response in the cache
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_cache_set",
+            |mut caller: Caller<'_, PluginState>,
+             key_ptr: i32,
+             key_len: i32,
+             entry_ptr: i32,
+             entry_len: i32,
+             ttl_secs: u32|
+             -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let key_start = key_ptr as usize;
+                let key_end = key_start + key_len as usize;
+                let entry_start = entry_ptr as usize;
+                let entry_end = entry_start + entry_len as usize;
+                let data = memory.data(&caller);
+
+                if key_end > data.len() || entry_end > data.len() {
+                    return -1;
+                }
+
+                // Read the cache key
+                let key = match std::str::from_utf8(&data[key_start..key_end]) {
+                    Ok(k) => k.to_string(),
+                    Err(_) => return -1,
+                };
+
+                // Parse the cache entry JSON
+                let entry: crate::cache::CacheEntry =
+                    match serde_json::from_slice(&data[entry_start..entry_end]) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            tracing::error!("failed to parse cache entry: {}", e);
+                            return -1;
+                        }
+                    };
+
+                // Get the response cache
+                let cache = match &caller.data().response_cache {
+                    Some(c) => c.clone(),
+                    None => {
+                        tracing::error!("response cache not available");
+                        return -1;
+                    }
+                };
+
+                // Store in cache
+                cache.set(&key, entry, ttl_secs as u64);
+                0 // Success
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_cache_set: {}", e)))?;
+
+    // host_cache_read_result - read cache lookup result into plugin memory
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_cache_read_result",
+            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let result = caller.data_mut().last_cache_result.take();
+                if let Some(data) = result {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
+
+                    if memory
+                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
+                        .is_ok()
+                    {
+                        return copy_len as i32;
+                    }
+                }
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_cache_read_result: {}", e))
         })?;
 
     Ok(())

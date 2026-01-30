@@ -302,10 +302,16 @@ paths:
 ```yaml
 - name: rate-limit
   config:
-    requests_per_minute: 100
-    burst: 20
-    key: header:Authorization
+    quota: 100             # Maximum requests allowed in window
+    window: 60             # Window duration in seconds
+    policy_name: "default" # Optional: name for RateLimit-Policy header
+    partition_key: "client_ip" # Options: "client_ip", "header:<name>", "context:<key>"
 ```
+
+Returns IETF draft-ietf-httpapi-ratelimit-headers compliant headers:
+- `RateLimit-Policy`: Policy description (e.g., `default;q=100;w=60`)
+- `RateLimit`: Current limit status
+- `Retry-After`: Seconds until quota reset (only on 429)
 
 ### cors
 
@@ -323,9 +329,15 @@ paths:
 ```yaml
 - name: cache
   config:
-    ttl: 300
-    vary: ["Accept-Language"]
+    ttl: 300                  # TTL in seconds (default: 300)
+    vary: ["Accept-Language"] # Headers that differentiate cache entries
+    methods: ["GET", "HEAD"]  # Cacheable methods (default: GET, HEAD)
+    cacheable_status: [200, 301, 404] # Cacheable status codes
 ```
+
+Adds `X-Cache` header to responses:
+- `HIT`: Response served from cache
+- `MISS`: Response not in cache (will be cached if cacheable)
 
 ### request-id
 
@@ -380,7 +392,9 @@ x-barbacane-middlewares:
       allowed_origins: ["*"]
   - name: rate-limit
     config:
-      requests_per_minute: 100
+      quota: 100
+      window: 60
+      partition_key: "client_ip"
 
 paths:
   /health:
@@ -440,7 +454,8 @@ paths:
             scopes: ["admin:read"]
         - name: rate-limit
           config:
-            requests_per_minute: 50
+            quota: 50
+            window: 60
       x-barbacane-dispatch:
         name: http-upstream
         config:
