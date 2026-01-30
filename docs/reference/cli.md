@@ -32,17 +32,22 @@ barbacane compile --spec <FILES>... --output <PATH>
 |--------|----------|---------|-------------|
 | `--spec`, `-s` | Yes | - | One or more spec files (YAML or JSON) |
 | `--output`, `-o` | Yes | - | Output artifact path |
+| `--manifest`, `-m` | No | - | Path to `barbacane.yaml` manifest (required for plugin bundling) |
+| `--allow-plaintext` | No | `false` | Allow `http://` upstream URLs during compilation |
 
 ### Examples
 
 ```bash
-# Compile single spec
-barbacane compile --spec api.yaml --output api.bca
+# Compile single spec with manifest
+barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 
 # Compile multiple specs
-barbacane compile -s users.yaml -s orders.yaml -o combined.bca
+barbacane compile -s users.yaml -s orders.yaml -m barbacane.yaml -o combined.bca
 
 # Short form
+barbacane compile -s api.yaml -m barbacane.yaml -o api.bca
+
+# Legacy compilation without manifest (no plugins bundled)
 barbacane compile -s api.yaml -o api.bca
 ```
 
@@ -51,7 +56,8 @@ barbacane compile -s api.yaml -o api.bca
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Compilation error (validation failed, routing conflict, missing dispatch) |
+| 1 | Compilation error (validation failed, routing conflict, undeclared plugin) |
+| 2 | Manifest or plugin resolution error |
 
 ---
 
@@ -82,6 +88,8 @@ barbacane validate --spec <FILES>... [OPTIONS]
 | E1011 | Extension | Middleware entry missing `name` |
 | E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
+| E1031 | Extension | Plaintext HTTP URL not allowed (use `--allow-plaintext` to override) |
+| E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
 
 ### Examples
 
@@ -241,14 +249,14 @@ Requests exceeding limits receive an RFC 9457 problem details response:
 ### Development Cycle
 
 ```bash
-# Edit spec
-vim api.yaml
+# Edit spec and manifest
+vim api.yaml barbacane.yaml
 
 # Validate (quick check)
 barbacane validate --spec api.yaml
 
-# Compile
-barbacane compile --spec api.yaml --output api.bca
+# Compile with manifest
+barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 
 # Run in dev mode
 barbacane serve --artifact api.bca --dev
@@ -263,10 +271,11 @@ set -e
 # Validate all specs
 barbacane validate --spec specs/*.yaml --format json > validation.json
 
-# Compile artifact
+# Compile artifact with manifest
 barbacane compile \
   --spec specs/users.yaml \
   --spec specs/orders.yaml \
+  --manifest barbacane.yaml \
   --output dist/gateway.bca
 
 echo "Artifact built: dist/gateway.bca"
