@@ -1,0 +1,6 @@
+[plugin]
+name = "apikey-auth"
+version = "0.1.0"
+type = "middleware"
+description = "API key authentication middleware for validating API keys from headers or query parameters"
+wasm = "apikey-auth.wasm"

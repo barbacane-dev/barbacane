@@ -1040,4 +1040,97 @@ mod tests {
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["message"], "Public access");
     }
+
+    // ==================== API Key Auth Tests ====================
+
+    #[tokio::test]
+    async fn test_apikey_auth_valid_key() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/apikey-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("X-API-Key", "test-key-123")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Access granted");
+    }
+
+    #[tokio::test]
+    async fn test_apikey_auth_missing_key() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/apikey-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request without API key
+        let resp = gateway.get("/protected").await.unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("required"));
+    }
+
+    #[tokio::test]
+    async fn test_apikey_auth_invalid_key() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/apikey-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("X-API-Key", "wrong-key")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("Invalid"));
+    }
+
+    #[tokio::test]
+    async fn test_apikey_auth_public_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/apikey-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Public endpoint should work without a key
+        let resp = gateway.get("/public").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Public access");
+    }
+
+    #[tokio::test]
+    async fn test_apikey_auth_query_param_valid() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/apikey-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/query-auth?api_key=query-key-789").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Query auth granted");
+    }
+
+    #[tokio::test]
+    async fn test_apikey_auth_query_param_missing() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/apikey-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Missing query param
+        let resp = gateway.get("/query-auth").await.unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("required"));
+    }
 }

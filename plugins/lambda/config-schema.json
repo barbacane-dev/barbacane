@@ -1,5 +1,6 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barbacane.dev/schemas/lambda-config.json",
   "title": "Lambda Dispatcher Configuration",
   "description": "Configuration for AWS Lambda dispatcher",
   "type": "object",
