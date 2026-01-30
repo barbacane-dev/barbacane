@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://barbacane.dev/schemas/http-upstream-config.json",
+  "$id": "urn:barbacane:schema:http-upstream-config",
   "title": "HTTP Upstream Dispatcher Config",
   "description": "Configuration for the HTTP upstream reverse proxy dispatcher plugin",
   "type": "object",
