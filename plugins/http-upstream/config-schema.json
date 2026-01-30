@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:http-upstream-config",
+  "title": "HTTP Upstream Dispatcher Config",
+  "description": "Configuration for the HTTP upstream reverse proxy dispatcher plugin",
+  "type": "object",
+  "required": ["url"],
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Base URL of the upstream (e.g., https://api.example.com)",
+      "format": "uri"
+    },
+    "path": {
+      "type": "string",
+      "description": "Path template for the upstream request. Supports {param} substitution from path parameters. If not specified, uses the original request path."
+    },
+    "timeout": {
+      "type": "number",
+      "description": "Request timeout in seconds",
+      "default": 30,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

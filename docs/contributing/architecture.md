@@ -142,6 +142,17 @@ Main CLI with three subcommands:
 
 Data plane binary - the actual gateway.
 
+**Startup flow:**
+1. Load artifact from disk
+2. Load compiled routes from artifact
+3. Load bundled plugins from artifact
+4. Compile WASM modules (AOT)
+5. **Resolve secrets** - scan configs for `env://` and `file://` references
+6. Create plugin instance pool with resolved secrets
+7. Start HTTP server
+
+If any secret cannot be resolved in step 5, the gateway exits with code 13.
+
 **Request flow:**
 1. Receive HTTP request
 2. Check reserved endpoints (`/__barbacane/*`)
@@ -166,6 +177,10 @@ WASM plugin runtime built on wasmtime.
 - `host_log` - Structured logging with trace context
 - `host_context_get/set` - Per-request key-value store
 - `host_clock_now` - Monotonic time in milliseconds
+- `host_http_call` - Make outbound HTTP requests
+- `host_http_read_result` - Read HTTP response data
+- `host_get_secret` - Get a resolved secret by reference
+- `host_secret_read_result` - Read secret value into plugin memory
 
 **Resource limits:**
 - 16 MB linear memory

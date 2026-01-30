@@ -6,3 +6,9 @@ plugins:
     path: ../../plugins/mock/mock.wasm
   http-upstream:
     path: ../../plugins/http-upstream/http-upstream.wasm
+  jwt-auth:
+    path: ../../plugins/jwt-auth/jwt-auth.wasm
+  apikey-auth:
+    path: ../../plugins/apikey-auth/apikey-auth.wasm
+  oauth2-auth:
+    path: ../../plugins/oauth2-auth/oauth2-auth.wasm

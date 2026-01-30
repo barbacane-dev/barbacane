@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:jwt-auth-config",
+  "title": "JWT Authentication Middleware Config",
+  "description": "Configuration for the JWT authentication middleware plugin",
+  "type": "object",
+  "properties": {
+    "issuer": {
+      "type": "string",
+      "description": "Expected issuer (iss claim). If set, tokens must match."
+    },
+    "audience": {
+      "type": "string",
+      "description": "Expected audience (aud claim). If set, tokens must match."
+    },
+    "clock_skew_seconds": {
+      "type": "integer",
+      "description": "Clock skew tolerance in seconds for exp/nbf validation",
+      "default": 60,
+      "minimum": 0
+    },
+    "skip_signature_validation": {
+      "type": "boolean",
+      "description": "Whether to skip signature validation (for testing only)",
+      "default": false
+    },
+    "jwks_url": {
+      "type": "string",
+      "description": "JWKS URL for fetching public keys (not yet implemented)",
+      "format": "uri"
+    },
+    "public_key_pem": {
+      "type": "string",
+      "description": "Inline public key in PEM format for signature validation (not yet implemented)"
+    }
+  },
+  "additionalProperties": false
+}

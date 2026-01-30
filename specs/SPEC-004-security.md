@@ -114,17 +114,20 @@ The compiler validates that every `securitySchemes` entry referenced in a `secur
 
 ### 4.2 Auth middleware output convention
 
-Auth middlewares that successfully authenticate a request must set context keys so downstream plugins can consume the identity:
+Auth middlewares that successfully authenticate a request add headers for downstream use:
 
-| Context key | Description | Required |
-|-------------|-------------|----------|
-| `context:auth.sub` | Subject identifier (user ID) | Yes |
-| `context:auth.roles` | Comma-separated role list | Optional |
-| `context:auth.exp` | Token expiry (Unix timestamp) | Optional |
-| `context:auth.scopes` | Space-separated OAuth2 scopes | Optional |
-| `context:auth.tenant` | Tenant identifier | Optional |
+| Header | Description | Set by |
+|--------|-------------|--------|
+| `x-auth-sub` | Subject identifier (user ID) | jwt-auth, oauth2-auth |
+| `x-auth-scope` | Space-separated scopes | oauth2-auth |
+| `x-auth-claims` | Full token claims as JSON | jwt-auth, oauth2-auth |
+| `x-auth-client-id` | OAuth2 client ID | oauth2-auth |
+| `x-auth-username` | Username (if present) | oauth2-auth |
+| `x-auth-key-id` | API key identifier | apikey-auth |
+| `x-auth-key-name` | API key human-readable name | apikey-auth |
+| `x-auth-key-scopes` | Comma-separated key scopes | apikey-auth |
 
-These are conventions, not enforced by the runtime. Custom auth plugins may add additional keys under `context:auth.*`.
+Headers are removed from upstream requests to prevent spoofing.
 
 ### 4.3 Auth rejection behavior
 
@@ -132,17 +135,19 @@ When an auth middleware rejects a request:
 
 | Situation | Status | `type` URN | Response header |
 |-----------|--------|------------|-----------------|
-| No credentials provided | `401` | `urn:barbacane:error:unauthorized` | `WWW-Authenticate: Bearer` |
-| Invalid/expired token | `401` | `urn:barbacane:error:unauthorized` | `WWW-Authenticate: Bearer error="invalid_token"` |
-| Token valid but insufficient scope | `403` | `urn:barbacane:error:forbidden` | — |
+| No credentials provided | `401` | `urn:barbacane:error:authentication-failed` | `WWW-Authenticate: Bearer realm="api"` |
+| Invalid/expired token | `401` | `urn:barbacane:error:authentication-failed` | `WWW-Authenticate: Bearer error="invalid_token"` |
+| Token valid but insufficient scope | `403` | `urn:barbacane:error:authorization-failed` | `WWW-Authenticate: Bearer error="insufficient_scope"` |
+
+Response body follows RFC 7807 Problem Details format with `type`, `title`, `status`, and `detail` fields.
 
 ### 4.4 Built-in auth plugins
 
 | Plugin | Config fields |
 |--------|--------------|
-| `barbacane-auth-jwt` | `issuer` (string, required), `audiences` (string[], required), `jwks_uri` (string, required), `algorithms` (string[], default `["RS256", "ES256"]`) |
-| `barbacane-auth-apikey` | `store` (string, required — vault reference), `header` (string, default `x-api-key`), `query_param` (string, optional — alternative to header) |
-| `barbacane-auth-oauth2` | `introspection_url` (string, required), `client_id` (string, required), `client_secret` (string, required — vault reference) |
+| `jwt-auth` | `secret` (string, HS256), `public_key` (string, RS256 PEM), `issuer` (string), `audience` (string), `required_claims` (string[]), `leeway` (int, seconds) |
+| `apikey-auth` | `key_location` (`header`/`query`), `header_name` (default `X-API-Key`), `query_param` (default `api_key`), `keys` (map of key→metadata) |
+| `oauth2-auth` | `introspection_endpoint` (string, required), `client_id` (string, required), `client_secret` (string, required), `required_scopes` (string, space-separated), `timeout` (float, seconds) |
 
 ---
 

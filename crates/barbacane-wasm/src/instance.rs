@@ -79,6 +79,12 @@ pub struct PluginState {
 
     /// Result buffer for host_http_read_result.
     pub last_http_result: Option<Vec<u8>>,
+
+    /// Resolved secrets store (shared across instances).
+    pub secrets: crate::secrets::SecretsStore,
+
+    /// Result buffer for host_secret_read_result.
+    pub last_secret_result: Option<Vec<u8>>,
 }
 
 impl PluginState {
@@ -91,6 +97,8 @@ impl PluginState {
             max_memory: limits.max_memory_bytes,
             http_client: None,
             last_http_result: None,
+            secrets: crate::secrets::SecretsStore::new(),
+            last_secret_result: None,
         }
     }
 
@@ -107,6 +115,27 @@ impl PluginState {
             max_memory: limits.max_memory_bytes,
             http_client: Some(http_client),
             last_http_result: None,
+            secrets: crate::secrets::SecretsStore::new(),
+            last_secret_result: None,
+        }
+    }
+
+    /// Create new plugin state with HTTP client and secrets.
+    pub fn with_http_client_and_secrets(
+        plugin_name: String,
+        limits: &PluginLimits,
+        http_client: Arc<HttpClient>,
+        secrets: crate::secrets::SecretsStore,
+    ) -> Self {
+        Self {
+            plugin_name,
+            output_buffer: Vec::new(),
+            context: RequestContext::default(),
+            max_memory: limits.max_memory_bytes,
+            http_client: Some(http_client),
+            last_http_result: None,
+            secrets,
+            last_secret_result: None,
         }
     }
 
@@ -164,7 +193,7 @@ impl PluginInstance {
         module: &CompiledModule,
         limits: PluginLimits,
     ) -> Result<Self, WasmError> {
-        Self::new_with_http_client(engine, module, limits, None)
+        Self::new_with_options(engine, module, limits, None, None)
     }
 
     /// Create a new plugin instance with an HTTP client for outbound calls.
@@ -174,9 +203,28 @@ impl PluginInstance {
         limits: PluginLimits,
         http_client: Option<Arc<HttpClient>>,
     ) -> Result<Self, WasmError> {
-        let state = match http_client {
-            Some(client) => PluginState::with_http_client(module.name.clone(), &limits, client),
-            None => PluginState::new(module.name.clone(), &limits),
+        Self::new_with_options(engine, module, limits, http_client, None)
+    }
+
+    /// Create a new plugin instance with HTTP client and secrets.
+    pub fn new_with_options(
+        engine: &Engine,
+        module: &CompiledModule,
+        limits: PluginLimits,
+        http_client: Option<Arc<HttpClient>>,
+        secrets: Option<crate::secrets::SecretsStore>,
+    ) -> Result<Self, WasmError> {
+        let state = match (http_client, secrets) {
+            (Some(client), Some(secrets)) => PluginState::with_http_client_and_secrets(
+                module.name.clone(),
+                &limits,
+                client,
+                secrets,
+            ),
+            (Some(client), None) => {
+                PluginState::with_http_client(module.name.clone(), &limits, client)
+            }
+            _ => PluginState::new(module.name.clone(), &limits),
         };
         let mut store = Store::new(engine, state);
 
@@ -516,6 +564,24 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_clock_now: {}", e)))?;
 
+    // host_get_unix_timestamp - returns current Unix timestamp in seconds
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_get_unix_timestamp",
+            |_caller: Caller<'_, PluginState>| -> u64 {
+                use std::time::{SystemTime, UNIX_EPOCH};
+
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_get_unix_timestamp: {}", e))
+        })?;
+
     // host_http_call - make outbound HTTP request
     linker
         .func_wrap(
@@ -675,6 +741,81 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| {
             WasmError::Instantiation(format!("failed to add host_http_read_result: {}", e))
+        })?;
+
+    // host_get_secret - get a secret by reference
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_get_secret",
+            |mut caller: Caller<'_, PluginState>, ref_ptr: i32, ref_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = ref_ptr as usize;
+                let end = start + ref_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                // Read the secret reference from plugin memory
+                let secret_ref = match std::str::from_utf8(&data[start..end]) {
+                    Ok(r) => r.to_string(),
+                    Err(_) => return -1,
+                };
+
+                // Look up in secrets store
+                match caller.data().secrets.get(&secret_ref) {
+                    Some(value) => {
+                        let bytes = value.as_bytes().to_vec();
+                        let len = bytes.len() as i32;
+                        caller.data_mut().last_secret_result = Some(bytes);
+                        len
+                    }
+                    None => {
+                        tracing::warn!(
+                            plugin = %caller.data().plugin_name,
+                            reference = %secret_ref,
+                            "secret not found in store"
+                        );
+                        -1
+                    }
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_get_secret: {}", e)))?;
+
+    // host_secret_read_result - read secret value into plugin memory
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_secret_read_result",
+            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let result = caller.data_mut().last_secret_result.take();
+                if let Some(data) = result {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
+
+                    if memory
+                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
+                        .is_ok()
+                    {
+                        return copy_len as i32;
+                    }
+                }
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_secret_read_result: {}", e))
         })?;
 
     Ok(())

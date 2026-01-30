@@ -17,6 +17,7 @@ mod limits;
 mod manifest;
 mod pool;
 mod schema;
+pub mod secrets;
 mod trap;
 mod validate;
 pub mod version;
@@ -32,6 +33,10 @@ pub use limits::PluginLimits;
 pub use manifest::{Capabilities, PluginManifest, PluginMeta, PluginType};
 pub use pool::{InstanceKey, InstancePool};
 pub use schema::ConfigSchema;
+pub use secrets::{
+    collect_secret_references, is_secret_reference, resolve_all_secrets, resolve_config_secrets,
+    resolve_secret, SecretsError, SecretsStore,
+};
 pub use trap::{TrapContext, TrapResult};
 pub use validate::{validate_exports, validate_imports};
 

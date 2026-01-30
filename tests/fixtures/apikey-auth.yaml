@@ -1,0 +1,97 @@
+openapi: "3.0.3"
+info:
+  title: API Key Auth Test API
+  version: "1.0.0"
+  description: API for testing API key authentication middleware
+
+# Global middleware - requires API key for all endpoints
+x-barbacane-middlewares:
+  - name: apikey-auth
+    config:
+      key_location: header
+      header_name: X-API-Key
+      keys:
+        test-key-123:
+          id: key-001
+          name: Test Key
+          scopes:
+            - read
+            - write
+        readonly-key-456:
+          id: key-002
+          name: Read Only Key
+          scopes:
+            - read
+
+paths:
+  /protected:
+    get:
+      summary: Protected endpoint requiring API key auth
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "401":
+          description: Unauthorized
+
+  /public:
+    get:
+      summary: Public endpoint (overrides global middleware)
+      operationId: getPublic
+      x-barbacane-middlewares: []  # Empty array removes global middleware
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Public access"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /query-auth:
+    get:
+      summary: Endpoint with query parameter API key auth
+      operationId: getQueryAuth
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            key_location: query
+            query_param: api_key
+            keys:
+              query-key-789:
+                id: key-003
+                name: Query Key
+                scopes:
+                  - read
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Query auth granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:oauth2-auth-config",
+  "title": "OAuth2 Token Introspection Middleware Config",
+  "description": "Configuration for the OAuth2 token introspection middleware plugin (RFC 7662)",
+  "type": "object",
+  "required": ["introspection_endpoint", "client_id", "client_secret"],
+  "properties": {
+    "introspection_endpoint": {
+      "type": "string",
+      "description": "Token introspection endpoint URL (RFC 7662)",
+      "format": "uri"
+    },
+    "client_id": {
+      "type": "string",
+      "description": "Client ID for introspection request"
+    },
+    "client_secret": {
+      "type": "string",
+      "description": "Client secret for introspection request"
+    },
+    "required_scopes": {
+      "type": "string",
+      "description": "Required scopes (space-separated). If set, token must have all these scopes."
+    },
+    "timeout": {
+      "type": "number",
+      "description": "Request timeout in seconds for introspection call",
+      "default": 5,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

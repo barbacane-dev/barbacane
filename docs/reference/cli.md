@@ -170,11 +170,13 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
 | `--max-uri-length` | No | `8192` | Maximum URI length in characters (8KB) |
 | `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
+| `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
+| `--tls-key` | No | - | Path to TLS private key file (PEM format) |
 
 ### Examples
 
 ```bash
-# Run with defaults
+# Run with defaults (HTTP)
 barbacane serve --artifact api.bca
 
 # Custom port
@@ -182,6 +184,11 @@ barbacane serve --artifact api.bca --listen 127.0.0.1:3000
 
 # Development mode (verbose errors)
 barbacane serve --artifact api.bca --dev
+
+# Production with TLS (HTTPS)
+barbacane serve --artifact api.bca \
+  --tls-cert /etc/barbacane/certs/server.crt \
+  --tls-key /etc/barbacane/certs/server.key
 
 # Production with custom limits
 barbacane serve --artifact api.bca \
@@ -191,12 +198,34 @@ barbacane serve --artifact api.bca \
 # All options
 barbacane serve --artifact api.bca \
   --listen 0.0.0.0:8080 \
+  --tls-cert /etc/barbacane/certs/server.crt \
+  --tls-key /etc/barbacane/certs/server.key \
   --log-level info \
   --max-body-size 1048576 \
   --max-headers 100 \
   --max-header-size 8192 \
   --max-uri-length 8192
 ```
+
+### TLS Termination
+
+The gateway supports HTTPS with TLS termination. To enable TLS, provide both `--tls-cert` and `--tls-key`:
+
+```bash
+barbacane serve --artifact api.bca \
+  --tls-cert /path/to/server.crt \
+  --tls-key /path/to/server.key
+```
+
+**TLS Configuration:**
+- TLS 1.2 minimum, TLS 1.3 preferred
+- Modern cipher suites (via aws-lc-rs)
+- ALPN support for HTTP/2 and HTTP/1.1
+
+**Certificate Requirements:**
+- Certificate and key must be in PEM format
+- Certificate file can contain the full chain (cert + intermediates)
+- Both `--tls-cert` and `--tls-key` must be provided together
 
 ### Development Mode
 
@@ -233,6 +262,19 @@ Requests exceeding limits receive an RFC 9457 problem details response:
 |------|---------|
 | 0 | Clean shutdown |
 | 1 | Startup error (artifact not found, bind failed) |
+| 11 | Plugin hash mismatch (artifact tampering detected) |
+| 13 | Secret resolution failure (missing env var or file) |
+
+Exit code 13 occurs when a secret reference in your spec cannot be resolved:
+
+```bash
+$ export OAUTH2_SECRET=""  # unset the variable
+$ unset OAUTH2_SECRET
+$ barbacane serve --artifact api.bca
+error: failed to resolve secrets: environment variable not found: OAUTH2_SECRET
+$ echo $?
+13
+```
 
 ---
 
@@ -241,6 +283,31 @@ Requests exceeding limits receive an RFC 9457 problem details response:
 | Variable | Description |
 |----------|-------------|
 | `RUST_LOG` | Override log level (e.g., `RUST_LOG=debug`) |
+
+### Secret References
+
+Dispatcher and middleware configs can reference secrets using special URI schemes. These are resolved at startup:
+
+| Scheme | Example | Description |
+|--------|---------|-------------|
+| `env://` | `env://API_KEY` | Read from environment variable |
+| `file://` | `file:///etc/secrets/key` | Read from file |
+
+Example config with secrets:
+```yaml
+x-barbacane-middlewares:
+  - name: oauth2-auth
+    config:
+      client_secret: "env://OAUTH2_SECRET"
+```
+
+Run with:
+```bash
+export OAUTH2_SECRET="my-secret-value"
+barbacane serve --artifact api.bca
+```
+
+See [Secrets Guide](../guide/secrets.md) for full documentation.
 
 ---
 
