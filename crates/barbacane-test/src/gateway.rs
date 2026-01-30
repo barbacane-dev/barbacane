@@ -164,6 +164,7 @@ impl TestGateway {
             .arg("--listen")
             .arg(format!("127.0.0.1:{}", port))
             .arg("--dev")
+            .arg("--allow-plaintext-upstream") // Allow HTTP calls to test mock servers
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -1132,5 +1133,267 @@ mod tests {
 
         let body: serde_json::Value = resp.json().await.unwrap();
         assert!(body["detail"].as_str().unwrap_or("").contains("required"));
+    }
+
+    // ==================== OAuth2 Auth Tests ====================
+
+    /// Create a temporary spec file for OAuth2 auth testing with dynamic introspection URL.
+    fn create_oauth2_spec(introspection_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let spec_path = temp_dir.path().join("oauth2-auth.yaml");
+
+        // Get absolute paths to plugins (relative to this test file's location)
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let plugins_dir = manifest_dir.parent().unwrap().parent().unwrap().join("plugins");
+        let mock_path = plugins_dir.join("mock/mock.wasm");
+        let oauth2_path = plugins_dir.join("oauth2-auth/oauth2-auth.wasm");
+
+        // Create barbacane.yaml manifest in temp dir
+        let manifest_path = temp_dir.path().join("barbacane.yaml");
+        let manifest_content = format!(
+            r#"# Test manifest for OAuth2 auth tests
+
+plugins:
+  mock:
+    path: {}
+  oauth2-auth:
+    path: {}
+"#,
+            mock_path.display(),
+            oauth2_path.display()
+        );
+        std::fs::write(&manifest_path, manifest_content).expect("failed to write manifest file");
+
+        let spec_content = format!(
+            r#"openapi: "3.0.3"
+info:
+  title: OAuth2 Auth Test API
+  version: "1.0.0"
+  description: API for testing OAuth2 token introspection middleware
+
+x-barbacane-middlewares:
+  - name: oauth2-auth
+    config:
+      introspection_endpoint: "{}"
+      client_id: "test-client"
+      client_secret: "test-secret"
+      timeout: 5
+
+paths:
+  /protected:
+    get:
+      summary: Protected endpoint requiring OAuth2 auth
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "Access granted"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+
+  /scoped:
+    get:
+      summary: Endpoint requiring specific scopes
+      operationId: getScoped
+      x-barbacane-middlewares:
+        - name: oauth2-auth
+          config:
+            introspection_endpoint: "{}"
+            client_id: "test-client"
+            client_secret: "test-secret"
+            required_scopes: "read write"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "Scoped access granted"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /public:
+    get:
+      summary: Public endpoint (no auth)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "Public access"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+"#,
+            introspection_url, introspection_url
+        );
+
+        std::fs::write(&spec_path, spec_content).expect("failed to write spec file");
+        (temp_dir, spec_path)
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_auth_valid_token() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path, body_string_contains};
+
+        // Start mock introspection server
+        let mock_server = MockServer::start().await;
+
+        // Mock active token response
+        Mock::given(method("POST"))
+            .and(path("/introspect"))
+            .and(body_string_contains("token=valid-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "active": true,
+                "sub": "user-123",
+                "scope": "read write",
+                "client_id": "my-client"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let introspection_url = format!("{}/introspect", mock_server.uri());
+        let (_temp_dir, spec_path) = create_oauth2_spec(&introspection_url);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", "Bearer valid-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Access granted");
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_auth_missing_token() {
+        use wiremock::MockServer;
+
+        // Start mock introspection server (won't be called)
+        let mock_server = MockServer::start().await;
+        let introspection_url = format!("{}/introspect", mock_server.uri());
+        let (_temp_dir, spec_path) = create_oauth2_spec(&introspection_url);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        // Request without token
+        let resp = gateway.get("/protected").await.unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("Bearer token required"));
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_auth_inactive_token() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock inactive token response
+        Mock::given(method("POST"))
+            .and(path("/introspect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "active": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let introspection_url = format!("{}/introspect", mock_server.uri());
+        let (_temp_dir, spec_path) = create_oauth2_spec(&introspection_url);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", "Bearer invalid-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("not active"));
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_auth_insufficient_scope() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+
+        // Mock active token with only "read" scope (missing "write")
+        Mock::given(method("POST"))
+            .and(path("/introspect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "active": true,
+                "sub": "user-123",
+                "scope": "read"  // Missing "write" scope
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let introspection_url = format!("{}/introspect", mock_server.uri());
+        let (_temp_dir, spec_path) = create_oauth2_spec(&introspection_url);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        // Access scoped endpoint (requires "read write")
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/scoped")
+            .header("Authorization", "Bearer token-with-read-only")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap_or("").contains("scope"));
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_auth_public_endpoint() {
+        use wiremock::MockServer;
+
+        let mock_server = MockServer::start().await;
+        let introspection_url = format!("{}/introspect", mock_server.uri());
+        let (_temp_dir, spec_path) = create_oauth2_spec(&introspection_url);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        // Public endpoint should work without a token
+        let resp = gateway.get("/public").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Public access");
     }
 }
