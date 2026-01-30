@@ -202,17 +202,18 @@ Additional authentication methods for diverse integration patterns.
 - [x] Context output — `x-auth-key-id`, `x-auth-key-name`, `x-auth-key-scopes` headers
 
 ### OAuth2 Token Introspection
-- [ ] `oauth2-auth` middleware plugin — token introspection (RFC 7662)
-- [ ] Introspection endpoint — configurable URL
-- [ ] Client credentials — `client_id`, `client_secret` for introspection request
-- [ ] Token caching — cache active tokens to reduce introspection calls
-- [ ] Scope extraction — `context:auth.scope`
-- [ ] Auth rejection — 401 for invalid token, 403 for insufficient scope
+- [x] `oauth2-auth` middleware plugin — token introspection (RFC 7662)
+- [x] Introspection endpoint — configurable URL
+- [x] Client credentials — `client_id`, `client_secret` for introspection request
+- [x] Required scopes — optional scope validation (space-separated list)
+- [x] Context headers — `x-auth-sub`, `x-auth-scope`, `x-auth-client-id`, `x-auth-username`, `x-auth-claims`
+- [x] Auth rejection — 401 for invalid token, 403 for insufficient scope
+- [ ] Token caching — cache active tokens to reduce introspection calls (future)
 
 ### Integration
-- [ ] Multiple auth methods — chain multiple auth middlewares
+- [x] Multiple auth methods — chain multiple auth middlewares (via middleware stacking)
 - [x] Integration tests — API key validation (6 tests)
-- [ ] Integration tests — OAuth2 introspection
+- [x] Integration tests — OAuth2 introspection (5 tests)
 
 ---
 

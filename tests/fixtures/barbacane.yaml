@@ -10,3 +10,5 @@ plugins:
     path: ../../plugins/jwt-auth/jwt-auth.wasm
   apikey-auth:
     path: ../../plugins/apikey-auth/apikey-auth.wasm
+  oauth2-auth:
+    path: ../../plugins/oauth2-auth/oauth2-auth.wasm
