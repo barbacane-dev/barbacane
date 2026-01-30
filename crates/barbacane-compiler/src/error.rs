@@ -19,6 +19,18 @@ pub enum CompileError {
     #[error("E1031: plaintext HTTP upstream URL not allowed in production: {0}")]
     PlaintextUpstream(String),
 
+    /// E1040: Plugin used in spec but not declared in manifest.
+    #[error("E1040: plugin '{0}' used in spec but not declared in barbacane.yaml")]
+    UndeclaredPlugin(String),
+
+    /// Manifest parsing or loading error.
+    #[error("manifest error: {0}")]
+    ManifestError(String),
+
+    /// Plugin resolution error (loading WASM bytes).
+    #[error("plugin resolution error: {0}")]
+    PluginResolution(String),
+
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

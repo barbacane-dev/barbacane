@@ -8,12 +8,29 @@ use std::sync::Arc;
 
 use wasmtime::{Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
 
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
 use crate::engine::CompiledModule;
 use crate::error::WasmError;
 use crate::http_client::{
     HttpClient, HttpRequest as HttpClientRequest, HttpResponse as HttpClientResponse,
 };
 use crate::limits::PluginLimits;
+
+/// HTTP request format from WASM plugins.
+/// This matches the format used by http-upstream plugin.
+#[derive(Debug, Deserialize)]
+struct PluginHttpRequest {
+    method: String,
+    url: String,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
 
 /// Per-request context passed to plugins.
 #[derive(Debug, Clone, Default)]
@@ -518,13 +535,25 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     return -1;
                 }
 
-                // Parse the request JSON
-                let request: HttpClientRequest = match serde_json::from_slice(&data[start..end]) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!("failed to parse HTTP request: {}", e);
-                        return -1;
-                    }
+                // Parse the request JSON from plugin format
+                let plugin_request: PluginHttpRequest =
+                    match serde_json::from_slice(&data[start..end]) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!("failed to parse HTTP request: {}", e);
+                            return -1;
+                        }
+                    };
+
+                // Convert to HttpClientRequest format
+                let request = HttpClientRequest {
+                    method: plugin_request.method,
+                    url: plugin_request.url,
+                    headers: plugin_request.headers.into_iter().collect(),
+                    body: plugin_request.body.map(|s| s.into_bytes()),
+                    timeout: plugin_request
+                        .timeout_ms
+                        .map(std::time::Duration::from_millis),
                 };
 
                 // Get the HTTP client
@@ -536,10 +565,25 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 };
 
-                // Execute the request (blocking)
-                let response_json = match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => {
-                        handle.block_on(async {
+                // Use a separate runtime to avoid deadlock with the main runtime.
+                // The main runtime is blocked waiting for the WASM call to complete,
+                // so we can't schedule work on it. Create a new runtime just for this call.
+                // TODO: Optimize by using a thread-local runtime or worker pool instead of
+                // creating a new runtime per call (performance improvement for high throughput).
+                let response_json = std::thread::scope(|s| {
+                    let handle = s.spawn(|| {
+                        let rt = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(rt) => rt,
+                            Err(e) => {
+                                tracing::error!("failed to create runtime: {}", e);
+                                return None;
+                            }
+                        };
+
+                        rt.block_on(async {
                             match http_client.call(request).await {
                                 Ok(response) => serde_json::to_vec(&response).ok(),
                                 Err(e) => {
@@ -581,12 +625,16 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                                 }
                             }
                         })
+                    });
+
+                    match handle.join() {
+                        Ok(result) => result,
+                        Err(e) => {
+                            tracing::error!("worker thread panicked: {:?}", e);
+                            None
+                        }
                     }
-                    Err(_) => {
-                        tracing::error!("no tokio runtime available");
-                        None
-                    }
-                };
+                });
 
                 match response_json {
                     Some(json) => {

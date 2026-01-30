@@ -1,0 +1,8 @@
+# Test fixtures manifest
+# Declares plugins used by the test spec files
+
+plugins:
+  mock:
+    path: ../../plugins/mock/mock.wasm
+  http-upstream:
+    path: ../../plugins/http-upstream/http-upstream.wasm

@@ -14,11 +14,13 @@ paths:
           # dispatcher-specific config
 ```
 
-## Built-in Dispatchers
+## Available Dispatchers
+
+All dispatchers are implemented as WASM plugins and must be declared in your `barbacane.yaml` manifest.
 
 ### mock
 
-Returns static responses. Useful for health checks, stubs, and testing. Implemented as a WASM plugin.
+Returns static responses. Useful for health checks, stubs, and testing.
 
 ```yaml
 x-barbacane-dispatch:
@@ -80,7 +82,7 @@ x-barbacane-dispatch:
 
 ### http-upstream
 
-Reverse proxy to an HTTP/HTTPS upstream backend. Supports connection pooling, circuit breakers, and automatic TLS.
+Reverse proxy to an HTTP/HTTPS upstream backend. Supports path parameter substitution, header forwarding, and configurable timeouts.
 
 ```yaml
 x-barbacane-dispatch:

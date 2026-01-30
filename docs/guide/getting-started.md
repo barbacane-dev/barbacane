@@ -91,7 +91,23 @@ paths:
 The key additions are:
 - `x-barbacane-dispatch` on each operation: tells Barbacane how to handle the request
 
-### 2. Validate the Spec
+### 2. Create a Manifest
+
+Create a `barbacane.yaml` manifest to declare which plugins to use:
+
+```yaml
+plugins:
+  mock:
+    path: ./plugins/mock.wasm
+  http-upstream:
+    path: ./plugins/http-upstream.wasm
+```
+
+The manifest declares all WASM plugins used by your spec. Plugins can be sourced from:
+- **Local path**: `path: ./plugins/name.wasm`
+- **URL** (coming soon): `url: https://plugins.example.com/name.wasm`
+
+### 3. Validate the Spec
 
 ```bash
 barbacane validate --spec api.yaml
@@ -104,23 +120,24 @@ Output:
 validated 1 spec(s): 1 valid, 0 invalid
 ```
 
-### 3. Compile to Artifact
+### 4. Compile to Artifact
 
 ```bash
-barbacane compile --spec api.yaml --output api.bca
+barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 ```
 
 Output:
 ```
-compiled 1 spec(s) to api.bca (3 routes)
+compiled 1 spec(s) to api.bca (3 routes, 2 plugin(s) bundled)
 ```
 
 The `.bca` (Barbacane Compiled Artifact) file contains:
 - Compiled routing table
 - Embedded source specs (for `/__barbacane/openapi`)
+- Bundled WASM plugins
 - Manifest with checksums
 
-### 4. Run the Gateway
+### 5. Run the Gateway
 
 ```bash
 barbacane serve --artifact api.bca --listen 127.0.0.1:8080 --dev
@@ -132,7 +149,7 @@ barbacane: loaded 3 route(s) from artifact
 barbacane: listening on 127.0.0.1:8080
 ```
 
-### 5. Test It
+### 6. Test It
 
 ```bash
 # Health check (mock dispatcher)
