@@ -14,6 +14,7 @@ use crate::error::WasmError;
 use crate::http_client::HttpClient;
 use crate::instance::PluginInstance;
 use crate::limits::PluginLimits;
+use crate::secrets::SecretsStore;
 
 /// Key for identifying a plugin instance.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,6 +73,9 @@ pub struct InstancePool {
     /// HTTP client for plugins that need outbound HTTP calls.
     http_client: Option<Arc<HttpClient>>,
 
+    /// Resolved secrets store (shared across all instances).
+    secrets: Option<SecretsStore>,
+
     /// Cache of compiled modules by plugin name.
     modules: DashMap<String, CompiledModule>,
 
@@ -91,6 +95,7 @@ impl InstancePool {
             engine,
             limits,
             http_client: None,
+            secrets: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -107,6 +112,25 @@ impl InstancePool {
             engine,
             limits,
             http_client: Some(http_client),
+            secrets: None,
+            modules: DashMap::new(),
+            instances: DashMap::new(),
+            configs: DashMap::new(),
+        }
+    }
+
+    /// Create a new instance pool with HTTP client and secrets store.
+    pub fn with_http_client_and_secrets(
+        engine: Arc<WasmEngine>,
+        limits: PluginLimits,
+        http_client: Arc<HttpClient>,
+        secrets: SecretsStore,
+    ) -> Self {
+        Self {
+            engine,
+            limits,
+            http_client: Some(http_client),
+            secrets: Some(secrets),
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -138,12 +162,13 @@ impl InstancePool {
             .get(key)
             .ok_or_else(|| WasmError::InitFailed(format!("config not found for: {}", key.name)))?;
 
-        // Create a new instance with HTTP client if available
-        let mut instance = PluginInstance::new_with_http_client(
+        // Create a new instance with HTTP client and secrets if available
+        let mut instance = PluginInstance::new_with_options(
             self.engine.engine(),
             &module,
             self.limits.clone(),
             self.http_client.clone(),
+            self.secrets.clone(),
         )?;
 
         // Initialize with config

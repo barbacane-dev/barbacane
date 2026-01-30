@@ -121,6 +121,25 @@ x-barbacane-dispatch:
     # Becomes: GET https://api.example.com/api/v2/users/123/orders/456
 ```
 
+### Secret References in Config
+
+Config values can reference secrets instead of hardcoding sensitive data:
+
+```yaml
+x-barbacane-dispatch:
+  name: http-upstream
+  config:
+    url: "https://api.example.com"
+    headers:
+      Authorization: "Bearer env://UPSTREAM_API_KEY"
+```
+
+Supported formats:
+- `env://VAR_NAME` - Read from environment variable
+- `file:///path/to/secret` - Read from file
+
+Secrets are resolved at gateway startup. If any secret is missing, the gateway fails with exit code 13. See [Secrets](secrets.md) for details.
+
 ## Middlewares
 
 Middlewares process requests before dispatching and responses after.

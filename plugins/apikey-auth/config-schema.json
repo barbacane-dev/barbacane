@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:apikey-auth-config",
+  "title": "API Key Authentication Middleware Config",
+  "description": "Configuration for the API key authentication middleware plugin",
+  "type": "object",
+  "properties": {
+    "key_location": {
+      "type": "string",
+      "description": "Where to extract the API key from",
+      "enum": ["header", "query"],
+      "default": "header"
+    },
+    "header_name": {
+      "type": "string",
+      "description": "Header name to extract the key from (when key_location is 'header')",
+      "default": "X-API-Key"
+    },
+    "query_param": {
+      "type": "string",
+      "description": "Query parameter name to extract the key from (when key_location is 'query')",
+      "default": "api_key"
+    },
+    "keys": {
+      "type": "object",
+      "description": "Map of valid API keys to their metadata",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for this key (for logging/auditing)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name for this key"
+          },
+          "scopes": {
+            "type": "array",
+            "description": "Optional scopes/permissions associated with this key",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        },
+        "additionalProperties": false
+      },
+      "default": {}
+    }
+  },
+  "additionalProperties": false
+}

@@ -178,6 +178,7 @@ curl -X POST http://127.0.0.1:8080/health
 - [Spec Configuration](spec-configuration.md) - Learn about all `x-barbacane-*` extensions
 - [Dispatchers](dispatchers.md) - Route to HTTP backends, mock responses, and more
 - [Middlewares](middlewares.md) - Add authentication, rate limiting, CORS
+- [Secrets](secrets.md) - Manage API keys, tokens, and passwords securely
 
 ## Development Mode
 

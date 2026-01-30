@@ -165,25 +165,27 @@ HTTPS termination and JWT authentication — the most common production security
 **Specs:** SPEC-004 (partial)
 
 ### TLS Termination
-- [ ] TLS termination — rustls ingress, cert/key from file paths
-- [ ] TLS settings — TLS 1.2 min, 1.3 preferred, modern cipher suites
-- [ ] ALPN — HTTP/1.1 and HTTP/2 negotiation
-- [ ] `--tls-cert` and `--tls-key` CLI flags
+- [x] TLS termination — rustls ingress, cert/key from file paths
+- [x] TLS settings — TLS 1.2 min, 1.3 preferred, modern cipher suites
+- [x] ALPN — HTTP/1.1 and HTTP/2 negotiation
+- [x] `--tls-cert` and `--tls-key` CLI flags
 - [ ] `--tls-config` for advanced settings (min version, cipher suites)
 
 ### JWT Authentication
-- [ ] `jwt-auth` middleware plugin — RS256/ES256 token validation
-- [ ] JWKS fetch — load public keys from `jwks_uri`
-- [ ] JWKS caching — configurable refresh interval, retain previous on failure
-- [ ] Token extraction — `Authorization: Bearer` header
-- [ ] Claims validation — `iss`, `aud`, `exp`, `nbf` checks
-- [ ] Context output — `context:auth.sub`, `context:auth.claims.*`
-- [ ] Auth rejection — 401 with `WWW-Authenticate` header
+- [x] `jwt-auth` middleware plugin — RS256/ES256 token validation (signature validation scaffolded)
+- [ ] JWKS fetch — load public keys from `jwks_uri` (deferred)
+- [ ] JWKS caching — configurable refresh interval, retain previous on failure (deferred)
+- [x] Token extraction — `Authorization: Bearer` header
+- [x] Claims validation — `iss`, `aud`, `exp`, `nbf` checks
+- [x] Context output — `x-auth-sub`, `x-auth-claims` headers to downstream
+- [x] Auth rejection — 401 with `WWW-Authenticate` header
+- [x] Middleware chain execution — on_request/on_response chain implemented
+- [x] `host_get_unix_timestamp` host function — for token expiration validation
 
 ### Integration
-- [ ] Auth context convention — standardized `context:auth.*` keys
+- [x] Auth context convention — `x-auth-*` headers for downstream
 - [ ] Security defaults — strict validation enabled by default
-- [ ] Integration tests — valid/invalid JWT, expired token, wrong audience
+- [x] Integration tests — valid/invalid JWT, expired token, wrong audience, missing token, malformed token
 
 ---
 
@@ -194,22 +196,24 @@ Additional authentication methods for diverse integration patterns.
 **Specs:** SPEC-004 (partial)
 
 ### API Key Authentication
-- [ ] `apikey-auth` middleware plugin — API key validation
-- [ ] Key extraction — header (`X-API-Key`), query param, or custom location
-- [ ] Key store — in-memory map loaded from config or file
-- [ ] Context output — `context:auth.key_id`, `context:auth.key_name`
+- [x] `apikey-auth` middleware plugin — API key validation
+- [x] Key extraction — header (`X-API-Key`), query param, or custom location
+- [x] Key store — in-memory map loaded from config
+- [x] Context output — `x-auth-key-id`, `x-auth-key-name`, `x-auth-key-scopes` headers
 
 ### OAuth2 Token Introspection
-- [ ] `oauth2-auth` middleware plugin — token introspection (RFC 7662)
-- [ ] Introspection endpoint — configurable URL
-- [ ] Client credentials — `client_id`, `client_secret` for introspection request
-- [ ] Token caching — cache active tokens to reduce introspection calls
-- [ ] Scope extraction — `context:auth.scope`
-- [ ] Auth rejection — 401 for invalid token, 403 for insufficient scope
+- [x] `oauth2-auth` middleware plugin — token introspection (RFC 7662)
+- [x] Introspection endpoint — configurable URL
+- [x] Client credentials — `client_id`, `client_secret` for introspection request
+- [x] Required scopes — optional scope validation (space-separated list)
+- [x] Context headers — `x-auth-sub`, `x-auth-scope`, `x-auth-client-id`, `x-auth-username`, `x-auth-claims`
+- [x] Auth rejection — 401 for invalid token, 403 for insufficient scope
+- [ ] Token caching — cache active tokens to reduce introspection calls (future)
 
 ### Integration
-- [ ] Multiple auth methods — chain multiple auth middlewares
-- [ ] Integration tests — API key validation, OAuth2 introspection
+- [x] Multiple auth methods — chain multiple auth middlewares (via middleware stacking)
+- [x] Integration tests — API key validation (6 tests)
+- [x] Integration tests — OAuth2 introspection (5 tests)
 
 ---
 
@@ -220,26 +224,27 @@ Policy-based authorization and secrets management for enterprise deployments.
 **Specs:** SPEC-004 (partial)
 
 ### OPA Authorization
-- [ ] `opa-authz` middleware plugin — OPA policy evaluation
-- [ ] Policy format — WASM-compiled Rego policies
-- [ ] OPA input mapping — `input.request`, `input.context`, `input.headers`
-- [ ] Policy bundling — `.wasm` policies in `policies/` directory of artifact
-- [ ] Decision output — allow/deny based on policy result
-- [ ] Authz rejection — 403 with policy violation details (dev mode)
+- [ ] `opa-authz` middleware plugin — OPA policy evaluation (deferred)
+- [ ] Policy format — WASM-compiled Rego policies (deferred)
+- [ ] OPA input mapping — `input.request`, `input.context`, `input.headers` (deferred)
+- [ ] Policy bundling — `.wasm` policies in `policies/` directory of artifact (deferred)
+- [ ] Decision output — allow/deny based on policy result (deferred)
+- [ ] Authz rejection — 403 with policy violation details (dev mode) (deferred)
 
 ### Secrets Management
-- [ ] Secret references — `env://VAR_NAME` for environment variables
-- [ ] Secret references — `file:///path/to/secret` for file-based secrets
-- [ ] Secret resolution at startup — fetch all, fail if any missing (exit code 13)
-- [ ] Host function: `host_get_secret` / `host_secret_read_result` — secret access from plugins
+- [x] Secret references — `env://VAR_NAME` for environment variables
+- [x] Secret references — `file:///path/to/secret` for file-based secrets
+- [x] Secret resolution at startup — fetch all, fail if any missing (exit code 13)
+- [x] Host function: `host_get_secret` / `host_secret_read_result` — secret access from plugins
 - [ ] Future: `vault://`, `aws-sm://`, `k8s://` references (deferred)
 
 ### Compiler Validation
-- [ ] Compiler check E1032 — OpenAPI security scheme without matching auth middleware
-- [ ] Security audit mode — warn on common misconfigurations
+- [ ] Compiler check E1032 — OpenAPI security scheme without matching auth middleware (deferred)
+- [ ] Security audit mode — warn on common misconfigurations (deferred)
 
 ### Integration
-- [ ] Integration tests — OPA allow/deny, secret resolution, missing secret error
+- [x] Integration tests — secret resolution (env and file), missing secret error (exit code 13)
+- [ ] Integration tests — OPA allow/deny (deferred)
 
 ---
 
