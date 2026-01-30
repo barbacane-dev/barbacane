@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:rate-limit:config",
+  "title": "Rate Limit Middleware Configuration",
+  "type": "object",
+  "required": ["quota", "window"],
+  "properties": {
+    "quota": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Maximum number of requests allowed in the window"
+    },
+    "window": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Window duration in seconds"
+    },
+    "policy_name": {
+      "type": "string",
+      "default": "default",
+      "description": "Policy name for RateLimit-Policy header"
+    },
+    "partition_key": {
+      "type": "string",
+      "default": "client_ip",
+      "description": "Partition key for rate limiting. Options: 'client_ip', 'header:<name>', 'context:<key>', or a static string"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+[plugin]
+name = "cache"
+version = "0.1.0"
+type = "middleware"
+description = "Response caching middleware with TTL support"
+
+[capabilities]
+cache = true
+log = true

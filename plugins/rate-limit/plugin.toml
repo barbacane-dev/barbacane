@@ -1,0 +1,10 @@
+[plugin]
+name = "rate-limit"
+version = "0.1.0"
+type = "middleware"
+description = "Rate limiting middleware with IETF draft headers support"
+wasm = "rate-limit.wasm"
+
+[capabilities]
+rate_limit = true
+log = true
