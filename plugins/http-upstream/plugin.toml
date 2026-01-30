@@ -1,0 +1,8 @@
+[plugin]
+name = "http-upstream"
+version = "0.1.0"
+type = "dispatcher"
+wasm = "http-upstream.wasm"
+
+[capabilities]
+host_functions = ["host_http_call", "host_log"]

@@ -7,7 +7,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use thiserror::Error;
 
-use barbacane_compiler::compile;
+use barbacane_compiler::{compile_with_manifest, CompileOptions, ProjectManifest};
 
 /// Errors from TestGateway operations.
 #[derive(Debug, Error)]
@@ -55,9 +55,31 @@ impl TestGateway {
         let temp_dir = TempDir::new()?;
         let artifact_path = temp_dir.path().join("test.bca");
 
-        // Compile the specs
+        // Find the barbacane.yaml manifest (look in the spec's directory)
+        let first_spec = Path::new(spec_paths[0]);
+        let spec_dir = first_spec.parent().unwrap_or(Path::new("."));
+        let manifest_path = spec_dir.join("barbacane.yaml");
+
+        if !manifest_path.exists() {
+            return Err(TestError::StartupFailed(format!(
+                "barbacane.yaml manifest not found in {}",
+                spec_dir.display()
+            )));
+        }
+
+        // Load the project manifest
+        let project_manifest = ProjectManifest::load(&manifest_path)?;
+
+        // Compile the specs with manifest
         let paths: Vec<&Path> = spec_paths.iter().map(|s| Path::new(*s)).collect();
-        compile(&paths, &artifact_path)?;
+        let options = CompileOptions::default();
+        compile_with_manifest(
+            &paths,
+            &project_manifest,
+            spec_dir,
+            &artifact_path,
+            &options,
+        )?;
 
         // Find the barbacane binary
         let binary_path = find_barbacane_binary()?;

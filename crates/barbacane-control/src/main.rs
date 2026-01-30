@@ -111,8 +111,13 @@ fn main() -> ExitCode {
                         barbacane_compiler::CompileError::Parse(_)
                         | barbacane_compiler::CompileError::RoutingConflict(_)
                         | barbacane_compiler::CompileError::MissingDispatch(_)
-                        | barbacane_compiler::CompileError::PlaintextUpstream(_) => {
+                        | barbacane_compiler::CompileError::PlaintextUpstream(_)
+                        | barbacane_compiler::CompileError::UndeclaredPlugin(_) => {
                             ExitCode::from(1)
+                        }
+                        barbacane_compiler::CompileError::ManifestError(_)
+                        | barbacane_compiler::CompileError::PluginResolution(_) => {
+                            ExitCode::from(2)
                         }
                         barbacane_compiler::CompileError::Io(_) => ExitCode::from(3),
                         barbacane_compiler::CompileError::Json(_) => ExitCode::from(1),
