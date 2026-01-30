@@ -21,22 +21,12 @@ use tokio::net::TcpListener;
 use std::collections::HashMap;
 
 use barbacane_compiler::{
-    compile, load_manifest, load_routes, load_specs, CompiledOperation, Manifest,
+    compile, compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs,
+    CompileOptions, CompiledOperation, Manifest, ProjectManifest,
 };
 use barbacane_router::{RouteEntry, RouteMatch, Router};
 use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits};
-use barbacane_wasm::{
-    HttpClient, HttpClientConfig, HttpClientError, InstancePool, PluginLimits, TlsConfig,
-    WasmEngine,
-};
-
-/// Embedded mock dispatcher WASM plugin.
-/// This is a built-in plugin that's always available.
-static MOCK_PLUGIN_WASM: &[u8] = include_bytes!("../../../plugins/mock/mock.wasm");
-
-/// Embedded lambda dispatcher WASM plugin.
-/// Invokes AWS Lambda functions via Lambda Function URLs.
-static LAMBDA_PLUGIN_WASM: &[u8] = include_bytes!("../../../plugins/lambda/lambda.wasm");
+use barbacane_wasm::{HttpClient, HttpClientConfig, InstancePool, PluginLimits, WasmEngine};
 
 #[derive(Parser, Debug)]
 #[command(name = "barbacane", about = "Barbacane API gateway", version)]
@@ -56,6 +46,14 @@ enum Commands {
         /// Output artifact path.
         #[arg(short, long)]
         output: String,
+
+        /// Path to barbacane.yaml manifest (required for plugin resolution).
+        #[arg(short, long)]
+        manifest: Option<String>,
+
+        /// Allow plaintext HTTP upstream URLs (development only).
+        #[arg(long)]
+        allow_plaintext: bool,
     },
 
     /// Validate OpenAPI spec(s) without compiling.
@@ -133,7 +131,8 @@ struct Gateway {
     /// Plugin resource limits (kept for future dynamic limit adjustment).
     #[allow(dead_code)]
     plugin_limits: PluginLimits,
-    /// HTTP client for upstream requests.
+    /// HTTP client for plugins making outbound calls (kept alive for pool lifetime).
+    #[allow(dead_code)]
     http_client: Arc<HttpClient>,
 }
 
@@ -176,21 +175,24 @@ impl Gateway {
             http_client.clone(),
         );
 
-        // Register built-in mock dispatcher plugin
-        let mock_module = wasm_engine
-            .compile(MOCK_PLUGIN_WASM, "mock".to_string(), "0.1.0".to_string())
-            .map_err(|e| format!("failed to compile mock plugin: {}", e))?;
-        plugin_pool.register_module(mock_module);
+        // Load plugins from the artifact
+        let bundled_plugins = load_plugins(artifact_path)
+            .map_err(|e| format!("failed to load plugins from artifact: {}", e))?;
 
-        // Register built-in lambda dispatcher plugin
-        let lambda_module = wasm_engine
-            .compile(
-                LAMBDA_PLUGIN_WASM,
-                "lambda".to_string(),
-                "0.1.0".to_string(),
-            )
-            .map_err(|e| format!("failed to compile lambda plugin: {}", e))?;
-        plugin_pool.register_module(lambda_module);
+        if bundled_plugins.is_empty() {
+            tracing::warn!("no plugins bundled in artifact - ensure barbacane.yaml manifest was used during compilation");
+        }
+
+        for (name, (version, wasm_bytes)) in bundled_plugins {
+            let module = wasm_engine
+                .compile(&wasm_bytes, name.clone(), version.clone())
+                .map_err(|e| format!("failed to compile plugin '{}': {}", name, e))?;
+            plugin_pool.register_module(module);
+
+            if dev_mode {
+                tracing::debug!(plugin = %name, version = %version, "loaded plugin from artifact");
+            }
+        }
 
         let mut router = Router::new();
         let mut validators = Vec::new();
@@ -337,7 +339,7 @@ impl Gateway {
             );
         }
 
-        // Check if dispatcher is available as a WASM plugin
+        // All dispatchers must be WASM plugins loaded from the artifact
         if self.plugin_pool.has_plugin(&dispatch.name) {
             return self
                 .dispatch_wasm_plugin(
@@ -351,32 +353,17 @@ impl Gateway {
                 .await;
         }
 
-        // Built-in dispatchers (fallback for http-upstream which is not yet a WASM plugin)
-        match dispatch.name.as_str() {
-            "http-upstream" => {
-                self.dispatch_http_upstream(
-                    &dispatch.config,
-                    operation,
-                    params,
-                    request_body,
-                    headers,
-                )
-                .await
-            }
-            _ => {
-                // Unknown dispatcher
-                let detail = if self.dev_mode {
-                    Some(format!(
-                        "unknown dispatcher '{}' - not found in plugin pool",
-                        dispatch.name
-                    ))
-                } else {
-                    None
-                };
+        // Unknown dispatcher - not bundled in the artifact
+        let detail = if self.dev_mode {
+            Some(format!(
+                "unknown dispatcher '{}' - not found in artifact plugins",
+                dispatch.name
+            ))
+        } else {
+            None
+        };
 
-                Ok(self.internal_error_response(detail.as_deref()))
-            }
-        }
+        Ok(self.internal_error_response(detail.as_deref()))
     }
 
     /// Dispatch via a WASM plugin.
@@ -487,139 +474,6 @@ impl Gateway {
 
         let body = plugin_response.body.unwrap_or_default();
         Ok(builder.body(Full::new(Bytes::from(body))).unwrap())
-    }
-
-    /// HTTP upstream dispatcher: reverse proxy to upstream server.
-    async fn dispatch_http_upstream(
-        &self,
-        config: &serde_json::Value,
-        operation: &CompiledOperation,
-        params: Vec<(String, String)>,
-        request_body: &[u8],
-        headers: &HashMap<String, String>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
-        // Extract upstream URL from config
-        let upstream_url = match config.get("url").and_then(|v| v.as_str()) {
-            Some(url) => url.to_string(),
-            None => {
-                return Ok(self.internal_error_response(Some(
-                    "http-upstream dispatcher requires 'url' in config",
-                )));
-            }
-        };
-
-        // Build the upstream path
-        // If config.path is specified, use it as a template
-        // Otherwise, use the operation path template
-        let path_template = config
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| operation.path.clone());
-
-        // Replace path parameters in the template
-        let mut upstream_path = path_template;
-        for (key, value) in &params {
-            upstream_path = upstream_path.replace(&format!("{{{}}}", key), value);
-        }
-
-        // Construct the full URL
-        let full_url = if upstream_url.ends_with('/') || upstream_path.starts_with('/') {
-            format!("{}{}", upstream_url.trim_end_matches('/'), upstream_path)
-        } else {
-            format!("{}{}", upstream_url, upstream_path)
-        };
-
-        // Build request
-        let mut http_headers = HashMap::new();
-        for (key, value) in headers {
-            // Skip hop-by-hop headers
-            if !matches!(
-                key.to_lowercase().as_str(),
-                "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
-            ) {
-                http_headers.insert(key.clone(), value.clone());
-            }
-        }
-
-        // Add X-Forwarded headers
-        if let Some(host) = headers.get("host") {
-            http_headers.insert("x-forwarded-host".to_string(), host.clone());
-        }
-
-        let request = barbacane_wasm::HttpRequest {
-            method: operation.method.clone(),
-            url: full_url.clone(),
-            headers: http_headers,
-            body: if request_body.is_empty() {
-                None
-            } else {
-                Some(request_body.to_vec())
-            },
-            timeout: config
-                .get("timeout")
-                .and_then(|v| v.as_f64())
-                .map(std::time::Duration::from_secs_f64),
-        };
-
-        // Extract TLS config for mTLS if specified
-        let tls_config: Option<TlsConfig> = config
-            .get("tls")
-            .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-        // Execute the request
-        match self
-            .http_client
-            .call_with_tls(request, tls_config.as_ref())
-            .await
-        {
-            Ok(response) => {
-                let mut builder = Response::builder()
-                    .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK));
-
-                // Add response headers, stripping hop-by-hop headers
-                for (key, value) in &response.headers {
-                    if !matches!(
-                        key.as_str(),
-                        "connection"
-                            | "keep-alive"
-                            | "transfer-encoding"
-                            | "te"
-                            | "trailer"
-                            | "upgrade"
-                    ) {
-                        builder = builder.header(key.as_str(), value.as_str());
-                    }
-                }
-
-                let body_bytes = response.body.unwrap_or_default();
-                Ok(builder.body(Full::new(Bytes::from(body_bytes))).unwrap())
-            }
-            Err(e) => {
-                let detail = if self.dev_mode {
-                    Some(format!("upstream error: {}", e))
-                } else {
-                    None
-                };
-
-                match e {
-                    HttpClientError::Timeout => {
-                        Ok(self.gateway_timeout_response(detail.as_deref()))
-                    }
-                    HttpClientError::CircuitOpen(_) => {
-                        Ok(self.service_unavailable_response(detail.as_deref()))
-                    }
-                    HttpClientError::ConnectionFailed(_) | HttpClientError::RequestFailed(_) => {
-                        Ok(self.bad_gateway_response(detail.as_deref()))
-                    }
-                    HttpClientError::TlsConfig(_) => {
-                        // TLS configuration errors are internal server errors
-                        Ok(self.internal_error_response(detail.as_deref()))
-                    }
-                    _ => Ok(self.bad_gateway_response(detail.as_deref())),
-                }
-            }
-        }
     }
 
     /// Handle reserved /__barbacane/* endpoints.
@@ -792,78 +646,6 @@ impl Gateway {
 
         Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header("content-type", "application/problem+json")
-            .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap()
-    }
-
-    /// Build a 502 Bad Gateway response (RFC 9457).
-    fn bad_gateway_response(&self, detail: Option<&str>) -> Response<Full<Bytes>> {
-        let body = if self.dev_mode {
-            serde_json::json!({
-                "type": "urn:barbacane:error:upstream-unavailable",
-                "title": "Bad Gateway",
-                "status": 502,
-                "detail": detail.unwrap_or("Failed to connect to upstream"),
-            })
-        } else {
-            serde_json::json!({
-                "type": "urn:barbacane:error:upstream-unavailable",
-                "title": "Bad Gateway",
-                "status": 502,
-            })
-        };
-
-        Response::builder()
-            .status(StatusCode::BAD_GATEWAY)
-            .header("content-type", "application/problem+json")
-            .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap()
-    }
-
-    /// Build a 503 Service Unavailable response (RFC 9457).
-    fn service_unavailable_response(&self, detail: Option<&str>) -> Response<Full<Bytes>> {
-        let body = if self.dev_mode {
-            serde_json::json!({
-                "type": "urn:barbacane:error:circuit-open",
-                "title": "Service Unavailable",
-                "status": 503,
-                "detail": detail.unwrap_or("Circuit breaker is open"),
-            })
-        } else {
-            serde_json::json!({
-                "type": "urn:barbacane:error:circuit-open",
-                "title": "Service Unavailable",
-                "status": 503,
-            })
-        };
-
-        Response::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .header("content-type", "application/problem+json")
-            .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap()
-    }
-
-    /// Build a 504 Gateway Timeout response (RFC 9457).
-    fn gateway_timeout_response(&self, detail: Option<&str>) -> Response<Full<Bytes>> {
-        let body = if self.dev_mode {
-            serde_json::json!({
-                "type": "urn:barbacane:error:upstream-timeout",
-                "title": "Gateway Timeout",
-                "status": 504,
-                "detail": detail.unwrap_or("Upstream request timed out"),
-            })
-        } else {
-            serde_json::json!({
-                "type": "urn:barbacane:error:upstream-timeout",
-                "title": "Gateway Timeout",
-                "status": 504,
-            })
-        };
-
-        Response::builder()
-            .status(StatusCode::GATEWAY_TIMEOUT)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(body.to_string())))
             .unwrap()
@@ -1135,7 +917,12 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
 }
 
 /// Run the compile command.
-fn run_compile(specs: &[String], output: &str) -> ExitCode {
+fn run_compile(
+    specs: &[String],
+    output: &str,
+    manifest_path: Option<&str>,
+    allow_plaintext: bool,
+) -> ExitCode {
     let spec_paths: Vec<&Path> = specs.iter().map(Path::new).collect();
     let output_path = Path::new(output);
 
@@ -1147,13 +934,53 @@ fn run_compile(specs: &[String], output: &str) -> ExitCode {
         }
     }
 
-    match compile(&spec_paths, output_path) {
+    let options = CompileOptions { allow_plaintext };
+
+    let result = if let Some(manifest_file) = manifest_path {
+        // Manifest-based compilation: validates plugins and bundles them
+        let manifest_path = Path::new(manifest_file);
+        if !manifest_path.exists() {
+            eprintln!("error: manifest file not found: {}", manifest_file);
+            return ExitCode::from(1);
+        }
+
+        // Load the project manifest
+        let project_manifest = match ProjectManifest::load(manifest_path) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: failed to load manifest: {}", e);
+                return ExitCode::from(1);
+            }
+        };
+
+        // Get the base path for resolving plugin paths (directory containing the manifest)
+        let base_path = manifest_path.parent().unwrap_or(Path::new("."));
+
+        compile_with_manifest(
+            &spec_paths,
+            &project_manifest,
+            base_path,
+            output_path,
+            &options,
+        )
+    } else {
+        // Legacy compilation without manifest (no plugin validation)
+        compile(&spec_paths, output_path)
+    };
+
+    match result {
         Ok(manifest) => {
+            let plugin_info = if manifest.plugins.is_empty() {
+                String::new()
+            } else {
+                format!(", {} plugin(s) bundled", manifest.plugins.len())
+            };
             eprintln!(
-                "compiled {} spec(s) to {} ({} routes)",
+                "compiled {} spec(s) to {} ({} routes{})",
                 specs.len(),
                 output,
-                manifest.routes_count
+                manifest.routes_count,
+                plugin_info
             );
             ExitCode::SUCCESS
         }
@@ -1242,7 +1069,12 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Compile { spec, output } => run_compile(&spec, &output),
+        Commands::Compile {
+            spec,
+            output,
+            manifest,
+            allow_plaintext,
+        } => run_compile(&spec, &output, manifest.as_deref(), allow_plaintext),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
         Commands::Serve {
             artifact,
