@@ -346,73 +346,7 @@ impl Gateway {
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let dispatch = &operation.dispatch;
 
-        // Log middleware chain (M3 feature - actual execution requires bundled plugins)
-        if !operation.middlewares.is_empty() {
-            tracing::debug!(
-                middlewares = ?operation.middlewares.iter().map(|m| &m.name).collect::<Vec<_>>(),
-                "middleware chain for operation (not yet executed - requires bundled plugins)"
-            );
-        }
-
-        // All dispatchers must be WASM plugins loaded from the artifact
-        if self.plugin_pool.has_plugin(&dispatch.name) {
-            return self
-                .dispatch_wasm_plugin(
-                    &dispatch.name,
-                    &dispatch.config,
-                    operation,
-                    params,
-                    request_body,
-                    headers,
-                )
-                .await;
-        }
-
-        // Unknown dispatcher - not bundled in the artifact
-        let detail = if self.dev_mode {
-            Some(format!(
-                "unknown dispatcher '{}' - not found in artifact plugins",
-                dispatch.name
-            ))
-        } else {
-            None
-        };
-
-        Ok(self.internal_error_response(detail.as_deref()))
-    }
-
-    /// Dispatch via a WASM plugin.
-    async fn dispatch_wasm_plugin(
-        &self,
-        plugin_name: &str,
-        config: &serde_json::Value,
-        operation: &CompiledOperation,
-        params: Vec<(String, String)>,
-        request_body: &[u8],
-        headers: &HashMap<String, String>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
-        // Create instance key for this (plugin, config) pair
-        let instance_key = barbacane_wasm::InstanceKey::new(plugin_name, config);
-
-        // Register config if not already registered
-        let config_json = serde_json::to_vec(config).unwrap_or_default();
-        self.plugin_pool
-            .register_config(instance_key.clone(), config_json);
-
-        // Get a plugin instance
-        let mut instance = match self.plugin_pool.get_instance(&instance_key) {
-            Ok(i) => i,
-            Err(e) => {
-                let detail = if self.dev_mode {
-                    Some(format!("failed to get plugin instance: {}", e))
-                } else {
-                    None
-                };
-                return Ok(self.internal_error_response(detail.as_deref()));
-            }
-        };
-
-        // Build the Request object for the plugin (using BTreeMap for WASM compatibility)
+        // Build the Request object for plugins (using BTreeMap for WASM compatibility)
         let path_params: std::collections::BTreeMap<String, String> = params.into_iter().collect();
         let headers_btree: std::collections::BTreeMap<String, String> = headers
             .iter()
@@ -432,7 +366,6 @@ impl Gateway {
             path_params,
         };
 
-        // Serialize request for the plugin
         let request_json = match serde_json::to_vec(&plugin_request) {
             Ok(j) => j,
             Err(e) => {
@@ -445,14 +378,212 @@ impl Gateway {
             }
         };
 
+        // Execute middleware on_request chain
+        let (final_request_json, middleware_instances) = if !operation.middlewares.is_empty() {
+            match self.execute_middleware_on_request(&operation.middlewares, &request_json) {
+                Ok((req, instances)) => (req, instances),
+                Err(resp) => return Ok(resp), // Short-circuit response
+            }
+        } else {
+            (request_json, Vec::new())
+        };
+
+        // All dispatchers must be WASM plugins loaded from the artifact
+        if !self.plugin_pool.has_plugin(&dispatch.name) {
+            let detail = if self.dev_mode {
+                Some(format!(
+                    "unknown dispatcher '{}' - not found in artifact plugins",
+                    dispatch.name
+                ))
+            } else {
+                None
+            };
+            return Ok(self.internal_error_response(detail.as_deref()));
+        }
+
+        // Dispatch to the plugin (returns raw plugin response for middleware chain)
+        let plugin_response = match self
+            .dispatch_wasm_plugin_inner(&dispatch.name, &dispatch.config, &final_request_json)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
+
+        // Execute middleware on_response chain (reverse order)
+        let final_response = if !middleware_instances.is_empty() {
+            self.execute_middleware_on_response(middleware_instances, plugin_response)
+        } else {
+            plugin_response
+        };
+
+        Ok(self.build_response_from_plugin(&final_response))
+    }
+
+    /// Execute middleware on_request chain.
+    /// Returns the final request JSON and the middleware instances (for on_response),
+    /// or a short-circuit response.
+    fn execute_middleware_on_request(
+        &self,
+        middlewares: &[barbacane_compiler::MiddlewareConfig],
+        request_json: &[u8],
+    ) -> Result<(Vec<u8>, Vec<barbacane_wasm::PluginInstance>), Response<Full<Bytes>>> {
+        use barbacane_wasm::{execute_on_request, ChainResult, RequestContext};
+
+        let mut instances = Vec::new();
+
+        // Create instances for each middleware
+        for mw in middlewares {
+            if !self.plugin_pool.has_plugin(&mw.name) {
+                tracing::error!(middleware = %mw.name, "middleware plugin not found in artifact");
+                let detail = if self.dev_mode {
+                    Some(format!(
+                        "middleware '{}' not found - ensure it's declared in barbacane.yaml",
+                        mw.name
+                    ))
+                } else {
+                    None
+                };
+                return Err(self.internal_error_response(detail.as_deref()));
+            }
+
+            let instance_key = barbacane_wasm::InstanceKey::new(&mw.name, &mw.config);
+            let config_json = serde_json::to_vec(&mw.config).unwrap_or_default();
+            self.plugin_pool
+                .register_config(instance_key.clone(), config_json);
+
+            match self.plugin_pool.get_instance(&instance_key) {
+                Ok(instance) => instances.push(instance),
+                Err(e) => {
+                    tracing::error!(middleware = %mw.name, error = %e, "failed to get middleware instance");
+                    let detail = if self.dev_mode {
+                        Some(format!("failed to get middleware '{}': {}", mw.name, e))
+                    } else {
+                        None
+                    };
+                    return Err(self.internal_error_response(detail.as_deref()));
+                }
+            }
+        }
+
+        if instances.is_empty() {
+            return Ok((request_json.to_vec(), instances));
+        }
+
+        // Execute the on_request chain
+        let context = RequestContext::default();
+        match execute_on_request(&mut instances, request_json, context) {
+            ChainResult::Continue {
+                request,
+                context: _,
+            } => Ok((request, instances)),
+            ChainResult::ShortCircuit {
+                response,
+                middleware_index: _,
+                context: _,
+            } => {
+                // Parse and return the short-circuit response
+                match serde_json::from_slice::<barbacane_wasm::Response>(&response) {
+                    Ok(plugin_response) => Err(self.build_response_from_plugin(&plugin_response)),
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to parse middleware response");
+                        let detail = if self.dev_mode {
+                            Some(format!("failed to parse middleware response: {}", e))
+                        } else {
+                            None
+                        };
+                        Err(self.internal_error_response(detail.as_deref()))
+                    }
+                }
+            }
+            ChainResult::Error {
+                error,
+                trap_result: _,
+            } => {
+                tracing::error!(error = %error, "middleware chain execution failed");
+                let detail = if self.dev_mode {
+                    Some(format!("middleware chain error: {}", error))
+                } else {
+                    None
+                };
+                Err(self.internal_error_response(detail.as_deref()))
+            }
+        }
+    }
+
+    /// Execute middleware on_response chain.
+    fn execute_middleware_on_response(
+        &self,
+        mut instances: Vec<barbacane_wasm::PluginInstance>,
+        response: barbacane_wasm::Response,
+    ) -> barbacane_wasm::Response {
+        use barbacane_wasm::{execute_on_response, RequestContext};
+
+        let response_json = match serde_json::to_vec(&response) {
+            Ok(j) => j,
+            Err(_) => return response,
+        };
+
+        let context = RequestContext::default();
+        let final_response_json = execute_on_response(&mut instances, &response_json, context);
+
+        // Parse the final response - middlewares can modify status/headers/body
+        serde_json::from_slice::<barbacane_wasm::Response>(&final_response_json).unwrap_or(response)
+    }
+
+    /// Build an HTTP response from a plugin Response.
+    fn build_response_from_plugin(
+        &self,
+        plugin_response: &barbacane_wasm::Response,
+    ) -> Response<Full<Bytes>> {
+        let status = StatusCode::from_u16(plugin_response.status).unwrap_or(StatusCode::OK);
+        let mut builder = Response::builder().status(status);
+
+        for (key, value) in &plugin_response.headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+
+        let body = plugin_response.body.clone().unwrap_or_default();
+        builder.body(Full::new(Bytes::from(body))).unwrap()
+    }
+
+    /// Dispatch via a WASM plugin (inner function taking pre-serialized request).
+    /// Returns the raw plugin response for middleware chain processing.
+    async fn dispatch_wasm_plugin_inner(
+        &self,
+        plugin_name: &str,
+        config: &serde_json::Value,
+        request_json: &[u8],
+    ) -> Result<barbacane_wasm::Response, Response<Full<Bytes>>> {
+        // Create instance key for this (plugin, config) pair
+        let instance_key = barbacane_wasm::InstanceKey::new(plugin_name, config);
+
+        // Register config if not already registered
+        let config_json = serde_json::to_vec(config).unwrap_or_default();
+        self.plugin_pool
+            .register_config(instance_key.clone(), config_json);
+
+        // Get a plugin instance
+        let mut instance = match self.plugin_pool.get_instance(&instance_key) {
+            Ok(i) => i,
+            Err(e) => {
+                let detail = if self.dev_mode {
+                    Some(format!("failed to get plugin instance: {}", e))
+                } else {
+                    None
+                };
+                return Err(self.internal_error_response(detail.as_deref()));
+            }
+        };
+
         // Call the dispatch function
-        if let Err(e) = instance.dispatch(&request_json) {
+        if let Err(e) = instance.dispatch(request_json) {
             let detail = if self.dev_mode {
                 Some(format!("plugin dispatch failed: {}", e))
             } else {
                 None
             };
-            return Ok(self.internal_error_response(detail.as_deref()));
+            return Err(self.internal_error_response(detail.as_deref()));
         }
 
         // Get the output
@@ -463,32 +594,21 @@ impl Gateway {
             } else {
                 None
             };
-            return Ok(self.internal_error_response(detail.as_deref()));
+            return Err(self.internal_error_response(detail.as_deref()));
         }
 
         // Parse the response
-        let plugin_response: barbacane_wasm::Response = match serde_json::from_slice(&output) {
-            Ok(r) => r,
+        match serde_json::from_slice(&output) {
+            Ok(r) => Ok(r),
             Err(e) => {
                 let detail = if self.dev_mode {
                     Some(format!("failed to parse plugin response: {}", e))
                 } else {
                     None
                 };
-                return Ok(self.internal_error_response(detail.as_deref()));
+                Err(self.internal_error_response(detail.as_deref()))
             }
-        };
-
-        // Build HTTP response
-        let status = StatusCode::from_u16(plugin_response.status).unwrap_or(StatusCode::OK);
-        let mut builder = Response::builder().status(status);
-
-        for (key, value) in &plugin_response.headers {
-            builder = builder.header(key.as_str(), value.as_str());
         }
-
-        let body = plugin_response.body.unwrap_or_default();
-        Ok(builder.body(Full::new(Bytes::from(body))).unwrap())
     }
 
     /// Handle reserved /__barbacane/* endpoints.
@@ -1019,18 +1139,24 @@ struct TlsConfig {
 /// - ALPN: h2, http/1.1
 fn load_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>, String> {
     // Load certificate chain
-    let cert_file = File::open(&config.cert_path)
-        .map_err(|e| format!("failed to open certificate file '{}': {}", config.cert_path, e))?;
+    let cert_file = File::open(&config.cert_path).map_err(|e| {
+        format!(
+            "failed to open certificate file '{}': {}",
+            config.cert_path, e
+        )
+    })?;
     let mut cert_reader = BufReader::new(cert_file);
     let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to parse certificate file '{}': {}", config.cert_path, e))?;
+        .map_err(|e| {
+            format!(
+                "failed to parse certificate file '{}': {}",
+                config.cert_path, e
+            )
+        })?;
 
     if certs.is_empty() {
-        return Err(format!(
-            "no certificates found in '{}'",
-            config.cert_path
-        ));
+        return Err(format!("no certificates found in '{}'", config.cert_path));
     }
 
     // Load private key
@@ -1219,7 +1345,15 @@ async fn main() -> ExitCode {
                 max_header_size,
                 max_uri_length,
             };
-            run_serve(&artifact, &listen, dev, limits, allow_plaintext_upstream, tls_config).await
+            run_serve(
+                &artifact,
+                &listen,
+                dev,
+                limits,
+                allow_plaintext_upstream,
+                tls_config,
+            )
+            .await
         }
     }
 }

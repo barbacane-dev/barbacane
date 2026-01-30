@@ -516,6 +516,24 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_clock_now: {}", e)))?;
 
+    // host_get_unix_timestamp - returns current Unix timestamp in seconds
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_get_unix_timestamp",
+            |_caller: Caller<'_, PluginState>| -> u64 {
+                use std::time::{SystemTime, UNIX_EPOCH};
+
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_get_unix_timestamp: {}", e))
+        })?;
+
     // host_http_call - make outbound HTTP request
     linker
         .func_wrap(

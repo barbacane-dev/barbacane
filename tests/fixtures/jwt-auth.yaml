@@ -1,0 +1,76 @@
+openapi: "3.0.3"
+info:
+  title: JWT Auth Test API
+  version: "1.0.0"
+  description: API for testing JWT authentication middleware
+
+# Global middleware - requires JWT for all endpoints
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "test-issuer"
+      audience: "test-audience"
+      clock_skew_seconds: 60
+      # Skip signature validation for testing (we generate unsigned tokens)
+      skip_signature_validation: true
+
+paths:
+  /protected:
+    get:
+      summary: Protected endpoint requiring JWT auth
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "401":
+          description: Unauthorized
+
+  /public:
+    get:
+      summary: Public endpoint (overrides global middleware)
+      operationId: getPublic
+      x-barbacane-middlewares: []  # Empty array removes global middleware
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Public access"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /protected-with-claims:
+    get:
+      summary: Protected endpoint that echoes auth claims
+      operationId: getProtectedWithClaims
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Claims received"}'
+          content_type: application/json
+          # The jwt-auth middleware adds x-auth-sub and x-auth-claims headers
+      responses:
+        "200":
+          description: Success

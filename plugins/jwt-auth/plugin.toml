@@ -1,0 +1,9 @@
+[plugin]
+name = "jwt-auth"
+version = "0.1.0"
+type = "middleware"
+description = "JWT authentication middleware for validating Bearer tokens"
+wasm = "jwt-auth.wasm"
+
+[capabilities]
+host_functions = ["host_verify_signature"]
