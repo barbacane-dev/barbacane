@@ -1,5 +1,6 @@
 //! TestGateway: full-stack integration test harness.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -41,6 +42,55 @@ pub struct TestGateway {
     client: reqwest::Client,
     /// Temp directory holding the artifact (kept alive for the test duration).
     _temp_dir: TempDir,
+    /// Whether TLS is enabled.
+    tls_enabled: bool,
+}
+
+/// Generated TLS certificates for testing.
+pub struct TestCertificates {
+    /// Path to the certificate file.
+    pub cert_path: std::path::PathBuf,
+    /// Path to the private key file.
+    pub key_path: std::path::PathBuf,
+    /// Root CA certificate for client verification.
+    pub root_cert: rustls::pki_types::CertificateDer<'static>,
+}
+
+/// Generate self-signed test certificates.
+pub fn generate_test_certificates(temp_dir: &Path) -> Result<TestCertificates, TestError> {
+    use rcgen::{CertifiedKey, generate_simple_self_signed};
+
+    // Install the default crypto provider for rustls (required before any TLS operations).
+    // This may fail if already installed, which is fine - we ignore the error.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Generate self-signed certificate for localhost
+    let subject_alt_names = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+    ];
+
+    let CertifiedKey { cert, key_pair } = generate_simple_self_signed(subject_alt_names)
+        .map_err(|e| TestError::StartupFailed(format!("failed to generate certificate: {}", e)))?;
+
+    // Write certificate
+    let cert_path = temp_dir.join("server.crt");
+    let mut cert_file = std::fs::File::create(&cert_path)?;
+    cert_file.write_all(cert.pem().as_bytes())?;
+
+    // Write private key
+    let key_path = temp_dir.join("server.key");
+    let mut key_file = std::fs::File::create(&key_path)?;
+    key_file.write_all(key_pair.serialize_pem().as_bytes())?;
+
+    // Get the DER-encoded certificate for client trust
+    let root_cert = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
+
+    Ok(TestCertificates {
+        cert_path,
+        key_path,
+        root_cert,
+    })
 }
 
 impl TestGateway {
@@ -49,8 +99,23 @@ impl TestGateway {
         Self::from_specs(&[spec_path]).await
     }
 
+    /// Create a TLS-enabled TestGateway from a spec YAML/JSON file.
+    pub async fn from_spec_with_tls(spec_path: &str) -> Result<Self, TestError> {
+        Self::from_specs_with_tls(&[spec_path]).await
+    }
+
     /// Create a TestGateway from multiple spec files.
     pub async fn from_specs(spec_paths: &[&str]) -> Result<Self, TestError> {
+        Self::create_gateway(spec_paths, false).await
+    }
+
+    /// Create a TLS-enabled TestGateway from multiple spec files.
+    pub async fn from_specs_with_tls(spec_paths: &[&str]) -> Result<Self, TestError> {
+        Self::create_gateway(spec_paths, true).await
+    }
+
+    /// Internal method to create a gateway with optional TLS.
+    async fn create_gateway(spec_paths: &[&str], tls_enabled: bool) -> Result<Self, TestError> {
         // Create temp directory for the artifact
         let temp_dir = TempDir::new()?;
         let artifact_path = temp_dir.path().join("test.bca");
@@ -87,25 +152,58 @@ impl TestGateway {
         // Find an available port
         let port = find_available_port()?;
 
-        // Start the gateway process
-        let child = Command::new(&binary_path)
-            .arg("serve")
+        // Generate TLS certificates if needed
+        let tls_certs = if tls_enabled {
+            Some(generate_test_certificates(temp_dir.path())?)
+        } else {
+            None
+        };
+
+        // Build the gateway command
+        let mut cmd = Command::new(&binary_path);
+        cmd.arg("serve")
             .arg("--artifact")
             .arg(&artifact_path)
             .arg("--listen")
             .arg(format!("127.0.0.1:{}", port))
             .arg("--dev")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
 
-        let client = reqwest::Client::new();
+        // Add TLS arguments if enabled
+        if let Some(ref certs) = tls_certs {
+            cmd.arg("--tls-cert").arg(&certs.cert_path);
+            cmd.arg("--tls-key").arg(&certs.key_path);
+        }
+
+        // Start the gateway process
+        let child = cmd.spawn()?;
+
+        // Create HTTP client (with custom TLS config if needed)
+        let client = if let Some(ref certs) = tls_certs {
+            // Create a client that trusts our self-signed certificate
+            let mut root_store = rustls::RootCertStore::empty();
+            root_store.add(certs.root_cert.clone()).map_err(|e| {
+                TestError::StartupFailed(format!("failed to add root cert: {:?}", e))
+            })?;
+
+            let tls_config = rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+
+            reqwest::Client::builder()
+                .use_preconfigured_tls(tls_config)
+                .build()?
+        } else {
+            reqwest::Client::new()
+        };
 
         let mut gateway = TestGateway {
             child,
             port,
             client,
             _temp_dir: temp_dir,
+            tls_enabled,
         };
 
         // Wait for the gateway to be ready
@@ -116,7 +214,7 @@ impl TestGateway {
 
     /// Wait for the gateway to be ready by polling the health endpoint.
     async fn wait_for_ready(&mut self) -> Result<(), TestError> {
-        let health_url = format!("http://127.0.0.1:{}/__barbacane/health", self.port);
+        let health_url = format!("{}/__barbacane/health", self.base_url());
         let max_attempts = 50;
         let delay = Duration::from_millis(100);
 
@@ -150,7 +248,13 @@ impl TestGateway {
 
     /// Get the base URL of the gateway.
     pub fn base_url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
+        let scheme = if self.tls_enabled { "https" } else { "http" };
+        format!("{}://127.0.0.1:{}", scheme, self.port)
+    }
+
+    /// Check if TLS is enabled.
+    pub fn is_tls_enabled(&self) -> bool {
+        self.tls_enabled
     }
 
     /// Make a GET request to the given path.
@@ -669,5 +773,52 @@ mod tests {
             headers.get("X-Forwarded-Host").is_some() || headers.get("x-forwarded-host").is_some(),
             "should forward X-Forwarded-Host header"
         );
+    }
+
+    // ========================
+    // M6a: TLS Termination Tests
+    // ========================
+
+    #[tokio::test]
+    async fn test_tls_gateway_health() {
+        let gateway = TestGateway::from_spec_with_tls("../../tests/fixtures/minimal.yaml")
+            .await
+            .expect("failed to start TLS gateway");
+
+        // Verify TLS is enabled
+        assert!(gateway.is_tls_enabled());
+        assert!(gateway.base_url().starts_with("https://"));
+
+        // Health check over HTTPS
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["status"], "healthy");
+    }
+
+    #[tokio::test]
+    async fn test_tls_gateway_mock_response() {
+        let gateway = TestGateway::from_spec_with_tls("../../tests/fixtures/minimal.yaml")
+            .await
+            .expect("failed to start TLS gateway");
+
+        // Mock response over HTTPS
+        let resp = gateway.get("/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_tls_gateway_404() {
+        let gateway = TestGateway::from_spec_with_tls("../../tests/fixtures/minimal.yaml")
+            .await
+            .expect("failed to start TLS gateway");
+
+        // 404 response over HTTPS
+        let resp = gateway.get("/nonexistent").await.unwrap();
+        assert_eq!(resp.status(), 404);
     }
 }
