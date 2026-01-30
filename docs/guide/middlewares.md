@@ -188,10 +188,12 @@ x-barbacane-middlewares:
     config:
       introspection_endpoint: https://auth.example.com/oauth2/introspect
       client_id: my-api-client
-      client_secret: ${OAUTH2_CLIENT_SECRET}
-      required_scopes: "read write"  # space-separated
-      timeout: 5.0                   # seconds
+      client_secret: "env://OAUTH2_CLIENT_SECRET"  # resolved at startup
+      required_scopes: "read write"                 # space-separated
+      timeout: 5.0                                  # seconds
 ```
+
+The `client_secret` uses a secret reference (`env://`) which is resolved at gateway startup. See [Secrets](secrets.md) for details.
 
 #### Configuration
 
