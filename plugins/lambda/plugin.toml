@@ -1,0 +1,8 @@
+[plugin]
+name = "lambda"
+version = "0.1.0"
+type = "dispatcher"
+wasm = "lambda.wasm"
+
+[capabilities]
+host_functions = ["host_http_call", "host_log"]

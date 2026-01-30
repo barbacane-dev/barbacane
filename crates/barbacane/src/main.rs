@@ -34,6 +34,10 @@ use barbacane_wasm::{
 /// This is a built-in plugin that's always available.
 static MOCK_PLUGIN_WASM: &[u8] = include_bytes!("../../../plugins/mock/mock.wasm");
 
+/// Embedded lambda dispatcher WASM plugin.
+/// Invokes AWS Lambda functions via Lambda Function URLs.
+static LAMBDA_PLUGIN_WASM: &[u8] = include_bytes!("../../../plugins/lambda/lambda.wasm");
+
 #[derive(Parser, Debug)]
 #[command(name = "barbacane", about = "Barbacane API gateway", version)]
 struct Cli {
@@ -150,14 +154,27 @@ impl Gateway {
         let specs =
             load_specs(artifact_path).map_err(|e| format!("failed to load specs: {}", e))?;
 
+        // Initialize HTTP client for upstream requests and plugin outbound calls
+        let http_client_config = HttpClientConfig {
+            allow_plaintext: allow_plaintext_upstream,
+            ..Default::default()
+        };
+        let http_client = HttpClient::new(http_client_config)
+            .map_err(|e| format!("failed to create HTTP client: {}", e))?;
+        let http_client = Arc::new(http_client);
+
         // Initialize WASM engine
         let plugin_limits = PluginLimits::default();
         let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
         let wasm_engine = Arc::new(wasm_engine);
 
-        // Create plugin instance pool
-        let plugin_pool = InstancePool::new(wasm_engine.clone(), plugin_limits.clone());
+        // Create plugin instance pool with HTTP client for outbound calls
+        let plugin_pool = InstancePool::with_http_client(
+            wasm_engine.clone(),
+            plugin_limits.clone(),
+            http_client.clone(),
+        );
 
         // Register built-in mock dispatcher plugin
         let mock_module = wasm_engine
@@ -165,13 +182,15 @@ impl Gateway {
             .map_err(|e| format!("failed to compile mock plugin: {}", e))?;
         plugin_pool.register_module(mock_module);
 
-        // Initialize HTTP client for upstream requests
-        let http_client_config = HttpClientConfig {
-            allow_plaintext: allow_plaintext_upstream,
-            ..Default::default()
-        };
-        let http_client = HttpClient::new(http_client_config)
-            .map_err(|e| format!("failed to create HTTP client: {}", e))?;
+        // Register built-in lambda dispatcher plugin
+        let lambda_module = wasm_engine
+            .compile(
+                LAMBDA_PLUGIN_WASM,
+                "lambda".to_string(),
+                "0.1.0".to_string(),
+            )
+            .map_err(|e| format!("failed to compile lambda plugin: {}", e))?;
+        plugin_pool.register_module(lambda_module);
 
         let mut router = Router::new();
         let mut validators = Vec::new();
@@ -212,7 +231,7 @@ impl Gateway {
             wasm_engine,
             plugin_pool: Arc::new(plugin_pool),
             plugin_limits,
-            http_client: Arc::new(http_client),
+            http_client,
         })
     }
 

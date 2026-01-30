@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::engine::{CompiledModule, WasmEngine};
 use crate::error::WasmError;
+use crate::http_client::HttpClient;
 use crate::instance::PluginInstance;
 use crate::limits::PluginLimits;
 
@@ -68,6 +69,9 @@ pub struct InstancePool {
     /// Resource limits for instances.
     limits: PluginLimits,
 
+    /// HTTP client for plugins that need outbound HTTP calls.
+    http_client: Option<Arc<HttpClient>>,
+
     /// Cache of compiled modules by plugin name.
     modules: DashMap<String, CompiledModule>,
 
@@ -86,6 +90,23 @@ impl InstancePool {
         Self {
             engine,
             limits,
+            http_client: None,
+            modules: DashMap::new(),
+            instances: DashMap::new(),
+            configs: DashMap::new(),
+        }
+    }
+
+    /// Create a new instance pool with an HTTP client for outbound calls.
+    pub fn with_http_client(
+        engine: Arc<WasmEngine>,
+        limits: PluginLimits,
+        http_client: Arc<HttpClient>,
+    ) -> Self {
+        Self {
+            engine,
+            limits,
+            http_client: Some(http_client),
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -117,8 +138,13 @@ impl InstancePool {
             .get(key)
             .ok_or_else(|| WasmError::InitFailed(format!("config not found for: {}", key.name)))?;
 
-        // Create a new instance
-        let mut instance = PluginInstance::new(self.engine.engine(), &module, self.limits.clone())?;
+        // Create a new instance with HTTP client if available
+        let mut instance = PluginInstance::new_with_http_client(
+            self.engine.engine(),
+            &module,
+            self.limits.clone(),
+            self.http_client.clone(),
+        )?;
 
         // Initialize with config
         let result = instance.init(&config_json)?;
