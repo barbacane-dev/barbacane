@@ -170,11 +170,13 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
 | `--max-uri-length` | No | `8192` | Maximum URI length in characters (8KB) |
 | `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
+| `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
+| `--tls-key` | No | - | Path to TLS private key file (PEM format) |
 
 ### Examples
 
 ```bash
-# Run with defaults
+# Run with defaults (HTTP)
 barbacane serve --artifact api.bca
 
 # Custom port
@@ -182,6 +184,11 @@ barbacane serve --artifact api.bca --listen 127.0.0.1:3000
 
 # Development mode (verbose errors)
 barbacane serve --artifact api.bca --dev
+
+# Production with TLS (HTTPS)
+barbacane serve --artifact api.bca \
+  --tls-cert /etc/barbacane/certs/server.crt \
+  --tls-key /etc/barbacane/certs/server.key
 
 # Production with custom limits
 barbacane serve --artifact api.bca \
@@ -191,12 +198,34 @@ barbacane serve --artifact api.bca \
 # All options
 barbacane serve --artifact api.bca \
   --listen 0.0.0.0:8080 \
+  --tls-cert /etc/barbacane/certs/server.crt \
+  --tls-key /etc/barbacane/certs/server.key \
   --log-level info \
   --max-body-size 1048576 \
   --max-headers 100 \
   --max-header-size 8192 \
   --max-uri-length 8192
 ```
+
+### TLS Termination
+
+The gateway supports HTTPS with TLS termination. To enable TLS, provide both `--tls-cert` and `--tls-key`:
+
+```bash
+barbacane serve --artifact api.bca \
+  --tls-cert /path/to/server.crt \
+  --tls-key /path/to/server.key
+```
+
+**TLS Configuration:**
+- TLS 1.2 minimum, TLS 1.3 preferred
+- Modern cipher suites (via aws-lc-rs)
+- ALPN support for HTTP/2 and HTTP/1.1
+
+**Certificate Requirements:**
+- Certificate and key must be in PEM format
+- Certificate file can contain the full chain (cert + intermediates)
+- Both `--tls-cert` and `--tls-key` must be provided together
 
 ### Development Mode
 

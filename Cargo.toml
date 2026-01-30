@@ -56,6 +56,12 @@ tar = "0.4"
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
 
+# TLS
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+rcgen = "0.13"
+
 # Sync primitives
 parking_lot = "0.12"
 

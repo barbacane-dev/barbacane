@@ -3,6 +3,8 @@
 //! Compiles OpenAPI specs into artifacts and runs the data plane server.
 
 use std::convert::Infallible;
+use std::fs::File;
+use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
@@ -16,7 +18,10 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::ServerConfig;
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
 use std::collections::HashMap;
 
@@ -108,6 +113,16 @@ enum Commands {
         /// In production, only HTTPS upstreams are allowed.
         #[arg(long)]
         allow_plaintext_upstream: bool,
+
+        /// Path to TLS certificate file (PEM format).
+        /// If provided, --tls-key must also be specified.
+        #[arg(long)]
+        tls_cert: Option<String>,
+
+        /// Path to TLS private key file (PEM format).
+        /// If provided, --tls-cert must also be specified.
+        #[arg(long)]
+        tls_key: Option<String>,
     },
 }
 
@@ -991,6 +1006,56 @@ fn run_compile(
     }
 }
 
+/// TLS configuration for the server.
+struct TlsConfig {
+    cert_path: String,
+    key_path: String,
+}
+
+/// Load TLS certificates and create a rustls ServerConfig.
+///
+/// Configuration:
+/// - TLS 1.2 minimum, TLS 1.3 preferred
+/// - ALPN: h2, http/1.1
+fn load_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>, String> {
+    // Load certificate chain
+    let cert_file = File::open(&config.cert_path)
+        .map_err(|e| format!("failed to open certificate file '{}': {}", config.cert_path, e))?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to parse certificate file '{}': {}", config.cert_path, e))?;
+
+    if certs.is_empty() {
+        return Err(format!(
+            "no certificates found in '{}'",
+            config.cert_path
+        ));
+    }
+
+    // Load private key
+    let key_file = File::open(&config.key_path)
+        .map_err(|e| format!("failed to open key file '{}': {}", config.key_path, e))?;
+    let mut key_reader = BufReader::new(key_file);
+    let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)
+        .map_err(|e| format!("failed to parse key file '{}': {}", config.key_path, e))?
+        .ok_or_else(|| format!("no private key found in '{}'", config.key_path))?;
+
+    // Build TLS config with modern settings
+    // - TLS 1.2 minimum (via default provider)
+    // - TLS 1.3 preferred (default behavior)
+    // - ALPN: h2, http/1.1
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| format!("failed to build TLS config: {}", e))?;
+
+    // Set ALPN protocols: prefer HTTP/2, fallback to HTTP/1.1
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+    Ok(Arc::new(server_config))
+}
+
 /// Run the serve command.
 async fn run_serve(
     artifact: &str,
@@ -998,6 +1063,7 @@ async fn run_serve(
     dev: bool,
     limits: RequestLimits,
     allow_plaintext_upstream: bool,
+    tls_config: Option<TlsConfig>,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
@@ -1036,7 +1102,27 @@ async fn run_serve(
         }
     };
 
-    eprintln!("barbacane: listening on {}", addr);
+    // Load TLS config if provided
+    let tls_acceptor = match &tls_config {
+        Some(config) => {
+            let server_config = match load_tls_config(config) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
+            Some(TlsAcceptor::from(server_config))
+        }
+        None => None,
+    };
+
+    let protocol = if tls_acceptor.is_some() {
+        "https"
+    } else {
+        "http"
+    };
+    eprintln!("barbacane: listening on {}://{}", protocol, addr);
 
     // Accept connections
     loop {
@@ -1049,7 +1135,7 @@ async fn run_serve(
         };
 
         let gateway = Arc::clone(&gateway);
-        let io = TokioIo::new(stream);
+        let tls_acceptor = tls_acceptor.clone();
 
         tokio::spawn(async move {
             let service = service_fn(move |req| {
@@ -1057,8 +1143,25 @@ async fn run_serve(
                 async move { gateway.handle_request(req).await }
             });
 
-            if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                eprintln!("error: connection error: {}", e);
+            if let Some(acceptor) = tls_acceptor {
+                // TLS connection
+                match acceptor.accept(stream).await {
+                    Ok(tls_stream) => {
+                        let io = TokioIo::new(tls_stream);
+                        if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                            eprintln!("error: connection error: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("error: TLS handshake failed: {}", e);
+                    }
+                }
+            } else {
+                // Plain TCP connection
+                let io = TokioIo::new(stream);
+                if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                    eprintln!("error: connection error: {}", e);
+                }
             }
         });
     }
@@ -1066,6 +1169,10 @@ async fn run_serve(
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Install the default crypto provider for rustls (required for TLS operations).
+    // This must be done before any TLS operations. Ignore errors if already installed.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -1085,15 +1192,34 @@ async fn main() -> ExitCode {
             max_header_size,
             max_uri_length,
             allow_plaintext_upstream,
+            tls_cert,
+            tls_key,
             ..
         } => {
+            // Validate TLS arguments
+            let tls_config = match (tls_cert, tls_key) {
+                (Some(cert), Some(key)) => Some(TlsConfig {
+                    cert_path: cert,
+                    key_path: key,
+                }),
+                (None, None) => None,
+                (Some(_), None) => {
+                    eprintln!("error: --tls-cert requires --tls-key");
+                    return ExitCode::from(1);
+                }
+                (None, Some(_)) => {
+                    eprintln!("error: --tls-key requires --tls-cert");
+                    return ExitCode::from(1);
+                }
+            };
+
             let limits = RequestLimits {
                 max_body_size,
                 max_headers,
                 max_header_size,
                 max_uri_length,
             };
-            run_serve(&artifact, &listen, dev, limits, allow_plaintext_upstream).await
+            run_serve(&artifact, &listen, dev, limits, allow_plaintext_upstream, tls_config).await
         }
     }
 }
