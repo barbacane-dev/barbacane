@@ -96,40 +96,134 @@ paths:
 
 ---
 
-## Built-in Middlewares (Planned)
+## Authentication Middlewares
 
-### auth-jwt
+### jwt-auth
 
-Validates JWT tokens.
+Validates JWT tokens with RS256/HS256 signatures.
 
 ```yaml
 x-barbacane-middlewares:
-  - name: auth-jwt
+  - name: jwt-auth
     config:
-      required: true
-      header: Authorization
-      scheme: Bearer
+      secret: "your-hs256-secret"  # For HS256
+      # OR
+      public_key: |                 # For RS256
+        -----BEGIN PUBLIC KEY-----
+        ...
+        -----END PUBLIC KEY-----
       issuer: https://auth.example.com
       audience: my-api
-      scopes: ["read", "write"]
+      required_claims:
+        - sub
+        - email
 ```
 
 #### Configuration
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `required` | boolean | `true` | Reject if no valid token |
-| `header` | string | `Authorization` | Header containing token |
-| `scheme` | string | `Bearer` | Expected auth scheme |
-| `issuer` | string | - | Expected token issuer |
-| `audience` | string | - | Expected audience claim |
-| `scopes` | array | `[]` | Required scopes (if any) |
+| `secret` | string | - | HS256 secret key |
+| `public_key` | string | - | RS256 public key (PEM format) |
+| `issuer` | string | - | Expected `iss` claim |
+| `audience` | string | - | Expected `aud` claim |
+| `required_claims` | array | `[]` | Claims that must be present |
+| `leeway` | integer | `0` | Seconds of clock skew tolerance |
 
-#### Context
+#### Context Headers
 
-Sets context for downstream:
-- `auth.sub` - Subject (user ID)
-- `auth.scopes` - Token scopes
+Sets headers for downstream:
+- `x-auth-sub` - Subject (user ID)
+- `x-auth-claims` - Full JWT claims as JSON
+
+---
+
+### apikey-auth
+
+Validates API keys from header or query parameter.
+
+```yaml
+x-barbacane-middlewares:
+  - name: apikey-auth
+    config:
+      key_location: header        # or "query"
+      header_name: X-API-Key      # when key_location is "header"
+      query_param: api_key        # when key_location is "query"
+      keys:
+        sk_live_abc123:
+          id: key-001
+          name: Production Key
+          scopes: ["read", "write"]
+        sk_test_xyz789:
+          id: key-002
+          name: Test Key
+          scopes: ["read"]
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `key_location` | string | `header` | Where to find key (`header` or `query`) |
+| `header_name` | string | `X-API-Key` | Header name (when `key_location: header`) |
+| `query_param` | string | `api_key` | Query param name (when `key_location: query`) |
+| `keys` | object | `{}` | Map of valid API keys to metadata |
+
+#### Context Headers
+
+Sets headers for downstream:
+- `x-auth-key-id` - Key identifier
+- `x-auth-key-name` - Key human-readable name
+- `x-auth-key-scopes` - Comma-separated scopes
+
+---
+
+### oauth2-auth
+
+Validates Bearer tokens via RFC 7662 token introspection.
+
+```yaml
+x-barbacane-middlewares:
+  - name: oauth2-auth
+    config:
+      introspection_endpoint: https://auth.example.com/oauth2/introspect
+      client_id: my-api-client
+      client_secret: ${OAUTH2_CLIENT_SECRET}
+      required_scopes: "read write"  # space-separated
+      timeout: 5.0                   # seconds
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `introspection_endpoint` | string | **required** | RFC 7662 introspection URL |
+| `client_id` | string | **required** | Client ID for introspection auth |
+| `client_secret` | string | **required** | Client secret for introspection auth |
+| `required_scopes` | string | - | Space-separated required scopes |
+| `timeout` | float | `5.0` | Introspection request timeout (seconds) |
+
+#### Context Headers
+
+Sets headers for downstream:
+- `x-auth-sub` - Subject
+- `x-auth-scope` - Token scopes
+- `x-auth-client-id` - Client ID
+- `x-auth-username` - Username (if present)
+- `x-auth-claims` - Full introspection response as JSON
+
+#### Error Responses
+
+- `401 Unauthorized` - Missing token, invalid token, or inactive token
+- `403 Forbidden` - Token lacks required scopes
+
+Includes RFC 6750 `WWW-Authenticate` header with error details.
+
+---
+
+## Planned Middlewares
+
+The following middlewares are planned for future milestones:
 
 ### rate-limit
 
