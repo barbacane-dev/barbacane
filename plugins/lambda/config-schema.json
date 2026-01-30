@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Lambda Dispatcher Configuration",
+  "description": "Configuration for AWS Lambda dispatcher",
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Lambda Function URL (e.g., https://<id>.lambda-url.<region>.on.aws/)",
+      "format": "uri"
+    },
+    "timeout": {
+      "type": "number",
+      "description": "Request timeout in seconds",
+      "default": 30.0,
+      "minimum": 1,
+      "maximum": 900
+    },
+    "pass_through_headers": {
+      "type": "boolean",
+      "description": "Pass incoming request headers to Lambda",
+      "default": true
+    }
+  },
+  "required": ["url"],
+  "additionalProperties": false
+}

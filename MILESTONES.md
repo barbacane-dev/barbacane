@@ -91,7 +91,7 @@ The extensibility layer. Plugins are loaded as WASM modules with sandboxed execu
 
 ---
 
-## M4 — Built-in Dispatchers 🚧
+## M4 — Built-in Dispatchers ✅
 
 Move dispatchers from hardcoded to WASM plugins. Add real HTTP upstream proxying.
 
@@ -110,7 +110,7 @@ Move dispatchers from hardcoded to WASM plugins. Add real HTTP upstream proxying
 ### Dispatchers
 - [x] `http-upstream` dispatcher — reverse proxy (built-in, uses `url`, `path`, `timeout` config)
 - [x] `mock` dispatcher — static response from config (WASM plugin)
-- [ ] `lambda` dispatcher — invoke AWS Lambda via `host_http_call`
+- [x] `lambda` dispatcher — invoke AWS Lambda via Lambda Function URLs (WASM plugin)
 
 ### Compiler & CLI
 - [x] Compiler check E1031 — reject `http://` upstream URLs in production mode

@@ -217,6 +217,85 @@ The dispatcher returns RFC 9457 error responses:
 - **mTLS**: Configure `tls.client_cert` and `tls.client_key` for mutual TLS authentication
 - **Custom CA**: Use `tls.ca` to add a custom CA certificate for private PKI
 
+### lambda
+
+Invokes AWS Lambda functions via Lambda Function URLs. Implemented as a WASM plugin.
+
+```yaml
+x-barbacane-dispatch:
+  name: lambda
+  config:
+    url: "https://abc123.lambda-url.us-east-1.on.aws/"
+```
+
+#### Configuration
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `url` | string | Yes | - | Lambda Function URL |
+| `timeout` | number | No | 30.0 | Request timeout in seconds |
+| `pass_through_headers` | boolean | No | true | Pass incoming headers to Lambda |
+
+#### Setup
+
+1. Enable Lambda Function URLs in AWS Console or via CLI
+2. Use the generated URL in your OpenAPI spec
+
+```bash
+# Enable Function URL for your Lambda
+aws lambda create-function-url-config \
+  --function-name my-function \
+  --auth-type NONE
+
+# Get the URL
+aws lambda get-function-url-config --function-name my-function
+```
+
+#### Examples
+
+**Basic Lambda invocation:**
+```yaml
+/api/process:
+  post:
+    x-barbacane-dispatch:
+      name: lambda
+      config:
+        url: "https://abc123.lambda-url.us-east-1.on.aws/"
+```
+
+**With custom timeout:**
+```yaml
+/api/long-running:
+  post:
+    x-barbacane-dispatch:
+      name: lambda
+      config:
+        url: "https://xyz789.lambda-url.eu-west-1.on.aws/"
+        timeout: 120.0
+```
+
+#### Request/Response Format
+
+The dispatcher passes the incoming HTTP request to Lambda:
+- Method, headers, and body are forwarded
+- Lambda should return a standard HTTP response
+
+Lambda response format:
+```json
+{
+  "statusCode": 200,
+  "headers": {"content-type": "application/json"},
+  "body": "{\"result\": \"success\"}"
+}
+```
+
+#### Error Handling
+
+| Status | Condition |
+|--------|-----------|
+| 502 Bad Gateway | Lambda invocation failed or returned invalid response |
+| 504 Gateway Timeout | Request exceeded configured timeout |
+
 ---
 
 ## Custom WASM Dispatchers
@@ -253,15 +332,9 @@ x-barbacane-dispatch:
       }
 ```
 
-#### Lambda Dispatcher
+#### Lambda Dispatcher (Planned)
 
-```yaml
-x-barbacane-dispatch:
-  name: lambda
-  config:
-    function: my-function
-    region: eu-west-1
-```
+Uses AWS SigV4 signing for direct Lambda invocation (not yet implemented). For now, use Lambda Function URLs with the built-in `lambda` dispatcher.
 
 ---
 
