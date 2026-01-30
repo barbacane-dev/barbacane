@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://barbacane.dev/schemas/jwt-auth-config.json",
+  "$id": "urn:barbacane:schema:jwt-auth-config",
   "title": "JWT Authentication Middleware Config",
   "description": "Configuration for the JWT authentication middleware plugin",
   "type": "object",
