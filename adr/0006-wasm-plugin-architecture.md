@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-01-28
+**Updated:** 2026-01-30
 
 ## Context
 
@@ -17,6 +18,8 @@ These components must be:
 - Deployable without recompiling the gateway
 - Writable in multiple languages (Rust, Go, JS/TS, etc.)
 
+Additionally, plugin configuration must follow the principle: **explicit is better than implicit**. Users should have full control over which plugins are available, with no "magic" built-ins that appear without declaration.
+
 ## Decision
 
 ### WASM as the Only Plugin Runtime
@@ -28,9 +31,18 @@ All plugins (middlewares and dispatchers) are compiled to **WebAssembly** and ex
 | Isolation | WASM sandbox — no host access unless explicitly granted |
 | Performance | Near-native with `wasmtime` AOT compilation |
 | Polyglot | Authors write in Rust, Go, C, JS/TS — compiled to `.wasm` |
-| Distribution | Plugins are `.wasm` artifacts, versioned and stored alongside specs |
+| Distribution | Plugins are `.wasm` artifacts, resolved at compile time |
 
 No native/dynamic library plugins. The security and isolation guarantees of WASM outweigh the marginal performance cost.
+
+### Bare Binary Philosophy
+
+The `barbacane` binary contains only the core gateway runtime — **no plugins are bundled**. Every plugin, including official ones like `mock`, `http-upstream`, and `lambda`, must be explicitly declared. This ensures:
+
+- Users know exactly what's in their gateway
+- Minimal footprint when only a few plugins are needed
+- No surprise behaviors from undeclared plugins
+- Consistent treatment of all plugins (official and third-party)
 
 ### Plugin Types
 
@@ -54,13 +66,102 @@ Each middleware can:
 
 Dispatchers handle final request delivery to the target. The dispatch interface is defined in ADR-0008. The plugin mechanism (WASM, sandboxing, distribution) is the same as middlewares.
 
-### Spec Integration
+### Plugin Configuration
 
-Plugins are declared in OpenAPI/AsyncAPI specs via `x-barbacane-*` extensions.
+Plugin availability is configured separately from plugin usage, following the Kubernetes Gateway API pattern:
 
-#### Global middleware chain (spec root level)
+| Concern | File | Purpose |
+|---------|------|---------|
+| **What plugins are available** | `barbacane.yaml` | Manifest — declares plugin sources |
+| **How plugins are used** | OpenAPI spec | API contract — references plugins by name |
+
+This separation ensures the API spec remains a portable contract while deployment configuration stays in a dedicated manifest.
+
+#### Manifest File (`barbacane.yaml`)
+
+The manifest lives in the project root and declares all available plugins:
 
 ```yaml
+# barbacane.yaml
+plugins:
+  # Local file
+  mock:
+    path: ./plugins/mock.wasm
+
+  # Remote URL
+  http-upstream:
+    url: https://plugins.barbacane.io/http-upstream/0.1.0/http-upstream.wasm
+
+  # Another local plugin
+  jwt-auth:
+    path: ./plugins/jwt-auth.wasm
+```
+
+#### Plugin Sources (MVP)
+
+Initially, two sources are supported:
+
+| Source | Syntax | Use Case |
+|--------|--------|----------|
+| `path` | Local filesystem path | Development, vendored plugins |
+| `url` | HTTPS URL | Remote distribution |
+
+A plugin registry may be added later when the need arises.
+
+#### Compile-Time Resolution
+
+Plugins are resolved at compile time and bundled into the `.bca` artifact:
+
+```bash
+barbacane compile --spec api.yaml --output api.bca
+# Reads barbacane.yaml
+# Resolves all plugin sources
+# Bundles .wasm files into api.bca
+```
+
+The resulting artifact is **fully self-contained** — it works offline and requires no plugin resolution at serve time.
+
+#### Validation
+
+If the spec references a plugin not declared in the manifest, compilation fails:
+
+```
+Error E1040: Plugin 'rate-limit' used in spec but not declared in barbacane.yaml
+
+  --> api.yaml:15:9
+   |
+15 |         name: rate-limit
+   |         ^^^^^^^^^^^^^^^^ undeclared plugin
+
+Help: Add 'rate-limit' to your barbacane.yaml plugins section
+```
+
+### Spec Integration
+
+Plugins are **used** in OpenAPI/AsyncAPI specs via `x-barbacane-*` extensions. The spec references plugins by name — availability is determined by the manifest.
+
+#### Complete Example
+
+```yaml
+# barbacane.yaml (manifest)
+plugins:
+  jwt-auth:
+    path: ./plugins/jwt-auth.wasm
+  rate-limit:
+    path: ./plugins/rate-limit.wasm
+  request-logger:
+    path: ./plugins/request-logger.wasm
+  http-upstream:
+    path: ./plugins/http-upstream.wasm
+```
+
+```yaml
+# api.yaml (spec)
+openapi: 3.1.0
+info:
+  title: User API
+  version: 1.0.0
+
 x-barbacane-middlewares:
   - name: jwt-auth
     config:
@@ -72,6 +173,30 @@ x-barbacane-middlewares:
       window: 60
       key: header:x-api-key
   - name: request-logger
+
+paths:
+  /users/{id}:
+    get:
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: https://user-service.internal
+          timeout: 5.0
+```
+
+#### Global middleware chain
+
+Middlewares declared at spec root apply to all routes:
+
+```yaml
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: https://auth.example.com
+  - name: rate-limit
+    config:
+      quota: 100
+      window: 60
 ```
 
 #### Per-route override
@@ -85,15 +210,17 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            quota: 1000
+            quota: 1000  # Higher limit for health checks
             window: 60
       x-barbacane-dispatch:
         name: http-upstream
         config:
-          url: http://health-service:8080
+          url: https://health-service.internal
 ```
 
 #### Dispatch declaration
+
+Every operation requires a dispatcher:
 
 ```yaml
 paths:
@@ -102,8 +229,8 @@ paths:
       x-barbacane-dispatch:
         name: http-upstream
         config:
-          url: http://user-service:3000
-          timeout: 5s
+          url: https://user-service.internal
+          timeout: 5.0  # seconds (numeric)
 ```
 
 ### Plugin Host Interface
@@ -124,14 +251,49 @@ Where `Action` is:
 
 ### Plugin Lifecycle
 
-1. Plugins are compiled to `.wasm` by their authors
-2. Plugins are registered in the control plane (`barbacane-control`)
-3. Specs reference plugins by name
-4. At compilation time (CI/CD), the control plane resolves plugin references and bundles `.wasm` artifacts with the compiled spec
-5. Data plane loads and AOT-compiles WASM modules at startup
+1. Plugin authors compile their plugins to `.wasm`
+2. Users declare available plugins in `barbacane.yaml` (path or URL)
+3. OpenAPI specs reference plugins by name via `x-barbacane-*` extensions
+4. `barbacane compile` validates that all referenced plugins are declared
+5. `barbacane compile` resolves plugin sources and bundles `.wasm` into the artifact
+6. `barbacane serve` loads the self-contained artifact (no external dependencies)
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ barbacane.yaml  │     │   api.yaml      │     │    api.bca      │
+│ (manifest)      │────▶│   (spec)        │────▶│   (artifact)    │
+│                 │     │                 │     │                 │
+│ plugins:        │     │ x-barbacane-    │     │ ├── spec        │
+│   mock: ...     │     │   dispatch:     │     │ ├── mock.wasm   │
+│   http: ...     │     │     name: mock  │     │ └── http.wasm   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                              compile              serve
+```
+
+### Starter Templates
+
+To ease onboarding, Barbacane provides starter templates via `barbacane init`:
+
+```bash
+# Basic template with common plugins
+barbacane init --template basic
+# Creates:
+#   barbacane.yaml (mock, http-upstream, lambda)
+#   plugins/ (downloaded .wasm files)
+#   api.yaml (example spec)
+
+# Minimal template for advanced users
+barbacane init --template minimal
+# Creates:
+#   barbacane.yaml (empty plugins section)
+#   api.yaml (skeleton spec)
+```
+
+Templates download official plugins and set up a working project structure.
 
 ## Consequences
 
 - **Easier:** Safe extensibility, polyglot plugin development, plugins can't crash the gateway, clear separation between core and extensions
 - **Harder:** WASM has limited host access (no arbitrary I/O from plugins without host functions), slight performance overhead vs native
+- **Trade-off:** Bare binary requires explicit plugin declaration even for official plugins, but ensures full transparency and minimal footprint
 - **Related:** Dispatch plugin interface defined in ADR-0008
