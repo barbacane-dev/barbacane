@@ -14,6 +14,7 @@ use barbacane_spec_parser::{
 };
 
 use crate::error::CompileError;
+use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
 pub const ARTIFACT_VERSION: u32 = 1;
@@ -101,6 +102,9 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
 }
 
 /// Compile one or more spec files into a .bca artifact with options.
+///
+/// Note: This function does NOT validate plugins against a manifest.
+/// Use `compile_with_manifest` for manifest-aware compilation.
 pub fn compile_with_options(
     spec_paths: &[&Path],
     output: &Path,
@@ -234,6 +238,202 @@ pub fn compile_with_options(
             .unwrap_or("spec.yaml");
         let archive_path = format!("specs/{}", filename);
         add_file_to_tar(&mut archive, &archive_path, content.as_bytes())?;
+    }
+
+    // Finish the archive
+    let encoder = archive.into_inner()?;
+    encoder.finish()?;
+
+    Ok(manifest)
+}
+
+/// Compile specs with a project manifest into a .bca artifact.
+///
+/// This is the primary compilation entry point for manifest-based projects.
+/// It validates that all plugins used in specs are declared in the manifest,
+/// resolves them, and bundles them into the artifact.
+///
+/// # Arguments
+/// * `spec_paths` - Paths to OpenAPI/AsyncAPI spec files
+/// * `project_manifest` - The project manifest declaring available plugins
+/// * `manifest_base_path` - Base path for resolving relative plugin paths
+/// * `output` - Output path for the .bca artifact
+/// * `options` - Compilation options
+pub fn compile_with_manifest(
+    spec_paths: &[&Path],
+    project_manifest: &ProjectManifest,
+    manifest_base_path: &Path,
+    output: &Path,
+    options: &CompileOptions,
+) -> Result<Manifest, CompileError> {
+    // Parse all specs
+    let mut specs: Vec<(ApiSpec, String, String)> = Vec::new();
+
+    for path in spec_paths {
+        let content = std::fs::read_to_string(path)?;
+        let sha256 = compute_sha256(&content);
+        let spec = parse_spec_file(path)?;
+        specs.push((spec, content, sha256));
+    }
+
+    // Extract just the ApiSpec for validation
+    let api_specs: Vec<ApiSpec> = specs.iter().map(|(spec, _, _)| spec.clone()).collect();
+
+    // Validate all plugins are declared (E1040)
+    project_manifest.validate_specs(&api_specs)?;
+
+    // Resolve used plugins (loads WASM bytes)
+    let resolved_plugins = project_manifest.resolve_used_plugins(&api_specs, manifest_base_path)?;
+
+    // Convert to PluginBundle
+    let plugin_bundles: Vec<PluginBundle> = resolved_plugins
+        .into_iter()
+        .map(|p| PluginBundle {
+            name: p.name,
+            version: "0.1.0".to_string(), // TODO: Get version from plugin manifest
+            plugin_type: "plugin".to_string(), // TODO: Detect type from plugin manifest
+            wasm_bytes: p.wasm_bytes,
+        })
+        .collect();
+
+    // Validate and collect operations
+    let mut operations: Vec<CompiledOperation> = Vec::new();
+    let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
+
+    for (spec, _, _) in &specs {
+        let spec_file = spec.filename.as_deref().unwrap_or("unknown");
+
+        for op in &spec.operations {
+            let key = (op.path.clone(), op.method.clone());
+            if let Some(other_spec) = seen_routes.get(&key) {
+                return Err(CompileError::RoutingConflict(format!(
+                    "{} {} declared in both '{}' and '{}'",
+                    op.method, op.path, other_spec, spec_file
+                )));
+            }
+            seen_routes.insert(key, spec_file.to_string());
+
+            let dispatch = op.dispatch.clone().ok_or_else(|| {
+                CompileError::MissingDispatch(format!(
+                    "{} {} in '{}'",
+                    op.method, op.path, spec_file
+                ))
+            })?;
+
+            // Check for plaintext HTTP upstream URLs (E1031)
+            if !options.allow_plaintext {
+                if let Some(url) = extract_upstream_url(&dispatch.config) {
+                    if url.starts_with("http://") {
+                        return Err(CompileError::PlaintextUpstream(format!(
+                            "{} {} in '{}' - upstream URL: {}",
+                            op.method, op.path, spec_file, url
+                        )));
+                    }
+                }
+            }
+
+            let middlewares = op
+                .middlewares
+                .clone()
+                .unwrap_or_else(|| spec.global_middlewares.clone());
+
+            operations.push(CompiledOperation {
+                index: operations.len(),
+                path: op.path.clone(),
+                method: op.method.clone(),
+                operation_id: op.operation_id.clone(),
+                parameters: op.parameters.clone(),
+                request_body: op.request_body.clone(),
+                dispatch,
+                middlewares,
+            });
+        }
+    }
+
+    // Build routes.json
+    let routes = CompiledRoutes { operations };
+    let routes_json = serde_json::to_string_pretty(&routes)?;
+    let routes_sha256 = compute_sha256(&routes_json);
+
+    // Build plugin metadata
+    let mut bundled_plugins = Vec::new();
+    let mut checksums = HashMap::new();
+    checksums.insert(
+        "routes.json".to_string(),
+        format!("sha256:{}", routes_sha256),
+    );
+
+    for plugin in &plugin_bundles {
+        let wasm_path = format!("plugins/{}.wasm", plugin.name);
+        let sha256 = compute_sha256_bytes(&plugin.wasm_bytes);
+
+        checksums.insert(wasm_path.clone(), format!("sha256:{}", sha256));
+
+        bundled_plugins.push(BundledPlugin {
+            name: plugin.name.clone(),
+            version: plugin.version.clone(),
+            plugin_type: plugin.plugin_type.clone(),
+            wasm_path,
+            sha256,
+        });
+    }
+
+    // Build manifest
+    let source_specs: Vec<SourceSpec> = specs
+        .iter()
+        .map(|(spec, _, sha256)| SourceSpec {
+            file: spec
+                .filename
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            sha256: sha256.clone(),
+            spec_type: match spec.format {
+                SpecFormat::OpenApi => "openapi".to_string(),
+                SpecFormat::AsyncApi => "asyncapi".to_string(),
+            },
+            version: spec.version.clone(),
+        })
+        .collect();
+
+    let manifest = Manifest {
+        barbacane_artifact_version: ARTIFACT_VERSION,
+        compiled_at: chrono_lite_now(),
+        compiler_version: COMPILER_VERSION.to_string(),
+        source_specs,
+        routes_count: routes.operations.len(),
+        checksums,
+        plugins: bundled_plugins,
+    };
+
+    let manifest_json = serde_json::to_string_pretty(&manifest)?;
+
+    // Create the .bca archive
+    let file = File::create(output)?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut archive = Builder::new(encoder);
+
+    // Add manifest.json
+    add_file_to_tar(&mut archive, "manifest.json", manifest_json.as_bytes())?;
+
+    // Add routes.json
+    add_file_to_tar(&mut archive, "routes.json", routes_json.as_bytes())?;
+
+    // Add source specs
+    for (spec, content, _) in &specs {
+        let filename = spec
+            .filename
+            .as_deref()
+            .and_then(|p| Path::new(p).file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("spec.yaml");
+        let archive_path = format!("specs/{}", filename);
+        add_file_to_tar(&mut archive, &archive_path, content.as_bytes())?;
+    }
+
+    // Add plugins
+    for plugin in &plugin_bundles {
+        let wasm_path = format!("plugins/{}.wasm", plugin.name);
+        add_file_to_tar(&mut archive, &wasm_path, &plugin.wasm_bytes)?;
     }
 
     // Finish the archive
