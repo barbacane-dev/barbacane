@@ -224,26 +224,27 @@ Policy-based authorization and secrets management for enterprise deployments.
 **Specs:** SPEC-004 (partial)
 
 ### OPA Authorization
-- [ ] `opa-authz` middleware plugin — OPA policy evaluation
-- [ ] Policy format — WASM-compiled Rego policies
-- [ ] OPA input mapping — `input.request`, `input.context`, `input.headers`
-- [ ] Policy bundling — `.wasm` policies in `policies/` directory of artifact
-- [ ] Decision output — allow/deny based on policy result
-- [ ] Authz rejection — 403 with policy violation details (dev mode)
+- [ ] `opa-authz` middleware plugin — OPA policy evaluation (deferred)
+- [ ] Policy format — WASM-compiled Rego policies (deferred)
+- [ ] OPA input mapping — `input.request`, `input.context`, `input.headers` (deferred)
+- [ ] Policy bundling — `.wasm` policies in `policies/` directory of artifact (deferred)
+- [ ] Decision output — allow/deny based on policy result (deferred)
+- [ ] Authz rejection — 403 with policy violation details (dev mode) (deferred)
 
 ### Secrets Management
-- [ ] Secret references — `env://VAR_NAME` for environment variables
-- [ ] Secret references — `file:///path/to/secret` for file-based secrets
-- [ ] Secret resolution at startup — fetch all, fail if any missing (exit code 13)
-- [ ] Host function: `host_get_secret` / `host_secret_read_result` — secret access from plugins
+- [x] Secret references — `env://VAR_NAME` for environment variables
+- [x] Secret references — `file:///path/to/secret` for file-based secrets
+- [x] Secret resolution at startup — fetch all, fail if any missing (exit code 13)
+- [x] Host function: `host_get_secret` / `host_secret_read_result` — secret access from plugins
 - [ ] Future: `vault://`, `aws-sm://`, `k8s://` references (deferred)
 
 ### Compiler Validation
-- [ ] Compiler check E1032 — OpenAPI security scheme without matching auth middleware
-- [ ] Security audit mode — warn on common misconfigurations
+- [ ] Compiler check E1032 — OpenAPI security scheme without matching auth middleware (deferred)
+- [ ] Security audit mode — warn on common misconfigurations (deferred)
 
 ### Integration
-- [ ] Integration tests — OPA allow/deny, secret resolution, missing secret error
+- [x] Integration tests — secret resolution (env and file), missing secret error (exit code 13)
+- [ ] Integration tests — OPA allow/deny (deferred)
 
 ---
 
