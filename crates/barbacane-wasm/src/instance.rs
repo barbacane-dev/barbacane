@@ -4,11 +4,15 @@
 //! plugin state required for host function calls.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use wasmtime::{Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
 
 use crate::engine::CompiledModule;
 use crate::error::WasmError;
+use crate::http_client::{
+    HttpClient, HttpRequest as HttpClientRequest, HttpResponse as HttpClientResponse,
+};
 use crate::limits::PluginLimits;
 
 /// Per-request context passed to plugins.
@@ -52,6 +56,12 @@ pub struct PluginState {
 
     /// Maximum memory in bytes.
     pub max_memory: usize,
+
+    /// HTTP client for outbound requests (shared).
+    pub http_client: Option<Arc<HttpClient>>,
+
+    /// Result buffer for host_http_read_result.
+    pub last_http_result: Option<Vec<u8>>,
 }
 
 impl PluginState {
@@ -62,6 +72,24 @@ impl PluginState {
             output_buffer: Vec::new(),
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
+            http_client: None,
+            last_http_result: None,
+        }
+    }
+
+    /// Create new plugin state with HTTP client.
+    pub fn with_http_client(
+        plugin_name: String,
+        limits: &PluginLimits,
+        http_client: Arc<HttpClient>,
+    ) -> Self {
+        Self {
+            plugin_name,
+            output_buffer: Vec::new(),
+            context: RequestContext::default(),
+            max_memory: limits.max_memory_bytes,
+            http_client: Some(http_client),
+            last_http_result: None,
         }
     }
 
@@ -119,7 +147,20 @@ impl PluginInstance {
         module: &CompiledModule,
         limits: PluginLimits,
     ) -> Result<Self, WasmError> {
-        let state = PluginState::new(module.name.clone(), &limits);
+        Self::new_with_http_client(engine, module, limits, None)
+    }
+
+    /// Create a new plugin instance with an HTTP client for outbound calls.
+    pub fn new_with_http_client(
+        engine: &Engine,
+        module: &CompiledModule,
+        limits: PluginLimits,
+        http_client: Option<Arc<HttpClient>>,
+    ) -> Result<Self, WasmError> {
+        let state = match http_client {
+            Some(client) => PluginState::with_http_client(module.name.clone(), &limits, client),
+            None => PluginState::new(module.name.clone(), &limits),
+        };
         let mut store = Store::new(engine, state);
 
         // Set fuel for execution limiting
@@ -429,8 +470,10 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 // Read data first, then mutate
                 let data = memory.data(&caller);
                 if key_end <= data.len() && val_end <= data.len() {
-                    let key_result = std::str::from_utf8(&data[key_start..key_end]).map(String::from);
-                    let val_result = std::str::from_utf8(&data[val_start..val_end]).map(String::from);
+                    let key_result =
+                        std::str::from_utf8(&data[key_start..key_end]).map(String::from);
+                    let val_result =
+                        std::str::from_utf8(&data[val_start..val_end]).map(String::from);
 
                     if let (Ok(key), Ok(value)) = (key_result, val_result) {
                         caller.data_mut().context.values.insert(key, value);
@@ -455,6 +498,136 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
             },
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_clock_now: {}", e)))?;
+
+    // host_http_call - make outbound HTTP request
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_http_call",
+            |mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = req_ptr as usize;
+                let end = start + req_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                // Parse the request JSON
+                let request: HttpClientRequest = match serde_json::from_slice(&data[start..end]) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!("failed to parse HTTP request: {}", e);
+                        return -1;
+                    }
+                };
+
+                // Get the HTTP client
+                let http_client = match caller.data().http_client.clone() {
+                    Some(c) => c,
+                    None => {
+                        tracing::error!("HTTP client not available");
+                        return -1;
+                    }
+                };
+
+                // Execute the request (blocking)
+                let response_json = match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        handle.block_on(async {
+                            match http_client.call(request).await {
+                                Ok(response) => serde_json::to_vec(&response).ok(),
+                                Err(e) => {
+                                    tracing::error!("HTTP call failed: {}", e);
+                                    // Return error response
+                                    let error_response = match e {
+                                        crate::http_client::HttpClientError::Timeout => {
+                                            HttpClientResponse::error(
+                                                504,
+                                                "urn:barbacane:error:upstream-timeout",
+                                                "Gateway Timeout",
+                                                "Upstream request timed out",
+                                            )
+                                        }
+                                        crate::http_client::HttpClientError::CircuitOpen(host) => {
+                                            HttpClientResponse::error(
+                                                503,
+                                                "urn:barbacane:error:circuit-open",
+                                                "Service Unavailable",
+                                                &format!("Circuit breaker open for {}", host),
+                                            )
+                                        }
+                                        crate::http_client::HttpClientError::ConnectionFailed(
+                                            _,
+                                        ) => HttpClientResponse::error(
+                                            502,
+                                            "urn:barbacane:error:upstream-unavailable",
+                                            "Bad Gateway",
+                                            "Failed to connect to upstream",
+                                        ),
+                                        _ => HttpClientResponse::error(
+                                            502,
+                                            "urn:barbacane:error:upstream-unavailable",
+                                            "Bad Gateway",
+                                            &e.to_string(),
+                                        ),
+                                    };
+                                    serde_json::to_vec(&error_response).ok()
+                                }
+                            }
+                        })
+                    }
+                    Err(_) => {
+                        tracing::error!("no tokio runtime available");
+                        None
+                    }
+                };
+
+                match response_json {
+                    Some(json) => {
+                        let len = json.len() as i32;
+                        caller.data_mut().last_http_result = Some(json);
+                        len
+                    }
+                    None => -1,
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_http_call: {}", e)))?;
+
+    // host_http_read_result - read HTTP response
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_http_read_result",
+            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let result = caller.data_mut().last_http_result.take();
+                if let Some(data) = result {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
+
+                    if memory
+                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
+                        .is_ok()
+                    {
+                        return copy_len as i32;
+                    }
+                }
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_http_read_result: {}", e))
+        })?;
 
     Ok(())
 }

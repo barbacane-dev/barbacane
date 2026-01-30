@@ -1,0 +1,96 @@
+openapi: "3.1.0"
+info:
+  title: Proxy Test API
+  version: "1.0.0"
+  description: Test spec for http-upstream dispatcher - proxies to httpbin.org
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Local health check (mock)
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok","service":"barbacane-proxy"}'
+
+  /proxy/{path}:
+    get:
+      operationId: proxyGet
+      summary: Proxy GET requests to httpbin.org
+      description: |
+        Forward GET requests to httpbin.org/{path}
+        Examples: /proxy/get, /proxy/headers, /proxy/ip, /proxy/user-agent
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://httpbin.org"
+          path: "/{path}"
+          timeout: 10.0
+
+    post:
+      operationId: proxyPost
+      summary: Proxy POST requests to httpbin.org
+      description: Forward POST requests with JSON body to httpbin.org/{path}
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://httpbin.org"
+          path: "/{path}"
+          timeout: 10.0
+
+  /delay/{seconds}:
+    get:
+      operationId: proxyDelay
+      summary: Test timeout handling
+      description: Proxy to httpbin.org/delay/{seconds} to test timeouts
+      parameters:
+        - name: seconds
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://httpbin.org"
+          path: "/delay/{seconds}"
+          timeout: 5.0
+
+  /status/{code}:
+    get:
+      operationId: proxyStatus
+      summary: Test status code passthrough
+      description: Proxy to httpbin.org/status/{code} to test error handling
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: integer
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://httpbin.org"
+          path: "/status/{code}"
+          timeout: 10.0

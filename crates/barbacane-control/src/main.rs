@@ -12,7 +12,11 @@ use barbacane_compiler::{compile, ARTIFACT_VERSION, COMPILER_VERSION};
 use barbacane_spec_parser::parse_spec_file;
 
 #[derive(Parser, Debug)]
-#[command(name = "barbacane-control", about = "Barbacane control plane CLI", version)]
+#[command(
+    name = "barbacane-control",
+    about = "Barbacane control plane CLI",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -106,7 +110,10 @@ fn main() -> ExitCode {
                     match e {
                         barbacane_compiler::CompileError::Parse(_)
                         | barbacane_compiler::CompileError::RoutingConflict(_)
-                        | barbacane_compiler::CompileError::MissingDispatch(_) => ExitCode::from(1),
+                        | barbacane_compiler::CompileError::MissingDispatch(_)
+                        | barbacane_compiler::CompileError::PlaintextUpstream(_) => {
+                            ExitCode::from(1)
+                        }
                         barbacane_compiler::CompileError::Io(_) => ExitCode::from(3),
                         barbacane_compiler::CompileError::Json(_) => ExitCode::from(1),
                     }

@@ -1,0 +1,53 @@
+openapi: "3.1.0"
+info:
+  title: HTTP Upstream Test API
+  version: "1.0.0"
+  description: Test spec for http-upstream dispatcher
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check (mock)
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+
+  /proxy/{path}:
+    get:
+      operationId: proxyGet
+      summary: Proxy GET request to httpbin
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://httpbin.org"
+          path: "/{path}"
+          timeout: 10.0
+    post:
+      operationId: proxyPost
+      summary: Proxy POST request to httpbin
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://httpbin.org"
+          path: "/{path}"
+          timeout: 10.0
