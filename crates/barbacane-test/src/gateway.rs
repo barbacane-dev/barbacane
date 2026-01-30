@@ -225,9 +225,23 @@ impl TestGateway {
 
             // Check if the process has exited
             if let Ok(Some(status)) = self.child.try_wait() {
+                // Try to read stderr to get the error message
+                let stderr = self
+                    .child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = String::new();
+                        use std::io::Read;
+                        let _ = s.read_to_string(&mut buf);
+                        buf
+                    })
+                    .unwrap_or_default();
+
                 return Err(TestError::StartupFailed(format!(
-                    "gateway exited with status: {}",
-                    status
+                    "gateway exited with status: {}\nstderr: {}",
+                    status,
+                    stderr.trim()
                 )));
             }
 
@@ -1114,7 +1128,10 @@ mod tests {
             .await
             .expect("failed to start gateway");
 
-        let resp = gateway.get("/query-auth?api_key=query-key-789").await.unwrap();
+        let resp = gateway
+            .get("/query-auth?api_key=query-key-789")
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
 
         let body: serde_json::Value = resp.json().await.unwrap();
@@ -1144,7 +1161,12 @@ mod tests {
 
         // Get absolute paths to plugins (relative to this test file's location)
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let plugins_dir = manifest_dir.parent().unwrap().parent().unwrap().join("plugins");
+        let plugins_dir = manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("plugins");
         let mock_path = plugins_dir.join("mock/mock.wasm");
         let oauth2_path = plugins_dir.join("oauth2-auth/oauth2-auth.wasm");
 
@@ -1245,8 +1267,8 @@ paths:
 
     #[tokio::test]
     async fn test_oauth2_auth_valid_token() {
+        use wiremock::matchers::{body_string_contains, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-        use wiremock::matchers::{method, path, body_string_contains};
 
         // Start mock introspection server
         let mock_server = MockServer::start().await;
@@ -1301,13 +1323,16 @@ paths:
         assert_eq!(resp.status(), 401);
 
         let body: serde_json::Value = resp.json().await.unwrap();
-        assert!(body["detail"].as_str().unwrap_or("").contains("Bearer token required"));
+        assert!(body["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Bearer token required"));
     }
 
     #[tokio::test]
     async fn test_oauth2_auth_inactive_token() {
-        use wiremock::{Mock, MockServer, ResponseTemplate};
         use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;
 
@@ -1341,8 +1366,8 @@ paths:
 
     #[tokio::test]
     async fn test_oauth2_auth_insufficient_scope() {
-        use wiremock::{Mock, MockServer, ResponseTemplate};
         use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;
 
@@ -1395,5 +1420,222 @@ paths:
 
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["message"], "Public access");
+    }
+
+    // ==================== Secrets Tests ====================
+
+    /// Create a temporary spec file for secrets testing using oauth2-auth.
+    /// The oauth2-auth plugin has secrets as values (client_secret), making it ideal for testing.
+    fn create_oauth2_secrets_spec(
+        temp_dir: &std::path::Path,
+        introspection_url: &str,
+        client_secret: &str,
+    ) -> std::path::PathBuf {
+        let spec_path = temp_dir.join("secrets-test.yaml");
+
+        // Get absolute paths to plugins
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let plugins_dir = manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("plugins");
+        let mock_path = plugins_dir.join("mock/mock.wasm");
+        let oauth2_path = plugins_dir.join("oauth2-auth/oauth2-auth.wasm");
+
+        // Create barbacane.yaml manifest
+        let manifest_path = temp_dir.join("barbacane.yaml");
+        let manifest_content = format!(
+            r#"plugins:
+  mock:
+    path: {}
+  oauth2-auth:
+    path: {}
+"#,
+            mock_path.display(),
+            oauth2_path.display()
+        );
+        std::fs::write(&manifest_path, manifest_content).expect("failed to write manifest");
+
+        // Create the spec with the provided client_secret (which may be a secret reference)
+        let spec_content = format!(
+            r#"openapi: "3.0.3"
+info:
+  title: Secrets Test API
+  version: "1.0.0"
+
+paths:
+  /test:
+    get:
+      summary: Test endpoint
+      operationId: test
+      x-barbacane-middlewares:
+        - name: oauth2-auth
+          config:
+            introspection_endpoint: "{}"
+            client_id: test-client
+            client_secret: "{}"
+            timeout: 5.0
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "success"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+"#,
+            introspection_url, client_secret
+        );
+
+        std::fs::write(&spec_path, spec_content).expect("failed to write spec");
+        spec_path
+    }
+
+    #[tokio::test]
+    async fn test_secrets_env_reference_resolved() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Set up environment variable for the secret
+        std::env::set_var("TEST_CLIENT_SECRET", "my-secret-value");
+
+        // Start mock introspection server
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/introspect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "active": true,
+                "sub": "user-123"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let introspection_url = format!("{}/introspect", mock_server.uri());
+        let spec_path = create_oauth2_secrets_spec(
+            temp_dir.path(),
+            &introspection_url,
+            "env://TEST_CLIENT_SECRET",
+        );
+
+        // Gateway should start successfully with the resolved secret
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway with env secret");
+
+        // Make a request with a valid token
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/test")
+            .header("Authorization", "Bearer test-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Clean up
+        std::env::remove_var("TEST_CLIENT_SECRET");
+    }
+
+    #[tokio::test]
+    async fn test_secrets_file_reference_resolved() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Start mock introspection server
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/introspect"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "active": true,
+                "sub": "user-123"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+
+        // Create a secret file
+        let secret_file = temp_dir.path().join("client-secret.txt");
+        std::fs::write(&secret_file, "file-based-secret\n").expect("failed to write secret file");
+
+        // Use file:// reference
+        let secret_ref = format!("file://{}", secret_file.display());
+        let introspection_url = format!("{}/introspect", mock_server.uri());
+        let spec_path =
+            create_oauth2_secrets_spec(temp_dir.path(), &introspection_url, &secret_ref);
+
+        // Gateway should start successfully with the resolved secret
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway with file secret");
+
+        // Make a request with a valid token
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/test")
+            .header("Authorization", "Bearer test-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_secrets_missing_env_var_fails_startup() {
+        // Make sure the env var doesn't exist
+        std::env::remove_var("NONEXISTENT_SECRET_VAR_12345");
+
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let spec_path = create_oauth2_secrets_spec(
+            temp_dir.path(),
+            "http://localhost:9999/introspect",
+            "env://NONEXISTENT_SECRET_VAR_12345",
+        );
+
+        // Gateway should fail to start
+        let result = TestGateway::from_spec(spec_path.to_str().unwrap()).await;
+        match result {
+            Ok(_) => {
+                panic!("gateway should fail with missing env var");
+            }
+            Err(e) => {
+                let err_str = format!("{}", e);
+                assert!(
+                    err_str.contains("secret")
+                        || err_str.contains("environment")
+                        || err_str.contains("not found"),
+                    "error should mention secrets or environment: {}",
+                    err_str
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_secrets_missing_file_fails_startup() {
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let spec_path = create_oauth2_secrets_spec(
+            temp_dir.path(),
+            "http://localhost:9999/introspect",
+            "file:///nonexistent/path/to/secret.txt",
+        );
+
+        // Gateway should fail to start
+        let result = TestGateway::from_spec(spec_path.to_str().unwrap()).await;
+        match result {
+            Ok(_) => panic!("gateway should fail with missing file"),
+            Err(e) => {
+                let err_str = format!("{}", e);
+                assert!(
+                    err_str.contains("secret")
+                        || err_str.contains("file")
+                        || err_str.contains("not found"),
+                    "error should mention secrets or file: {}",
+                    err_str
+                );
+            }
+        }
     }
 }

@@ -183,13 +183,6 @@ impl Gateway {
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
         let wasm_engine = Arc::new(wasm_engine);
 
-        // Create plugin instance pool with HTTP client for outbound calls
-        let plugin_pool = InstancePool::with_http_client(
-            wasm_engine.clone(),
-            plugin_limits.clone(),
-            http_client.clone(),
-        );
-
         // Load plugins from the artifact
         let bundled_plugins = load_plugins(artifact_path)
             .map_err(|e| format!("failed to load plugins from artifact: {}", e))?;
@@ -198,12 +191,67 @@ impl Gateway {
             tracing::warn!("no plugins bundled in artifact - ensure barbacane.yaml manifest was used during compilation");
         }
 
+        // Compile all plugin modules first (we'll register them after creating the final pool)
+        let mut compiled_modules = Vec::new();
         for (name, (version, wasm_bytes)) in bundled_plugins {
             let module = wasm_engine
                 .compile(&wasm_bytes, name.clone(), version.clone())
                 .map_err(|e| format!("failed to compile plugin '{}': {}", name, e))?;
-            plugin_pool.register_module(module);
+            compiled_modules.push((name, version, module));
+        }
 
+        // Collect all configs to find secret references
+        let all_configs: Vec<&serde_json::Value> = routes
+            .operations
+            .iter()
+            .flat_map(|op| {
+                let mut configs: Vec<&serde_json::Value> =
+                    op.middlewares.iter().map(|m| &m.config).collect();
+                configs.push(&op.dispatch.config);
+                configs
+            })
+            .collect();
+
+        // Debug: log all configs being checked for secrets
+        if dev_mode {
+            for config in &all_configs {
+                tracing::debug!(config = %config, "checking config for secret references");
+            }
+            let refs = all_configs
+                .iter()
+                .flat_map(|c| barbacane_wasm::collect_secret_references(c))
+                .collect::<Vec<_>>();
+            tracing::debug!(references = ?refs, "found secret references");
+        }
+
+        // Resolve all secrets
+        let secrets_store =
+            barbacane_wasm::resolve_all_secrets(&all_configs).map_err(|errors| {
+                let messages: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+                format!("failed to resolve secrets: {}", messages.join(", "))
+            })?;
+
+        // Replace secret references in route configs with resolved values
+        let mut resolved_operations = routes.operations;
+        for op in &mut resolved_operations {
+            for mw in &mut op.middlewares {
+                mw.config = barbacane_wasm::resolve_config_secrets(&mw.config, &secrets_store);
+            }
+            op.dispatch.config =
+                barbacane_wasm::resolve_config_secrets(&op.dispatch.config, &secrets_store);
+        }
+
+        // Create pool with secrets for host_get_secret calls
+        let plugin_pool = InstancePool::with_http_client_and_secrets(
+            wasm_engine.clone(),
+            plugin_limits.clone(),
+            http_client.clone(),
+            secrets_store,
+        );
+
+        // Register all compiled modules in the pool
+        for (name, version, module) in compiled_modules {
+            plugin_pool.register_module(module);
             if dev_mode {
                 tracing::debug!(plugin = %name, version = %version, "loaded plugin from artifact");
             }
@@ -212,7 +260,7 @@ impl Gateway {
         let mut router = Router::new();
         let mut validators = Vec::new();
 
-        for op in &routes.operations {
+        for op in &resolved_operations {
             router.insert(
                 &op.path,
                 &op.method,
@@ -240,7 +288,7 @@ impl Gateway {
         Ok(Gateway {
             manifest,
             router,
-            operations: routes.operations,
+            operations: resolved_operations,
             validators,
             specs,
             limits,
@@ -1202,6 +1250,10 @@ async fn run_serve(
         Ok(g) => Arc::new(g),
         Err(e) => {
             eprintln!("error: {}", e);
+            // Exit code 13 for secret resolution failures
+            if e.contains("failed to resolve secrets") {
+                return ExitCode::from(13);
+            }
             return ExitCode::from(1);
         }
     };

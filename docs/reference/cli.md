@@ -262,6 +262,19 @@ Requests exceeding limits receive an RFC 9457 problem details response:
 |------|---------|
 | 0 | Clean shutdown |
 | 1 | Startup error (artifact not found, bind failed) |
+| 11 | Plugin hash mismatch (artifact tampering detected) |
+| 13 | Secret resolution failure (missing env var or file) |
+
+Exit code 13 occurs when a secret reference in your spec cannot be resolved:
+
+```bash
+$ export OAUTH2_SECRET=""  # unset the variable
+$ unset OAUTH2_SECRET
+$ barbacane serve --artifact api.bca
+error: failed to resolve secrets: environment variable not found: OAUTH2_SECRET
+$ echo $?
+13
+```
 
 ---
 
@@ -270,6 +283,31 @@ Requests exceeding limits receive an RFC 9457 problem details response:
 | Variable | Description |
 |----------|-------------|
 | `RUST_LOG` | Override log level (e.g., `RUST_LOG=debug`) |
+
+### Secret References
+
+Dispatcher and middleware configs can reference secrets using special URI schemes. These are resolved at startup:
+
+| Scheme | Example | Description |
+|--------|---------|-------------|
+| `env://` | `env://API_KEY` | Read from environment variable |
+| `file://` | `file:///etc/secrets/key` | Read from file |
+
+Example config with secrets:
+```yaml
+x-barbacane-middlewares:
+  - name: oauth2-auth
+    config:
+      client_secret: "env://OAUTH2_SECRET"
+```
+
+Run with:
+```bash
+export OAUTH2_SECRET="my-secret-value"
+barbacane serve --artifact api.bca
+```
+
+See [Secrets Guide](../guide/secrets.md) for full documentation.
 
 ---
 

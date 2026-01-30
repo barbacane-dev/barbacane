@@ -159,6 +159,29 @@ paths:
           timeout: 10.0
 ```
 
+### Secret References
+
+Config values can reference secrets instead of hardcoding sensitive data. Secrets are resolved at gateway startup.
+
+| Scheme | Example | Description |
+|--------|---------|-------------|
+| `env://` | `env://API_KEY` | Read from environment variable |
+| `file://` | `file:///etc/secrets/key` | Read from file (content trimmed) |
+
+**Example with secret reference:**
+```yaml
+x-barbacane-dispatch:
+  name: http-upstream
+  config:
+    url: "https://api.example.com"
+    headers:
+      Authorization: "Bearer env://UPSTREAM_API_KEY"
+```
+
+If a secret cannot be resolved, the gateway fails to start with exit code 13.
+
+See [Secrets Guide](../guide/secrets.md) for full documentation.
+
 ---
 
 ## x-barbacane-middlewares
