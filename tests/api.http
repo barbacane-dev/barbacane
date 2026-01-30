@@ -145,3 +145,78 @@ POST {{baseUrl}}/users
 Content-Type: application/json
 
 {"name": "", "email": "test@example.com"}
+
+### ================================================================
+### M4: HTTP Upstream Proxy Tests
+### ================================================================
+### Usage: Start gateway with proxy.yaml:
+###   cargo build
+###   ./target/debug/barbacane compile --spec tests/fixtures/proxy.yaml --output /tmp/proxy.bca
+###   ./target/debug/barbacane serve --artifact /tmp/proxy.bca --dev
+
+### Local health check (mock dispatcher)
+GET {{baseUrl}}/health
+
+### ================================
+### Proxy to httpbin.org
+### ================================
+
+### Proxy GET - returns request info
+GET {{baseUrl}}/proxy/get
+
+### Proxy GET - returns request headers
+GET {{baseUrl}}/proxy/headers
+
+### Proxy GET - returns client IP
+GET {{baseUrl}}/proxy/ip
+
+### Proxy GET - returns user agent
+GET {{baseUrl}}/proxy/user-agent
+
+### Proxy POST - echo JSON body
+POST {{baseUrl}}/proxy/post
+Content-Type: application/json
+
+{"message": "Hello from Barbacane!", "timestamp": "2024-01-01T00:00:00Z"}
+
+### Proxy POST - complex JSON
+POST {{baseUrl}}/proxy/post
+Content-Type: application/json
+
+{
+  "user": {
+    "name": "Alice",
+    "email": "alice@example.com"
+  },
+  "items": ["apple", "banana", "cherry"],
+  "count": 3
+}
+
+### ================================
+### Status Code Passthrough
+### ================================
+
+### Upstream returns 200
+GET {{baseUrl}}/status/200
+
+### Upstream returns 201
+GET {{baseUrl}}/status/201
+
+### Upstream returns 400
+GET {{baseUrl}}/status/400
+
+### Upstream returns 404
+GET {{baseUrl}}/status/404
+
+### Upstream returns 500
+GET {{baseUrl}}/status/500
+
+### ================================
+### Timeout Testing
+### ================================
+
+### Fast response (2 seconds, within 5s timeout)
+GET {{baseUrl}}/delay/2
+
+### Slow response (6 seconds, exceeds 5s timeout -> 504)
+GET {{baseUrl}}/delay/6

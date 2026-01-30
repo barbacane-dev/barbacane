@@ -368,7 +368,10 @@ mod tests {
             .expect("failed to start gateway");
 
         // POST with body missing required 'name' field
-        let resp = gateway.post("/users", r#"{"email":"test@example.com"}"#).await.unwrap();
+        let resp = gateway
+            .post("/users", r#"{"email":"test@example.com"}"#)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 400);
 
         let body: serde_json::Value = resp.json().await.unwrap();
@@ -382,7 +385,13 @@ mod tests {
             .expect("failed to start gateway");
 
         // POST with valid body
-        let resp = gateway.post("/users", r#"{"name":"Test User","email":"test@example.com"}"#).await.unwrap();
+        let resp = gateway
+            .post(
+                "/users",
+                r#"{"name":"Test User","email":"test@example.com"}"#,
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 201);
     }
 
@@ -393,7 +402,10 @@ mod tests {
             .expect("failed to start gateway");
 
         // PUT without required X-Request-ID header
-        let resp = gateway.put("/users/123", r#"{"name":"Updated"}"#).await.unwrap();
+        let resp = gateway
+            .put("/users/123", r#"{"name":"Updated"}"#)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 400);
 
         let body: serde_json::Value = resp.json().await.unwrap();
@@ -408,7 +420,11 @@ mod tests {
 
         // PUT with required X-Request-ID header
         let resp = gateway
-            .put_with_headers("/users/123", r#"{"name":"Updated"}"#, &[("X-Request-ID", "abc-123")])
+            .put_with_headers(
+                "/users/123",
+                r#"{"name":"Updated"}"#,
+                &[("X-Request-ID", "abc-123")],
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
@@ -468,7 +484,10 @@ mod tests {
             .expect("failed to start gateway");
 
         // Valid email format
-        let resp = gateway.post("/users", r#"{"name":"Test","email":"user@example.com"}"#).await.unwrap();
+        let resp = gateway
+            .post("/users", r#"{"name":"Test","email":"user@example.com"}"#)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 201);
     }
 
@@ -479,7 +498,10 @@ mod tests {
             .expect("failed to start gateway");
 
         // Invalid email format
-        let resp = gateway.post("/users", r#"{"name":"Test","email":"not-an-email"}"#).await.unwrap();
+        let resp = gateway
+            .post("/users", r#"{"name":"Test","email":"not-an-email"}"#)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 400);
 
         let body: serde_json::Value = resp.json().await.unwrap();
@@ -493,7 +515,10 @@ mod tests {
             .expect("failed to start gateway");
 
         // Valid UUID format
-        let resp = gateway.get("/users/550e8400-e29b-41d4-a716-446655440000").await.unwrap();
+        let resp = gateway
+            .get("/users/550e8400-e29b-41d4-a716-446655440000")
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
     }
 
@@ -522,7 +547,10 @@ mod tests {
             .expect("failed to start gateway");
 
         // Small body should succeed
-        let resp = gateway.post("/users", r#"{"name":"Test","email":"test@example.com"}"#).await.unwrap();
+        let resp = gateway
+            .post("/users", r#"{"name":"Test","email":"test@example.com"}"#)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 201);
     }
 
@@ -553,5 +581,71 @@ mod tests {
                 // early. The exact error depends on timing and OS behavior.
             }
         }
+    }
+
+    // ========================
+    // M4: HTTP Upstream Tests
+    // ========================
+
+    #[tokio::test]
+    async fn test_http_upstream_get() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/http-upstream.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Proxy GET request to httpbin.org/get
+        let resp = gateway.get("/proxy/get").await.unwrap();
+
+        // httpbin.org/get returns 200 with JSON containing request details
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(
+            body.get("url").is_some(),
+            "response should contain url field"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_http_upstream_post() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/http-upstream.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Proxy POST request to httpbin.org/post
+        let resp = gateway
+            .post("/proxy/post", r#"{"test":"data"}"#)
+            .await
+            .unwrap();
+
+        // httpbin.org/post returns 200 with JSON containing request details
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(
+            body.get("json").is_some(),
+            "response should contain json field"
+        );
+        assert_eq!(body["json"]["test"], "data");
+    }
+
+    #[tokio::test]
+    async fn test_http_upstream_headers_forwarded() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/http-upstream.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // httpbin.org/headers returns the request headers
+        let resp = gateway.get("/proxy/headers").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let headers = &body["headers"];
+
+        // Should have X-Forwarded-Host header
+        assert!(
+            headers.get("X-Forwarded-Host").is_some() || headers.get("x-forwarded-host").is_some(),
+            "should forward X-Forwarded-Host header"
+        );
     }
 }

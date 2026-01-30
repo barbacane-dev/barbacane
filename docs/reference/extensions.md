@@ -101,18 +101,17 @@ x-barbacane-dispatch:
     body: string      # Response body (default: "")
 ```
 
-### Dispatcher: `http`
+### Dispatcher: `http-upstream`
 
-Proxies to HTTP backend.
+Reverse proxy to HTTP/HTTPS backend.
 
 ```yaml
 x-barbacane-dispatch:
-  name: http
+  name: http-upstream
   config:
-    upstream: string    # Required. Upstream name
-    path: string        # Optional. Backend path (default: operation path)
-    method: string      # Optional. HTTP method (default: operation method)
-    timeout: duration   # Optional. Override timeout
+    url: string       # Required. Base URL (HTTPS required in production)
+    path: string      # Optional. Upstream path template (default: operation path)
+    timeout: number   # Optional. Timeout in seconds (default: 30.0)
 ```
 
 ### Examples
@@ -129,29 +128,35 @@ paths:
           body: '{"status":"ok"}'
 ```
 
-**HTTP proxy:**
+**HTTP upstream proxy:**
 ```yaml
 paths:
   /users/{id}:
     get:
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: user-service
-          path: /api/v2/users/{id}
+          url: "https://user-service.internal"
+          path: "/api/v2/users/{id}"
 ```
 
-**HTTP proxy with method override:**
+**Wildcard proxy:**
 ```yaml
 paths:
-  /legacy/{id}:
-    delete:
+  /proxy/{path}:
+    get:
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: legacy-api
-          path: /resource/{id}/remove
-          method: POST
+          url: "https://backend.internal"
+          path: "/{path}"
+          timeout: 10.0
 ```
 
 ---
@@ -209,9 +214,9 @@ paths:
     get:
       # Inherits all global middlewares
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
 ```
 
 **Operation-specific middlewares:**
@@ -225,9 +230,9 @@ paths:
             required: true
             scopes: ["admin:read"]
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
 ```
 
 **Override global config:**
@@ -247,9 +252,9 @@ paths:
           config:
             requests_per_minute: 1000
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
 ```
 
 ---
@@ -375,9 +380,9 @@ paths:
           config:
             ttl: 60
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: main-backend
+          url: "https://api.example.com"
           path: /api/users
       responses:
         "200":
@@ -387,9 +392,9 @@ paths:
     get:
       operationId: getUser
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: main-backend
+          url: "https://api.example.com"
           path: /api/users/{id}
       parameters:
         - name: id
@@ -414,9 +419,9 @@ paths:
           config:
             requests_per_minute: 50
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: main-backend
+          url: "https://api.example.com"
           path: /api/admin/users
       responses:
         "200":

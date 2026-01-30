@@ -94,14 +94,17 @@ impl PluginRef {
 /// Parse a version constraint string.
 fn parse_version_constraint(s: &str) -> Result<VersionConstraint, VersionError> {
     // Check for range prefixes
-    if s.starts_with('^') || s.starts_with('~') || s.starts_with('>') || s.starts_with('<') || s.starts_with('=')
+    if s.starts_with('^')
+        || s.starts_with('~')
+        || s.starts_with('>')
+        || s.starts_with('<')
+        || s.starts_with('=')
     {
         let req = VersionReq::parse(s).map_err(|e| VersionError::InvalidRange(e.to_string()))?;
         Ok(VersionConstraint::Range(req))
     } else {
         // Try parsing as exact version
-        let version =
-            Version::parse(s).map_err(|e| VersionError::InvalidVersion(e.to_string()))?;
+        let version = Version::parse(s).map_err(|e| VersionError::InvalidVersion(e.to_string()))?;
         Ok(VersionConstraint::Exact(version))
     }
 }

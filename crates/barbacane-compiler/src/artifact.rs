@@ -18,6 +18,14 @@ use crate::error::CompileError;
 /// Current artifact format version.
 pub const ARTIFACT_VERSION: u32 = 1;
 
+/// Options for compilation.
+#[derive(Debug, Clone, Default)]
+pub struct CompileOptions {
+    /// Allow plaintext HTTP upstream URLs (development only).
+    /// If false, compilation fails with E1031 for http:// URLs.
+    pub allow_plaintext: bool,
+}
+
 /// Compiler version (from Cargo.toml).
 pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -86,7 +94,18 @@ pub struct CompiledOperation {
 }
 
 /// Compile one or more spec files into a .bca artifact.
+///
+/// Uses default options (plaintext http:// URLs are not allowed).
 pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileError> {
+    compile_with_options(spec_paths, output, &CompileOptions::default())
+}
+
+/// Compile one or more spec files into a .bca artifact with options.
+pub fn compile_with_options(
+    spec_paths: &[&Path],
+    output: &Path,
+    options: &CompileOptions,
+) -> Result<Manifest, CompileError> {
     // Parse all specs
     let mut specs: Vec<(ApiSpec, String, String)> = Vec::new(); // (spec, content, sha256)
 
@@ -123,6 +142,18 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
                 ))
             })?;
 
+            // Check for plaintext HTTP upstream URLs (E1031)
+            if !options.allow_plaintext {
+                if let Some(url) = extract_upstream_url(&dispatch.config) {
+                    if url.starts_with("http://") {
+                        return Err(CompileError::PlaintextUpstream(format!(
+                            "{} {} in '{}' - upstream URL: {}",
+                            op.method, op.path, spec_file, url
+                        )));
+                    }
+                }
+            }
+
             // Resolve middleware chain: operation-level overrides global
             let middlewares = op
                 .middlewares
@@ -151,7 +182,10 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
     let source_specs: Vec<SourceSpec> = specs
         .iter()
         .map(|(spec, _, sha256)| SourceSpec {
-            file: spec.filename.clone().unwrap_or_else(|| "unknown".to_string()),
+            file: spec
+                .filename
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
             sha256: sha256.clone(),
             spec_type: match spec.format {
                 SpecFormat::OpenApi => "openapi".to_string(),
@@ -162,7 +196,10 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
         .collect();
 
     let mut checksums = HashMap::new();
-    checksums.insert("routes.json".to_string(), format!("sha256:{}", routes_sha256));
+    checksums.insert(
+        "routes.json".to_string(),
+        format!("sha256:{}", routes_sha256),
+    );
 
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
@@ -281,7 +318,9 @@ pub fn load_specs(artifact_path: &Path) -> Result<HashMap<String, String>, Compi
 
 /// Load all bundled plugins from a .bca artifact.
 /// Returns a map of plugin name -> (version, WASM bytes).
-pub fn load_plugins(artifact_path: &Path) -> Result<HashMap<String, (String, Vec<u8>)>, CompileError> {
+pub fn load_plugins(
+    artifact_path: &Path,
+) -> Result<HashMap<String, (String, Vec<u8>)>, CompileError> {
     // First load manifest to get plugin metadata
     let manifest = load_manifest(artifact_path)?;
 
@@ -390,7 +429,10 @@ pub fn compile_with_plugins(
     // Build plugin metadata
     let mut bundled_plugins = Vec::new();
     let mut checksums = HashMap::new();
-    checksums.insert("routes.json".to_string(), format!("sha256:{}", routes_sha256));
+    checksums.insert(
+        "routes.json".to_string(),
+        format!("sha256:{}", routes_sha256),
+    );
 
     for plugin in plugins {
         let wasm_path = format!("plugins/{}.wasm", plugin.name);
@@ -411,7 +453,10 @@ pub fn compile_with_plugins(
     let source_specs: Vec<SourceSpec> = specs
         .iter()
         .map(|(spec, _, sha256)| SourceSpec {
-            file: spec.filename.clone().unwrap_or_else(|| "unknown".to_string()),
+            file: spec
+                .filename
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
             sha256: sha256.clone(),
             spec_type: match spec.format {
                 SpecFormat::OpenApi => "openapi".to_string(),
@@ -554,6 +599,28 @@ fn chrono_lite_now() -> String {
 
 fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Extract upstream URL from dispatch config, if present.
+///
+/// Looks for common URL fields in the dispatch config:
+/// - `url` (e.g., for http-upstream dispatcher)
+/// - `upstream` (alternative field name)
+fn extract_upstream_url(config: &serde_json::Value) -> Option<String> {
+    // Check for "url" field
+    if let Some(url) = config.get("url").and_then(|v| v.as_str()) {
+        return Some(url.to_string());
+    }
+
+    // Check for "upstream" field (which could be a URL or a name)
+    if let Some(upstream) = config.get("upstream").and_then(|v| v.as_str()) {
+        // Only return if it looks like a URL
+        if upstream.starts_with("http://") || upstream.starts_with("https://") {
+            return Some(upstream.to_string());
+        }
+    }
+
+    None
 }
 
 // Need to add hex encoding manually since we don't have the hex crate
@@ -728,6 +795,66 @@ paths:
     }
 
     #[test]
+    fn compile_rejects_plaintext_http_url() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /proxy:
+    get:
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://backend.internal:8080/api"
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        // Default options reject plaintext HTTP
+        let result = compile(&[spec_path.as_path()], &output_path);
+        assert!(matches!(result, Err(CompileError::PlaintextUpstream(_))));
+
+        // With allow_plaintext, it should succeed
+        let result = compile_with_options(
+            &[spec_path.as_path()],
+            &output_path,
+            &CompileOptions {
+                allow_plaintext: true,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn compile_allows_https_url() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /proxy:
+    get:
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://backend.internal:8080/api"
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        // HTTPS should be allowed by default
+        let result = compile(&[spec_path.as_path()], &output_path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn compile_with_bundled_plugins() {
         let temp = TempDir::new().unwrap();
 
@@ -758,7 +885,8 @@ paths:
             wasm_bytes: fake_wasm.clone(),
         }];
 
-        let manifest = compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
+        let manifest =
+            compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
 
         assert_eq!(manifest.plugins.len(), 1);
         assert_eq!(manifest.plugins[0].name, "test-plugin");

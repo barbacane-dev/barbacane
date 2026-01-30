@@ -9,31 +9,37 @@ use crate::model::{
 };
 
 /// HTTP methods we recognize in OpenAPI paths.
-const HTTP_METHODS: &[&str] = &["get", "post", "put", "delete", "patch", "head", "options", "trace"];
+const HTTP_METHODS: &[&str] = &[
+    "get", "post", "put", "delete", "patch", "head", "options", "trace",
+];
 
 /// Parse an OpenAPI or AsyncAPI spec from a YAML/JSON string.
 pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     // Parse YAML (also handles JSON since JSON is valid YAML)
-    let root: Value = serde_yaml::from_str(input)
-        .map_err(|e| ParseError::ParseError(e.to_string()))?;
+    let root: Value =
+        serde_yaml::from_str(input).map_err(|e| ParseError::ParseError(e.to_string()))?;
 
-    let root_obj = root.as_object()
+    let root_obj = root
+        .as_object()
         .ok_or_else(|| ParseError::ParseError("spec root must be an object".into()))?;
 
     // Detect format
     let (format, version) = detect_format(root_obj)?;
 
     // Extract info
-    let info = root_obj.get("info")
+    let info = root_obj
+        .get("info")
         .and_then(|v| v.as_object())
         .ok_or_else(|| ParseError::SchemaError("missing 'info' object".into()))?;
 
-    let title = info.get("title")
+    let title = info
+        .get("title")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ParseError::SchemaError("missing 'info.title'".into()))?
         .to_string();
 
-    let api_version = info.get("version")
+    let api_version = info
+        .get("version")
         .and_then(|v| v.as_str())
         .unwrap_or("0.0.0")
         .to_string();
@@ -66,26 +72,31 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
 pub fn parse_spec_file(path: &std::path::Path) -> Result<ApiSpec, ParseError> {
     let content = std::fs::read_to_string(path)?;
     let mut spec = parse_spec(&content)?;
-    spec.filename = path.file_name()
+    spec.filename = path
+        .file_name()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string());
     Ok(spec)
 }
 
 /// Detect whether this is OpenAPI or AsyncAPI and extract the version.
-fn detect_format(root: &serde_json::Map<String, Value>) -> Result<(SpecFormat, String), ParseError> {
+fn detect_format(
+    root: &serde_json::Map<String, Value>,
+) -> Result<(SpecFormat, String), ParseError> {
     if let Some(version) = root.get("openapi").and_then(|v| v.as_str()) {
         if !version.starts_with("3.") {
-            return Err(ParseError::SchemaError(
-                format!("unsupported OpenAPI version: {} (only 3.x supported)", version)
-            ));
+            return Err(ParseError::SchemaError(format!(
+                "unsupported OpenAPI version: {} (only 3.x supported)",
+                version
+            )));
         }
         Ok((SpecFormat::OpenApi, version.to_string()))
     } else if let Some(version) = root.get("asyncapi").and_then(|v| v.as_str()) {
         if !version.starts_with("3.") {
-            return Err(ParseError::SchemaError(
-                format!("unsupported AsyncAPI version: {} (only 3.x supported)", version)
-            ));
+            return Err(ParseError::SchemaError(format!(
+                "unsupported AsyncAPI version: {} (only 3.x supported)",
+                version
+            )));
         }
         Ok((SpecFormat::AsyncApi, version.to_string()))
     } else {
@@ -120,7 +131,9 @@ fn extract_dispatch(obj: &serde_json::Map<String, Value>) -> Option<DispatchConf
 }
 
 /// Parse OpenAPI 3.x paths into operations.
-fn parse_openapi_paths(root: &serde_json::Map<String, Value>) -> Result<Vec<Operation>, ParseError> {
+fn parse_openapi_paths(
+    root: &serde_json::Map<String, Value>,
+) -> Result<Vec<Operation>, ParseError> {
     let mut operations = Vec::new();
 
     let paths = match root.get("paths").and_then(|v| v.as_object()) {
@@ -129,26 +142,29 @@ fn parse_openapi_paths(root: &serde_json::Map<String, Value>) -> Result<Vec<Oper
     };
 
     for (path, path_item) in paths {
-        let path_obj = path_item.as_object()
-            .ok_or_else(|| ParseError::SchemaError(
-                format!("path item for '{}' must be an object", path)
-            ))?;
+        let path_obj = path_item.as_object().ok_or_else(|| {
+            ParseError::SchemaError(format!("path item for '{}' must be an object", path))
+        })?;
 
         // Path-level parameters (inherited by all operations)
         let path_params = parse_parameters(path_obj);
 
         for method in HTTP_METHODS {
             if let Some(op_value) = path_obj.get(*method) {
-                let op_obj = op_value.as_object()
-                    .ok_or_else(|| ParseError::SchemaError(
-                        format!("operation {} {} must be an object", method.to_uppercase(), path)
-                    ))?;
+                let op_obj = op_value.as_object().ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "operation {} {} must be an object",
+                        method.to_uppercase(),
+                        path
+                    ))
+                })?;
 
                 // Merge path-level and operation-level parameters
                 let mut params = path_params.clone();
                 params.extend(parse_parameters(op_obj));
 
-                let operation_id = op_obj.get("operationId")
+                let operation_id = op_obj
+                    .get("operationId")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
@@ -192,7 +208,8 @@ fn parse_parameters(obj: &serde_json::Map<String, Value>) -> Vec<Parameter> {
                     Some(Parameter {
                         name: param_obj.get("name")?.as_str()?.to_string(),
                         location: param_obj.get("in")?.as_str()?.to_string(),
-                        required: param_obj.get("required")
+                        required: param_obj
+                            .get("required")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false),
                         schema: param_obj.get("schema").cloned(),
@@ -216,20 +233,17 @@ fn parse_request_body(obj: &serde_json::Map<String, Value>) -> Option<RequestBod
 
     let mut content = BTreeMap::new();
     for (media_type, media_obj) in content_obj {
-        let schema = media_obj
-            .as_object()
-            .and_then(|o| o.get("schema").cloned());
-        content.insert(
-            media_type.clone(),
-            ContentSchema { schema },
-        );
+        let schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
+        content.insert(media_type.clone(), ContentSchema { schema });
     }
 
     Some(RequestBody { required, content })
 }
 
 /// Parse AsyncAPI 3.x channels into operations (stub for M9).
-fn parse_asyncapi_channels(_root: &serde_json::Map<String, Value>) -> Result<Vec<Operation>, ParseError> {
+fn parse_asyncapi_channels(
+    _root: &serde_json::Map<String, Value>,
+) -> Result<Vec<Operation>, ParseError> {
     // AsyncAPI support is M9, return empty for now
     Ok(Vec::new())
 }
@@ -379,7 +393,9 @@ paths:
         let spec = parse_spec(yaml).unwrap();
         assert_eq!(spec.operations.len(), 2);
 
-        let methods: Vec<&str> = spec.operations.iter()
+        let methods: Vec<&str> = spec
+            .operations
+            .iter()
             .map(|op| op.method.as_str())
             .collect();
         assert!(methods.contains(&"GET"));

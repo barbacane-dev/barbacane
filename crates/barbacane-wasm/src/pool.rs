@@ -118,8 +118,7 @@ impl InstancePool {
             .ok_or_else(|| WasmError::InitFailed(format!("config not found for: {}", key.name)))?;
 
         // Create a new instance
-        let mut instance =
-            PluginInstance::new(self.engine.engine(), &module, self.limits.clone())?;
+        let mut instance = PluginInstance::new(self.engine.engine(), &module, self.limits.clone())?;
 
         // Initialize with config
         let result = instance.init(&config_json)?;

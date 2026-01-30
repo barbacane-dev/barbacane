@@ -91,25 +91,34 @@ The extensibility layer. Plugins are loaded as WASM modules with sandboxed execu
 
 ---
 
-## M4 — Built-in Dispatchers
+## M4 — Built-in Dispatchers 🚧
 
 Move dispatchers from hardcoded to WASM plugins. Add real HTTP upstream proxying.
 
 **Specs:** SPEC-002 (section 4.7), SPEC-004 (section 3)
 
-- [ ] `http-upstream` dispatcher — reverse proxy via `host_http_call`
-- [ ] Host function: `host_http_call` / `host_http_read_result` — outbound HTTP requests
-- [ ] Upstream TLS — rustls for egress, system CA roots by default
-- [ ] Upstream mTLS — `tls.client_cert`, `tls.client_key`, `tls.ca` config
-- [ ] `--allow-plaintext-upstream` flag — dev only, refused in production builds
-- [ ] Compiler check E1031 — reject `http://` upstream URLs in production mode
-- [ ] Connection pooling — reuse connections to the same upstream host
-- [ ] Timeouts — per-dispatch `timeout` config
-- [ ] Circuit breaker — `threshold` and `window` config, 503 when open
-- [ ] `mock` dispatcher — static response from config (as WASM plugin)
+### HTTP Client Infrastructure
+- [x] Connection pooling — reuse connections to the same upstream host (reqwest)
+- [x] Upstream TLS — rustls for egress, system CA roots by default
+- [x] Circuit breaker — `threshold` and `window` config, 503 when open
+- [x] Timeouts — per-dispatch `timeout` config
+- [x] Dispatch error responses — 502, 503, 504 with RFC 9457 format
+
+### Host Functions
+- [x] Host function: `host_http_call` / `host_http_read_result` — outbound HTTP requests
+
+### Dispatchers
+- [x] `http-upstream` dispatcher — reverse proxy (built-in, uses `url`, `path`, `timeout` config)
+- [ ] `mock` dispatcher — static response from config (as WASM plugin, currently hardcoded)
 - [ ] `lambda` dispatcher — invoke AWS Lambda via `host_http_call`
-- [ ] Dispatch error responses — 502, 503, 504 with RFC 9457 format
-- [ ] Integration tests — upstream proxying, timeout, circuit breaker, mock responses
+
+### Compiler & CLI
+- [x] Compiler check E1031 — reject `http://` upstream URLs in production mode
+- [x] `--allow-plaintext-upstream` flag — dev only
+
+### Remaining
+- [ ] Upstream mTLS — `tls.client_cert`, `tls.client_key`, `tls.ca` config
+- [x] Integration tests — upstream proxying (httpbin.org tests)
 
 ---
 

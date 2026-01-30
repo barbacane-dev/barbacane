@@ -76,10 +76,7 @@ impl Router {
     /// Method should be uppercase.
     pub fn lookup(&self, path: &str, method: &str) -> RouteMatch {
         let normalized = normalize_path(path);
-        let segments: Vec<&str> = normalized
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
+        let segments: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
 
         let mut params = Vec::new();
         match self.traverse_and_match(&self.root, &segments, &mut params) {
@@ -107,11 +104,7 @@ impl Router {
 
         for segment in segments {
             current = match segment {
-                Segment::Static(name) => {
-                    current.static_children
-                        .entry(name.clone())
-                        .or_default()
-                }
+                Segment::Static(name) => current.static_children.entry(name.clone()).or_default(),
                 Segment::Param(name) => {
                     if current.param_child.is_none() {
                         current.param_child = Some(Box::new(ParamNode {
@@ -268,15 +261,22 @@ mod tests {
     #[test]
     fn route_with_multiple_parameters() {
         let mut router = Router::new();
-        router.insert("/users/{userId}/orders/{orderId}", "GET", RouteEntry { operation_index: 0 });
+        router.insert(
+            "/users/{userId}/orders/{orderId}",
+            "GET",
+            RouteEntry { operation_index: 0 },
+        );
 
         match router.lookup("/users/42/orders/99", "GET") {
             RouteMatch::Found { entry, params } => {
                 assert_eq!(entry.operation_index, 0);
-                assert_eq!(params, vec![
-                    ("userId".to_string(), "42".to_string()),
-                    ("orderId".to_string(), "99".to_string()),
-                ]);
+                assert_eq!(
+                    params,
+                    vec![
+                        ("userId".to_string(), "42".to_string()),
+                        ("orderId".to_string(), "99".to_string()),
+                    ]
+                );
             }
             _ => panic!("expected Found"),
         }

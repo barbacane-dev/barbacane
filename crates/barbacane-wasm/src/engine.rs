@@ -89,8 +89,8 @@ impl WasmEngine {
         name: String,
         version: String,
     ) -> Result<CompiledModule, WasmError> {
-        let module =
-            Module::new(&self.engine, wasm_bytes).map_err(|e| WasmError::Compilation(e.to_string()))?;
+        let module = Module::new(&self.engine, wasm_bytes)
+            .map_err(|e| WasmError::Compilation(e.to_string()))?;
 
         Ok(CompiledModule {
             module,
@@ -103,7 +103,8 @@ impl WasmEngine {
     ///
     /// This is faster than full compilation and useful for quick validation.
     pub fn validate(&self, wasm_bytes: &[u8]) -> Result<(), WasmError> {
-        Module::validate(&self.engine, wasm_bytes).map_err(|e| WasmError::Compilation(e.to_string()))
+        Module::validate(&self.engine, wasm_bytes)
+            .map_err(|e| WasmError::Compilation(e.to_string()))
     }
 }
 
