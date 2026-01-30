@@ -11,6 +11,9 @@ members = [
     "crates/barbacane-wasm",
     "crates/barbacane-test",
 ]
+exclude = [
+    "plugins/mock",
+]
 resolver = "2"
 
 [workspace.package]
@@ -60,6 +63,7 @@ jsonschema = "0.26"
 
 # WASM runtime
 wasmtime = { version = "28", features = ["async", "cranelift", "pooling-allocator"] }
+wasmtime-wasi = { version = "28" }
 
 # Plugin manifest
 toml = "0.8"

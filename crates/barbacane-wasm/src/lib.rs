@@ -30,14 +30,17 @@ pub use error::WasmError;
 pub use instance::{PluginInstance, RequestContext};
 pub use limits::PluginLimits;
 pub use manifest::{Capabilities, PluginManifest, PluginMeta, PluginType};
-pub use pool::InstancePool;
+pub use pool::{InstanceKey, InstancePool};
 pub use schema::ConfigSchema;
 pub use trap::{TrapContext, TrapResult};
 pub use validate::{validate_exports, validate_imports};
 
 // HTTP client for host_http_call
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
-pub use http_client::{HttpClient, HttpClientConfig, HttpClientError, HttpRequest, HttpResponse};
+pub use http_client::{
+    HttpClient, HttpClientConfig, HttpClientError, HttpRequest, HttpResponse, TlsConfig,
+    TlsConfigError,
+};
 
 /// Re-export plugin SDK types for convenience.
 pub use barbacane_plugin_sdk::prelude::{Action, Request, Response};

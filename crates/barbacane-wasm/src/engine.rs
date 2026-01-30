@@ -41,8 +41,9 @@ impl WasmEngine {
     pub fn with_limits(limits: PluginLimits) -> Result<Self, WasmError> {
         let mut config = Config::new();
 
-        // Enable async support for async host functions
-        config.async_support(true);
+        // Disable async support for now - we use synchronous instantiation
+        // Can re-enable when we need async host functions
+        config.async_support(false);
 
         // Use Cranelift for AOT compilation with speed optimization
         config.cranelift_opt_level(OptLevel::Speed);

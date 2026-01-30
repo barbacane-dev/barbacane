@@ -18,7 +18,7 @@ paths:
 
 ### mock
 
-Returns static responses. Useful for health checks, stubs, and testing.
+Returns static responses. Useful for health checks, stubs, and testing. Implemented as a WASM plugin.
 
 ```yaml
 x-barbacane-dispatch:
@@ -34,6 +34,8 @@ x-barbacane-dispatch:
 |----------|------|---------|-------------|
 | `status` | integer | 200 | HTTP status code |
 | `body` | string | `""` | Response body |
+| `headers` | object | `{}` | Additional response headers |
+| `content_type` | string | `"application/json"` | Content-Type header value |
 
 #### Examples
 
@@ -63,6 +65,19 @@ x-barbacane-dispatch:
     status: 204
 ```
 
+**Custom headers:**
+```yaml
+x-barbacane-dispatch:
+  name: mock
+  config:
+    status: 200
+    body: '<html><body>Hello</body></html>'
+    content_type: 'text/html'
+    headers:
+      X-Custom-Header: 'custom-value'
+      Cache-Control: 'no-cache'
+```
+
 ### http-upstream
 
 Reverse proxy to an HTTP/HTTPS upstream backend. Supports connection pooling, circuit breakers, and automatic TLS.
@@ -83,6 +98,36 @@ x-barbacane-dispatch:
 | `url` | string | Yes | - | Base URL of the upstream (must be HTTPS in production) |
 | `path` | string | No | Same as operation path | Upstream path template with `{param}` substitution |
 | `timeout` | number | No | 30.0 | Request timeout in seconds |
+| `tls` | object | No | - | TLS configuration for mTLS (see below) |
+
+##### TLS Configuration (mTLS)
+
+For upstreams that require mutual TLS (client certificate authentication):
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `tls.client_cert` | string | If mTLS | Path to PEM-encoded client certificate |
+| `tls.client_key` | string | If mTLS | Path to PEM-encoded client private key |
+| `tls.ca` | string | No | Path to PEM-encoded CA certificate for server verification |
+
+**Example with mTLS:**
+
+```yaml
+x-barbacane-dispatch:
+  name: http-upstream
+  config:
+    url: "https://secure-backend.internal"
+    tls:
+      client_cert: "/etc/barbacane/certs/client.crt"
+      client_key: "/etc/barbacane/certs/client.key"
+      ca: "/etc/barbacane/certs/ca.crt"
+```
+
+**Notes:**
+- Both `client_cert` and `client_key` must be specified together
+- Certificate files must be in PEM format
+- The `ca` option adds a custom CA for server verification (in addition to system roots)
+- TLS-configured clients are cached and reused across requests
 
 #### Path Parameters
 
@@ -169,14 +214,18 @@ The dispatcher returns RFC 9457 error responses:
 - **HTTPS required in production**: `http://` URLs are rejected by the compiler (E1031)
 - **Development mode**: Use `--allow-plaintext-upstream` flag to allow `http://` URLs
 - **TLS**: Uses rustls with system CA roots by default
+- **mTLS**: Configure `tls.client_cert` and `tls.client_key` for mutual TLS authentication
+- **Custom CA**: Use `tls.ca` to add a custom CA certificate for private PKI
 
 ---
 
-## Plugin Dispatchers (Future)
+## Custom WASM Dispatchers
 
-Custom dispatchers can be implemented as WASM plugins.
+Custom dispatchers can be implemented as WASM plugins using the Plugin SDK. The `mock` dispatcher is an example of a WASM-based dispatcher.
 
-### Example: gRPC Dispatcher
+### Planned Dispatchers
+
+#### gRPC Dispatcher
 
 ```yaml
 x-barbacane-dispatch:
@@ -187,7 +236,7 @@ x-barbacane-dispatch:
     method: GetUser
 ```
 
-### Example: GraphQL Dispatcher
+#### GraphQL Dispatcher
 
 ```yaml
 x-barbacane-dispatch:
@@ -204,7 +253,7 @@ x-barbacane-dispatch:
       }
 ```
 
-### Example: Lambda Dispatcher
+#### Lambda Dispatcher
 
 ```yaml
 x-barbacane-dispatch:
