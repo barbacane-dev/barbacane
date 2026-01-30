@@ -196,10 +196,10 @@ Additional authentication methods for diverse integration patterns.
 **Specs:** SPEC-004 (partial)
 
 ### API Key Authentication
-- [ ] `apikey-auth` middleware plugin — API key validation
-- [ ] Key extraction — header (`X-API-Key`), query param, or custom location
-- [ ] Key store — in-memory map loaded from config or file
-- [ ] Context output — `context:auth.key_id`, `context:auth.key_name`
+- [x] `apikey-auth` middleware plugin — API key validation
+- [x] Key extraction — header (`X-API-Key`), query param, or custom location
+- [x] Key store — in-memory map loaded from config
+- [x] Context output — `x-auth-key-id`, `x-auth-key-name`, `x-auth-key-scopes` headers
 
 ### OAuth2 Token Introspection
 - [ ] `oauth2-auth` middleware plugin — token introspection (RFC 7662)
@@ -211,7 +211,8 @@ Additional authentication methods for diverse integration patterns.
 
 ### Integration
 - [ ] Multiple auth methods — chain multiple auth middlewares
-- [ ] Integration tests — API key validation, OAuth2 introspection
+- [x] Integration tests — API key validation (6 tests)
+- [ ] Integration tests — OAuth2 introspection
 
 ---
 

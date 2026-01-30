@@ -326,7 +326,7 @@ impl Gateway {
                     return Ok(self.validation_error_response(&errors));
                 }
 
-                self.dispatch(operation, params, &body_bytes, &headers)
+                self.dispatch(operation, params, query_string, &body_bytes, &headers)
                     .await
             }
             RouteMatch::MethodNotAllowed { allowed } => {
@@ -341,6 +341,7 @@ impl Gateway {
         &self,
         operation: &CompiledOperation,
         params: Vec<(String, String)>,
+        query_string: Option<String>,
         request_body: &[u8],
         headers: &HashMap<String, String>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
@@ -355,7 +356,7 @@ impl Gateway {
         let plugin_request = barbacane_wasm::Request {
             method: operation.method.clone(),
             path: operation.path.clone(),
-            query: None, // TODO: pass query string
+            query: query_string,
             headers: headers_btree,
             body: if request_body.is_empty() {
                 None
