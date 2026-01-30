@@ -85,8 +85,8 @@ The extensibility layer. Plugins are loaded as WASM modules with sandboxed execu
 ### CLI & Bundling
 - [x] Plugin version resolution — `name`, `name@1.0.0`, `name@^1.0.0`
 - [x] Artifact bundling — copy `.wasm` files into `plugins/` directory of `.bca`
-- [ ] `barbacane-control plugin register` CLI — validate and store plugin in registry (deferred to M8)
-- [ ] Compiler: plugin resolution — E1020–E1024 checks (deferred to M8)
+- [ ] `barbacane-control plugin register` CLI — validate and store plugin in registry (deferred to M9)
+- [ ] Compiler: plugin resolution — E1020–E1024 checks (deferred to M9)
 - [ ] Integration tests — middleware chain with real WASM plugins (requires M4 for http-upstream)
 
 ---
@@ -122,33 +122,128 @@ Move dispatchers from hardcoded to WASM plugins. Add real HTTP upstream proxying
 
 ---
 
-## M5 — Security
+## M5 — Plugin Manifest System
 
-Auth and authz plugins, secrets management, TLS termination, security defaults.
+Implement the `barbacane.yaml` manifest for explicit plugin configuration (ADR-0006). No "magic" built-in plugins — everything must be declared.
 
-**Specs:** SPEC-004
+**Specs:** ADR-0006
 
-- [ ] TLS termination — rustls ingress, cert/key from file or vault reference
-- [ ] TLS settings — TLS 1.2 min, 1.3 preferred, modern cipher suites, ALPN
-- [ ] `barbacane-auth-jwt` plugin — RS256/ES256 validation, JWKS fetch, context:auth.* output
-- [ ] `barbacane-auth-apikey` plugin — API key lookup from vault-backed store
-- [ ] `barbacane-auth-oauth2` plugin — token introspection
-- [ ] Auth context convention — `context:auth.sub`, `context:auth.roles`, etc.
-- [ ] Auth rejection — 401 with `WWW-Authenticate`, 403 for insufficient scope
-- [ ] `barbacane-authz-opa` plugin — OPA policy evaluation via WASM-compiled Rego
-- [ ] OPA input mapping — `context:`, `request:`, `header:` prefixes
-- [ ] OPA policy compilation — `.rego` to `.wasm`, bundled in `policies/` directory
-- [ ] Host function: `host_get_secret` / `host_secret_read_result` — vault secret fetch
-- [ ] Secrets management — vault references (`vault://`, `aws-sm://`, `k8s://`, `env://`)
-- [ ] Secret resolution at startup — fetch all, fail if any missing (exit code 13)
-- [ ] JWKS periodic refresh — configurable interval, retain previous on failure
-- [ ] Compiler check E1032 — security scheme without matching auth middleware
-- [ ] Security defaults — strict validation, no CORS, no wildcard routes, upstream TLS mandatory
-- [ ] Integration tests — JWT validation, API key auth, OPA deny/allow, secret resolution
+### Manifest Parser
+- [ ] `barbacane.yaml` schema definition — `plugins` section with name → source mapping
+- [ ] Plugin source types — `path` (local file), `url` (HTTPS remote)
+- [ ] Manifest parser — load and validate `barbacane.yaml`
+- [ ] Plugin resolver — fetch from path or URL, validate `.wasm` format
+
+### Compiler Integration
+- [ ] `--manifest` CLI flag — path to manifest file (default: `./barbacane.yaml`)
+- [ ] Plugin reference extraction — collect all plugin names from spec (`x-barbacane-dispatch`, `x-barbacane-middlewares`)
+- [ ] Validation E1040 — plugin used in spec but not declared in manifest
+- [ ] Artifact bundling — copy resolved `.wasm` files into `plugins/` directory of `.bca`
+- [ ] Manifest embedding — include resolved manifest in artifact for reproducibility
+
+### Data Plane
+- [ ] Remove embedded plugins — no more `include_bytes!` in binary
+- [ ] Load plugins from artifact — read `.wasm` from `plugins/` directory in `.bca`
+- [ ] Bare binary validation — fail if spec uses plugin not in artifact
+
+### CLI & Templates
+- [ ] `barbacane init --template basic` — create project with `barbacane.yaml`, `plugins/`, example spec
+- [ ] `barbacane init --template minimal` — create minimal project skeleton
+- [ ] Plugin download — fetch official plugins from release URLs
+
+### Testing
+- [ ] Update all test fixtures — add `barbacane.yaml` to each fixture directory
+- [ ] Integration tests — compile with manifest, verify plugin resolution
+- [ ] Error tests — E1040 for undeclared plugins
 
 ---
 
-## M6 — Rate Limiting & Caching
+## M6a — TLS & JWT Auth
+
+HTTPS termination and JWT authentication — the most common production security setup.
+
+**Specs:** SPEC-004 (partial)
+
+### TLS Termination
+- [ ] TLS termination — rustls ingress, cert/key from file paths
+- [ ] TLS settings — TLS 1.2 min, 1.3 preferred, modern cipher suites
+- [ ] ALPN — HTTP/1.1 and HTTP/2 negotiation
+- [ ] `--tls-cert` and `--tls-key` CLI flags
+- [ ] `--tls-config` for advanced settings (min version, cipher suites)
+
+### JWT Authentication
+- [ ] `jwt-auth` middleware plugin — RS256/ES256 token validation
+- [ ] JWKS fetch — load public keys from `jwks_uri`
+- [ ] JWKS caching — configurable refresh interval, retain previous on failure
+- [ ] Token extraction — `Authorization: Bearer` header
+- [ ] Claims validation — `iss`, `aud`, `exp`, `nbf` checks
+- [ ] Context output — `context:auth.sub`, `context:auth.claims.*`
+- [ ] Auth rejection — 401 with `WWW-Authenticate` header
+
+### Integration
+- [ ] Auth context convention — standardized `context:auth.*` keys
+- [ ] Security defaults — strict validation enabled by default
+- [ ] Integration tests — valid/invalid JWT, expired token, wrong audience
+
+---
+
+## M6b — API Key & OAuth2 Auth
+
+Additional authentication methods for diverse integration patterns.
+
+**Specs:** SPEC-004 (partial)
+
+### API Key Authentication
+- [ ] `apikey-auth` middleware plugin — API key validation
+- [ ] Key extraction — header (`X-API-Key`), query param, or custom location
+- [ ] Key store — in-memory map loaded from config or file
+- [ ] Context output — `context:auth.key_id`, `context:auth.key_name`
+
+### OAuth2 Token Introspection
+- [ ] `oauth2-auth` middleware plugin — token introspection (RFC 7662)
+- [ ] Introspection endpoint — configurable URL
+- [ ] Client credentials — `client_id`, `client_secret` for introspection request
+- [ ] Token caching — cache active tokens to reduce introspection calls
+- [ ] Scope extraction — `context:auth.scope`
+- [ ] Auth rejection — 401 for invalid token, 403 for insufficient scope
+
+### Integration
+- [ ] Multiple auth methods — chain multiple auth middlewares
+- [ ] Integration tests — API key validation, OAuth2 introspection
+
+---
+
+## M6c — OPA Authz & Secrets
+
+Policy-based authorization and secrets management for enterprise deployments.
+
+**Specs:** SPEC-004 (partial)
+
+### OPA Authorization
+- [ ] `opa-authz` middleware plugin — OPA policy evaluation
+- [ ] Policy format — WASM-compiled Rego policies
+- [ ] OPA input mapping — `input.request`, `input.context`, `input.headers`
+- [ ] Policy bundling — `.wasm` policies in `policies/` directory of artifact
+- [ ] Decision output — allow/deny based on policy result
+- [ ] Authz rejection — 403 with policy violation details (dev mode)
+
+### Secrets Management
+- [ ] Secret references — `env://VAR_NAME` for environment variables
+- [ ] Secret references — `file:///path/to/secret` for file-based secrets
+- [ ] Secret resolution at startup — fetch all, fail if any missing (exit code 13)
+- [ ] Host function: `host_get_secret` / `host_secret_read_result` — secret access from plugins
+- [ ] Future: `vault://`, `aws-sm://`, `k8s://` references (deferred)
+
+### Compiler Validation
+- [ ] Compiler check E1032 — OpenAPI security scheme without matching auth middleware
+- [ ] Security audit mode — warn on common misconfigurations
+
+### Integration
+- [ ] Integration tests — OPA allow/deny, secret resolution, missing secret error
+
+---
+
+## M7 — Rate Limiting & Caching
 
 Built-in rate limiting aligned with draft-ietf-httpapi-ratelimit-headers, and response caching.
 
@@ -169,7 +264,7 @@ Built-in rate limiting aligned with draft-ietf-httpapi-ratelimit-headers, and re
 
 ---
 
-## M7 — Observability
+## M8 — Observability
 
 Metrics, traces, structured logs, and OpenTelemetry export.
 
@@ -202,7 +297,7 @@ Metrics, traces, structured logs, and OpenTelemetry export.
 
 ---
 
-## M8 — Control Plane
+## M9 — Control Plane
 
 The management layer — REST API, database, spec/artifact/plugin lifecycle.
 
@@ -239,7 +334,7 @@ The management layer — REST API, database, spec/artifact/plugin lifecycle.
 
 ---
 
-## M9 — AsyncAPI & Event Dispatch
+## M10 — AsyncAPI & Event Dispatch
 
 Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 
@@ -257,7 +352,7 @@ Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 
 ---
 
-## M10 — Production Readiness
+## M11 — Production Readiness
 
 Performance, testing infrastructure, lifecycle features, and hardening.
 
