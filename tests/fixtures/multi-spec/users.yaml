@@ -1,0 +1,65 @@
+openapi: "3.1.0"
+info:
+  title: Users Service API
+  version: "1.0.0"
+  description: User management endpoints
+
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      summary: List all users
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"users":[{"id":"1","name":"Alice"},{"id":"2","name":"Bob"}]}'
+      responses:
+        "200":
+          description: List of users
+
+    post:
+      operationId: createUser
+      summary: Create a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email]
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{"id":"3","name":"New User"}'
+      responses:
+        "201":
+          description: User created
+
+  /users/{userId}:
+    get:
+      operationId: getUser
+      summary: Get user by ID
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"1","name":"Alice","email":"alice@example.com"}'
+      responses:
+        "200":
+          description: User found
+        "404":
+          description: User not found

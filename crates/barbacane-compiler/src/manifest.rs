@@ -11,6 +11,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CompileError;
 
+/// Minimal plugin.toml structure for extracting metadata.
+#[derive(Debug, Deserialize)]
+struct PluginToml {
+    plugin: PluginMeta,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginMeta {
+    version: String,
+    #[serde(rename = "type")]
+    plugin_type: String,
+}
+
+/// Try to read plugin metadata from plugin.toml in the same directory as the WASM file.
+fn read_plugin_metadata(wasm_path: &Path) -> Option<(String, String)> {
+    let plugin_toml_path = wasm_path.parent()?.join("plugin.toml");
+    let content = std::fs::read_to_string(&plugin_toml_path).ok()?;
+    let parsed: PluginToml = toml::from_str(&content).ok()?;
+    Some((parsed.plugin.version, parsed.plugin.plugin_type))
+}
+
 /// A project manifest (`barbacane.yaml`).
 ///
 /// Declares the plugins available for use in OpenAPI specs.
@@ -64,6 +85,10 @@ pub struct ResolvedPlugin {
     pub source: String,
     /// WASM binary content.
     pub wasm_bytes: Vec<u8>,
+    /// Plugin version (from plugin.toml if available).
+    pub version: Option<String>,
+    /// Plugin type: "middleware" or "dispatcher" (from plugin.toml if available).
+    pub plugin_type: Option<String>,
 }
 
 impl ProjectManifest {
@@ -138,10 +163,27 @@ impl ProjectManifest {
                 )));
             }
 
+            // Try to read plugin metadata from plugin.toml
+            let (version, plugin_type) = match source {
+                PluginSource::Path(path_source) => {
+                    let wasm_path = if Path::new(&path_source.path).is_absolute() {
+                        Path::new(&path_source.path).to_path_buf()
+                    } else {
+                        base_path.join(&path_source.path)
+                    };
+                    read_plugin_metadata(&wasm_path)
+                        .map(|(v, t)| (Some(v), Some(t)))
+                        .unwrap_or((None, None))
+                }
+                PluginSource::Url(_) => (None, None),
+            };
+
             resolved.push(ResolvedPlugin {
                 name: name.clone(),
                 source: source.description(),
                 wasm_bytes,
+                version,
+                plugin_type,
             });
         }
 
@@ -223,10 +265,27 @@ impl ProjectManifest {
                 )));
             }
 
+            // Try to read plugin metadata from plugin.toml
+            let (version, plugin_type) = match source {
+                PluginSource::Path(path_source) => {
+                    let wasm_path = if Path::new(&path_source.path).is_absolute() {
+                        Path::new(&path_source.path).to_path_buf()
+                    } else {
+                        base_path.join(&path_source.path)
+                    };
+                    read_plugin_metadata(&wasm_path)
+                        .map(|(v, t)| (Some(v), Some(t)))
+                        .unwrap_or((None, None))
+                }
+                PluginSource::Url(_) => (None, None),
+            };
+
             resolved.push(ResolvedPlugin {
                 name: name.clone(),
                 source: source.description(),
                 wasm_bytes,
+                version,
+                plugin_type,
             });
         }
 
@@ -426,6 +485,8 @@ plugins:
                     }),
                     middlewares: None,
                     observability: None,
+                    deprecated: false,
+                    sunset: None,
                     extensions: BTreeMap::new(),
                 },
                 Operation {
@@ -443,6 +504,8 @@ plugins:
                         config: serde_json::json!({}),
                     }]),
                     observability: None,
+                    deprecated: false,
+                    sunset: None,
                     extensions: BTreeMap::new(),
                 },
             ],
@@ -485,6 +548,8 @@ plugins:
                 }),
                 middlewares: None,
                 observability: None,
+                deprecated: false,
+                sunset: None,
                 extensions: BTreeMap::new(),
             }],
         };
@@ -526,6 +591,8 @@ plugins:
                 }),
                 middlewares: None,
                 observability: None,
+                deprecated: false,
+                sunset: None,
                 extensions: BTreeMap::new(),
             }],
         };

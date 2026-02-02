@@ -1,0 +1,34 @@
+openapi: "3.1.0"
+info:
+  title: Service B - Users
+  version: "1.0.0"
+  description: Second spec also defining /users (causes E1010 conflict)
+
+paths:
+  /users:
+    get:
+      # This conflicts with spec-a.yaml's GET /users
+      # Should cause E1010 routing conflict error
+      operationId: listUsersB
+      summary: List users (from Service B) - CONFLICT!
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"source":"service-b","users":[]}'
+      responses:
+        "200":
+          description: List of users
+
+  /service-b/health:
+    get:
+      operationId: healthB
+      summary: Service B health (no conflict)
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok","service":"b"}'
+      responses:
+        "200":
+          description: OK

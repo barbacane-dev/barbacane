@@ -26,3 +26,4 @@ tracing = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
+uuid = { workspace = true }

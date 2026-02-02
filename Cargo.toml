@@ -107,6 +107,9 @@ syn = { version = "2", features = ["full", "parsing"] }
 quote = "1"
 proc-macro2 = "1"
 
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
 # Workspace crates
 barbacane-spec-parser = { path = "crates/barbacane-spec-parser" }
 barbacane-compiler = { path = "crates/barbacane-compiler" }
