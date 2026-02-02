@@ -1,0 +1,9 @@
+[plugin]
+name = "kafka"
+version = "0.1.0"
+type = "dispatcher"
+description = "Publishes messages to Kafka topics (sync-to-async bridge)"
+wasm = "kafka.wasm"
+
+[capabilities]
+host_functions = ["kafka_publish"]

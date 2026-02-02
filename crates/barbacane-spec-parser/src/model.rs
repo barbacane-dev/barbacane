@@ -33,18 +33,18 @@ pub enum SpecFormat {
     AsyncApi,
 }
 
-/// A single API operation (path + method).
+/// A single API operation (path + method for OpenAPI, channel + action for AsyncAPI).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Operation {
-    /// The path template (e.g. "/users/{id}").
+    /// The path template (OpenAPI: "/users/{id}", AsyncAPI: channel address).
     pub path: String,
-    /// The HTTP method (uppercase).
+    /// The HTTP method (OpenAPI: "GET", AsyncAPI: "SEND"/"RECEIVE").
     pub method: String,
-    /// The OpenAPI operationId, if present.
+    /// The operationId, if present.
     pub operation_id: Option<String>,
-    /// Path parameters defined on this operation.
+    /// Path/channel parameters defined on this operation.
     pub parameters: Vec<Parameter>,
-    /// Request body definition (for POST, PUT, PATCH).
+    /// Request body definition (OpenAPI: requestBody, AsyncAPI: message payload for SEND).
     pub request_body: Option<RequestBody>,
     /// The dispatcher configuration from `x-barbacane-dispatch`.
     pub dispatch: Option<DispatchConfig>,
@@ -61,6 +61,12 @@ pub struct Operation {
     pub sunset: Option<String>,
     /// Operation-level `x-barbacane-*` extensions.
     pub extensions: BTreeMap<String, serde_json::Value>,
+    /// AsyncAPI messages (for async operations only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<Message>,
+    /// Protocol bindings (AsyncAPI: kafka, nats, mqtt, amqp, ws).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, serde_json::Value>,
 }
 
 /// A path, query, or header parameter.
@@ -127,4 +133,51 @@ pub struct ObservabilityConfig {
     /// Emit `barbacane_slo_violation_total` metric when exceeded.
     #[serde(default)]
     pub latency_slo_ms: Option<u64>,
+}
+
+/// AsyncAPI message definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    /// Message name/ID.
+    pub name: String,
+    /// Message payload schema.
+    pub payload: Option<serde_json::Value>,
+    /// Content type (e.g., "application/json").
+    pub content_type: Option<String>,
+    /// Protocol-specific bindings (kafka, nats, mqtt, amqp, ws, etc.).
+    #[serde(default)]
+    pub bindings: BTreeMap<String, serde_json::Value>,
+}
+
+/// AsyncAPI channel definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Channel {
+    /// Channel address/topic (e.g., "user/signedup", "orders.{orderId}").
+    pub address: String,
+    /// Messages that can be sent/received on this channel.
+    pub messages: Vec<Message>,
+    /// Channel parameters (for templated addresses like "orders.{orderId}").
+    pub parameters: Vec<Parameter>,
+    /// Protocol-specific bindings.
+    #[serde(default)]
+    pub bindings: BTreeMap<String, serde_json::Value>,
+}
+
+/// AsyncAPI operation action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AsyncAction {
+    /// Gateway sends/publishes a message to the channel.
+    Send,
+    /// Gateway receives/subscribes to messages from the channel.
+    Receive,
+}
+
+impl std::fmt::Display for AsyncAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AsyncAction::Send => write!(f, "SEND"),
+            AsyncAction::Receive => write!(f, "RECEIVE"),
+        }
+    }
 }

@@ -123,30 +123,59 @@ pub mod http {
 ///
 /// ```text
 /// host_kafka_publish(msg_ptr: i32, msg_len: i32) -> i32
+/// host_broker_read_result(buf_ptr: i32, buf_len: i32) -> i32
 /// ```
 ///
-/// Not yet implemented (M9 milestone).
+/// The message JSON format:
+/// ```json
+/// {
+///   "topic": "events",
+///   "key": "optional-partition-key",
+///   "payload": "{\"event\":\"data\"}",
+///   "headers": {"key": "value"}
+/// }
+/// ```
+///
+/// Returns the length of the result JSON, or -1 on error.
+/// Result format: `{ success: bool, error?: string, topic: string, partition?: i32, offset?: i64 }`
 pub mod kafka {
     /// The capability name.
     pub const CAPABILITY: &str = "kafka_publish";
 
     /// The function name.
     pub const FUNCTION_NAME: &str = "host_kafka_publish";
+
+    /// The read result function name.
+    pub const READ_RESULT_FUNCTION: &str = "host_broker_read_result";
 }
 
 /// Host functions for NATS publishing.
 ///
 /// ```text
 /// host_nats_publish(msg_ptr: i32, msg_len: i32) -> i32
+/// host_broker_read_result(buf_ptr: i32, buf_len: i32) -> i32
 /// ```
 ///
-/// Not yet implemented (M9 milestone).
+/// The message JSON format:
+/// ```json
+/// {
+///   "topic": "subject.name",
+///   "payload": "{\"event\":\"data\"}",
+///   "headers": {"key": "value"}
+/// }
+/// ```
+///
+/// Returns the length of the result JSON, or -1 on error.
+/// Result format: `{ success: bool, error?: string, topic: string }`
 pub mod nats {
     /// The capability name.
     pub const CAPABILITY: &str = "nats_publish";
 
     /// The function name.
     pub const FUNCTION_NAME: &str = "host_nats_publish";
+
+    /// The read result function name (shared with Kafka).
+    pub const READ_RESULT_FUNCTION: &str = "host_broker_read_result";
 }
 
 /// Host functions for telemetry.

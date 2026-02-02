@@ -1,0 +1,114 @@
+asyncapi: "3.0.0"
+info:
+  title: Event Dispatch Test API
+  version: "1.0.0"
+  description: AsyncAPI spec for testing event dispatch and sync-to-async bridge
+
+channels:
+  userEvents:
+    address: /events/users
+    messages:
+      UserCreated:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - userId
+            - email
+          properties:
+            userId:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            name:
+              type: string
+            timestamp:
+              type: string
+              format: date-time
+
+  orderEvents:
+    address: /events/orders/{orderId}
+    parameters:
+      orderId:
+        schema:
+          type: string
+          format: uuid
+    messages:
+      OrderPlaced:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - orderId
+            - items
+          properties:
+            orderId:
+              type: string
+              format: uuid
+            items:
+              type: array
+              items:
+                type: object
+                required:
+                  - productId
+                  - quantity
+                properties:
+                  productId:
+                    type: string
+                  quantity:
+                    type: integer
+                    minimum: 1
+            total:
+              type: number
+
+  notifications:
+    address: /notifications
+    messages:
+      Notification:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - title
+          properties:
+            title:
+              type: string
+            body:
+              type: string
+
+operations:
+  publishUserCreated:
+    action: send
+    channel:
+      $ref: '#/channels/userEvents'
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","subject":"events.users"}'
+        content_type: application/json
+
+  publishOrderPlaced:
+    action: send
+    channel:
+      $ref: '#/channels/orderEvents'
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","subject":"events.orders"}'
+        content_type: application/json
+
+  publishNotification:
+    action: send
+    channel:
+      $ref: '#/channels/notifications'
+    x-barbacane-middlewares: []
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","subject":"notifications"}'
+        content_type: application/json
