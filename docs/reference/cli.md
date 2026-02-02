@@ -311,6 +311,27 @@ X-Trace-Id: 4bf92f3577b34da6a3ce929d0e0e4736
 Content-Type: application/json
 ```
 
+### API Lifecycle Headers
+
+For deprecated operations, additional headers are included:
+
+| Header | Description |
+|--------|-------------|
+| `Deprecation` | `true` - indicates the endpoint is deprecated (per draft-ietf-httpapi-deprecation-header) |
+| `Sunset` | HTTP-date when the endpoint will be removed (per RFC 8594) |
+
+Example for deprecated endpoint:
+
+```
+HTTP/1.1 200 OK
+Server: barbacane/0.1.0
+Deprecation: true
+Sunset: Sat, 31 Dec 2025 23:59:59 GMT
+Content-Type: application/json
+```
+
+See [API Lifecycle](#api-lifecycle) for configuration details.
+
 ### Exit Codes
 
 | Code | Meaning |

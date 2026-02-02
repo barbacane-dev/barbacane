@@ -311,6 +311,64 @@ paths:
           description: Payment processed
 ```
 
+## API Lifecycle
+
+Barbacane supports API lifecycle management through standard OpenAPI deprecation and the `x-barbacane-sunset` extension.
+
+### Marking Operations as Deprecated
+
+Use the standard OpenAPI `deprecated` field:
+
+```yaml
+paths:
+  /v1/users:
+    get:
+      deprecated: true
+      summary: List users (deprecated, use /v2/users)
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.example.com"
+```
+
+When a client calls a deprecated endpoint, the response includes a `Deprecation: true` header per [draft-ietf-httpapi-deprecation-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-deprecation-header/).
+
+### Setting a Sunset Date
+
+Use `x-barbacane-sunset` to specify when an endpoint will be removed:
+
+```yaml
+paths:
+  /v1/users:
+    get:
+      deprecated: true
+      x-barbacane-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.example.com"
+```
+
+The sunset date must be in HTTP-date format (RFC 9110). When set, the response includes a `Sunset` header per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594).
+
+### Example Response Headers
+
+```
+HTTP/1.1 200 OK
+Deprecation: true
+Sunset: Sat, 31 Dec 2025 23:59:59 GMT
+Content-Type: application/json
+```
+
+### Best Practices
+
+1. **Mark deprecated first**: Set `deprecated: true` before setting a sunset date
+2. **Give advance notice**: Set the sunset date at least 6 months in advance
+3. **Update API docs**: Include migration instructions in the operation summary or description
+4. **Monitor usage**: Track calls to deprecated endpoints via metrics
+
+---
+
 ## Validation
 
 The compiler validates your spec:

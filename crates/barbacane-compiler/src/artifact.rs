@@ -92,6 +92,12 @@ pub struct CompiledOperation {
     /// Otherwise, uses the global middlewares from the spec.
     #[serde(default)]
     pub middlewares: Vec<MiddlewareConfig>,
+    /// Whether this operation is deprecated.
+    #[serde(default)]
+    pub deprecated: bool,
+    /// Sunset date for deprecated operations (HTTP-date format per RFC 9110).
+    #[serde(default)]
+    pub sunset: Option<String>,
 }
 
 /// Compile one or more spec files into a .bca artifact.
@@ -173,6 +179,8 @@ pub fn compile_with_options(
                 request_body: op.request_body.clone(),
                 dispatch,
                 middlewares,
+                deprecated: op.deprecated,
+                sunset: op.sunset.clone(),
             });
         }
     }
@@ -346,6 +354,8 @@ pub fn compile_with_manifest(
                 request_body: op.request_body.clone(),
                 dispatch,
                 middlewares,
+                deprecated: op.deprecated,
+                sunset: op.sunset.clone(),
             });
         }
     }
@@ -617,6 +627,8 @@ pub fn compile_with_plugins(
                 request_body: op.request_body.clone(),
                 dispatch,
                 middlewares,
+                deprecated: op.deprecated,
+                sunset: op.sunset.clone(),
             });
         }
     }
