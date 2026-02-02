@@ -14,9 +14,77 @@ barbacane <COMMAND> [OPTIONS]
 
 | Command | Description |
 |---------|-------------|
+| `init` | Initialize a new Barbacane project |
 | `compile` | Compile OpenAPI spec(s) into a `.bca` artifact |
 | `validate` | Validate spec(s) without compiling |
 | `serve` | Run the gateway server |
+
+---
+
+## barbacane init
+
+Initialize a new Barbacane project with manifest, spec, and directory structure.
+
+```bash
+barbacane init [NAME] [OPTIONS]
+```
+
+### Arguments
+
+| Argument | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NAME` | No | `.` | Project name (creates a directory with this name, or initializes in current directory if `.`) |
+
+### Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--template`, `-t` | No | `basic` | Template to use: `basic` (full example) or `minimal` (bare bones) |
+
+### Templates
+
+**basic** (default):
+- Complete OpenAPI spec with `/health` and `/users` endpoints
+- Example `x-barbacane-dispatch` configurations
+- Ready to compile and run
+
+**minimal**:
+- Bare-bones OpenAPI spec with just the required structure
+- Single `/health` endpoint placeholder
+- Start from scratch
+
+### Examples
+
+```bash
+# Create project in new directory with basic template
+barbacane init my-api
+
+# Create project with minimal template
+barbacane init my-api --template minimal
+
+# Initialize in current directory
+barbacane init .
+
+# Short form
+barbacane init my-api -t minimal
+```
+
+### Generated Files
+
+```
+my-api/
+├── barbacane.yaml    # Project manifest (plugin declarations)
+├── api.yaml          # OpenAPI 3.1 specification
+├── plugins/          # Directory for WASM plugins
+└── .gitignore        # Ignores *.bca, target/, plugins/*.wasm
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Directory exists and is not empty, or write error |
 
 ---
 
