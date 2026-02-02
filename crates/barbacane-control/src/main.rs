@@ -458,3 +458,154 @@ async fn seed_plugins(
 
     Ok(seeded_count)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_plugin_manifest_full() {
+        let toml_content = r#"
+[plugin]
+name = "http-upstream"
+version = "0.1.0"
+type = "dispatcher"
+description = "HTTP upstream reverse proxy dispatcher"
+wasm = "http-upstream.wasm"
+
+[capabilities]
+host_functions = ["host_http_call", "host_log"]
+"#;
+
+        let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
+
+        assert_eq!(manifest.plugin.name, "http-upstream");
+        assert_eq!(manifest.plugin.version, "0.1.0");
+        assert_eq!(manifest.plugin.plugin_type, "dispatcher");
+        assert_eq!(
+            manifest.plugin.description,
+            Some("HTTP upstream reverse proxy dispatcher".to_string())
+        );
+        assert_eq!(manifest.plugin.wasm, Some("http-upstream.wasm".to_string()));
+        assert!(manifest.capabilities.is_some());
+    }
+
+    #[test]
+    fn test_parse_plugin_manifest_minimal() {
+        let toml_content = r#"
+[plugin]
+name = "mock"
+version = "0.1.0"
+type = "dispatcher"
+"#;
+
+        let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
+
+        assert_eq!(manifest.plugin.name, "mock");
+        assert_eq!(manifest.plugin.version, "0.1.0");
+        assert_eq!(manifest.plugin.plugin_type, "dispatcher");
+        assert!(manifest.plugin.description.is_none());
+        assert!(manifest.plugin.wasm.is_none());
+        assert!(manifest.capabilities.is_none());
+    }
+
+    #[test]
+    fn test_parse_plugin_manifest_middleware() {
+        let toml_content = r#"
+[plugin]
+name = "rate-limit"
+version = "0.1.0"
+type = "middleware"
+description = "Rate limiting middleware"
+wasm = "rate-limit.wasm"
+
+[capabilities]
+rate_limit = true
+log = true
+"#;
+
+        let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
+
+        assert_eq!(manifest.plugin.name, "rate-limit");
+        assert_eq!(manifest.plugin.plugin_type, "middleware");
+
+        // Verify capabilities can be converted to JSON
+        let capabilities = manifest
+            .capabilities
+            .map(|c| serde_json::to_value(&c))
+            .transpose()
+            .unwrap()
+            .unwrap_or(serde_json::json!([]));
+
+        assert!(capabilities.is_object());
+        assert_eq!(capabilities["rate_limit"], true);
+        assert_eq!(capabilities["log"], true);
+    }
+
+    #[test]
+    fn test_parse_plugin_manifest_with_host_functions() {
+        let toml_content = r#"
+[plugin]
+name = "jwt-auth"
+version = "0.1.0"
+type = "middleware"
+
+[capabilities]
+host_functions = ["host_verify_signature"]
+"#;
+
+        let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
+
+        let capabilities = manifest
+            .capabilities
+            .map(|c| serde_json::to_value(&c))
+            .transpose()
+            .unwrap()
+            .unwrap_or(serde_json::json!([]));
+
+        assert!(capabilities["host_functions"].is_array());
+        assert_eq!(capabilities["host_functions"][0], "host_verify_signature");
+    }
+
+    #[test]
+    fn test_wasm_filename_default() {
+        let toml_content = r#"
+[plugin]
+name = "my-plugin"
+version = "1.0.0"
+type = "middleware"
+"#;
+
+        let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
+
+        // When wasm is not specified, it should default to {plugin_name}.wasm
+        let wasm_filename = manifest
+            .plugin
+            .wasm
+            .clone()
+            .unwrap_or_else(|| format!("{}.wasm", "my-plugin"));
+
+        assert_eq!(wasm_filename, "my-plugin.wasm");
+    }
+
+    #[test]
+    fn test_wasm_filename_explicit() {
+        let toml_content = r#"
+[plugin]
+name = "my-plugin"
+version = "1.0.0"
+type = "middleware"
+wasm = "custom-name.wasm"
+"#;
+
+        let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
+
+        let wasm_filename = manifest
+            .plugin
+            .wasm
+            .clone()
+            .unwrap_or_else(|| format!("{}.wasm", "my-plugin"));
+
+        assert_eq!(wasm_filename, "custom-name.wasm");
+    }
+}
