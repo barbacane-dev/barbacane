@@ -3,6 +3,8 @@ import type {
   Compilation,
   CompileRequest,
   HealthResponse,
+  InitRequest,
+  InitResponse,
   Plugin,
   PluginType,
   ProblemDetails,
@@ -211,6 +213,14 @@ export async function downloadArtifact(id: string): Promise<Blob> {
     throw new ApiError(response.status, problem)
   }
   return response.blob()
+}
+
+// Init
+export async function initProject(data: InitRequest): Promise<InitResponse> {
+  return request<InitResponse>('/init', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
 }
 
 export { ApiError }

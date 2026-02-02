@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use uuid::Uuid;
 
-use super::{artifacts, compilations, health, plugins, specs};
+use super::{artifacts, compilations, health, init, plugins, specs};
 
 /// API version header value.
 const API_VERSION: &str = "application/vnd.barbacane.v1+json";
@@ -33,6 +33,8 @@ pub fn create_router(pool: PgPool, compilation_tx: Option<mpsc::Sender<Uuid>>) -
     Router::new()
         // Health
         .route("/health", get(health::health_check))
+        // Init
+        .route("/init", post(init::init_project))
         // Specs
         .route("/specs", post(specs::upload_spec))
         .route("/specs", get(specs::list_specs))
