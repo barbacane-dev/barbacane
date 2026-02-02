@@ -7,9 +7,12 @@ import {
   Settings,
   Sun,
   Moon,
+  LogOut,
+  User,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/hooks'
+import { useAuth } from '@/lib/auth'
 
 const navigation = [
   { name: 'Specs', href: '/specs', icon: FileCode },
@@ -20,6 +23,7 @@ const navigation = [
 
 export function Sidebar() {
   const { theme, toggleTheme } = useTheme()
+  const { user, logout } = useAuth()
 
   return (
     <div className="flex h-full w-64 flex-col border-r border-sidebar-border bg-sidebar">
@@ -75,6 +79,30 @@ export function Sidebar() {
               Dark Mode
             </>
           )}
+        </button>
+      </div>
+
+      {/* User section */}
+      <div className="border-t border-sidebar-border p-3">
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/20 text-primary">
+            <User className="h-4 w-4" />
+          </div>
+          <div className="flex-1 truncate">
+            <div className="text-sm font-medium text-sidebar-foreground truncate">
+              {user?.name}
+            </div>
+            <div className="text-xs text-muted-foreground truncate">
+              {user?.email}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={logout}
+          className="mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        >
+          <LogOut className="h-5 w-5" />
+          Sign out
         </button>
       </div>
     </div>

@@ -12,19 +12,23 @@
 - [x] Add toggle button in sidebar
 - [x] CSS variables for both dark (default) and light modes
 
-## In Progress
-
-### 3. Authentication (OpenID Connect)
-- [ ] Choose OIDC library (e.g., `oidc-client-ts`, `react-oidc-context`)
-- [ ] Add auth provider wrapper
-- [ ] Protect routes with auth guard
-- [ ] Add login/logout flow
-- [ ] Store tokens securely
-- [ ] Add user info to sidebar
-- [ ] Handle token refresh
+### 3. Authentication (Mock) ✅
+- [x] Add AuthProvider with mock login
+- [x] Add ProtectedRoute component
+- [x] Add login page with form
+- [x] Store auth state in localStorage
+- [x] Add user info to sidebar
+- [x] Add logout functionality
 
 ## Future
 
+### Authentication (Production)
+- [ ] Replace mock auth with OIDC (`oidc-client-ts` or `react-oidc-context`)
+- [ ] Configure OIDC provider (Auth0, Keycloak, etc.)
+- [ ] Handle token refresh
+- [ ] Add role-based access control
+
+### Features
 - [ ] Spec upload with drag & drop
 - [ ] Spec editor with syntax highlighting
 - [ ] Compilation progress indicator
