@@ -12,7 +12,7 @@ This guide walks you through creating your first Barbacane-powered API gateway.
 ### From Source
 
 ```bash
-git clone https://github.com/barbacane/barbacane.git
+git clone https://github.com/barbacane-dev/barbacane.git
 cd barbacane
 cargo build --release
 
@@ -27,6 +27,31 @@ cargo install barbacane
 ```
 
 ## Your First Gateway
+
+### Quick Start with `barbacane init`
+
+The fastest way to start a new project:
+
+```bash
+# Create a new project with example spec
+barbacane init my-api
+
+cd my-api
+```
+
+This creates:
+- `barbacane.yaml` — project manifest for plugin configuration
+- `api.yaml` — OpenAPI spec with example endpoints
+- `plugins/` — directory for WASM plugins
+- `.gitignore` — ignores build artifacts
+
+For a minimal skeleton without example endpoints:
+
+```bash
+barbacane init my-api --template minimal
+```
+
+Skip to [Step 3: Validate the Spec](#3-validate-the-spec) if using `barbacane init`.
 
 ### 1. Create an OpenAPI Spec
 
