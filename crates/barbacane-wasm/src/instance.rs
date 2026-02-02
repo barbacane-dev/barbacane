@@ -97,6 +97,9 @@ pub struct PluginState {
 
     /// Result buffer for host_cache_read_result.
     pub last_cache_result: Option<Vec<u8>>,
+
+    /// Metrics registry for plugin telemetry (shared).
+    pub metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
 }
 
 impl PluginState {
@@ -115,6 +118,7 @@ impl PluginState {
             last_rate_limit_result: None,
             response_cache: None,
             last_cache_result: None,
+            metrics: None,
         }
     }
 
@@ -137,6 +141,7 @@ impl PluginState {
             last_rate_limit_result: None,
             response_cache: None,
             last_cache_result: None,
+            metrics: None,
         }
     }
 
@@ -160,6 +165,7 @@ impl PluginState {
             last_rate_limit_result: None,
             response_cache: None,
             last_cache_result: None,
+            metrics: None,
         }
     }
 
@@ -185,6 +191,34 @@ impl PluginState {
             last_rate_limit_result: None,
             response_cache,
             last_cache_result: None,
+            metrics: None,
+        }
+    }
+
+    /// Create new plugin state with all options including metrics.
+    pub fn with_all_options_and_metrics(
+        plugin_name: String,
+        limits: &PluginLimits,
+        http_client: Option<Arc<HttpClient>>,
+        secrets: crate::secrets::SecretsStore,
+        rate_limiter: Option<crate::rate_limiter::RateLimiter>,
+        response_cache: Option<crate::cache::ResponseCache>,
+        metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
+    ) -> Self {
+        Self {
+            plugin_name,
+            output_buffer: Vec::new(),
+            context: RequestContext::default(),
+            max_memory: limits.max_memory_bytes,
+            http_client,
+            last_http_result: None,
+            secrets,
+            last_secret_result: None,
+            rate_limiter,
+            last_rate_limit_result: None,
+            response_cache,
+            last_cache_result: None,
+            metrics,
         }
     }
 
@@ -1104,6 +1138,193 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| {
             WasmError::Instantiation(format!("failed to add host_cache_read_result: {}", e))
+        })?;
+
+    // === Telemetry Host Functions ===
+
+    // host_metric_counter_inc - increment a plugin counter metric
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_metric_counter_inc",
+            |mut caller: Caller<'_, PluginState>,
+             name_ptr: i32,
+             name_len: i32,
+             labels_ptr: i32,
+             labels_len: i32,
+             value: f64| {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                let data = memory.data(&caller);
+                let name_start = name_ptr as usize;
+                let name_end = name_start + name_len as usize;
+                let labels_start = labels_ptr as usize;
+                let labels_end = labels_start + labels_len as usize;
+
+                if name_end > data.len() || labels_end > data.len() {
+                    return;
+                }
+
+                let name = match std::str::from_utf8(&data[name_start..name_end]) {
+                    Ok(n) => n.to_string(),
+                    Err(_) => return,
+                };
+
+                let labels_json = match std::str::from_utf8(&data[labels_start..labels_end]) {
+                    Ok(l) => l.to_string(),
+                    Err(_) => return,
+                };
+
+                let plugin_name = caller.data().plugin_name.clone();
+                if let Some(metrics) = &caller.data().metrics {
+                    metrics.plugin_counter_inc(&plugin_name, &name, &labels_json, value as u64);
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_metric_counter_inc: {}", e))
+        })?;
+
+    // host_metric_histogram_observe - observe a plugin histogram metric
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_metric_histogram_observe",
+            |mut caller: Caller<'_, PluginState>,
+             name_ptr: i32,
+             name_len: i32,
+             labels_ptr: i32,
+             labels_len: i32,
+             value: f64| {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                let data = memory.data(&caller);
+                let name_start = name_ptr as usize;
+                let name_end = name_start + name_len as usize;
+                let labels_start = labels_ptr as usize;
+                let labels_end = labels_start + labels_len as usize;
+
+                if name_end > data.len() || labels_end > data.len() {
+                    return;
+                }
+
+                let name = match std::str::from_utf8(&data[name_start..name_end]) {
+                    Ok(n) => n.to_string(),
+                    Err(_) => return,
+                };
+
+                let labels_json = match std::str::from_utf8(&data[labels_start..labels_end]) {
+                    Ok(l) => l.to_string(),
+                    Err(_) => return,
+                };
+
+                let plugin_name = caller.data().plugin_name.clone();
+                if let Some(metrics) = &caller.data().metrics {
+                    metrics.plugin_histogram_observe(&plugin_name, &name, &labels_json, value);
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!(
+                "failed to add host_metric_histogram_observe: {}",
+                e
+            ))
+        })?;
+
+    // host_span_start - start a child span (stub - returns span ID)
+    // Full implementation requires passing span context through RequestContext
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_span_start",
+            |mut caller: Caller<'_, PluginState>, name_ptr: i32, name_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let data = memory.data(&caller);
+                let start = name_ptr as usize;
+                let end = start + name_len as usize;
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                let span_name = match std::str::from_utf8(&data[start..end]) {
+                    Ok(n) => n,
+                    Err(_) => return -1,
+                };
+
+                // Log the span start for now (full tracing integration in Phase 9)
+                let plugin_name = &caller.data().plugin_name;
+                tracing::debug!(plugin = %plugin_name, span = %span_name, "plugin span started");
+
+                // Return a placeholder span ID
+                1
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_span_start: {}", e)))?;
+
+    // host_span_end - end the current span
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_span_end",
+            |caller: Caller<'_, PluginState>| {
+                let plugin_name = &caller.data().plugin_name;
+                tracing::debug!(plugin = %plugin_name, "plugin span ended");
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_span_end: {}", e)))?;
+
+    // host_span_set_attribute - set an attribute on the current span
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_span_set_attribute",
+            |mut caller: Caller<'_, PluginState>,
+             key_ptr: i32,
+             key_len: i32,
+             val_ptr: i32,
+             val_len: i32| {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                let data = memory.data(&caller);
+                let key_start = key_ptr as usize;
+                let key_end = key_start + key_len as usize;
+                let val_start = val_ptr as usize;
+                let val_end = val_start + val_len as usize;
+
+                if key_end > data.len() || val_end > data.len() {
+                    return;
+                }
+
+                let key = match std::str::from_utf8(&data[key_start..key_end]) {
+                    Ok(k) => k,
+                    Err(_) => return,
+                };
+
+                let value = match std::str::from_utf8(&data[val_start..val_end]) {
+                    Ok(v) => v,
+                    Err(_) => return,
+                };
+
+                let plugin_name = &caller.data().plugin_name;
+                tracing::debug!(plugin = %plugin_name, %key, %value, "plugin span attribute set");
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_span_set_attribute: {}", e))
         })?;
 
     Ok(())

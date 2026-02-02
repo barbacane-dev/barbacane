@@ -47,6 +47,7 @@ hex.workspace = true
 
 # Workspace crates
 barbacane-plugin-sdk.workspace = true
+barbacane-telemetry.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

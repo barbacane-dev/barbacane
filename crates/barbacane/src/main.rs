@@ -9,11 +9,12 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use hyper::body::{Body, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
@@ -23,6 +24,7 @@ use rustls::ServerConfig;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
+use barbacane_telemetry::MetricsRegistry;
 use std::collections::HashMap;
 
 use barbacane_compiler::{
@@ -30,7 +32,24 @@ use barbacane_compiler::{
     CompileOptions, CompiledOperation, Manifest, ProjectManifest,
 };
 use barbacane_router::{RouteEntry, RouteMatch, Router};
-use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits};
+use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits, ValidationError2};
+
+/// Extract a reason string from a validation error for metrics.
+fn validation_error_reason(err: &ValidationError2) -> String {
+    match err {
+        ValidationError2::MissingRequiredParameter { .. } => {
+            "missing_required_parameter".to_string()
+        }
+        ValidationError2::InvalidParameter { .. } => "invalid_parameter".to_string(),
+        ValidationError2::MissingRequiredBody => "missing_required_body".to_string(),
+        ValidationError2::UnsupportedContentType(_) => "unsupported_content_type".to_string(),
+        ValidationError2::InvalidBody { .. } => "invalid_body".to_string(),
+        ValidationError2::BodyTooLarge { .. } => "body_too_large".to_string(),
+        ValidationError2::TooManyHeaders { .. } => "too_many_headers".to_string(),
+        ValidationError2::HeaderTooLarge { .. } => "header_too_large".to_string(),
+        ValidationError2::UriTooLong { .. } => "uri_too_long".to_string(),
+    }
+}
 use barbacane_wasm::{
     HttpClient, HttpClientConfig, InstancePool, PluginLimits, RateLimiter, ResponseCache,
     WasmEngine,
@@ -92,9 +111,18 @@ enum Commands {
         #[arg(long)]
         dev: bool,
 
-        /// Log level.
+        /// Log level (error, warn, info, debug, trace).
         #[arg(long, default_value = "info")]
         log_level: String,
+
+        /// Log format (json or pretty).
+        #[arg(long, default_value = "json")]
+        log_format: String,
+
+        /// OTLP endpoint for telemetry export (e.g., http://localhost:4317).
+        /// If not set, telemetry is collected locally but not exported.
+        #[arg(long)]
+        otlp_endpoint: Option<String>,
 
         /// Maximum request body size in bytes (default: 1048576 = 1MB).
         #[arg(long, default_value = "1048576")]
@@ -152,6 +180,10 @@ struct Gateway {
     /// HTTP client for plugins making outbound calls (kept alive for pool lifetime).
     #[allow(dead_code)]
     http_client: Arc<HttpClient>,
+    /// Metrics registry for observability.
+    metrics: Arc<MetricsRegistry>,
+    /// API name from the first spec's title (for metrics labels).
+    api_name: String,
 }
 
 impl Gateway {
@@ -161,6 +193,7 @@ impl Gateway {
         dev_mode: bool,
         limits: RequestLimits,
         allow_plaintext_upstream: bool,
+        metrics: Arc<MetricsRegistry>,
     ) -> Result<Self, String> {
         let manifest =
             load_manifest(artifact_path).map_err(|e| format!("failed to load manifest: {}", e))?;
@@ -296,6 +329,20 @@ impl Gateway {
             }
         }
 
+        // Extract API name from manifest (first source spec file or "default")
+        let api_name = manifest
+            .source_specs
+            .first()
+            .map(|s| {
+                // Remove extension and path, just keep the file name
+                Path::new(&s.file)
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("default")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "default".to_string());
+
         Ok(Gateway {
             manifest,
             router,
@@ -308,6 +355,8 @@ impl Gateway {
             plugin_pool: Arc::new(plugin_pool),
             plugin_limits,
             http_client,
+            metrics,
+            api_name,
         })
     }
 
@@ -316,14 +365,25 @@ impl Gateway {
         &self,
         req: Request<Incoming>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
+        let start_time = Instant::now();
         let uri_string = req.uri().to_string();
         let path = req.uri().path().to_string();
         let query_string = req.uri().query().map(|s| s.to_string());
         let method = req.method().clone();
+        let method_str = method.as_str().to_string();
 
         // Check URI length limit early
         if let Err(e) = self.limits.validate_uri(&uri_string) {
-            return Ok(self.validation_error_response(&[e]));
+            let response = self.validation_error_response(&[e]);
+            self.record_request_metrics(
+                &method_str,
+                &path,
+                response.status().as_u16(),
+                0,
+                0,
+                start_time,
+            );
+            return Ok(response);
         }
 
         // Reserved /__barbacane/* endpoints (skip other limits for internal endpoints)
@@ -340,24 +400,42 @@ impl Gateway {
 
         // Check header limits
         if let Err(e) = self.limits.validate_headers(&headers) {
-            return Ok(self.validation_error_response(&[e]));
+            let response = self.validation_error_response(&[e]);
+            self.record_request_metrics(
+                &method_str,
+                &path,
+                response.status().as_u16(),
+                0,
+                0,
+                start_time,
+            );
+            return Ok(response);
         }
 
         // Check content-length before reading body (if present)
         if let Some(content_length) = headers.get("content-length") {
             if let Ok(len) = content_length.parse::<usize>() {
                 if let Err(e) = self.limits.validate_body_size(len) {
-                    return Ok(self.validation_error_response(&[e]));
+                    let response = self.validation_error_response(&[e]);
+                    self.record_request_metrics(
+                        &method_str,
+                        &path,
+                        response.status().as_u16(),
+                        0,
+                        0,
+                        start_time,
+                    );
+                    return Ok(response);
                 }
             }
         }
 
         // Route lookup
-        let method_str = method.as_str();
-        match self.router.lookup(&path, method_str) {
+        match self.router.lookup(&path, &method_str) {
             RouteMatch::Found { entry, params } => {
                 let operation = &self.operations[entry.operation_index];
                 let validator = &self.validators[entry.operation_index];
+                let route_path = operation.path.clone();
 
                 let content_type = headers.get("content-type").map(|s| s.as_str());
 
@@ -365,13 +443,38 @@ impl Gateway {
                 let body_bytes = match req.collect().await {
                     Ok(collected) => collected.to_bytes(),
                     Err(_) => {
-                        return Ok(self.bad_request_response("failed to read request body"));
+                        let response = self.bad_request_response("failed to read request body");
+                        self.record_request_metrics(
+                            &method_str,
+                            &route_path,
+                            response.status().as_u16(),
+                            0,
+                            0,
+                            start_time,
+                        );
+                        return Ok(response);
                     }
                 };
 
+                let request_size = body_bytes.len() as u64;
+
                 // Validate actual body size (in case content-length was missing or wrong)
                 if let Err(e) = self.limits.validate_body_size(body_bytes.len()) {
-                    return Ok(self.validation_error_response(&[e]));
+                    self.metrics.record_validation_failure(
+                        &method_str,
+                        &route_path,
+                        "body_too_large",
+                    );
+                    let response = self.validation_error_response(&[e]);
+                    self.record_request_metrics(
+                        &method_str,
+                        &route_path,
+                        response.status().as_u16(),
+                        request_size,
+                        0,
+                        start_time,
+                    );
+                    return Ok(response);
                 }
 
                 // Validate request against OpenAPI spec
@@ -382,17 +485,86 @@ impl Gateway {
                     content_type,
                     &body_bytes,
                 ) {
-                    return Ok(self.validation_error_response(&errors));
+                    // Record validation failures - use error variant name as reason
+                    for err in &errors {
+                        let reason = validation_error_reason(err);
+                        self.metrics
+                            .record_validation_failure(&method_str, &route_path, &reason);
+                    }
+                    let response = self.validation_error_response(&errors);
+                    self.record_request_metrics(
+                        &method_str,
+                        &route_path,
+                        response.status().as_u16(),
+                        request_size,
+                        0,
+                        start_time,
+                    );
+                    return Ok(response);
                 }
 
-                self.dispatch(operation, params, query_string, &body_bytes, &headers)
-                    .await
+                let response = self
+                    .dispatch(operation, params, query_string, &body_bytes, &headers)
+                    .await?;
+
+                let response_size = response.body().size_hint().exact().unwrap_or(0);
+                self.record_request_metrics(
+                    &method_str,
+                    &route_path,
+                    response.status().as_u16(),
+                    request_size,
+                    response_size,
+                    start_time,
+                );
+                Ok(response)
             }
             RouteMatch::MethodNotAllowed { allowed } => {
-                Ok(self.method_not_allowed_response(allowed))
+                let response = self.method_not_allowed_response(allowed);
+                self.record_request_metrics(
+                    &method_str,
+                    &path,
+                    response.status().as_u16(),
+                    0,
+                    0,
+                    start_time,
+                );
+                Ok(response)
             }
-            RouteMatch::NotFound => Ok(self.not_found_response()),
+            RouteMatch::NotFound => {
+                let response = self.not_found_response();
+                self.record_request_metrics(
+                    &method_str,
+                    &path,
+                    response.status().as_u16(),
+                    0,
+                    0,
+                    start_time,
+                );
+                Ok(response)
+            }
         }
+    }
+
+    /// Record request metrics.
+    fn record_request_metrics(
+        &self,
+        method: &str,
+        path: &str,
+        status: u16,
+        request_size: u64,
+        response_size: u64,
+        start_time: Instant,
+    ) {
+        let duration = start_time.elapsed().as_secs_f64();
+        self.metrics.record_request(
+            method,
+            path,
+            status,
+            &self.api_name,
+            duration,
+            request_size,
+            response_size,
+        );
     }
 
     /// Dispatch a request to the appropriate handler.
@@ -483,6 +655,7 @@ impl Gateway {
     /// Execute middleware on_request chain.
     /// Returns the final request JSON and the middleware instances (for on_response),
     /// or a short-circuit response.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     fn execute_middleware_on_request(
         &self,
         middlewares: &[barbacane_compiler::MiddlewareConfig],
@@ -679,6 +852,7 @@ impl Gateway {
 
         match path {
             "/__barbacane/health" => self.health_response(),
+            "/__barbacane/metrics" => self.metrics_response(),
             "/__barbacane/openapi" => self.openapi_response(),
             _ => {
                 // Check for specific spec file: /__barbacane/openapi/{filename}
@@ -765,6 +939,17 @@ impl Gateway {
             .status(StatusCode::OK)
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body.to_string())))
+            .unwrap()
+    }
+
+    /// Build the Prometheus metrics response.
+    fn metrics_response(&self) -> Response<Full<Bytes>> {
+        let body = barbacane_telemetry::prometheus::render_metrics(&self.metrics);
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", barbacane_telemetry::PROMETHEUS_CONTENT_TYPE)
+            .body(Full::new(Bytes::from(body)))
             .unwrap()
     }
 
@@ -1250,6 +1435,7 @@ async fn run_serve(
     limits: RequestLimits,
     allow_plaintext_upstream: bool,
     tls_config: Option<TlsConfig>,
+    metrics: Arc<MetricsRegistry>,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
@@ -1257,7 +1443,13 @@ async fn run_serve(
         return ExitCode::from(1);
     }
 
-    let gateway = match Gateway::load(artifact_path, dev, limits, allow_plaintext_upstream) {
+    let gateway = match Gateway::load(
+        artifact_path,
+        dev,
+        limits,
+        allow_plaintext_upstream,
+        metrics.clone(),
+    ) {
         Ok(g) => Arc::new(g),
         Err(e) => {
             eprintln!("error: {}", e);
@@ -1324,8 +1516,12 @@ async fn run_serve(
             }
         };
 
+        // Track connection
+        metrics.connection_opened();
+
         let gateway = Arc::clone(&gateway);
         let tls_acceptor = tls_acceptor.clone();
+        let conn_metrics = metrics.clone();
 
         tokio::spawn(async move {
             let service = service_fn(move |req| {
@@ -1353,6 +1549,9 @@ async fn run_serve(
                     eprintln!("error: connection error: {}", e);
                 }
             }
+
+            // Connection closed
+            conn_metrics.connection_closed();
         });
     }
 }
@@ -1377,6 +1576,9 @@ async fn main() -> ExitCode {
             artifact,
             listen,
             dev,
+            log_level,
+            log_format,
+            otlp_endpoint,
             max_body_size,
             max_headers,
             max_header_size,
@@ -1384,8 +1586,29 @@ async fn main() -> ExitCode {
             allow_plaintext_upstream,
             tls_cert,
             tls_key,
-            ..
         } => {
+            // Initialize telemetry
+            let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
+                .unwrap_or(barbacane_telemetry::LogFormat::Json);
+
+            let mut telemetry_config = barbacane_telemetry::TelemetryConfig::new()
+                .with_log_level(&log_level)
+                .with_log_format(log_fmt);
+
+            if let Some(endpoint) = otlp_endpoint {
+                telemetry_config = telemetry_config.with_otlp_endpoint(endpoint);
+            }
+
+            let telemetry = match barbacane_telemetry::Telemetry::init(telemetry_config) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("error: failed to initialize telemetry: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
+
+            let metrics = telemetry.metrics_clone();
+
             // Validate TLS arguments
             let tls_config = match (tls_cert, tls_key) {
                 (Some(cert), Some(key)) => Some(TlsConfig {
@@ -1416,6 +1639,7 @@ async fn main() -> ExitCode {
                 limits,
                 allow_plaintext_upstream,
                 tls_config,
+                metrics,
             )
             .await
         }

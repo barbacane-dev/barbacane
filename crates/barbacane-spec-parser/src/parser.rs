@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use crate::error::ParseError;
 use crate::model::{
-    ApiSpec, ContentSchema, DispatchConfig, MiddlewareConfig, Operation, Parameter, RequestBody,
-    SpecFormat,
+    ApiSpec, ContentSchema, DispatchConfig, MiddlewareConfig, ObservabilityConfig, Operation,
+    Parameter, RequestBody, SpecFormat,
 };
 
 /// HTTP methods we recognize in OpenAPI paths.
@@ -50,6 +50,9 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     // Extract global middlewares
     let global_middlewares = extract_middlewares(root_obj);
 
+    // Extract global observability config
+    let observability = extract_observability(root_obj);
+
     // Parse operations based on format
     let operations = match format {
         SpecFormat::OpenApi => parse_openapi_paths(root_obj)?,
@@ -64,6 +67,7 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
         api_version,
         operations,
         global_middlewares,
+        observability,
         extensions,
     })
 }
@@ -130,6 +134,19 @@ fn extract_dispatch(obj: &serde_json::Map<String, Value>) -> Option<DispatchConf
         .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
+/// Extract x-barbacane-observability from an object.
+fn extract_observability(obj: &serde_json::Map<String, Value>) -> ObservabilityConfig {
+    obj.get("x-barbacane-observability")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default()
+}
+
+/// Extract optional x-barbacane-observability from an object.
+fn extract_observability_opt(obj: &serde_json::Map<String, Value>) -> Option<ObservabilityConfig> {
+    obj.get("x-barbacane-observability")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
 /// Parse OpenAPI 3.x paths into operations.
 fn parse_openapi_paths(
     root: &serde_json::Map<String, Value>,
@@ -178,6 +195,8 @@ fn parse_openapi_paths(
                     None
                 };
 
+                let observability = extract_observability_opt(op_obj);
+
                 let extensions = extract_extensions(op_obj);
 
                 operations.push(Operation {
@@ -188,6 +207,7 @@ fn parse_openapi_paths(
                     request_body,
                     dispatch,
                     middlewares,
+                    observability,
                     extensions,
                 });
             }
@@ -424,6 +444,56 @@ paths:
 
         let op = &spec.operations[0];
         assert!(op.extensions.contains_key("x-barbacane-cache"));
+    }
+
+    #[test]
+    fn parse_observability_config() {
+        let yaml = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-observability:
+  trace_sampling: 0.1
+  detailed_validation_logs: true
+  latency_slo_ms: 50
+paths:
+  /fast:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-observability:
+        trace_sampling: 1.0
+        latency_slo_ms: 10
+  /slow:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec = parse_spec(yaml).unwrap();
+
+        // Check global observability config
+        assert_eq!(spec.observability.trace_sampling, Some(0.1));
+        assert_eq!(spec.observability.detailed_validation_logs, Some(true));
+        assert_eq!(spec.observability.latency_slo_ms, Some(50));
+
+        // Check operation-level override
+        let fast_op = spec
+            .operations
+            .iter()
+            .find(|op| op.path == "/fast")
+            .unwrap();
+        let fast_obs = fast_op.observability.as_ref().unwrap();
+        assert_eq!(fast_obs.trace_sampling, Some(1.0));
+        assert_eq!(fast_obs.latency_slo_ms, Some(10));
+
+        // Check operation without override
+        let slow_op = spec
+            .operations
+            .iter()
+            .find(|op| op.path == "/slow")
+            .unwrap();
+        assert!(slow_op.observability.is_none());
     }
 
     #[test]

@@ -165,6 +165,8 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--listen` | No | `0.0.0.0:8080` | Listen address (ip:port) |
 | `--dev` | No | `false` | Enable development mode |
 | `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
+| `--log-format` | No | `json` | Log format (`json` or `pretty`) |
+| `--otlp-endpoint` | No | - | OpenTelemetry endpoint for trace export (e.g., `http://localhost:4317`) |
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes (1MB) |
 | `--max-headers` | No | `100` | Maximum number of request headers |
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
@@ -195,12 +197,22 @@ barbacane serve --artifact api.bca \
   --max-body-size 5242880 \
   --max-headers 50
 
+# With observability (OTLP export)
+barbacane serve --artifact api.bca \
+  --log-format json \
+  --otlp-endpoint http://otel-collector:4317
+
+# Development mode with pretty logging
+barbacane serve --artifact api.bca --dev --log-format pretty
+
 # All options
 barbacane serve --artifact api.bca \
   --listen 0.0.0.0:8080 \
   --tls-cert /etc/barbacane/certs/server.crt \
   --tls-key /etc/barbacane/certs/server.key \
   --log-level info \
+  --log-format json \
+  --otlp-endpoint http://otel-collector:4317 \
   --max-body-size 1048576 \
   --max-headers 100 \
   --max-header-size 8192 \
@@ -283,6 +295,52 @@ $ echo $?
 | Variable | Description |
 |----------|-------------|
 | `RUST_LOG` | Override log level (e.g., `RUST_LOG=debug`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Alternative to `--otlp-endpoint` flag |
+
+---
+
+## Observability
+
+Barbacane provides built-in observability features:
+
+### Logging
+
+Structured logs are written to stdout in either JSON (default) or pretty format:
+
+```bash
+# JSON format (production)
+barbacane serve --artifact api.bca --log-format json
+
+# Pretty format (development)
+barbacane serve --artifact api.bca --log-format pretty --log-level debug
+```
+
+### Metrics
+
+Prometheus metrics are exposed at `/__barbacane/metrics`:
+
+```bash
+curl http://localhost:8080/__barbacane/metrics
+```
+
+Key metrics include:
+- `barbacane_requests_total` - Request counter by method, path, status
+- `barbacane_request_duration_seconds` - Request latency histogram
+- `barbacane_active_connections` - Current connection count
+- `barbacane_validation_failures_total` - Validation error counter
+
+### Distributed Tracing
+
+Enable OTLP export to send traces to OpenTelemetry Collector:
+
+```bash
+barbacane serve --artifact api.bca \
+  --otlp-endpoint http://otel-collector:4317
+```
+
+Barbacane supports W3C Trace Context propagation (`traceparent`/`tracestate` headers) for distributed tracing across services.
+
+---
 
 ### Secret References
 
