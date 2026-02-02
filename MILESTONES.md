@@ -377,25 +377,32 @@ Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 
 ---
 
-## M11 — Production Readiness
+## M11 — Production Readiness (In Progress)
 
 Performance, testing infrastructure, lifecycle features, and hardening.
 
 **Specs:** SPEC-002 (sections 6, 7), SPEC-007
 
-- [ ] Graceful shutdown — SIGTERM handling, drain in-flight requests (30s), force-close
-- [ ] HTTP/2 — ALPN negotiation, max concurrent streams, window size, frame size
-- [ ] HTTP keep-alive — idle timeout (60s)
-- [ ] `X-Request-Id` header — UUID v4 on every response
-- [ ] `X-Trace-Id` header — trace ID on every response
-- [ ] `Server` header — `barbacane/<version>`, strip upstream `Server`
+### Server Hardening
+- [x] Graceful shutdown — SIGTERM/SIGINT handling, drain in-flight requests with configurable timeout (--shutdown-timeout)
+- [x] HTTP keep-alive — enabled with configurable idle timeout (--keepalive-timeout)
+- [x] `X-Request-Id` header — UUID v4 on every response (propagates incoming header if present)
+- [x] `X-Trace-Id` header — trace ID on every response (extracted from traceparent or generated)
+- [x] `Server` header — `barbacane/<version>` on every response
+- [ ] HTTP/2 support — ALPN negotiation configured, needs connection-level implementation
 - [ ] API lifecycle — `deprecated: true` support, `x-barbacane-sunset` header
-- [ ] `barbacane-test` crate — `TestGateway`, `PluginHarness`, `SpecBuilder`, `RequestBuilder`
+
+### Testing Infrastructure
+- [x] `barbacane-test` crate — `TestGateway`, `PluginHarness`, `SpecBuilder`, `RequestBuilder`
 - [ ] Fixture specs — minimal, full-crud, async-kafka, multi-spec, invalid-* specs
 - [ ] Performance benchmarks — criterion suite (routing, validation, WASM, full pipeline)
-- [ ] CI/CD pipeline — fmt, clippy, test, bench, build, integration test
 - [ ] Benchmark regression check — fail CI on >10% regression
-- [ ] Artifact checksum verification — SHA-256 check at data plane startup (exit code 11)
-- [ ] Startup exit codes — 10–15 for each failure category
-- [ ] Multiple specs in one artifact — `barbacane-control compile --specs a.yaml b.yaml`
-- [ ] Routing conflict detection — E1010 across specs
+
+### CI/CD
+- [ ] CI/CD pipeline — fmt, clippy, test, bench, build, integration test
+
+### Already Implemented (from previous milestones)
+- [x] Artifact checksum verification — SHA-256 check at data plane startup (exit code 11)
+- [x] Startup exit codes — 10–15 for each failure category (13 for secret resolution failure)
+- [x] Multiple specs in one artifact — `barbacane compile --spec a.yaml --spec b.yaml`
+- [x] Routing conflict detection — E1010 across specs

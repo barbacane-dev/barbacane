@@ -176,6 +176,8 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
 | `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
 | `--tls-key` | No | - | Path to TLS private key file (PEM format) |
+| `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds |
+| `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 
 ### Examples
 
@@ -268,6 +270,45 @@ Requests exceeding limits receive an RFC 9457 problem details response:
   "status": 400,
   "detail": "request body too large: 2000000 bytes exceeds limit of 1048576 bytes"
 }
+```
+
+### Graceful Shutdown
+
+The gateway handles shutdown signals (SIGTERM, SIGINT) gracefully:
+
+1. **Stop accepting** new connections immediately
+2. **Drain** in-flight requests for up to `--shutdown-timeout` seconds (default: 30)
+3. **Force close** any remaining connections after timeout
+4. **Exit** with code 0 on successful shutdown
+
+```bash
+# Send SIGTERM to gracefully shutdown
+kill -TERM $(pgrep barbacane)
+
+# Output during graceful shutdown
+barbacane: received shutdown signal, draining connections...
+barbacane: waiting for 3 active connection(s) to complete...
+barbacane: all connections drained, shutting down
+```
+
+### Response Headers
+
+Every response includes these standard headers:
+
+| Header | Description |
+|--------|-------------|
+| `Server` | `barbacane/<version>` (e.g., `barbacane/0.1.0`) |
+| `X-Request-Id` | Request ID - propagates incoming header or generates UUID v4 |
+| `X-Trace-Id` | Trace ID - extracted from `traceparent` header or generated |
+
+Example response headers:
+
+```
+HTTP/1.1 200 OK
+Server: barbacane/0.1.0
+X-Request-Id: 550e8400-e29b-41d4-a716-446655440000
+X-Trace-Id: 4bf92f3577b34da6a3ce929d0e0e4736
+Content-Type: application/json
 ```
 
 ### Exit Codes
