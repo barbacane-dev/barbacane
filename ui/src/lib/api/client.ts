@@ -1,16 +1,28 @@
 import type {
+  AddPluginToProjectRequest,
+  ApiKey,
+  ApiKeyCreated,
   Artifact,
   Compilation,
   CompileRequest,
+  CreateApiKeyRequest,
+  CreateProjectRequest,
+  DataPlane,
+  DeployRequest,
+  DeployResponse,
   HealthResponse,
   InitRequest,
   InitResponse,
   Plugin,
   PluginType,
   ProblemDetails,
+  Project,
+  ProjectPluginConfig,
   Spec,
   SpecRevision,
   SpecType,
+  UpdateProjectPluginRequest,
+  UpdateProjectRequest,
   UploadResponse,
 } from './types'
 
@@ -81,14 +93,23 @@ export async function uploadSpec(file: File): Promise<UploadResponse> {
   const formData = new FormData()
   formData.append('file', file)
 
+  console.log('Uploading to:', `${API_BASE}/specs`)
   const response = await fetch(`${API_BASE}/specs`, {
     method: 'POST',
     body: formData,
   })
 
+  console.log('Response status:', response.status, response.statusText)
+
   if (!response.ok) {
-    const problem = (await response.json()) as ProblemDetails
-    throw new ApiError(response.status, problem)
+    const text = await response.text()
+    console.error('Error response:', text)
+    try {
+      const problem = JSON.parse(text) as ProblemDetails
+      throw new ApiError(response.status, problem)
+    } catch {
+      throw new Error(`Upload failed: ${response.status} ${response.statusText} - ${text}`)
+    }
   }
 
   return response.json() as Promise<UploadResponse>
@@ -220,6 +241,167 @@ export async function initProject(data: InitRequest): Promise<InitResponse> {
   return request<InitResponse>('/init', {
     method: 'POST',
     body: JSON.stringify(data),
+  })
+}
+
+// Projects
+export async function listProjects(): Promise<Project[]> {
+  return request<Project[]>('/projects')
+}
+
+export async function createProject(data: CreateProjectRequest): Promise<Project> {
+  return request<Project>('/projects', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getProject(id: string): Promise<Project> {
+  return request<Project>(`/projects/${id}`)
+}
+
+export async function updateProject(
+  id: string,
+  data: UpdateProjectRequest
+): Promise<Project> {
+  return request<Project>(`/projects/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  return request<void>(`/projects/${id}`, { method: 'DELETE' })
+}
+
+// Project specs
+export async function listProjectSpecs(projectId: string): Promise<Spec[]> {
+  return request<Spec[]>(`/projects/${projectId}/specs`)
+}
+
+export async function uploadSpecToProject(
+  projectId: string,
+  file: File
+): Promise<UploadResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const response = await fetch(`${API_BASE}/projects/${projectId}/specs`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const problem = (await response.json()) as ProblemDetails
+    throw new ApiError(response.status, problem)
+  }
+
+  return response.json() as Promise<UploadResponse>
+}
+
+// Project plugins
+export async function listProjectPlugins(
+  projectId: string
+): Promise<ProjectPluginConfig[]> {
+  return request<ProjectPluginConfig[]>(`/projects/${projectId}/plugins`)
+}
+
+export async function addPluginToProject(
+  projectId: string,
+  data: AddPluginToProjectRequest
+): Promise<ProjectPluginConfig> {
+  return request<ProjectPluginConfig>(`/projects/${projectId}/plugins`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function updateProjectPlugin(
+  projectId: string,
+  pluginName: string,
+  data: UpdateProjectPluginRequest
+): Promise<ProjectPluginConfig> {
+  return request<ProjectPluginConfig>(
+    `/projects/${projectId}/plugins/${pluginName}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }
+  )
+}
+
+export async function removePluginFromProject(
+  projectId: string,
+  pluginName: string
+): Promise<void> {
+  return request<void>(`/projects/${projectId}/plugins/${pluginName}`, {
+    method: 'DELETE',
+  })
+}
+
+// Project compilations and artifacts
+export async function listProjectCompilations(
+  projectId: string
+): Promise<Compilation[]> {
+  return request<Compilation[]>(`/projects/${projectId}/compilations`)
+}
+
+export async function listProjectArtifacts(projectId: string): Promise<Artifact[]> {
+  return request<Artifact[]>(`/projects/${projectId}/artifacts`)
+}
+
+// Project API keys
+export async function listProjectApiKeys(projectId: string): Promise<ApiKey[]> {
+  return request<ApiKey[]>(`/projects/${projectId}/api-keys`)
+}
+
+export async function createProjectApiKey(
+  projectId: string,
+  data: CreateApiKeyRequest
+): Promise<ApiKeyCreated> {
+  return request<ApiKeyCreated>(`/projects/${projectId}/api-keys`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function revokeProjectApiKey(
+  projectId: string,
+  keyId: string
+): Promise<void> {
+  return request<void>(`/projects/${projectId}/api-keys/${keyId}`, {
+    method: 'DELETE',
+  })
+}
+
+// Project data planes
+export async function listProjectDataPlanes(projectId: string): Promise<DataPlane[]> {
+  return request<DataPlane[]>(`/projects/${projectId}/data-planes`)
+}
+
+export async function getProjectDataPlane(
+  projectId: string,
+  dataPlaneId: string
+): Promise<DataPlane> {
+  return request<DataPlane>(`/projects/${projectId}/data-planes/${dataPlaneId}`)
+}
+
+export async function disconnectProjectDataPlane(
+  projectId: string,
+  dataPlaneId: string
+): Promise<void> {
+  return request<void>(`/projects/${projectId}/data-planes/${dataPlaneId}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function deployToProjectDataPlanes(
+  projectId: string,
+  data?: DeployRequest
+): Promise<DeployResponse> {
+  return request<DeployResponse>(`/projects/${projectId}/deploy`, {
+    method: 'POST',
+    body: JSON.stringify(data ?? {}),
   })
 }
 

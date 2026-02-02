@@ -18,6 +18,8 @@ tags:
     description: Health check endpoints
   - name: Init
     description: Project initialization
+  - name: Projects
+    description: Project management
   - name: Specs
     description: API specification management
   - name: Plugins
@@ -26,6 +28,10 @@ tags:
     description: Compiled artifact management
   - name: Compilations
     description: Async compilation job management
+  - name: DataPlanes
+    description: Connected data plane management
+  - name: ApiKeys
+    description: API key management for data plane authentication
 
 paths:
   /health:
@@ -573,6 +579,321 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
 
+  # Projects
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List projects
+      description: List all projects.
+      operationId: listProjects
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+
+    post:
+      tags: [Projects]
+      summary: Create project
+      description: Create a new project.
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          description: Invalid request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /projects/{projectId}:
+    get:
+      tags: [Projects]
+      summary: Get project
+      description: Get a specific project by ID.
+      operationId: getProject
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '404':
+          description: Project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    put:
+      tags: [Projects]
+      summary: Update project
+      description: Update a project.
+      operationId: updateProject
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectRequest'
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '404':
+          description: Project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    delete:
+      tags: [Projects]
+      summary: Delete project
+      description: Delete a project and all its resources.
+      operationId: deleteProject
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '204':
+          description: Project deleted
+        '404':
+          description: Project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # Project Data Planes
+  /projects/{projectId}/data-planes:
+    get:
+      tags: [DataPlanes]
+      summary: List connected data planes
+      description: List all data planes connected to this project.
+      operationId: listProjectDataPlanes
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: List of connected data planes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DataPlane'
+        '404':
+          description: Project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /projects/{projectId}/data-planes/{dataPlaneId}:
+    get:
+      tags: [DataPlanes]
+      summary: Get data plane
+      description: Get details for a specific connected data plane.
+      operationId: getProjectDataPlane
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/dataPlaneId'
+      responses:
+        '200':
+          description: Data plane details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataPlane'
+        '404':
+          description: Data plane or project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    delete:
+      tags: [DataPlanes]
+      summary: Disconnect data plane
+      description: Disconnect a data plane from the project. This closes the WebSocket connection.
+      operationId: disconnectProjectDataPlane
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/dataPlaneId'
+      responses:
+        '204':
+          description: Data plane disconnected
+        '404':
+          description: Data plane or project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # Project Deploy
+  /projects/{projectId}/deploy:
+    post:
+      tags: [DataPlanes]
+      summary: Deploy to data planes
+      description: |
+        Notify all connected data planes that a new artifact is available.
+        Data planes will pull and load the artifact.
+      operationId: deployToProjectDataPlanes
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeployRequest'
+      responses:
+        '200':
+          description: Deployment initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeployResponse'
+        '404':
+          description: Project or artifact not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # Project API Keys
+  /projects/{projectId}/api-keys:
+    get:
+      tags: [ApiKeys]
+      summary: List API keys
+      description: List all API keys for a project. Only key prefixes are returned, not full keys.
+      operationId: listProjectApiKeys
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ApiKey'
+        '404':
+          description: Project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    post:
+      tags: [ApiKeys]
+      summary: Create API key
+      description: |
+        Create a new API key for data plane authentication.
+        The full key is only returned once in the response - store it securely.
+      operationId: createProjectApiKey
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+      responses:
+        '201':
+          description: API key created (full key returned only once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreated'
+        '400':
+          description: Invalid request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: API key name already exists
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /projects/{projectId}/api-keys/{keyId}:
+    delete:
+      tags: [ApiKeys]
+      summary: Revoke API key
+      description: Revoke an API key. Data planes using this key will be disconnected.
+      operationId: revokeProjectApiKey
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/apiKeyId'
+      responses:
+        '204':
+          description: API key revoked
+        '404':
+          description: API key or project not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # WebSocket endpoint (documented for reference)
+  /ws/data-plane:
+    get:
+      tags: [DataPlanes]
+      summary: Data plane WebSocket connection
+      description: |
+        WebSocket endpoint for data plane connections. Data planes connect here
+        to register with the control plane, send heartbeats, and receive artifact
+        notifications.
+
+        **Protocol:**
+        1. Connect with WebSocket upgrade
+        2. Send `register` message with project_id and api_key
+        3. Receive `registered` confirmation with data_plane_id
+        4. Send periodic `heartbeat` messages (every 30 seconds)
+        5. Receive `artifact_available` when new deployments are triggered
+
+        **Messages (Data Plane → Control Plane):**
+        - `{"type": "register", "project_id": "uuid", "api_key": "bbk_...", "name": "optional-name"}`
+        - `{"type": "heartbeat", "artifact_id": "uuid"}`
+
+        **Messages (Control Plane → Data Plane):**
+        - `{"type": "registered", "data_plane_id": "uuid", "heartbeat_interval_secs": 30}`
+        - `{"type": "artifact_available", "artifact_id": "uuid", "download_url": "/artifacts/{id}/download", "sha256": "..."}`
+        - `{"type": "heartbeat_ack"}`
+      operationId: dataPlaneWebSocket
+      responses:
+        '101':
+          description: WebSocket upgrade successful
+        '401':
+          description: Invalid or missing API key
+
 components:
   parameters:
     specId:
@@ -617,6 +938,33 @@ components:
       description: Plugin version
       schema:
         type: string
+
+    projectId:
+      name: projectId
+      in: path
+      required: true
+      description: Project UUID
+      schema:
+        type: string
+        format: uuid
+
+    dataPlaneId:
+      name: dataPlaneId
+      in: path
+      required: true
+      description: Data plane UUID
+      schema:
+        type: string
+        format: uuid
+
+    apiKeyId:
+      name: keyId
+      in: path
+      required: true
+      description: API key UUID
+      schema:
+        type: string
+        format: uuid
 
   schemas:
     HealthResponse:
@@ -885,3 +1233,188 @@ components:
         content:
           type: string
           description: File content
+
+    Project:
+      type: object
+      required: [id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Project name
+        description:
+          type: string
+          nullable: true
+          description: Optional project description
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Project name
+        description:
+          type: string
+          description: Optional project description
+
+    UpdateProjectRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Project name
+        description:
+          type: string
+          nullable: true
+          description: Project description
+
+    DataPlane:
+      type: object
+      required: [id, project_id, status, metadata, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          nullable: true
+          description: Optional friendly name
+        artifact_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Currently deployed artifact
+        status:
+          type: string
+          enum: [online, offline, deploying]
+          description: Connection status
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last heartbeat timestamp
+        connected_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the data plane connected
+        metadata:
+          type: object
+          description: Additional metadata (version, hostname, etc.)
+        created_at:
+          type: string
+          format: date-time
+
+    ApiKey:
+      type: object
+      required: [id, project_id, name, key_prefix, scopes, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Human-readable key name
+        key_prefix:
+          type: string
+          description: Key prefix for identification (e.g., "bbk_abc1...")
+        scopes:
+          type: array
+          items:
+            type: string
+          description: Granted scopes
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ApiKeyCreated:
+      type: object
+      required: [id, name, key, key_prefix, scopes, created_at]
+      description: Response when creating an API key. The full key is only returned once.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        key:
+          type: string
+          description: The full API key (only returned once, store securely)
+        key_prefix:
+          type: string
+          description: Key prefix for future identification
+        scopes:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CreateApiKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Human-readable key name
+        scopes:
+          type: array
+          items:
+            type: string
+          description: Scopes to grant (defaults to data-plane:connect)
+        expires_at:
+          type: string
+          format: date-time
+          description: Optional expiration time
+
+    DeployRequest:
+      type: object
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+          description: Specific artifact to deploy (defaults to latest)
+
+    DeployResponse:
+      type: object
+      required: [artifact_id, data_planes_notified]
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+          description: The artifact being deployed
+        data_planes_notified:
+          type: integer
+          description: Number of connected data planes notified

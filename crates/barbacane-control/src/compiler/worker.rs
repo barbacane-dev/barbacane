@@ -46,13 +46,18 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
 
     tracing::info!(
         compilation_id = %compilation_id,
-        spec_id = %compilation.spec_id,
+        spec_id = ?compilation.spec_id,
+        project_id = ?compilation.project_id,
         "Starting compilation"
     );
 
-    // Get spec content
+    // Get spec content - require spec_id for now (project-level compilation not yet implemented)
+    let spec_id = compilation
+        .spec_id
+        .ok_or_else(|| anyhow::anyhow!("spec_id is required for compilation"))?;
+
     let spec_revision = specs_repo
-        .get_latest_revision(compilation.spec_id)
+        .get_latest_revision(spec_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Spec revision not found"))?;
 
@@ -93,9 +98,10 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
             hasher.update(&artifact_data);
             let sha256 = hex::encode(hasher.finalize());
 
-            // Store artifact
+            // Store artifact (with project_id if available)
             let artifact = artifacts_repo
                 .create(
+                    compilation.project_id,
                     serde_json::to_value(&manifest)?,
                     artifact_data,
                     &sha256,
@@ -105,12 +111,12 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
 
             // Link artifact to specs
             artifacts_repo
-                .link_to_spec(artifact.id, compilation.spec_id, spec_revision.revision)
+                .link_to_spec(artifact.id, spec_id, spec_revision.revision)
                 .await?;
 
             // Mark compilation succeeded
             compilations_repo
-                .mark_succeeded(artifact.id, artifact.id, serde_json::json!([]))
+                .mark_succeeded(compilation_id, artifact.id, serde_json::json!([]))
                 .await?;
 
             tracing::info!(

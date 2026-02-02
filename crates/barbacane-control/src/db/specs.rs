@@ -23,11 +23,12 @@ impl SpecsRepository {
 
         let row = sqlx::query_as::<_, Spec>(
             r#"
-            INSERT INTO specs (name, current_sha256, spec_type, spec_version)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO specs (project_id, name, current_sha256, spec_type, spec_version)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING *
             "#,
         )
+        .bind(spec.project_id)
         .bind(&spec.name)
         .bind(&spec.sha256)
         .bind(&spec.spec_type)
@@ -52,7 +53,7 @@ impl SpecsRepository {
         Ok(row)
     }
 
-    /// List all specs with optional filtering.
+    /// List all specs with optional filtering (global).
     pub async fn list(
         &self,
         spec_type: Option<&str>,
@@ -78,6 +79,14 @@ impl SpecsRepository {
         q.fetch_all(&self.pool).await
     }
 
+    /// List specs for a specific project.
+    pub async fn list_for_project(&self, project_id: Uuid) -> Result<Vec<Spec>, sqlx::Error> {
+        sqlx::query_as::<_, Spec>("SELECT * FROM specs WHERE project_id = $1 ORDER BY name")
+            .bind(project_id)
+            .fetch_all(&self.pool)
+            .await
+    }
+
     /// Get a spec by ID.
     pub async fn get_by_id(&self, id: Uuid) -> Result<Option<Spec>, sqlx::Error> {
         sqlx::query_as::<_, Spec>("SELECT * FROM specs WHERE id = $1")
@@ -86,9 +95,24 @@ impl SpecsRepository {
             .await
     }
 
-    /// Get a spec by name.
+    /// Get a spec by name (global - deprecated, use get_by_project_and_name).
+    #[deprecated(note = "Use get_by_project_and_name instead")]
+    #[allow(dead_code)]
     pub async fn get_by_name(&self, name: &str) -> Result<Option<Spec>, sqlx::Error> {
         sqlx::query_as::<_, Spec>("SELECT * FROM specs WHERE name = $1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+    }
+
+    /// Get a spec by project ID and name.
+    pub async fn get_by_project_and_name(
+        &self,
+        project_id: Uuid,
+        name: &str,
+    ) -> Result<Option<Spec>, sqlx::Error> {
+        sqlx::query_as::<_, Spec>("SELECT * FROM specs WHERE project_id = $1 AND name = $2")
+            .bind(project_id)
             .bind(name)
             .fetch_optional(&self.pool)
             .await
@@ -112,10 +136,12 @@ impl SpecsRepository {
         .await
     }
 
-    /// Update a spec by name with a new revision.
+    /// Update a spec by project and name with a new revision.
     /// Returns the updated spec and the new revision number.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update(
         &self,
+        project_id: Uuid,
         name: &str,
         spec_type: &str,
         spec_version: &str,
@@ -126,7 +152,8 @@ impl SpecsRepository {
         let mut tx = self.pool.begin().await?;
 
         // Get spec ID
-        let spec: Spec = sqlx::query_as("SELECT * FROM specs WHERE name = $1")
+        let spec: Spec = sqlx::query_as("SELECT * FROM specs WHERE project_id = $1 AND name = $2")
+            .bind(project_id)
             .bind(name)
             .fetch_one(&mut *tx)
             .await?;

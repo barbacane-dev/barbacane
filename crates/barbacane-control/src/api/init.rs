@@ -67,7 +67,7 @@ pub async fn init_project(
         .description
         .unwrap_or_else(|| format!("A Barbacane-powered API for {}", req.name));
 
-    // Generate files
+    // Generate files (no .gitignore - that's only for CLI usage)
     let files = vec![
         ProjectFile {
             path: "barbacane.yaml".to_string(),
@@ -76,10 +76,6 @@ pub async fn init_project(
         ProjectFile {
             path: "api.yaml".to_string(),
             content: generate_spec(&req.name, &req.version, &description, &req.template),
-        },
-        ProjectFile {
-            path: ".gitignore".to_string(),
-            content: generate_gitignore(),
         },
     ];
 
@@ -111,14 +107,7 @@ fn slug(name: &str) -> String {
 
 fn generate_manifest() -> String {
     r#"# Barbacane project manifest
-# See https://barbacane.dev/docs/guide/spec-configuration for details
-
 plugins: {}
-  # Example plugin configuration:
-  # http-upstream:
-  #   path: ./plugins/http-upstream.wasm
-  # jwt-auth:
-  #   path: ./plugins/jwt-auth.wasm
 "#
     .to_string()
 }
@@ -305,28 +294,4 @@ components:
             description = description,
         )
     }
-}
-
-fn generate_gitignore() -> String {
-    r#"# Build artifacts
-*.bca
-target/
-
-# Plugins (download separately)
-plugins/*.wasm
-
-# IDE
-.idea/
-.vscode/
-*.swp
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment
-.env
-.env.local
-"#
-    .to_string()
 }

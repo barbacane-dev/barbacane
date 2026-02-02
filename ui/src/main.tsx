@@ -6,7 +6,7 @@ import './index.css'
 
 import { AuthProvider } from '@/lib/auth'
 import { ProtectedRoute } from '@/components/auth'
-import { RootLayout } from '@/components/layout'
+import { RootLayout, ProjectLayout } from '@/components/layout'
 import {
   SpecsPage,
   PluginsPage,
@@ -15,6 +15,12 @@ import {
   SettingsPage,
   LoginPage,
   InitPage,
+  ProjectsPage,
+  ProjectSpecsPage,
+  ProjectPluginsPage,
+  ProjectBuildsPage,
+  ProjectDeployPage,
+  ProjectSettingsPage,
 } from '@/pages'
 
 const queryClient = new QueryClient({
@@ -39,13 +45,31 @@ const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
-      { index: true, element: <Navigate to="/specs" replace /> },
+      // Landing page is now projects
+      { index: true, element: <Navigate to="/projects" replace /> },
+      // Projects
+      { path: 'projects', element: <ProjectsPage /> },
+      {
+        path: 'projects/:id',
+        element: <ProjectLayout />,
+        children: [
+          { index: true, element: <Navigate to="specs" replace /> },
+          { path: 'specs', element: <ProjectSpecsPage /> },
+          { path: 'plugins', element: <ProjectPluginsPage /> },
+          { path: 'builds', element: <ProjectBuildsPage /> },
+          { path: 'deploy', element: <ProjectDeployPage /> },
+          { path: 'settings', element: <ProjectSettingsPage /> },
+        ],
+      },
+      // Global pages (backward compatibility + admin)
       { path: 'specs', element: <SpecsPage /> },
-      { path: 'plugins', element: <PluginsPage /> },
+      { path: 'plugin-registry', element: <PluginsPage /> },
       { path: 'artifacts', element: <ArtifactsPage /> },
       { path: 'activity', element: <ActivityPage /> },
       { path: 'init', element: <InitPage /> },
       { path: 'settings', element: <SettingsPage /> },
+      // Legacy route redirect
+      { path: 'plugins', element: <Navigate to="/plugin-registry" replace /> },
     ],
   },
 ])

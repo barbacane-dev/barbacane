@@ -93,6 +93,18 @@ impl ProblemDetails {
         }
     }
 
+    /// Create a 500 Internal Server Error with details.
+    pub fn internal_error_with_detail(detail: impl Into<String>) -> Self {
+        Self {
+            error_type: "urn:barbacane:error:internal-error".into(),
+            title: "Internal Server Error".into(),
+            status: 500,
+            detail: Some(detail.into()),
+            instance: None,
+            errors: vec![],
+        }
+    }
+
     /// Create a 503 Service Unavailable error.
     #[allow(dead_code)]
     pub fn service_unavailable(detail: impl Into<String>) -> Self {
