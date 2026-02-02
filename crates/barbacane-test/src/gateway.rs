@@ -1638,4 +1638,237 @@ paths:
             }
         }
     }
+
+    // ==================== Rate Limit Tests ====================
+
+    #[tokio::test]
+    async fn test_rate_limit_allows_within_quota() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/rate-limit.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // First request should be allowed
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/limited")
+            .header("x-client-id", "test-client-1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Check rate limit headers in response (added to request, passed through)
+        // The mock dispatcher returns our configured response
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_blocks_over_quota() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/rate-limit.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let client_id = format!("test-client-quota-{}", std::process::id());
+
+        // Send 3 requests (the quota)
+        for i in 0..3 {
+            let resp = gateway
+                .request_builder(reqwest::Method::GET, "/limited")
+                .header("x-client-id", &client_id)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200, "request {} should be allowed", i + 1);
+        }
+
+        // 4th request should be rate limited
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/limited")
+            .header("x-client-id", &client_id)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 429, "request 4 should be rate limited");
+
+        // Check rate limit headers before consuming the body
+        let has_retry_after = resp.headers().contains_key("retry-after");
+        let has_ratelimit_policy = resp.headers().contains_key("ratelimit-policy");
+
+        // Check the response body
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:rate-limit-exceeded");
+        assert_eq!(body["status"], 429);
+
+        // Verify headers
+        assert!(has_retry_after, "should have Retry-After header");
+        assert!(has_ratelimit_policy, "should have RateLimit-Policy header");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_different_clients_separate_quotas() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/rate-limit.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Client A uses 3 requests (full quota)
+        let client_a = format!("client-a-{}", std::process::id());
+        for _ in 0..3 {
+            let resp = gateway
+                .request_builder(reqwest::Method::GET, "/limited")
+                .header("x-client-id", &client_a)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+
+        // Client A is now rate limited
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/limited")
+            .header("x-client-id", &client_a)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 429, "client A should be rate limited");
+
+        // Client B should still have full quota
+        let client_b = format!("client-b-{}", std::process::id());
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/limited")
+            .header("x-client-id", &client_b)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "client B should not be rate limited");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_unlimited_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/rate-limit.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Unlimited endpoint should always work
+        for _ in 0..10 {
+            let resp = gateway.get("/unlimited").await.unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+    }
+
+    // ==================== Cache Tests ====================
+
+    #[tokio::test]
+    async fn test_cache_miss_then_hit() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cache.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // First request should be a cache miss
+        let resp1 = gateway.get("/cached").await.unwrap();
+        assert_eq!(resp1.status(), 200);
+        let x_cache1 = resp1
+            .headers()
+            .get("x-cache")
+            .map(|v| v.to_str().unwrap().to_string());
+        let body1: serde_json::Value = resp1.json().await.unwrap();
+        assert_eq!(body1["message"], "cached response");
+        assert_eq!(x_cache1, Some("MISS".to_string()));
+
+        // Second request should be a cache hit
+        let resp2 = gateway.get("/cached").await.unwrap();
+        assert_eq!(resp2.status(), 200);
+        let x_cache2 = resp2
+            .headers()
+            .get("x-cache")
+            .map(|v| v.to_str().unwrap().to_string());
+        assert_eq!(x_cache2, Some("HIT".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_vary_header() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cache.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request with Accept-Language: en
+        let resp1 = gateway
+            .request_builder(reqwest::Method::GET, "/cached-with-vary")
+            .header("accept-language", "en")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp1.status(), 200);
+        let x_cache1 = resp1
+            .headers()
+            .get("x-cache")
+            .map(|v| v.to_str().unwrap().to_string());
+        assert_eq!(x_cache1, Some("MISS".to_string()));
+
+        // Same request should hit cache
+        let resp2 = gateway
+            .request_builder(reqwest::Method::GET, "/cached-with-vary")
+            .header("accept-language", "en")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), 200);
+        let x_cache2 = resp2
+            .headers()
+            .get("x-cache")
+            .map(|v| v.to_str().unwrap().to_string());
+        assert_eq!(x_cache2, Some("HIT".to_string()));
+
+        // Different Accept-Language should miss cache
+        let resp3 = gateway
+            .request_builder(reqwest::Method::GET, "/cached-with-vary")
+            .header("accept-language", "fr")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp3.status(), 200);
+        let x_cache3 = resp3
+            .headers()
+            .get("x-cache")
+            .map(|v| v.to_str().unwrap().to_string());
+        assert_eq!(x_cache3, Some("MISS".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_cache_post_not_cached() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cache.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // POST requests should not be cached by default
+        let resp1 = gateway.post("/post-not-cached", "{}").await.unwrap();
+        assert_eq!(resp1.status(), 200);
+        // POST shouldn't even have x-cache header since it's not cacheable
+        let has_x_cache = resp1.headers().contains_key("x-cache");
+        resp1.text().await.unwrap(); // consume body
+
+        // Second POST should also not have cache header
+        let resp2 = gateway.post("/post-not-cached", "{}").await.unwrap();
+        assert_eq!(resp2.status(), 200);
+        let has_x_cache2 = resp2.headers().contains_key("x-cache");
+
+        // Neither should have x-cache since POSTs are not cached
+        assert!(!has_x_cache, "POST should not be cached");
+        assert!(!has_x_cache2, "POST should not be cached");
+    }
+
+    #[tokio::test]
+    async fn test_uncached_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cache.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Endpoint without cache middleware
+        let resp = gateway.get("/uncached").await.unwrap();
+        assert_eq!(resp.status(), 200);
+        // Should not have x-cache header
+        assert!(!resp.headers().contains_key("x-cache"));
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "not cached");
+    }
 }

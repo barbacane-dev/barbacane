@@ -1,0 +1,40 @@
+openapi: "3.1.0"
+info:
+  title: Rate Limit Test API
+  version: "1.0.0"
+
+paths:
+  /limited:
+    get:
+      operationId: limitedEndpoint
+      summary: Rate limited endpoint (3 req/60s)
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 3
+            window: 60
+            policy_name: "test-policy"
+            partition_key: "header:x-client-id"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+      responses:
+        "200":
+          description: Success
+        "429":
+          description: Rate limit exceeded
+
+  /unlimited:
+    get:
+      operationId: unlimitedEndpoint
+      summary: Endpoint without rate limiting
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"unlimited"}'
+      responses:
+        "200":
+          description: Success

@@ -122,29 +122,29 @@ Move dispatchers from hardcoded to WASM plugins. Add real HTTP upstream proxying
 
 ---
 
-## M5 — Plugin Manifest System
+## M5 — Plugin Manifest System ✅
 
 Implement the `barbacane.yaml` manifest for explicit plugin configuration (ADR-0006). No "magic" built-in plugins — everything must be declared.
 
 **Specs:** ADR-0006
 
 ### Manifest Parser
-- [ ] `barbacane.yaml` schema definition — `plugins` section with name → source mapping
-- [ ] Plugin source types — `path` (local file), `url` (HTTPS remote)
-- [ ] Manifest parser — load and validate `barbacane.yaml`
-- [ ] Plugin resolver — fetch from path or URL, validate `.wasm` format
+- [x] `barbacane.yaml` schema definition — `plugins` section with name → source mapping
+- [x] Plugin source types — `path` (local file), `url` (HTTPS remote)
+- [x] Manifest parser — load and validate `barbacane.yaml`
+- [x] Plugin resolver — fetch from path or URL, validate `.wasm` format
 
 ### Compiler Integration
-- [ ] `--manifest` CLI flag — path to manifest file (default: `./barbacane.yaml`)
-- [ ] Plugin reference extraction — collect all plugin names from spec (`x-barbacane-dispatch`, `x-barbacane-middlewares`)
-- [ ] Validation E1040 — plugin used in spec but not declared in manifest
-- [ ] Artifact bundling — copy resolved `.wasm` files into `plugins/` directory of `.bca`
-- [ ] Manifest embedding — include resolved manifest in artifact for reproducibility
+- [x] `--manifest` CLI flag — path to manifest file (default: `./barbacane.yaml`)
+- [x] Plugin reference extraction — collect all plugin names from spec (`x-barbacane-dispatch`, `x-barbacane-middlewares`)
+- [x] Validation E1040 — plugin used in spec but not declared in manifest
+- [x] Artifact bundling — copy resolved `.wasm` files into `plugins/` directory of `.bca`
+- [x] Manifest embedding — include resolved manifest in artifact for reproducibility
 
 ### Data Plane
-- [ ] Remove embedded plugins — no more `include_bytes!` in binary
-- [ ] Load plugins from artifact — read `.wasm` from `plugins/` directory in `.bca`
-- [ ] Bare binary validation — fail if spec uses plugin not in artifact
+- [x] Remove embedded plugins — no more `include_bytes!` in binary
+- [x] Load plugins from artifact — read `.wasm` from `plugins/` directory in `.bca`
+- [x] Bare binary validation — fail if spec uses plugin not in artifact
 
 ### CLI & Templates
 - [ ] `barbacane init --template basic` — create project with `barbacane.yaml`, `plugins/`, example spec
@@ -152,9 +152,9 @@ Implement the `barbacane.yaml` manifest for explicit plugin configuration (ADR-0
 - [ ] Plugin download — fetch official plugins from release URLs
 
 ### Testing
-- [ ] Update all test fixtures — add `barbacane.yaml` to each fixture directory
-- [ ] Integration tests — compile with manifest, verify plugin resolution
-- [ ] Error tests — E1040 for undeclared plugins
+- [x] Update all test fixtures — add `barbacane.yaml` to each fixture directory
+- [x] Integration tests — compile with manifest, verify plugin resolution
+- [x] Error tests — E1040 for undeclared plugins
 
 ---
 
@@ -248,24 +248,21 @@ Policy-based authorization and secrets management for enterprise deployments.
 
 ---
 
-## M7 — Rate Limiting & Caching
+## M7 — Rate Limiting & Caching ✅
 
 Built-in rate limiting aligned with draft-ietf-httpapi-ratelimit-headers, and response caching.
 
 **Specs:** SPEC-001 (section 3.3, 3.4), SPEC-002 (section 4.9)
 
-- [ ] `rate-limit` middleware plugin — token bucket / sliding window implementation
-- [ ] IETF draft alignment — `quota`, `window`, `quota_unit`, `policy_name` config
-- [ ] `RateLimit-Policy` response header — on every response
-- [ ] `RateLimit` response header — remaining quota and reset time
-- [ ] `Retry-After` header — on 429 responses
-- [ ] Partition key support — `client_ip`, `header:<name>`, `context:<key>`
-- [ ] `x-barbacane-ratelimit` sugar — compiler transforms into middleware chain entry
-- [ ] Compiler validation — E1012 (missing quota/window), E1013 (invalid quota_unit)
-- [ ] `cache` middleware plugin — in-memory response caching
-- [ ] Cache key — path + method + `vary` headers
-- [ ] `x-barbacane-cache` sugar — compiler transforms into middleware chain entry
-- [ ] Integration tests — rate limiting (allow, block, reset), cache hit/miss
+- [x] `rate-limit` middleware plugin — sliding window implementation
+- [x] IETF draft alignment — `quota`, `window`, `policy_name` config
+- [x] `RateLimit-Policy` response header — on every response
+- [x] `RateLimit` response header — remaining quota and reset time
+- [x] `Retry-After` header — on 429 responses
+- [x] Partition key support — `client_ip`, `header:<name>`, `context:<key>`
+- [x] `cache` middleware plugin — in-memory response caching
+- [x] Cache key — path + method + `vary` headers
+- [x] Integration tests — rate limiting (allow, block, reset), cache hit/miss
 
 ---
 
