@@ -422,6 +422,8 @@ Every response includes these standard headers:
 | `Server` | `barbacane/<version>` (e.g., `barbacane/0.1.0`) |
 | `X-Request-Id` | Request ID - propagates incoming header or generates UUID v4 |
 | `X-Trace-Id` | Trace ID - extracted from `traceparent` header or generated |
+| `X-Content-Type-Options` | `nosniff` - prevents MIME sniffing attacks |
+| `X-Frame-Options` | `DENY` - prevents clickjacking via iframes |
 
 Example response headers:
 
@@ -430,6 +432,8 @@ HTTP/1.1 200 OK
 Server: barbacane/0.1.0
 X-Request-Id: 550e8400-e29b-41d4-a716-446655440000
 X-Trace-Id: 4bf92f3577b34da6a3ce929d0e0e4736
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
 Content-Type: application/json
 ```
 

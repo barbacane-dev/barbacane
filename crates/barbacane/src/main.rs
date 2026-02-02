@@ -401,16 +401,28 @@ impl Gateway {
         })
     }
 
-    /// Add standard headers to a response (Server, X-Request-Id, X-Trace-Id).
+    /// Add standard headers to a response.
+    ///
+    /// Includes:
+    /// - Server version
+    /// - Request/trace IDs for observability
+    /// - Security headers (X-Content-Type-Options, X-Frame-Options)
     fn add_standard_headers(
         mut response: Response<Full<Bytes>>,
         request_id: &str,
         trace_id: &str,
     ) -> Response<Full<Bytes>> {
         let headers = response.headers_mut();
+
+        // Observability headers
         headers.insert("server", SERVER_VERSION.parse().unwrap());
         headers.insert("x-request-id", request_id.parse().unwrap());
         headers.insert("x-trace-id", trace_id.parse().unwrap());
+
+        // Security headers (enabled by default)
+        headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+        headers.insert("x-frame-options", "DENY".parse().unwrap());
+
         response
     }
 
