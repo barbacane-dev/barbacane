@@ -359,7 +359,10 @@ impl TestGateway {
 pub async fn assert_status(resp: reqwest::Response, expected: u16) {
     let status = resp.status().as_u16();
     if status != expected {
-        let body = resp.text().await.unwrap_or_else(|e| format!("<error reading body: {}>", e));
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("<error reading body: {}>", e));
         panic!(
             "Expected status {} but got {}. Response body:\n{}",
             expected, status, body
