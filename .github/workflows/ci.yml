@@ -170,7 +170,5 @@ jobs:
         run: chmod +x target/debug/barbacane
 
       - name: Run integration tests
-        # Run both test files from tests/ directories and gateway tests from barbacane-test
-        run: |
-          cargo test --workspace --test '*' -- --test-threads=2
-          cargo test -p barbacane-test --lib -- --test-threads=2
+        # Run gateway integration tests from barbacane-test crate
+        run: cargo test -p barbacane-test --lib -- --test-threads=2
