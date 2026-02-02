@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateJsonSchema } from './use-json-schema'
+import { validateJsonSchema, generateSkeletonFromSchema, generateSkeletonWithComments } from './use-json-schema'
 
 describe('validateJsonSchema', () => {
   describe('with empty or no schema', () => {
@@ -293,5 +293,171 @@ describe('validateJsonSchema', () => {
       expect(result.valid).toBe(false)
       expect(result.errors.length).toBeGreaterThanOrEqual(2)
     })
+  })
+})
+
+describe('generateSkeletonFromSchema', () => {
+  it('returns empty object for empty schema', () => {
+    const result = generateSkeletonFromSchema({})
+    expect(result).toEqual({})
+  })
+
+  it('returns empty object for null schema', () => {
+    const result = generateSkeletonFromSchema(null)
+    expect(result).toEqual({})
+  })
+
+  it('generates required fields only by default', () => {
+    const schema = {
+      type: 'object',
+      required: ['url'],
+      properties: {
+        url: { type: 'string', format: 'uri' },
+        timeout: { type: 'number' },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result).toEqual({ url: 'https://example.com' })
+    expect(result).not.toHaveProperty('timeout')
+  })
+
+  it('includes optional fields with defaults', () => {
+    const schema = {
+      type: 'object',
+      required: ['url'],
+      properties: {
+        url: { type: 'string', format: 'uri' },
+        timeout: { type: 'number', default: 30 },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result).toEqual({ url: 'https://example.com', timeout: 30 })
+  })
+
+  it('uses first enum value', () => {
+    const schema = {
+      type: 'object',
+      required: ['method'],
+      properties: {
+        method: { type: 'string', enum: ['GET', 'POST', 'PUT'] },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result).toEqual({ method: 'GET' })
+  })
+
+  it('uses minimum for numbers when available', () => {
+    const schema = {
+      type: 'object',
+      required: ['retries'],
+      properties: {
+        retries: { type: 'integer', minimum: 1 },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result).toEqual({ retries: 1 })
+  })
+
+  it('generates correct format placeholders', () => {
+    const schema = {
+      type: 'object',
+      required: ['email', 'website'],
+      properties: {
+        email: { type: 'string', format: 'email' },
+        website: { type: 'string', format: 'uri' },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result.email).toBe('user@example.com')
+    expect(result.website).toBe('https://example.com')
+  })
+
+  it('generates nested objects', () => {
+    const schema = {
+      type: 'object',
+      required: ['config'],
+      properties: {
+        config: {
+          type: 'object',
+          required: ['enabled'],
+          properties: {
+            enabled: { type: 'boolean' },
+            limit: { type: 'number', default: 100 },
+          },
+        },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result).toEqual({
+      config: { enabled: false, limit: 100 },
+    })
+  })
+
+  it('generates arrays with one item if items schema exists', () => {
+    const schema = {
+      type: 'object',
+      required: ['tags'],
+      properties: {
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result).toEqual({ tags: [''] })
+  })
+
+  it('handles http-upstream schema correctly', () => {
+    const schema = {
+      type: 'object',
+      required: ['url'],
+      properties: {
+        url: { type: 'string', format: 'uri' },
+        path: { type: 'string' },
+        timeout: { type: 'number', default: 30, minimum: 0 },
+      },
+    }
+    const result = generateSkeletonFromSchema(schema)
+    expect(result).toEqual({
+      url: 'https://example.com',
+      timeout: 30,
+    })
+  })
+})
+
+describe('generateSkeletonWithComments', () => {
+  it('returns {} for empty schema', () => {
+    const result = generateSkeletonWithComments({})
+    expect(result).toBe('{}')
+  })
+
+  it('generates formatted output with comments', () => {
+    const schema = {
+      type: 'object',
+      required: ['url'],
+      properties: {
+        url: { type: 'string', format: 'uri' },
+        timeout: { type: 'number', minimum: 0, maximum: 300 },
+      },
+    }
+    const result = generateSkeletonWithComments(schema)
+    expect(result).toContain('"url"')
+    expect(result).toContain('// required, string, format: uri')
+    expect(result).toContain('// "timeout"')
+    expect(result).toContain('min: 0')
+    expect(result).toContain('max: 300')
+  })
+
+  it('shows enum options in comments', () => {
+    const schema = {
+      type: 'object',
+      required: ['method'],
+      properties: {
+        method: { type: 'string', enum: ['GET', 'POST'] },
+      },
+    }
+    const result = generateSkeletonWithComments(schema)
+    expect(result).toContain('options: GET | POST')
   })
 })

@@ -503,6 +503,30 @@ Custom dispatchers can be implemented as WASM plugins using the Plugin SDK. The 
 
 ### Planned Dispatchers
 
+The following dispatchers are planned for future releases:
+
+#### AsyncAPI Dispatchers (Kafka, NATS)
+
+Barbacane supports parsing AsyncAPI 3.x specifications. Message broker dispatchers are planned:
+
+```yaml
+# Planned Kafka dispatcher
+x-barbacane-dispatch:
+  name: kafka
+  config:
+    broker: "kafka.internal:9092"
+    topic: "orders"
+```
+
+```yaml
+# Planned NATS dispatcher
+x-barbacane-dispatch:
+  name: nats
+  config:
+    url: "nats://nats.internal:4222"
+    subject: "events.orders"
+```
+
 #### gRPC Dispatcher
 
 ```yaml
@@ -530,10 +554,6 @@ x-barbacane-dispatch:
         }
       }
 ```
-
-#### Lambda Dispatcher (Planned)
-
-Uses AWS SigV4 signing for direct Lambda invocation (not yet implemented). For now, use Lambda Function URLs with the built-in `lambda` dispatcher.
 
 ---
 
