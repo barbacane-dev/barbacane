@@ -1,4 +1,5 @@
-.PHONY: all test test-verbose clippy fmt check build release plugins clean help
+.PHONY: all test test-verbose clippy fmt check build release plugins clean help \
+        control-plane ui dev db-up db-down db-reset
 
 # Default target
 all: check test
@@ -64,10 +65,61 @@ clean:
 		fi \
 	done
 
+# =============================================================================
+# Development servers
+# =============================================================================
+
+# Default database URL for local development
+DATABASE_URL ?= postgres://barbacane:barbacane@localhost:5432/barbacane
+
+# Start the control plane server
+control-plane:
+	cargo run -p barbacane-control -- serve --database-url $(DATABASE_URL)
+
+# Start the UI development server
+ui:
+	cd ui && npm run dev
+
+# Start both control plane and UI (requires terminal multiplexer or run in separate terminals)
+dev:
+	@echo "Starting development environment..."
+	@echo "Run 'make control-plane' in one terminal"
+	@echo "Run 'make ui' in another terminal"
+	@echo ""
+	@echo "Or use: make dev-tmux (requires tmux)"
+
+# Start dev environment with tmux
+dev-tmux:
+	@command -v tmux >/dev/null 2>&1 || { echo "tmux is required but not installed."; exit 1; }
+	tmux new-session -d -s barbacane 'make control-plane' \; \
+		split-window -h 'make ui' \; \
+		attach
+
+# =============================================================================
+# Database commands
+# =============================================================================
+
+# Start the database (requires docker-compose)
+db-up:
+	docker-compose up -d postgres
+
+# Stop the database
+db-down:
+	docker-compose down
+
+# Reset the database (stop, remove volume, start fresh)
+db-reset:
+	docker-compose down -v
+	docker-compose up -d postgres
+	@echo "Waiting for database to be ready..."
+	@sleep 3
+	@echo "Database reset complete"
+
 # Show help
 help:
 	@echo "Barbacane Makefile targets:"
 	@echo ""
+	@echo "Build & Test:"
 	@echo "  make              - Run check + test (default)"
 	@echo "  make test         - Run all workspace tests"
 	@echo "  make test-verbose - Run tests with output"
@@ -80,4 +132,18 @@ help:
 	@echo "  make release      - Build release"
 	@echo "  make plugins      - Build all WASM plugins"
 	@echo "  make clean        - Clean all build artifacts"
-	@echo "  make help         - Show this help"
+	@echo ""
+	@echo "Development:"
+	@echo "  make control-plane - Start control plane server (port 9090)"
+	@echo "  make ui            - Start UI dev server (port 5173)"
+	@echo "  make dev           - Show instructions to start both"
+	@echo "  make dev-tmux      - Start both in tmux session"
+	@echo ""
+	@echo "  Override DATABASE_URL: make control-plane DATABASE_URL=postgres://..."
+	@echo ""
+	@echo "Database:"
+	@echo "  make db-up         - Start PostgreSQL container"
+	@echo "  make db-down       - Stop PostgreSQL container"
+	@echo "  make db-reset      - Reset database (removes all data)"
+	@echo ""
+	@echo "  make help          - Show this help"

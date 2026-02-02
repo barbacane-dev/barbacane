@@ -84,6 +84,14 @@ pub struct ArtifactNotification {
     pub sha256: String,
 }
 
+/// Response to send back to the control plane after downloading an artifact.
+#[derive(Debug, Clone)]
+pub struct ArtifactDownloadedResponse {
+    pub artifact_id: Uuid,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 /// Control plane client that maintains connection and handles messages.
 pub struct ControlPlaneClient {
     config: ControlPlaneConfig,
@@ -96,15 +104,23 @@ impl ControlPlaneClient {
     }
 
     /// Start the connection loop in a background task.
-    /// Returns a receiver for artifact notifications.
-    pub fn start(self, shutdown_rx: watch::Receiver<bool>) -> mpsc::Receiver<ArtifactNotification> {
-        let (tx, rx) = mpsc::channel::<ArtifactNotification>(16);
+    /// Returns a receiver for artifact notifications and a sender for download responses.
+    pub fn start(
+        self,
+        shutdown_rx: watch::Receiver<bool>,
+    ) -> (
+        mpsc::Receiver<ArtifactNotification>,
+        mpsc::Sender<ArtifactDownloadedResponse>,
+    ) {
+        let (artifact_tx, artifact_rx) = mpsc::channel::<ArtifactNotification>(16);
+        let (response_tx, response_rx) = mpsc::channel::<ArtifactDownloadedResponse>(16);
 
         tokio::spawn(async move {
-            self.connection_loop(shutdown_rx, tx).await;
+            self.connection_loop(shutdown_rx, artifact_tx, response_rx)
+                .await;
         });
 
-        rx
+        (artifact_rx, response_tx)
     }
 
     /// Main connection loop with reconnection logic.
@@ -112,6 +128,7 @@ impl ControlPlaneClient {
         &self,
         mut shutdown_rx: watch::Receiver<bool>,
         artifact_tx: mpsc::Sender<ArtifactNotification>,
+        mut response_rx: mpsc::Receiver<ArtifactDownloadedResponse>,
     ) {
         const INITIAL_BACKOFF_MS: u64 = 1000;
         const MAX_BACKOFF_MS: u64 = 60000;
@@ -128,7 +145,10 @@ impl ControlPlaneClient {
 
             tracing::info!(url = %self.config.control_plane_url, "Connecting to control plane");
 
-            match self.try_connect(&mut shutdown_rx, &artifact_tx).await {
+            match self
+                .try_connect(&mut shutdown_rx, &artifact_tx, &mut response_rx)
+                .await
+            {
                 Ok(()) => {
                     // Connection was cleanly closed (e.g., shutdown)
                     return;
@@ -163,6 +183,7 @@ impl ControlPlaneClient {
         &self,
         shutdown_rx: &mut watch::Receiver<bool>,
         artifact_tx: &mpsc::Sender<ArtifactNotification>,
+        response_rx: &mut mpsc::Receiver<ArtifactDownloadedResponse>,
     ) -> Result<(), String> {
         // Connect to WebSocket
         let (ws_stream, _response) = connect_async(&self.config.control_plane_url)
@@ -260,6 +281,28 @@ impl ControlPlaneClient {
                     tracing::debug!("Heartbeat sent");
                 }
 
+                // Artifact download response from main loop
+                Some(response) = response_rx.recv() => {
+                    let msg = DataPlaneMessage::ArtifactDownloaded {
+                        artifact_id: response.artifact_id,
+                        success: response.success,
+                        error: response.error,
+                    };
+
+                    let json = serde_json::to_string(&msg)
+                        .map_err(|e| format!("Failed to serialize artifact downloaded: {}", e))?;
+
+                    if let Err(e) = sender.send(Message::Text(json.into())).await {
+                        tracing::warn!(error = %e, "Failed to send artifact downloaded response");
+                    } else {
+                        tracing::info!(
+                            artifact_id = %response.artifact_id,
+                            success = response.success,
+                            "Sent artifact downloaded response to control plane"
+                        );
+                    }
+                }
+
                 // Incoming messages
                 result = receiver.next() => {
                     match result {
@@ -345,5 +388,185 @@ impl ControlPlaneClient {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_data_plane_message_register_serialization() {
+        let msg = DataPlaneMessage::Register {
+            project_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            api_key: "test-key".to_string(),
+            name: Some("my-data-plane".to_string()),
+            artifact_id: None,
+            metadata: serde_json::json!({"version": "1.0"}),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"register\""));
+        assert!(json.contains("\"project_id\":"));
+        assert!(json.contains("\"api_key\":\"test-key\""));
+        assert!(json.contains("\"name\":\"my-data-plane\""));
+    }
+
+    #[test]
+    fn test_data_plane_message_heartbeat_serialization() {
+        let msg = DataPlaneMessage::Heartbeat {
+            artifact_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
+            uptime_secs: 3600,
+            requests_total: 1000,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"heartbeat\""));
+        assert!(json.contains("\"uptime_secs\":3600"));
+        assert!(json.contains("\"requests_total\":1000"));
+    }
+
+    #[test]
+    fn test_data_plane_message_artifact_downloaded_success() {
+        let artifact_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let msg = DataPlaneMessage::ArtifactDownloaded {
+            artifact_id,
+            success: true,
+            error: None,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"artifact_downloaded\""));
+        assert!(json.contains("\"success\":true"));
+        assert!(!json.contains("\"error\":")); // None should be skipped
+    }
+
+    #[test]
+    fn test_data_plane_message_artifact_downloaded_failure() {
+        let artifact_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let msg = DataPlaneMessage::ArtifactDownloaded {
+            artifact_id,
+            success: false,
+            error: Some("checksum mismatch".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"artifact_downloaded\""));
+        assert!(json.contains("\"success\":false"));
+        assert!(json.contains("\"error\":\"checksum mismatch\""));
+    }
+
+    #[test]
+    fn test_control_plane_message_registered_deserialization() {
+        let json = r#"{
+            "type": "registered",
+            "data_plane_id": "550e8400-e29b-41d4-a716-446655440000",
+            "heartbeat_interval_secs": 30
+        }"#;
+
+        let msg: ControlPlaneMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ControlPlaneMessage::Registered {
+                data_plane_id,
+                heartbeat_interval_secs,
+            } => {
+                assert_eq!(
+                    data_plane_id,
+                    Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+                );
+                assert_eq!(heartbeat_interval_secs, 30);
+            }
+            _ => panic!("Expected Registered message"),
+        }
+    }
+
+    #[test]
+    fn test_control_plane_message_artifact_available_deserialization() {
+        let json = r#"{
+            "type": "artifact_available",
+            "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
+            "download_url": "http://localhost:9090/artifacts/123/download",
+            "sha256": "abc123def456"
+        }"#;
+
+        let msg: ControlPlaneMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ControlPlaneMessage::ArtifactAvailable {
+                artifact_id,
+                download_url,
+                sha256,
+            } => {
+                assert_eq!(
+                    artifact_id,
+                    Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+                );
+                assert_eq!(download_url, "http://localhost:9090/artifacts/123/download");
+                assert_eq!(sha256, "abc123def456");
+            }
+            _ => panic!("Expected ArtifactAvailable message"),
+        }
+    }
+
+    #[test]
+    fn test_control_plane_message_disconnect_deserialization() {
+        let json = r#"{
+            "type": "disconnect",
+            "reason": "server shutting down"
+        }"#;
+
+        let msg: ControlPlaneMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ControlPlaneMessage::Disconnect { reason } => {
+                assert_eq!(reason, "server shutting down");
+            }
+            _ => panic!("Expected Disconnect message"),
+        }
+    }
+
+    #[test]
+    fn test_artifact_downloaded_response_creation() {
+        let artifact_id = Uuid::new_v4();
+
+        let success_response = ArtifactDownloadedResponse {
+            artifact_id,
+            success: true,
+            error: None,
+        };
+        assert!(success_response.success);
+        assert!(success_response.error.is_none());
+
+        let failure_response = ArtifactDownloadedResponse {
+            artifact_id,
+            success: false,
+            error: Some("download failed".to_string()),
+        };
+        assert!(!failure_response.success);
+        assert_eq!(failure_response.error.as_deref(), Some("download failed"));
+    }
+
+    #[test]
+    fn test_artifact_notification_creation() {
+        let notification = ArtifactNotification {
+            artifact_id: Uuid::new_v4(),
+            download_url: "http://example.com/artifact.bca".to_string(),
+            sha256: "abc123".to_string(),
+        };
+
+        assert!(!notification.download_url.is_empty());
+        assert!(!notification.sha256.is_empty());
+    }
+
+    #[test]
+    fn test_control_plane_config_creation() {
+        let config = ControlPlaneConfig {
+            control_plane_url: "ws://localhost:9090/ws/data-plane".to_string(),
+            project_id: Uuid::new_v4(),
+            api_key: "test-api-key".to_string(),
+            data_plane_name: Some("test-plane".to_string()),
+        };
+
+        assert!(config.control_plane_url.starts_with("ws://"));
+        assert_eq!(config.api_key, "test-api-key");
+        assert_eq!(config.data_plane_name.as_deref(), Some("test-plane"));
     }
 }

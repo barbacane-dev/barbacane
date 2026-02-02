@@ -5,6 +5,7 @@ export { ActivityPage } from './activity'
 export { SettingsPage } from './settings'
 export { LoginPage } from './login'
 export { InitPage } from './init'
+export { ApiDocsPage } from './api-docs'
 
 // Project pages
 export { ProjectsPage } from './projects'

@@ -46,3 +46,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
+
+# API documentation
+scalar_api_reference = "0.1"
