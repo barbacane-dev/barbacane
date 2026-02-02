@@ -352,6 +352,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "reqwest",
  "rustls",
  "rustls-pemfile",
  "serde",

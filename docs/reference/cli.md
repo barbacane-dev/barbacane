@@ -40,6 +40,23 @@ barbacane init [NAME] [OPTIONS]
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
 | `--template`, `-t` | No | `basic` | Template to use: `basic` (full example) or `minimal` (bare bones) |
+| `--fetch-plugins` | No | `false` | Download official plugins (mock, http-upstream) from GitHub releases |
+
+### Plugin Download
+
+The `--fetch-plugins` flag downloads official Barbacane plugins from GitHub releases:
+
+- **mock** — Returns static responses (useful for testing and mocking)
+- **http-upstream** — Proxies requests to HTTP/HTTPS backends
+
+Downloaded plugins are placed in the `plugins/` directory and automatically configured in `barbacane.yaml`.
+
+```bash
+# Create project with plugins downloaded
+barbacane init my-api --fetch-plugins
+```
+
+If download fails (e.g., network issues), the project is still created with an empty plugins directory.
 
 ### Templates
 
@@ -58,6 +75,9 @@ barbacane init [NAME] [OPTIONS]
 ```bash
 # Create project in new directory with basic template
 barbacane init my-api
+
+# Create project with official plugins downloaded
+barbacane init my-api --fetch-plugins
 
 # Create project with minimal template
 barbacane init my-api --template minimal
