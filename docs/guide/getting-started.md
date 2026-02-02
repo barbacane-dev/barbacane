@@ -179,6 +179,7 @@ curl -X POST http://127.0.0.1:8080/health
 - [Dispatchers](dispatchers.md) - Route to HTTP backends, mock responses, and more
 - [Middlewares](middlewares.md) - Add authentication, rate limiting, CORS
 - [Secrets](secrets.md) - Manage API keys, tokens, and passwords securely
+- [Observability](observability.md) - Metrics, logging, and distributed tracing
 
 ## Development Mode
 
@@ -191,3 +192,25 @@ For production, omit the flag:
 ```bash
 barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
+
+## Observability
+
+Barbacane includes built-in observability features:
+
+```bash
+# Pretty logs for development
+barbacane serve --artifact api.bca --log-format pretty --log-level debug
+
+# JSON logs with OTLP tracing for production
+barbacane serve --artifact api.bca \
+  --log-format json \
+  --otlp-endpoint http://otel-collector:4317
+```
+
+Prometheus metrics are available at `/__barbacane/metrics`:
+
+```bash
+curl http://127.0.0.1:8080/__barbacane/metrics
+```
+
+See the [Observability Guide](observability.md) for full details.
