@@ -1,0 +1,34 @@
+#!/bin/bash
+# Pre-commit hook for Barbacane
+# Checks formatting and lints before allowing commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Source cargo environment if available
+if [ -f "$HOME/.cargo/env" ]; then
+    source "$HOME/.cargo/env"
+fi
+
+# Check if cargo is available
+if ! command -v cargo &> /dev/null; then
+    echo "Warning: cargo not found, skipping checks"
+    exit 0
+fi
+
+# Check formatting
+echo "Checking formatting..."
+if ! cargo fmt --all -- --check; then
+    echo ""
+    echo "ERROR: Formatting check failed!"
+    echo "Run 'cargo fmt --all' to fix formatting issues."
+    exit 1
+fi
+
+# Run clippy (optional, can be slow)
+# Uncomment to enable:
+# echo "Running clippy..."
+# cargo clippy --workspace --all-targets -- -D warnings
+
+echo "Pre-commit checks passed!"

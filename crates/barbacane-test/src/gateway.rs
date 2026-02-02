@@ -2170,7 +2170,10 @@ paths:
             .expect("failed to start gateway");
 
         let resp = gateway
-            .post("/users", r#"{"email":"test@example.com","name":"Test User"}"#)
+            .post(
+                "/users",
+                r#"{"email":"test@example.com","name":"Test User"}"#,
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), 201);

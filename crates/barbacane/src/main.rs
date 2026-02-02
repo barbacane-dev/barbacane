@@ -584,7 +584,14 @@ impl Gateway {
                 }
 
                 let response = self
-                    .dispatch(operation, params, query_string, &body_bytes, &headers, client_addr)
+                    .dispatch(
+                        operation,
+                        params,
+                        query_string,
+                        &body_bytes,
+                        &headers,
+                        client_addr,
+                    )
                     .await?;
 
                 // Add deprecation headers if the operation is deprecated
