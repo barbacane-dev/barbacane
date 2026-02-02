@@ -28,3 +28,5 @@ tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }

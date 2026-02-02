@@ -1,25 +1,24 @@
 import { NavLink } from 'react-router-dom'
 import {
-  FileCode,
-  Package,
-  Puzzle,
+  FolderKanban,
+  Store,
   Activity,
   Settings,
   Sun,
   Moon,
   LogOut,
   User,
-  Plus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/hooks'
 import { useAuth } from '@/lib/auth'
 
-const navigation = [
-  { name: 'New Project', href: '/init', icon: Plus },
-  { name: 'Specs', href: '/specs', icon: FileCode },
-  { name: 'Plugins', href: '/plugins', icon: Puzzle },
-  { name: 'Artifacts', href: '/artifacts', icon: Package },
+const mainNavigation = [
+  { name: 'Projects', href: '/projects', icon: FolderKanban },
+]
+
+const globalNavigation = [
+  { name: 'Plugin Registry', href: '/plugin-registry', icon: Store },
   { name: 'Activity', href: '/activity', icon: Activity },
 ]
 
@@ -32,24 +31,54 @@ export function Sidebar() {
       <div className="flex h-16 items-center border-b border-sidebar-border px-6">
         <span className="text-xl font-bold text-gradient">Barbacane</span>
       </div>
-      <nav className="flex-1 space-y-1 px-3 py-4">
-        {navigation.map((item) => (
-          <NavLink
-            key={item.name}
-            to={item.href}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
-                isActive
-                  ? 'bg-primary/10 text-primary glow-cyan'
-                  : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-              )
-            }
-          >
-            <item.icon className="h-5 w-5" />
-            {item.name}
-          </NavLink>
-        ))}
+      <nav className="flex-1 px-3 py-4">
+        {/* Main navigation */}
+        <div className="space-y-1">
+          {mainNavigation.map((item) => (
+            <NavLink
+              key={item.name}
+              to={item.href}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
+                  isActive
+                    ? 'bg-primary/10 text-primary glow-cyan'
+                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                )
+              }
+            >
+              <item.icon className="h-5 w-5" />
+              {item.name}
+            </NavLink>
+          ))}
+        </div>
+
+        {/* Separator */}
+        <div className="my-4 border-t border-sidebar-border" />
+
+        {/* Global navigation */}
+        <div className="space-y-1">
+          <p className="px-3 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Global
+          </p>
+          {globalNavigation.map((item) => (
+            <NavLink
+              key={item.name}
+              to={item.href}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
+                  isActive
+                    ? 'bg-primary/10 text-primary glow-cyan'
+                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                )
+              }
+            >
+              <item.icon className="h-5 w-5" />
+              {item.name}
+            </NavLink>
+          ))}
+        </div>
       </nav>
       <div className="border-t border-sidebar-border p-3 space-y-1">
         <NavLink

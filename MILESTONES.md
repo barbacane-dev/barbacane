@@ -412,3 +412,53 @@ Performance, testing infrastructure, lifecycle features, and hardening.
 - [x] Startup exit codes — 10–15 for each failure category (13 for secret resolution failure)
 - [x] Multiple specs in one artifact — `barbacane compile --spec a.yaml --spec b.yaml`
 - [x] Routing conflict detection — E1010 across specs
+
+---
+
+## M12 — Data Plane Connection ✅
+
+Connected mode for centralized fleet management — WebSocket communication between data planes and control plane.
+
+**Specs:** ADR-0007
+
+### Database Schema
+- [x] `data_planes` table — id, project_id, name, artifact_id, status, last_seen, connected_at, metadata
+- [x] `api_keys` table — id, project_id, name, key_hash, key_prefix, scopes, expires_at, revoked_at
+- [x] Migration `003_add_data_planes.sql`
+
+### Control Plane WebSocket Server
+- [x] WebSocket endpoint — `WS /ws/data-plane` for data plane connections
+- [x] Connection manager — DashMap-based tracking of active WebSocket connections
+- [x] Registration protocol — API key validation, project association
+- [x] Heartbeat protocol — 30-second intervals, status tracking
+- [x] Artifact notification — broadcast to connected data planes when deploy triggered
+
+### Control Plane REST API
+- [x] `GET /projects/{id}/data-planes` — list connected data planes
+- [x] `GET /projects/{id}/data-planes/{dpId}` — get data plane details
+- [x] `DELETE /projects/{id}/data-planes/{dpId}` — disconnect data plane
+- [x] `POST /projects/{id}/deploy` — notify all connected data planes of new artifact
+- [x] `POST /projects/{id}/api-keys` — create API key (returns full key once)
+- [x] `GET /projects/{id}/api-keys` — list API keys (prefix only)
+- [x] `DELETE /projects/{id}/api-keys/{keyId}` — revoke API key
+
+### Data Plane Client
+- [x] CLI flags — `--control-plane`, `--project-id`, `--api-key`, `--data-plane-name`
+- [x] WebSocket client — tokio-tungstenite based connection
+- [x] Registration — send project_id and api_key on connect
+- [x] Heartbeat — send status every 30 seconds
+- [x] Reconnection — exponential backoff (1s to 60s max)
+- [x] Graceful degradation — continue serving if control plane unavailable
+- [x] Artifact notification — receive and log (hot-reload deferred)
+
+### Frontend
+- [x] Deploy tab — `/projects/:id/deploy` route
+- [x] Data plane list — shows connected data planes with status
+- [x] API key management — create, list, revoke API keys
+- [x] Deploy button — one-click deployment to all connected data planes
+- [x] Status polling — 5-second refresh for real-time updates
+
+### Future Enhancements
+- [ ] Hot-reload — download and swap artifact at runtime without restart
+- [ ] Health metrics — report CPU, memory, request rates to control plane
+- [ ] Data plane groups — deploy to specific subsets of data planes

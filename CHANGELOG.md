@@ -20,6 +20,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nats` dispatcher plugin with subject routing
 - Sync-to-async bridge: HTTP request in, broker publish out, 202 ack response
 
+#### Data Plane Connection (M12)
+- WebSocket-based connection between data planes and control plane
+- Connected mode for centralized fleet management (`--control-plane` flag)
+- API key authentication for data plane connections (`--api-key` flag)
+- Data plane registration and heartbeat protocol (30-second intervals)
+- Artifact deployment notifications to connected data planes
+- Deploy tab in UI showing connected data planes
+- API key management (create, list, revoke) in Deploy tab
+- One-click deployment to all connected data planes
+- REST endpoints for data plane management:
+  - `GET /projects/{id}/data-planes` — list connected data planes
+  - `GET /projects/{id}/data-planes/{dpId}` — get data plane details
+  - `DELETE /projects/{id}/data-planes/{dpId}` — disconnect data plane
+  - `POST /projects/{id}/deploy` — deploy artifact to connected data planes
+  - `POST /projects/{id}/api-keys` — create API key
+  - `GET /projects/{id}/api-keys` — list API keys
+  - `DELETE /projects/{id}/api-keys/{keyId}` — revoke API key
+  - `WS /ws/data-plane` — WebSocket endpoint for data plane connections
+- Graceful degradation: data planes continue serving if control plane unavailable
+- Reconnection with exponential backoff (1s to 60s max)
+
+#### Web UI Improvements
+- Added JSON Schema for CORS plugin configuration
+- Improved plugin deletion error handling with user-friendly messages
+- Plugin configuration forms now auto-generate from JSON Schema
+- Real-time validation of plugin configurations
+
+#### Documentation
+- New Web UI guide (`docs/guide/web-ui.md`)
+- Updated Control Plane guide with Projects, Data Planes, Deploy sections
+- Updated Development guide with Makefile targets and UI setup
+- Updated Dispatchers guide with AsyncAPI planned support
+- Updated CLI Reference with `seed-plugins` command documentation
+- Added Interactive API Documentation section (Scalar at `/api/docs`)
+
 #### Other
 - HTTP/2 support with automatic protocol detection via ALPN
 - API lifecycle support with `deprecated` flag and `x-barbacane-sunset` extension
@@ -30,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Improved test fixtures with more comprehensive scenarios
+- Improved foreign key error handling in control plane API
+- Plugin deletion now returns "resource is in use" error when referenced by projects
+
+### Fixed
+- CORS plugin now includes JSON Schema (`config-schema.json`) for UI configuration
+- Plugin deletion errors now display user-friendly messages in the UI
 
 ## [0.1.0] - 2026-01-28
 

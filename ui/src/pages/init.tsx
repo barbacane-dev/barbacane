@@ -1,23 +1,27 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Download, FileCode, Sparkles, ArrowRight, Check } from 'lucide-react'
-import { useMutation } from '@tanstack/react-query'
-import { initProject } from '@/lib/api'
-import type { InitTemplate, InitResponse } from '@/lib/api'
+import { Download, FileCode, Sparkles, ArrowRight, Check, Rocket } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { initProject, createProject, uploadSpecToProject } from '@/lib/api'
+import type { InitTemplate, InitResponse, Project } from '@/lib/api'
 import { Button, Card, CardContent, CardHeader, CardTitle } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
-type Step = 'config' | 'preview' | 'download'
+type Step = 'config' | 'preview' | 'complete'
+type CompletionMode = 'download' | 'setup'
 
 export function InitPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [step, setStep] = useState<Step>('config')
+  const [completionMode, setCompletionMode] = useState<CompletionMode>('download')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [version, setVersion] = useState('1.0.0')
   const [template, setTemplate] = useState<InitTemplate>('basic')
   const [result, setResult] = useState<InitResponse | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [createdProject, setCreatedProject] = useState<Project | null>(null)
 
   const initMutation = useMutation({
     mutationFn: initProject,
@@ -25,6 +29,40 @@ export function InitPage() {
       setResult(data)
       setSelectedFile(data.files[0]?.path ?? null)
       setStep('preview')
+    },
+  })
+
+  const setupMutation = useMutation({
+    mutationFn: async () => {
+      if (!result) throw new Error('No result to upload')
+
+      // 1. Create the project
+      const project = await createProject({
+        name: name.trim(),
+        description: description.trim() || undefined,
+      })
+      console.log('Created project:', project)
+
+      // 2. Find the api.yaml file and upload it to the project
+      const apiFile = result.files.find((f) => f.path === 'api.yaml')
+      if (!apiFile) throw new Error('No api.yaml file found')
+
+      console.log('Uploading spec to project:', project.id)
+      const file = new File([apiFile.content], 'api.yaml', { type: 'text/yaml' })
+      const uploadResponse = await uploadSpecToProject(project.id, file)
+      console.log('Upload response:', uploadResponse)
+
+      return project
+    },
+    onSuccess: (project) => {
+      console.log('Setup succeeded:', project)
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      setCreatedProject(project)
+      setCompletionMode('setup')
+      setStep('complete')
+    },
+    onError: (error) => {
+      console.error('Setup failed:', error)
     },
   })
 
@@ -61,7 +99,13 @@ export function InitPage() {
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
 
-    setStep('download')
+    setCompletionMode('download')
+    setStep('complete')
+  }
+
+  const handleSetupGateway = () => {
+    console.log('handleSetupGateway called, result:', result)
+    setupMutation.mutate()
   }
 
   const handleDownloadFile = (path: string, content: string) => {
@@ -87,19 +131,19 @@ export function InitPage() {
 
       {/* Steps indicator */}
       <div className="flex items-center gap-4 mb-8">
-        {(['config', 'preview', 'download'] as const).map((s, i) => (
+        {(['config', 'preview', 'complete'] as const).map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div
               className={cn(
                 'flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium',
                 step === s
                   ? 'bg-primary text-primary-foreground'
-                  : s === 'download' && step === 'download'
+                  : s === 'complete' && step === 'complete'
                     ? 'bg-green-500 text-white'
                     : 'bg-muted text-muted-foreground'
               )}
             >
-              {step === 'download' && s === 'download' ? (
+              {step === 'complete' && s === 'complete' ? (
                 <Check className="h-4 w-4" />
               ) : (
                 i + 1
@@ -113,7 +157,7 @@ export function InitPage() {
             >
               {s === 'config' && 'Configure'}
               {s === 'preview' && 'Preview'}
-              {s === 'download' && 'Download'}
+              {s === 'complete' && 'Complete'}
             </span>
             {i < 2 && <ArrowRight className="h-4 w-4 text-muted-foreground ml-2" />}
           </div>
@@ -122,12 +166,12 @@ export function InitPage() {
 
       {/* Step 1: Configuration */}
       {step === 'config' && (
-        <Card>
+        <Card className="overflow-hidden">
           <CardHeader>
             <CardTitle>Project Configuration</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div>
+            <div className="min-w-0">
               <label className="block text-sm font-medium mb-2">
                 Project Name *
               </label>
@@ -136,11 +180,11 @@ export function InitPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My API"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full max-w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
 
-            <div>
+            <div className="min-w-0">
               <label className="block text-sm font-medium mb-2">
                 Description
               </label>
@@ -149,18 +193,18 @@ export function InitPage() {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="A Barbacane-powered API"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full max-w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
 
-            <div>
+            <div className="min-w-0">
               <label className="block text-sm font-medium mb-2">Version</label>
               <input
                 type="text"
                 value={version}
                 onChange={(e) => setVersion(e.target.value)}
                 placeholder="1.0.0"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full max-w-full rounded-lg border border-input bg-background px-3 py-2 text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
 
@@ -254,7 +298,7 @@ export function InitPage() {
                 </div>
 
                 {/* File content */}
-                <div className="flex-1 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex-1 min-w-0 rounded-lg border border-border bg-muted/30 p-4 overflow-hidden">
                   <pre className="text-sm overflow-auto max-h-96">
                     <code>
                       {result.files.find((f) => f.path === selectedFile)?.content}
@@ -281,44 +325,85 @@ export function InitPage() {
                   {file.path}
                 </Button>
               ))}
-              <Button onClick={handleDownload}>
+              <Button variant="outline" onClick={handleDownload}>
                 <Download className="h-4 w-4 mr-2" />
                 Download All
               </Button>
+              <Button onClick={handleSetupGateway} disabled={setupMutation.isPending}>
+                <Rocket className="h-4 w-4 mr-2" />
+                {setupMutation.isPending ? 'Setting up...' : 'Set up Gateway'}
+              </Button>
             </div>
           </div>
+          {setupMutation.isError && (
+            <p className="text-sm text-destructive mt-2">
+              {setupMutation.error instanceof Error
+                ? setupMutation.error.message
+                : 'Failed to set up gateway'}
+            </p>
+          )}
         </div>
       )}
 
-      {/* Step 3: Download complete */}
-      {step === 'download' && result && (
+      {/* Step 3: Complete */}
+      {step === 'complete' && result && (
         <Card>
           <CardContent className="py-12 text-center">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-500/10">
-              <Check className="h-6 w-6 text-green-500" />
+              {completionMode === 'setup' ? (
+                <Rocket className="h-6 w-6 text-green-500" />
+              ) : (
+                <Check className="h-6 w-6 text-green-500" />
+              )}
             </div>
-            <h3 className="text-lg font-medium mb-2">Project Created!</h3>
+            <h3 className="text-lg font-medium mb-2">
+              {completionMode === 'setup' ? 'Gateway Ready!' : 'Project Created!'}
+            </h3>
             <p className="text-muted-foreground mb-6">
-              Your project files have been downloaded.
+              {completionMode === 'setup'
+                ? 'Your API spec has been uploaded to the control plane.'
+                : 'Your project files have been downloaded.'}
             </p>
 
-            <div className="text-left max-w-md mx-auto mb-6">
-              <h4 className="font-medium mb-2">Next Steps:</h4>
-              <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
-                {result.next_steps.map((step, i) => (
-                  <li key={i}>{step}</li>
-                ))}
-              </ol>
-            </div>
+            {completionMode === 'download' && (
+              <div className="text-left max-w-md mx-auto mb-6">
+                <h4 className="font-medium mb-2">Next Steps:</h4>
+                <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
+                  {result.next_steps.map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {completionMode === 'setup' && createdProject && (
+              <div className="text-left max-w-md mx-auto mb-6">
+                <h4 className="font-medium mb-2">Next Steps:</h4>
+                <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
+                  <li>View your uploaded spec in the project</li>
+                  <li>Configure plugins if needed</li>
+                  <li>Compile to create an artifact</li>
+                  <li>Deploy your gateway</li>
+                </ol>
+              </div>
+            )}
 
             <div className="flex justify-center gap-4">
-              <Button variant="outline" onClick={() => navigate('/specs')}>
-                Go to Specs
-              </Button>
+              {completionMode === 'setup' && createdProject ? (
+                <Button onClick={() => navigate(`/projects/${createdProject.id}/specs`)}>
+                  Go to Project
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={() => navigate('/projects')}>
+                  Go to Projects
+                </Button>
+              )}
               <Button
+                variant={completionMode === 'setup' ? 'outline' : 'default'}
                 onClick={() => {
                   setStep('config')
                   setResult(null)
+                  setCreatedProject(null)
                   setName('')
                   setDescription('')
                 }}

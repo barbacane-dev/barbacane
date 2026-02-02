@@ -2,6 +2,8 @@
 //!
 //! Compiles OpenAPI specs into artifacts and runs the data plane server.
 
+mod control_plane;
+
 use std::convert::Infallible;
 use std::fs::File;
 use std::io::BufReader;
@@ -69,6 +71,7 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Compile OpenAPI spec(s) into a .bca artifact.
     Compile {
@@ -191,6 +194,26 @@ enum Commands {
         /// After SIGTERM, wait this long for in-flight requests to complete.
         #[arg(long, default_value = "30")]
         shutdown_timeout: u64,
+
+        // Connected mode options (optional)
+        /// Control plane WebSocket URL (e.g., ws://control:8080/ws/data-plane).
+        /// When provided, the data plane connects to the control plane for centralized management.
+        #[arg(long)]
+        control_plane: Option<String>,
+
+        /// Project ID (UUID) for control plane registration.
+        /// Required if --control-plane is specified.
+        #[arg(long)]
+        project_id: Option<String>,
+
+        /// API key for control plane authentication.
+        /// Required if --control-plane is specified.
+        #[arg(long, env = "BARBACANE_API_KEY")]
+        api_key: Option<String>,
+
+        /// Data plane name for identification in control plane.
+        #[arg(long)]
+        data_plane_name: Option<String>,
     },
 }
 
@@ -1867,6 +1890,19 @@ struct TlsConfig {
     min_version: String,
 }
 
+/// Configuration for connected mode (optional control plane connection).
+#[derive(Clone)]
+struct ConnectedModeConfig {
+    /// WebSocket URL for the control plane (e.g., ws://control:8080/ws/data-plane).
+    control_plane_url: String,
+    /// Project ID to register with.
+    project_id: uuid::Uuid,
+    /// API key for authentication.
+    api_key: String,
+    /// Optional name for this data plane.
+    data_plane_name: Option<String>,
+}
+
 /// Load TLS certificates and create a rustls ServerConfig.
 ///
 /// Configuration:
@@ -1934,6 +1970,7 @@ async fn run_serve(
     metrics: Arc<MetricsRegistry>,
     keepalive_timeout: u64,
     shutdown_timeout: u64,
+    connected_mode: Option<ConnectedModeConfig>,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
@@ -2015,6 +2052,23 @@ async fn run_serve(
         let _ = shutdown_tx_clone.send(true);
     });
 
+    // Start control plane client if in connected mode
+    let mut artifact_rx = if let Some(config) = connected_mode {
+        eprintln!(
+            "barbacane: connecting to control plane at {}",
+            config.control_plane_url
+        );
+        let client = control_plane::ControlPlaneClient::new(control_plane::ControlPlaneConfig {
+            control_plane_url: config.control_plane_url,
+            project_id: config.project_id,
+            api_key: config.api_key,
+            data_plane_name: config.data_plane_name,
+        });
+        Some(client.start(shutdown_rx.clone()))
+    } else {
+        None
+    };
+
     // Keep-alive timeout (currently used for documentation; HTTP/1.1 uses internal defaults)
     let _keepalive_duration = Duration::from_secs(keepalive_timeout);
     let shutdown_duration = Duration::from_secs(shutdown_timeout);
@@ -2030,6 +2084,20 @@ async fn run_serve(
                 if *shutdown_rx.borrow() {
                     break;
                 }
+            }
+            // Handle artifact notifications from control plane
+            Some(notification) = async {
+                match artifact_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                eprintln!(
+                    "barbacane: new artifact available: {} (hot-reload not yet implemented)",
+                    notification.artifact_id
+                );
+                // TODO: Download and hot-reload the new artifact
+                // For now, just log the notification
             }
             // Accept new connections
             accept_result = listener.accept() => {
@@ -2227,6 +2295,10 @@ async fn main() -> ExitCode {
             tls_min_version,
             keepalive_timeout,
             shutdown_timeout,
+            control_plane,
+            project_id,
+            api_key,
+            data_plane_name,
         } => {
             // Initialize telemetry
             let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
@@ -2283,6 +2355,34 @@ async fn main() -> ExitCode {
                 max_header_size,
                 max_uri_length,
             };
+
+            // Validate connected mode options
+            let connected_mode = match (&control_plane, &project_id, &api_key) {
+                (Some(cp), Some(pid), Some(key)) => {
+                    // Parse project_id as UUID
+                    let project_uuid = match uuid::Uuid::parse_str(pid) {
+                        Ok(u) => u,
+                        Err(_) => {
+                            eprintln!("error: --project-id must be a valid UUID");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    Some(ConnectedModeConfig {
+                        control_plane_url: cp.clone(),
+                        project_id: project_uuid,
+                        api_key: key.clone(),
+                        data_plane_name: data_plane_name.clone(),
+                    })
+                }
+                (None, None, None) => None,
+                _ => {
+                    eprintln!(
+                        "error: --control-plane, --project-id, and --api-key must all be specified together"
+                    );
+                    return ExitCode::from(1);
+                }
+            };
+
             run_serve(
                 &artifact,
                 &listen,
@@ -2293,6 +2393,7 @@ async fn main() -> ExitCode {
                 metrics,
                 keepalive_timeout,
                 shutdown_timeout,
+                connected_mode,
             )
             .await
         }
