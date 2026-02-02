@@ -7,6 +7,7 @@ use uuid::Uuid;
 use super::models::Compilation;
 
 /// Compilation status values.
+#[allow(dead_code)]
 pub mod status {
     pub const PENDING: &str = "pending";
     pub const COMPILING: &str = "compiling";
@@ -77,6 +78,7 @@ impl CompilationsRepository {
     }
 
     /// List pending compilations (for worker to pick up).
+    #[allow(dead_code)]
     pub async fn list_pending(&self, limit: i64) -> Result<Vec<Compilation>, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
@@ -162,6 +164,7 @@ impl CompilationsRepository {
     }
 
     /// Get compilations by status.
+    #[allow(dead_code)]
     pub async fn list_by_status(&self, status: &str) -> Result<Vec<Compilation>, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"

@@ -19,6 +19,7 @@ pub struct Spec {
 
 /// A spec revision record with content.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct SpecRevision {
     pub id: Uuid,
     pub spec_id: Uuid,
@@ -53,6 +54,7 @@ pub struct Plugin {
 
 /// Plugin with binary data for downloads.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct PluginWithBinary {
     pub name: String,
     pub version: String,
@@ -78,6 +80,7 @@ pub struct Artifact {
 
 /// Artifact with binary data for downloads.
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct ArtifactWithData {
     pub id: Uuid,
     pub manifest: serde_json::Value,

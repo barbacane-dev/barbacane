@@ -20,12 +20,6 @@ pub struct ListPluginsQuery {
     pub plugin_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct PluginPath {
-    pub name: String,
-    pub version: String,
-}
-
 /// POST /plugins - Register a new plugin
 pub async fn register_plugin(
     State(state): State<AppState>,

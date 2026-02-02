@@ -57,6 +57,7 @@ impl ProblemDetails {
     }
 
     /// Create a 422 Unprocessable Entity error for validation failures.
+    #[allow(dead_code)]
     pub fn validation_failed(errors: Vec<ValidationIssue>) -> Self {
         Self {
             error_type: "urn:barbacane:error:spec-invalid".into(),
@@ -93,6 +94,7 @@ impl ProblemDetails {
     }
 
     /// Create a 503 Service Unavailable error.
+    #[allow(dead_code)]
     pub fn service_unavailable(detail: impl Into<String>) -> Self {
         Self {
             error_type: "urn:barbacane:error:service-unavailable".into(),

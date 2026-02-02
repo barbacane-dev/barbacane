@@ -84,6 +84,7 @@ impl ArtifactsRepository {
     }
 
     /// Get an artifact by SHA256 hash.
+    #[allow(dead_code)]
     pub async fn get_by_sha256(&self, sha256: &str) -> Result<Option<Artifact>, sqlx::Error> {
         sqlx::query_as::<_, Artifact>(
             r#"
@@ -107,6 +108,7 @@ impl ArtifactsRepository {
     }
 
     /// Get artifacts for a specific spec (via artifact_specs junction).
+    #[allow(dead_code)]
     pub async fn list_for_spec(&self, spec_id: Uuid) -> Result<Vec<Artifact>, sqlx::Error> {
         sqlx::query_as::<_, Artifact>(
             r#"
