@@ -178,6 +178,11 @@ enum Commands {
         #[arg(long)]
         tls_key: Option<String>,
 
+        /// Minimum TLS version (1.2 or 1.3). Default: 1.2.
+        /// Use 1.3 for maximum security (modern clients only).
+        #[arg(long, default_value = "1.2")]
+        tls_min_version: String,
+
         /// HTTP keep-alive idle timeout in seconds (default: 60).
         #[arg(long, default_value = "60")]
         keepalive_timeout: u64,
@@ -1838,12 +1843,14 @@ fn run_compile(
 struct TlsConfig {
     cert_path: String,
     key_path: String,
+    /// Minimum TLS version: "1.2" or "1.3"
+    min_version: String,
 }
 
 /// Load TLS certificates and create a rustls ServerConfig.
 ///
 /// Configuration:
-/// - TLS 1.2 minimum, TLS 1.3 preferred
+/// - Minimum TLS version configurable (1.2 or 1.3)
 /// - ALPN: h2, http/1.1
 fn load_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>, String> {
     // Load certificate chain
@@ -1875,11 +1882,16 @@ fn load_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>, String> {
         .map_err(|e| format!("failed to parse key file '{}': {}", config.key_path, e))?
         .ok_or_else(|| format!("no private key found in '{}'", config.key_path))?;
 
-    // Build TLS config with modern settings
-    // - TLS 1.2 minimum (via default provider)
-    // - TLS 1.3 preferred (default behavior)
-    // - ALPN: h2, http/1.1
-    let mut server_config = ServerConfig::builder()
+    // Select TLS versions based on min_version setting
+    // Note: min_version is validated at startup, so only "1.2" or "1.3" are possible
+    let versions: Vec<&'static rustls::SupportedProtocolVersion> = match config.min_version.as_str()
+    {
+        "1.3" => vec![&rustls::version::TLS13],
+        _ => vec![&rustls::version::TLS13, &rustls::version::TLS12], // "1.2" (default)
+    };
+
+    // Build TLS config with configured version
+    let mut server_config = ServerConfig::builder_with_protocol_versions(&versions)
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| format!("failed to build TLS config: {}", e))?;
@@ -2192,6 +2204,7 @@ async fn main() -> ExitCode {
             allow_plaintext_upstream,
             tls_cert,
             tls_key,
+            tls_min_version,
             keepalive_timeout,
             shutdown_timeout,
         } => {
@@ -2217,11 +2230,21 @@ async fn main() -> ExitCode {
 
             let metrics = telemetry.metrics_clone();
 
+            // Validate TLS min version
+            if tls_min_version != "1.2" && tls_min_version != "1.3" {
+                eprintln!(
+                    "error: --tls-min-version must be '1.2' or '1.3', got '{}'",
+                    tls_min_version
+                );
+                return ExitCode::from(1);
+            }
+
             // Validate TLS arguments
             let tls_config = match (tls_cert, tls_key) {
                 (Some(cert), Some(key)) => Some(TlsConfig {
                     cert_path: cert,
                     key_path: key,
+                    min_version: tls_min_version,
                 }),
                 (None, None) => None,
                 (Some(_), None) => {

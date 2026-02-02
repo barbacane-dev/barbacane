@@ -264,6 +264,7 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
 | `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
 | `--tls-key` | No | - | Path to TLS private key file (PEM format) |
+| `--tls-min-version` | No | `1.2` | Minimum TLS version (`1.2` or `1.3`) |
 | `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 
@@ -321,8 +322,17 @@ barbacane serve --artifact api.bca \
   --tls-key /path/to/server.key
 ```
 
+For maximum security with TLS 1.3 only (modern clients):
+
+```bash
+barbacane serve --artifact api.bca \
+  --tls-cert /path/to/server.crt \
+  --tls-key /path/to/server.key \
+  --tls-min-version 1.3
+```
+
 **TLS Configuration:**
-- TLS 1.2 minimum, TLS 1.3 preferred
+- Minimum TLS version: 1.2 (default) or 1.3 (via `--tls-min-version`)
 - Modern cipher suites (via aws-lc-rs)
 - ALPN support for HTTP/2 and HTTP/1.1
 
