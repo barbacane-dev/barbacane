@@ -184,7 +184,7 @@ HTTPS termination and JWT authentication — the most common production security
 
 ### Integration
 - [x] Auth context convention — `x-auth-*` headers for downstream
-- [ ] Security defaults — strict validation enabled by default
+- [x] Security defaults — security headers enabled by default (X-Content-Type-Options, X-Frame-Options)
 - [x] Integration tests — valid/invalid JWT, expired token, wrong audience, missing token, malformed token
 
 ---
