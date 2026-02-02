@@ -1,0 +1,9 @@
+[plugin]
+name = "nats"
+version = "0.1.0"
+type = "dispatcher"
+description = "Publishes messages to NATS subjects (sync-to-async bridge)"
+wasm = "nats.wasm"
+
+[capabilities]
+host_functions = ["nats_publish"]
