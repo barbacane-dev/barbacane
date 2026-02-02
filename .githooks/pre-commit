@@ -26,9 +26,13 @@ if ! cargo fmt --all -- --check; then
     exit 1
 fi
 
-# Run clippy (optional, can be slow)
-# Uncomment to enable:
-# echo "Running clippy..."
-# cargo clippy --workspace --all-targets -- -D warnings
+# Run clippy
+echo "Running clippy..."
+if ! cargo clippy --workspace --all-targets -- -D warnings; then
+    echo ""
+    echo "ERROR: Clippy check failed!"
+    echo "Fix the warnings above before committing."
+    exit 1
+fi
 
 echo "Pre-commit checks passed!"

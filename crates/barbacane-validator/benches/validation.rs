@@ -120,13 +120,13 @@ fn bench_path_param_validation(c: &mut Criterion) {
 
     group.bench_function("valid_uuid", |b| {
         b.iter(|| {
-            black_box(validator.validate_path_params(&valid_params));
+            let _ = black_box(validator.validate_path_params(&valid_params));
         });
     });
 
     group.bench_function("invalid_uuid", |b| {
         b.iter(|| {
-            black_box(validator.validate_path_params(&invalid_params));
+            let _ = black_box(validator.validate_path_params(&invalid_params));
         });
     });
 
@@ -144,13 +144,13 @@ fn bench_query_param_validation(c: &mut Criterion) {
 
     group.bench_function("valid_params", |b| {
         b.iter(|| {
-            black_box(validator.validate_query_params(Some(valid_query)));
+            let _ = black_box(validator.validate_query_params(Some(valid_query)));
         });
     });
 
     group.bench_function("invalid_params", |b| {
         b.iter(|| {
-            black_box(validator.validate_query_params(Some(invalid_query)));
+            let _ = black_box(validator.validate_query_params(Some(invalid_query)));
         });
     });
 
@@ -196,7 +196,8 @@ fn bench_body_validation(c: &mut Criterion) {
             &body_bytes,
             |b, body_bytes| {
                 b.iter(|| {
-                    black_box(validator.validate_body(Some("application/json"), body_bytes));
+                    let _ =
+                        black_box(validator.validate_body(Some("application/json"), body_bytes));
                 });
             },
         );
@@ -235,7 +236,7 @@ fn bench_full_request_validation(c: &mut Criterion) {
 
     c.bench_function("full_request_validation", |b| {
         b.iter(|| {
-            black_box(validator.validate_request(
+            let _ = black_box(validator.validate_request(
                 &path_params,
                 Some(query_string),
                 &headers,
