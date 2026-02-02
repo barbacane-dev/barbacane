@@ -1,0 +1,811 @@
+openapi: 3.1.0
+info:
+  title: Barbacane Control Plane API
+  description: |
+    REST API for managing API specifications, plugins, artifacts, and compilations
+    in the Barbacane API Gateway control plane.
+  version: 0.1.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:9090
+    description: Local development server
+
+tags:
+  - name: Health
+    description: Health check endpoints
+  - name: Specs
+    description: API specification management
+  - name: Plugins
+    description: Plugin registry management
+  - name: Artifacts
+    description: Compiled artifact management
+  - name: Compilations
+    description: Async compilation job management
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Returns the health status of the control plane and database connectivity.
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service unavailable (database connection failed)
+
+  /specs:
+    get:
+      tags: [Specs]
+      summary: List specs
+      description: List all registered API specifications with optional filtering.
+      operationId: listSpecs
+      parameters:
+        - name: type
+          in: query
+          description: Filter by spec type
+          schema:
+            type: string
+            enum: [openapi, asyncapi]
+        - name: name
+          in: query
+          description: Filter by name (case-insensitive partial match)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of specs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Spec'
+
+    post:
+      tags: [Specs]
+      summary: Upload spec
+      description: |
+        Upload a new API specification or create a new revision of an existing spec.
+        The spec name is extracted from the OpenAPI/AsyncAPI title field.
+      operationId: uploadSpec
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The OpenAPI or AsyncAPI specification file (YAML or JSON)
+      responses:
+        '201':
+          description: Spec uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          description: Invalid spec file
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /specs/{id}:
+    get:
+      tags: [Specs]
+      summary: Get spec
+      description: Get metadata for a specific spec by ID.
+      operationId: getSpec
+      parameters:
+        - $ref: '#/components/parameters/specId'
+      responses:
+        '200':
+          description: Spec metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Spec'
+        '404':
+          description: Spec not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    delete:
+      tags: [Specs]
+      summary: Delete spec
+      description: Delete a spec and all its revisions.
+      operationId: deleteSpec
+      parameters:
+        - $ref: '#/components/parameters/specId'
+      responses:
+        '204':
+          description: Spec deleted
+        '404':
+          description: Spec not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /specs/{id}/history:
+    get:
+      tags: [Specs]
+      summary: Get spec history
+      description: Get the revision history for a spec.
+      operationId: getSpecHistory
+      parameters:
+        - $ref: '#/components/parameters/specId'
+      responses:
+        '200':
+          description: Revision history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpecRevision'
+        '404':
+          description: Spec not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /specs/{id}/content:
+    get:
+      tags: [Specs]
+      summary: Download spec content
+      description: Download the spec file content, optionally for a specific revision.
+      operationId: downloadSpecContent
+      parameters:
+        - $ref: '#/components/parameters/specId'
+        - name: revision
+          in: query
+          description: Specific revision number (defaults to latest)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Spec file content
+          content:
+            application/yaml:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Spec or revision not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /specs/{id}/compile:
+    post:
+      tags: [Compilations]
+      summary: Start compilation
+      description: |
+        Start an asynchronous compilation job for this spec.
+        Returns immediately with a compilation ID that can be polled for status.
+      operationId: startCompilation
+      parameters:
+        - $ref: '#/components/parameters/specId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompileRequest'
+      responses:
+        '202':
+          description: Compilation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Compilation'
+        '404':
+          description: Spec not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /specs/{id}/compilations:
+    get:
+      tags: [Compilations]
+      summary: List spec compilations
+      description: List all compilation jobs for a specific spec.
+      operationId: listSpecCompilations
+      parameters:
+        - $ref: '#/components/parameters/specId'
+      responses:
+        '200':
+          description: List of compilations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Compilation'
+        '404':
+          description: Spec not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /compilations/{id}:
+    get:
+      tags: [Compilations]
+      summary: Get compilation status
+      description: Get the current status of a compilation job.
+      operationId: getCompilation
+      parameters:
+        - $ref: '#/components/parameters/compilationId'
+      responses:
+        '200':
+          description: Compilation status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Compilation'
+        '404':
+          description: Compilation not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    delete:
+      tags: [Compilations]
+      summary: Delete compilation
+      description: Delete a compilation record.
+      operationId: deleteCompilation
+      parameters:
+        - $ref: '#/components/parameters/compilationId'
+      responses:
+        '204':
+          description: Compilation deleted
+        '404':
+          description: Compilation not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /plugins:
+    get:
+      tags: [Plugins]
+      summary: List plugins
+      description: List all registered plugins with optional filtering.
+      operationId: listPlugins
+      parameters:
+        - name: type
+          in: query
+          description: Filter by plugin type
+          schema:
+            type: string
+            enum: [middleware, dispatcher]
+        - name: name
+          in: query
+          description: Filter by plugin name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of plugins
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Plugin'
+
+    post:
+      tags: [Plugins]
+      summary: Register plugin
+      description: Register a new plugin version in the registry.
+      operationId: registerPlugin
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [name, version, type, file]
+              properties:
+                name:
+                  type: string
+                  description: Plugin name
+                version:
+                  type: string
+                  description: Semantic version
+                type:
+                  type: string
+                  enum: [middleware, dispatcher]
+                  description: Plugin type
+                description:
+                  type: string
+                  description: Human-readable description
+                capabilities:
+                  type: string
+                  description: JSON array of capability strings
+                config_schema:
+                  type: string
+                  description: JSON Schema for plugin configuration
+                file:
+                  type: string
+                  format: binary
+                  description: WASM binary file
+      responses:
+        '201':
+          description: Plugin registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plugin'
+        '400':
+          description: Invalid plugin data
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Plugin version already exists
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /plugins/{name}:
+    get:
+      tags: [Plugins]
+      summary: List plugin versions
+      description: List all versions of a specific plugin.
+      operationId: listPluginVersions
+      parameters:
+        - $ref: '#/components/parameters/pluginName'
+      responses:
+        '200':
+          description: List of plugin versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Plugin'
+        '404':
+          description: Plugin not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /plugins/{name}/{version}:
+    get:
+      tags: [Plugins]
+      summary: Get plugin
+      description: Get metadata for a specific plugin version.
+      operationId: getPlugin
+      parameters:
+        - $ref: '#/components/parameters/pluginName'
+        - $ref: '#/components/parameters/pluginVersion'
+      responses:
+        '200':
+          description: Plugin metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plugin'
+        '404':
+          description: Plugin not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    delete:
+      tags: [Plugins]
+      summary: Delete plugin
+      description: Delete a specific plugin version.
+      operationId: deletePlugin
+      parameters:
+        - $ref: '#/components/parameters/pluginName'
+        - $ref: '#/components/parameters/pluginVersion'
+      responses:
+        '204':
+          description: Plugin deleted
+        '404':
+          description: Plugin not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Plugin is referenced by an artifact
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /plugins/{name}/{version}/download:
+    get:
+      tags: [Plugins]
+      summary: Download plugin
+      description: Download the WASM binary for a plugin.
+      operationId: downloadPlugin
+      parameters:
+        - $ref: '#/components/parameters/pluginName'
+        - $ref: '#/components/parameters/pluginVersion'
+      responses:
+        '200':
+          description: Plugin WASM binary
+          content:
+            application/wasm:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Plugin not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /artifacts:
+    get:
+      tags: [Artifacts]
+      summary: List artifacts
+      description: List all compiled artifacts.
+      operationId: listArtifacts
+      responses:
+        '200':
+          description: List of artifacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Artifact'
+
+  /artifacts/{id}:
+    get:
+      tags: [Artifacts]
+      summary: Get artifact
+      description: Get metadata for a specific artifact.
+      operationId: getArtifact
+      parameters:
+        - $ref: '#/components/parameters/artifactId'
+      responses:
+        '200':
+          description: Artifact metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Artifact'
+        '404':
+          description: Artifact not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+    delete:
+      tags: [Artifacts]
+      summary: Delete artifact
+      description: Delete an artifact.
+      operationId: deleteArtifact
+      parameters:
+        - $ref: '#/components/parameters/artifactId'
+      responses:
+        '204':
+          description: Artifact deleted
+        '404':
+          description: Artifact not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /artifacts/{id}/download:
+    get:
+      tags: [Artifacts]
+      summary: Download artifact
+      description: Download the compiled .bca artifact file.
+      operationId: downloadArtifact
+      parameters:
+        - $ref: '#/components/parameters/artifactId'
+      responses:
+        '200':
+          description: Artifact .bca file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Artifact not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+components:
+  parameters:
+    specId:
+      name: id
+      in: path
+      required: true
+      description: Spec UUID
+      schema:
+        type: string
+        format: uuid
+
+    compilationId:
+      name: id
+      in: path
+      required: true
+      description: Compilation UUID
+      schema:
+        type: string
+        format: uuid
+
+    artifactId:
+      name: id
+      in: path
+      required: true
+      description: Artifact UUID
+      schema:
+        type: string
+        format: uuid
+
+    pluginName:
+      name: name
+      in: path
+      required: true
+      description: Plugin name
+      schema:
+        type: string
+
+    pluginVersion:
+      name: version
+      in: path
+      required: true
+      description: Plugin version
+      schema:
+        type: string
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        version:
+          type: string
+          description: Control plane version
+
+    Spec:
+      type: object
+      required: [id, name, current_sha256, spec_type, spec_version, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Unique spec name (from OpenAPI/AsyncAPI title)
+        current_sha256:
+          type: string
+          description: SHA256 hash of the current revision
+        spec_type:
+          type: string
+          enum: [openapi, asyncapi]
+        spec_version:
+          type: string
+          description: OpenAPI/AsyncAPI version string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SpecRevision:
+      type: object
+      required: [revision, sha256, filename, created_at]
+      properties:
+        revision:
+          type: integer
+          description: Revision number (1-indexed)
+        sha256:
+          type: string
+          description: SHA256 hash of the content
+        filename:
+          type: string
+          description: Original filename
+        created_at:
+          type: string
+          format: date-time
+
+    UploadResponse:
+      type: object
+      required: [id, name, revision, sha256]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        revision:
+          type: integer
+        sha256:
+          type: string
+
+    Plugin:
+      type: object
+      required: [name, version, plugin_type, capabilities, config_schema, sha256, registered_at]
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        plugin_type:
+          type: string
+          enum: [middleware, dispatcher]
+        description:
+          type: string
+          nullable: true
+        capabilities:
+          type: array
+          items:
+            type: string
+        config_schema:
+          type: object
+          description: JSON Schema for plugin configuration
+        sha256:
+          type: string
+          description: SHA256 hash of the WASM binary
+        registered_at:
+          type: string
+          format: date-time
+
+    Artifact:
+      type: object
+      required: [id, manifest, sha256, size_bytes, compiler_version, compiled_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        manifest:
+          type: object
+          description: Artifact manifest with routes, plugins, etc.
+        sha256:
+          type: string
+          description: SHA256 hash of the artifact
+        size_bytes:
+          type: integer
+          format: int64
+        compiler_version:
+          type: string
+        compiled_at:
+          type: string
+          format: date-time
+
+    CompileRequest:
+      type: object
+      properties:
+        production:
+          type: boolean
+          default: true
+          description: Enable production mode checks
+        additional_specs:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Additional spec IDs to bundle
+
+    Compilation:
+      type: object
+      required: [id, spec_id, status, production, started_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        spec_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, compiling, succeeded, failed]
+        production:
+          type: boolean
+        additional_specs:
+          type: array
+          items:
+            type: string
+            format: uuid
+        artifact_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Set when compilation succeeds
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilationError'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompilationError'
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CompilationError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Error code (e.g., E1000)
+        message:
+          type: string
+
+    ProblemDetails:
+      type: object
+      description: RFC 9457 Problem Details
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Error type URI
+        title:
+          type: string
+          description: Short human-readable summary
+        status:
+          type: integer
+          description: HTTP status code
+        detail:
+          type: string
+          description: Detailed explanation
+        instance:
+          type: string
+          description: URI identifying the specific occurrence
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+
+    ValidationIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        location:
+          type: string
+          description: JSON pointer to the error location

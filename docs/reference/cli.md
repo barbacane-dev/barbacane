@@ -1,6 +1,8 @@
 # CLI Reference
 
-Barbacane provides a unified command-line tool with subcommands for compilation, validation, and running the gateway.
+Barbacane provides two command-line tools:
+- **barbacane** - Data plane (gateway) for compiling specs and serving traffic
+- **barbacane-control** - Control plane for managing specs, plugins, and artifacts via REST API
 
 ## barbacane
 
@@ -434,3 +436,99 @@ curl http://localhost:8080/__barbacane/openapi
 # Stop gateway
 kill %1
 ```
+
+---
+
+## barbacane-control
+
+The control plane CLI for managing specs, plugins, and artifacts via REST API.
+
+```bash
+barbacane-control <COMMAND> [OPTIONS]
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `compile` | Compile spec(s) into a `.bca` artifact (local) |
+| `validate` | Validate spec(s) without compiling |
+| `serve` | Start the control plane REST API server |
+
+---
+
+## barbacane-control serve
+
+Start the control plane HTTP server with PostgreSQL backend.
+
+```bash
+barbacane-control serve [OPTIONS]
+```
+
+### Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--listen` | No | `127.0.0.1:9090` | Listen address (ip:port) |
+| `--database-url` | Yes | - | PostgreSQL connection URL |
+| `--migrate` | No | `true` | Run database migrations on startup |
+
+The `--database-url` can also be set via the `DATABASE_URL` environment variable.
+
+### Examples
+
+```bash
+# Start with explicit database URL
+barbacane-control serve \
+  --database-url postgres://postgres:password@localhost/barbacane \
+  --listen 0.0.0.0:9090
+
+# Using environment variable
+export DATABASE_URL=postgres://postgres:password@localhost/barbacane
+barbacane-control serve
+
+# Skip migrations (not recommended)
+barbacane-control serve \
+  --database-url postgres://localhost/barbacane \
+  --migrate=false
+```
+
+### Database Setup
+
+The control plane requires PostgreSQL 14+. Tables are created automatically via migrations:
+
+```bash
+# Create database
+createdb barbacane
+
+# Start server (migrations run automatically)
+barbacane-control serve --database-url postgres://localhost/barbacane
+```
+
+### API Endpoints
+
+The server exposes a REST API for managing specs, plugins, and artifacts:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check |
+| `POST /specs` | Upload spec (multipart) |
+| `GET /specs` | List specs |
+| `GET /specs/{id}` | Get spec metadata |
+| `DELETE /specs/{id}` | Delete spec |
+| `GET /specs/{id}/history` | Revision history |
+| `GET /specs/{id}/content` | Download spec content |
+| `POST /specs/{id}/compile` | Start async compilation |
+| `GET /compilations/{id}` | Poll compilation status |
+| `POST /plugins` | Register plugin (multipart) |
+| `GET /plugins` | List plugins |
+| `GET /plugins/{name}/{version}` | Get plugin metadata |
+| `DELETE /plugins/{name}/{version}` | Delete plugin |
+| `GET /plugins/{name}/{version}/download` | Download WASM binary |
+| `GET /artifacts` | List artifacts |
+| `GET /artifacts/{id}` | Get artifact metadata |
+| `GET /artifacts/{id}/download` | Download `.bca` file |
+
+Full API documentation: [Control Plane OpenAPI](../../crates/barbacane-control/openapi.yaml)
+
+See the [Control Plane Guide](../guide/control-plane.md) for detailed usage examples.
