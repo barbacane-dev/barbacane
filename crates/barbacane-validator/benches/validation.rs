@@ -4,9 +4,9 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use barbacane_spec_parser::{Parameter, RequestBody, RequestBodyContent};
+use barbacane_spec_parser::{ContentSchema, Parameter, RequestBody};
 use barbacane_validator::OperationValidator;
 
 /// Create parameters for benchmarking.
@@ -54,10 +54,10 @@ fn create_parameters() -> Vec<Parameter> {
 
 /// Create a request body schema for benchmarking.
 fn create_request_body() -> RequestBody {
-    let mut content = HashMap::new();
+    let mut content = BTreeMap::new();
     content.insert(
         "application/json".to_string(),
-        RequestBodyContent {
+        ContentSchema {
             schema: Some(json!({
                 "type": "object",
                 "required": ["name", "email"],
@@ -137,31 +137,20 @@ fn bench_query_param_validation(c: &mut Criterion) {
     let params = create_parameters();
     let validator = OperationValidator::new(&params, None);
 
-    let valid_query: HashMap<String, String> = [
-        ("page".to_string(), "1".to_string()),
-        ("limit".to_string(), "50".to_string()),
-    ]
-    .into_iter()
-    .collect();
-
-    let invalid_query: HashMap<String, String> = [
-        ("page".to_string(), "0".to_string()),     // Below minimum
-        ("limit".to_string(), "1000".to_string()), // Above maximum
-    ]
-    .into_iter()
-    .collect();
+    let valid_query = "page=1&limit=50";
+    let invalid_query = "page=0&limit=1000"; // Below minimum, above maximum
 
     let mut group = c.benchmark_group("query_param_validation");
 
     group.bench_function("valid_params", |b| {
         b.iter(|| {
-            black_box(validator.validate_query_params(&valid_query));
+            black_box(validator.validate_query_params(Some(valid_query)));
         });
     });
 
     group.bench_function("invalid_params", |b| {
         b.iter(|| {
-            black_box(validator.validate_query_params(&invalid_query));
+            black_box(validator.validate_query_params(Some(invalid_query)));
         });
     });
 
@@ -226,12 +215,7 @@ fn bench_full_request_validation(c: &mut Criterion) {
         "550e8400-e29b-41d4-a716-446655440000".to_string(),
     )];
 
-    let query_params: HashMap<String, String> = [
-        ("page".to_string(), "1".to_string()),
-        ("limit".to_string(), "50".to_string()),
-    ]
-    .into_iter()
-    .collect();
+    let query_string = "page=1&limit=50";
 
     let headers: HashMap<String, String> = [
         (
@@ -253,8 +237,9 @@ fn bench_full_request_validation(c: &mut Criterion) {
         b.iter(|| {
             black_box(validator.validate_request(
                 &path_params,
-                &query_params,
+                Some(query_string),
                 &headers,
+                Some("application/json"),
                 &body_bytes,
             ));
         });
