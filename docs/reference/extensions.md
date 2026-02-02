@@ -9,6 +9,7 @@ Complete reference for all `x-barbacane-*` OpenAPI extensions.
 | [`x-barbacane-upstream`](#x-barbacane-upstream) | Server | No | Define backend connection |
 | [`x-barbacane-dispatch`](#x-barbacane-dispatch) | Operation | Yes | Route to dispatcher |
 | [`x-barbacane-middlewares`](#x-barbacane-middlewares) | Root / Operation | No | Apply middleware chain |
+| [`x-barbacane-observability`](#x-barbacane-observability) | Root / Operation | No | Configure observability settings |
 
 ---
 
@@ -355,6 +356,110 @@ Adds `X-Cache` header to responses:
   config:
     header: Idempotency-Key
     ttl: 86400
+```
+
+---
+
+## x-barbacane-observability
+
+Configures observability settings for tracing, logging, and SLO monitoring.
+
+### Location
+
+- **Root level**: Applies to all operations (global defaults)
+- **Operation level**: Overrides global settings for specific operation
+
+### Schema
+
+```yaml
+x-barbacane-observability:
+  trace_sampling: number         # Optional. Sampling rate 0.0-1.0 (default: 1.0)
+  detailed_validation_logs: bool # Optional. Log validation details (default: false)
+  latency_slo_ms: integer        # Optional. Latency SLO threshold in milliseconds
+```
+
+### Properties
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `trace_sampling` | number | No | `1.0` | Trace sampling rate (0.0 = none, 1.0 = all) |
+| `detailed_validation_logs` | boolean | No | `false` | Include validation error details in logs |
+| `latency_slo_ms` | integer | No | - | Emit `barbacane_slo_violation_total` metric when exceeded |
+
+### Examples
+
+**Global observability settings:**
+```yaml
+openapi: "3.1.0"
+info:
+  title: My API
+  version: "1.0.0"
+
+x-barbacane-observability:
+  trace_sampling: 0.1          # Sample 10% of traces
+  latency_slo_ms: 500          # Alert if requests exceed 500ms
+
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.example.com"
+```
+
+**Operation-specific override:**
+```yaml
+x-barbacane-observability:
+  trace_sampling: 0.1   # Global: 10% sampling
+
+paths:
+  /critical-endpoint:
+    get:
+      x-barbacane-observability:
+        trace_sampling: 1.0     # Override: 100% for critical endpoint
+        latency_slo_ms: 100     # Stricter SLO
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.example.com"
+```
+
+**Debugging with detailed validation logs:**
+```yaml
+paths:
+  /validate:
+    post:
+      x-barbacane-observability:
+        detailed_validation_logs: true  # Log full validation error details
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.example.com"
+```
+
+### SLO Monitoring
+
+When `latency_slo_ms` is configured, the gateway emits a `barbacane_slo_violation_total` metric each time a request exceeds the threshold:
+
+```
+barbacane_slo_violation_total{method="GET",path="/users",api="users-api",slo_ms="500"} 12
+```
+
+This integrates with Prometheus alerting:
+
+```yaml
+# Prometheus alert rule
+groups:
+  - name: barbacane
+    rules:
+      - alert: HighLatencySLOViolations
+        expr: rate(barbacane_slo_violation_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High SLO violation rate"
 ```
 
 ---
