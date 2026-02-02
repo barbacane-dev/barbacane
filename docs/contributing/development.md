@@ -306,14 +306,33 @@ cargo test -p barbacane-test test_gateway_health -- --nocapture
 
 ## Performance Profiling
 
-### Benchmarks (planned)
+### Benchmarks
 
-Criterion benchmarks are planned for the router, validator, and WASM runtime.
+Criterion benchmarks are available for performance-critical components:
 
 ```bash
-# Once implemented:
+# Run all benchmarks
+cargo bench --workspace
+
+# Run router benchmarks (trie lookup and insertion)
 cargo bench -p barbacane-router
+
+# Run validator benchmarks (schema validation)
+cargo bench -p barbacane-validator
 ```
+
+**Router benchmarks** (`crates/barbacane-router/benches/routing.rs`):
+- `router_lookup` - Measures lookup performance for static paths, parameterized paths, and not-found cases
+- `router_insert` - Measures route insertion performance at various route counts (10-1000 routes)
+
+**Validator benchmarks** (`crates/barbacane-validator/benches/validation.rs`):
+- `validator_creation` - Measures schema compilation time
+- `path_param_validation` - Validates path parameters against schemas
+- `query_param_validation` - Validates query parameters
+- `body_validation` - Validates JSON request bodies
+- `full_request_validation` - End-to-end request validation
+
+Benchmark results are saved to `target/criterion/` with HTML reports.
 
 ### Flamegraph
 
