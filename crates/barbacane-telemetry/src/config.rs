@@ -14,7 +14,7 @@ pub enum LogFormat {
 
 impl LogFormat {
     /// Parse from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "json" => Some(Self::Json),
             "pretty" => Some(Self::Pretty),
@@ -35,7 +35,7 @@ pub enum OtlpProtocol {
 
 impl OtlpProtocol {
     /// Parse from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "grpc" => Some(Self::Grpc),
             "http" => Some(Self::Http),

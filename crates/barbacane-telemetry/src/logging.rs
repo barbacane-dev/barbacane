@@ -208,11 +208,11 @@ mod tests {
     // These tests verify the configuration logic.
 
     #[test]
-    fn test_log_format_from_str() {
-        assert_eq!(LogFormat::from_str("json"), Some(LogFormat::Json));
-        assert_eq!(LogFormat::from_str("JSON"), Some(LogFormat::Json));
-        assert_eq!(LogFormat::from_str("pretty"), Some(LogFormat::Pretty));
-        assert_eq!(LogFormat::from_str("PRETTY"), Some(LogFormat::Pretty));
-        assert_eq!(LogFormat::from_str("invalid"), None);
+    fn test_log_format_parse() {
+        assert_eq!(LogFormat::parse("json"), Some(LogFormat::Json));
+        assert_eq!(LogFormat::parse("JSON"), Some(LogFormat::Json));
+        assert_eq!(LogFormat::parse("pretty"), Some(LogFormat::Pretty));
+        assert_eq!(LogFormat::parse("PRETTY"), Some(LogFormat::Pretty));
+        assert_eq!(LogFormat::parse("invalid"), None);
     }
 }
