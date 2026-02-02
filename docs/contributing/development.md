@@ -306,9 +306,12 @@ cargo test -p barbacane-test test_gateway_health -- --nocapture
 
 ## Performance Profiling
 
-### Benchmarks (coming soon)
+### Benchmarks (planned)
+
+Criterion benchmarks are planned for the router, validator, and WASM runtime.
 
 ```bash
+# Once implemented:
 cargo bench -p barbacane-router
 ```
 

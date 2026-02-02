@@ -52,8 +52,6 @@ struct HttpResponse {
 
 impl HttpUpstreamDispatcher {
     /// Proxy the request to the upstream and return the response.
-    // TODO: Forward query string from original request
-    // TODO: Handle binary response bodies (currently only UTF-8 is supported)
     pub fn dispatch(&mut self, req: Request) -> Response {
         // Build the upstream path
         let upstream_path = match &self.path {
@@ -61,11 +59,17 @@ impl HttpUpstreamDispatcher {
             None => req.path.clone(),
         };
 
-        // Construct the full URL
-        let full_url = if self.url.ends_with('/') || upstream_path.starts_with('/') {
+        // Construct the full URL with query string
+        let base_url = if self.url.ends_with('/') || upstream_path.starts_with('/') {
             format!("{}{}", self.url.trim_end_matches('/'), upstream_path)
         } else {
             format!("{}{}", self.url, upstream_path)
+        };
+
+        // Forward query string from original request
+        let full_url = match &req.query {
+            Some(qs) if !qs.is_empty() => format!("{}?{}", base_url, qs),
+            _ => base_url,
         };
 
         // Build headers to send to upstream
@@ -86,8 +90,9 @@ impl HttpUpstreamDispatcher {
         if let Some(host) = req.headers.get("host") {
             headers.insert("x-forwarded-host".to_string(), host.clone());
         }
-        // TODO: Detect actual protocol instead of hardcoding "http"
-        headers.insert("x-forwarded-proto".to_string(), "http".to_string());
+        // Detect protocol from upstream URL
+        let proto = if self.url.starts_with("https://") { "https" } else { "http" };
+        headers.insert("x-forwarded-proto".to_string(), proto.to_string());
 
         // Build the HTTP request
         let http_request = HttpRequest {
@@ -143,10 +148,16 @@ impl HttpUpstreamDispatcher {
             }
         }
 
+        // Note: Binary response bodies that are not valid UTF-8 will be omitted.
+        // This is a limitation of the plugin SDK's Response type which uses String.
+        // For binary content, consider using a base64-encoding middleware or
+        // returning the raw bytes through a future SDK enhancement.
+        let body = http_response.body.and_then(|b| String::from_utf8(b).ok());
+
         Response {
             status: http_response.status,
             headers: response_headers,
-            body: http_response.body.and_then(|b| String::from_utf8(b).ok()),
+            body,
         }
     }
 

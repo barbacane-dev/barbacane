@@ -298,8 +298,8 @@ pub fn compile_with_manifest(
         .into_iter()
         .map(|p| PluginBundle {
             name: p.name,
-            version: "0.1.0".to_string(), // TODO: Get version from plugin manifest
-            plugin_type: "plugin".to_string(), // TODO: Detect type from plugin manifest
+            version: p.version.unwrap_or_else(|| "0.1.0".to_string()),
+            plugin_type: p.plugin_type.unwrap_or_else(|| "plugin".to_string()),
             wasm_bytes: p.wasm_bytes,
         })
         .collect();

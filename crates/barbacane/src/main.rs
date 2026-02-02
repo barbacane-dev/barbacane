@@ -418,6 +418,7 @@ impl Gateway {
     async fn handle_request(
         &self,
         req: Request<Incoming>,
+        client_addr: Option<SocketAddr>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let start_time = Instant::now();
         let uri_string = req.uri().to_string();
@@ -583,7 +584,7 @@ impl Gateway {
                 }
 
                 let response = self
-                    .dispatch(operation, params, query_string, &body_bytes, &headers)
+                    .dispatch(operation, params, query_string, &body_bytes, &headers, client_addr)
                     .await?;
 
                 // Add deprecation headers if the operation is deprecated
@@ -657,6 +658,7 @@ impl Gateway {
         query_string: Option<String>,
         request_body: &[u8],
         headers: &HashMap<String, String>,
+        client_addr: Option<SocketAddr>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let dispatch = &operation.dispatch;
 
@@ -676,7 +678,9 @@ impl Gateway {
             } else {
                 String::from_utf8(request_body.to_vec()).ok()
             },
-            client_ip: "0.0.0.0".to_string(), // TODO: get actual client IP
+            client_ip: client_addr
+                .map(|addr| addr.ip().to_string())
+                .unwrap_or_else(|| "0.0.0.0".to_string()),
             path_params,
         };
 
@@ -1621,7 +1625,7 @@ async fn run_serve(
             }
             // Accept new connections
             accept_result = listener.accept() => {
-                let (stream, _) = match accept_result {
+                let (stream, peer_addr) = match accept_result {
                     Ok(conn) => conn,
                     Err(e) => {
                         eprintln!("error: accept failed: {}", e);
@@ -1638,11 +1642,13 @@ async fn run_serve(
                 let conn_metrics = metrics.clone();
                 let conn_counter = active_connections.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
+                let client_addr = Some(peer_addr);
 
                 tokio::spawn(async move {
                     let service = service_fn(move |req| {
                         let gateway = Arc::clone(&gateway);
-                        async move { gateway.handle_request(req).await }
+                        let client_addr = client_addr;
+                        async move { gateway.handle_request(req, client_addr).await }
                     });
 
                     if let Some(acceptor) = tls_acceptor {
