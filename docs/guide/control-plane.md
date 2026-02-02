@@ -91,6 +91,16 @@ When complete:
 curl -o api.bca http://localhost:9090/artifacts/770e8400-e29b-41d4-a716-446655440002/download
 ```
 
+## API Versioning
+
+All JSON responses from the control plane include a versioned content type:
+
+```
+Content-Type: application/vnd.barbacane.v1+json
+```
+
+This allows clients to detect the API version and handle future breaking changes gracefully.
+
 ## API Reference
 
 Full OpenAPI specification is available at [crates/barbacane-control/openapi.yaml](../../crates/barbacane-control/openapi.yaml).

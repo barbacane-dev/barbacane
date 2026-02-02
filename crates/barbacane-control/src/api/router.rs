@@ -1,15 +1,19 @@
 //! Axum router configuration.
 
 use axum::{
+    http::HeaderValue,
     routing::{delete, get, post},
     Router,
 };
 use sqlx::PgPool;
 use tokio::sync::mpsc;
-use tower_http::trace::TraceLayer;
+use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 use uuid::Uuid;
 
 use super::{artifacts, compilations, health, plugins, specs};
+
+/// API version header value.
+const API_VERSION: &str = "application/vnd.barbacane.v1+json";
 
 /// Shared application state.
 #[derive(Clone)]
@@ -67,5 +71,10 @@ pub fn create_router(pool: PgPool, compilation_tx: Option<mpsc::Sender<Uuid>>) -
         )
         // Middleware
         .layer(TraceLayer::new_for_http())
+        // API versioning: set Content-Type to versioned media type for JSON responses
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static(API_VERSION),
+        ))
         .with_state(state)
 }
