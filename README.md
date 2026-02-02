@@ -62,6 +62,23 @@ cargo build --release
 | `cache` | Middleware | Response caching |
 | `cors` | Middleware | CORS header management |
 
+## Performance
+
+Benchmark results on Apple M4 (MacBook Air 16GB):
+
+| Operation | Latency |
+|-----------|---------|
+| Route lookup (1000 routes) | ~83 ns |
+| Request validation (full) | ~1.2 µs |
+| Body validation (JSON) | ~458 ns |
+| Router build (500 routes) | ~130 µs |
+
+Run your own benchmarks:
+
+```bash
+cargo bench --workspace
+```
+
 ## Project Status
 
 Barbacane is under active development. See [MILESTONES.md](MILESTONES.md) for the roadmap and [CHANGELOG.md](CHANGELOG.md) for release history.
