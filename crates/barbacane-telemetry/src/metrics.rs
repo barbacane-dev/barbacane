@@ -4,12 +4,7 @@
 
 use prometheus_client::{
     encoding::EncodeLabelSet,
-    metrics::{
-        counter::Counter,
-        family::Family,
-        gauge::Gauge,
-        histogram::Histogram,
-    },
+    metrics::{counter::Counter, family::Family, gauge::Gauge, histogram::Histogram},
     registry::Registry,
 };
 
@@ -155,20 +150,18 @@ impl MetricsRegistry {
             request_duration_seconds.clone(),
         );
 
-        let request_size_bytes =
-            Family::<RequestLabels, Histogram>::new_with_constructor(|| {
-                Histogram::new(SIZE_BUCKETS.iter().cloned())
-            });
+        let request_size_bytes = Family::<RequestLabels, Histogram>::new_with_constructor(|| {
+            Histogram::new(SIZE_BUCKETS.iter().cloned())
+        });
         registry.register(
             "barbacane_request_size_bytes",
             "HTTP request body size in bytes",
             request_size_bytes.clone(),
         );
 
-        let response_size_bytes =
-            Family::<RequestLabels, Histogram>::new_with_constructor(|| {
-                Histogram::new(SIZE_BUCKETS.iter().cloned())
-            });
+        let response_size_bytes = Family::<RequestLabels, Histogram>::new_with_constructor(|| {
+            Histogram::new(SIZE_BUCKETS.iter().cloned())
+        });
         registry.register(
             "barbacane_response_size_bytes",
             "HTTP response body size in bytes",
@@ -450,20 +443,22 @@ impl MetricsRegistry {
             plugin: format!("{}_{}", plugin, name),
             labels_json: labels_json.to_string(),
         };
-        self.plugin_counters
-            .get_or_create(&labels)
-            .inc_by(value);
+        self.plugin_counters.get_or_create(&labels).inc_by(value);
     }
 
     /// Observe a plugin histogram metric.
-    pub fn plugin_histogram_observe(&self, plugin: &str, name: &str, labels_json: &str, value: f64) {
+    pub fn plugin_histogram_observe(
+        &self,
+        plugin: &str,
+        name: &str,
+        labels_json: &str,
+        value: f64,
+    ) {
         let labels = PluginMetricLabels {
             plugin: format!("{}_{}", plugin, name),
             labels_json: labels_json.to_string(),
         };
-        self.plugin_histograms
-            .get_or_create(&labels)
-            .observe(value);
+        self.plugin_histograms.get_or_create(&labels).observe(value);
     }
 }
 
@@ -528,7 +523,10 @@ mod tests {
             reason: "missing_required_field".to_string(),
         };
         assert_eq!(
-            registry.validation_failures_total.get_or_create(&labels).get(),
+            registry
+                .validation_failures_total
+                .get_or_create(&labels)
+                .get(),
             1
         );
     }

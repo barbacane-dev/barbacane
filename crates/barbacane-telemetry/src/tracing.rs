@@ -120,11 +120,7 @@ impl TracingContext {
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         // Get trace ID from context
-        let trace_id = context
-            .span()
-            .span_context()
-            .trace_id()
-            .to_string();
+        let trace_id = context.span().span_context().trace_id().to_string();
 
         Self {
             context,
@@ -230,7 +226,8 @@ pub struct SpanBuilder {
 impl SpanBuilder {
     /// Add an attribute to the span.
     pub fn with_attribute(mut self, key: &str, value: impl Into<opentelemetry::Value>) -> Self {
-        self.attributes.push(KeyValue::new(key.to_string(), value.into()));
+        self.attributes
+            .push(KeyValue::new(key.to_string(), value.into()));
         self
     }
 

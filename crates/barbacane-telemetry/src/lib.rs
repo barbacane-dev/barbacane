@@ -29,7 +29,7 @@ pub use config::{LogFormat, ObservabilityConfig, OtlpProtocol, TelemetryConfig};
 pub use logging::events;
 pub use metrics::MetricsRegistry;
 pub use prometheus::PROMETHEUS_CONTENT_TYPE;
-pub use tracing::{spans, attributes, TracingContext};
+pub use tracing::{attributes, spans, TracingContext};
 
 use std::sync::Arc;
 use thiserror::Error;
@@ -158,7 +158,10 @@ mod tests {
         assert_eq!(config.service_name, "test-service");
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.log_format, LogFormat::Pretty);
-        assert_eq!(config.otlp_endpoint, Some("http://localhost:4317".to_string()));
+        assert_eq!(
+            config.otlp_endpoint,
+            Some("http://localhost:4317".to_string())
+        );
         assert_eq!(config.trace_sampling, 0.5);
     }
 

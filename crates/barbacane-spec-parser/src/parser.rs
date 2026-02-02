@@ -478,13 +478,21 @@ paths:
         assert_eq!(spec.observability.latency_slo_ms, Some(50));
 
         // Check operation-level override
-        let fast_op = spec.operations.iter().find(|op| op.path == "/fast").unwrap();
+        let fast_op = spec
+            .operations
+            .iter()
+            .find(|op| op.path == "/fast")
+            .unwrap();
         let fast_obs = fast_op.observability.as_ref().unwrap();
         assert_eq!(fast_obs.trace_sampling, Some(1.0));
         assert_eq!(fast_obs.latency_slo_ms, Some(10));
 
         // Check operation without override
-        let slow_op = spec.operations.iter().find(|op| op.path == "/slow").unwrap();
+        let slow_op = spec
+            .operations
+            .iter()
+            .find(|op| op.path == "/slow")
+            .unwrap();
         assert!(slow_op.observability.is_none());
     }
 

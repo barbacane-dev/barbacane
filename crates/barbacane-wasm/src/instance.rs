@@ -1231,7 +1231,10 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
             },
         )
         .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_metric_histogram_observe: {}", e))
+            WasmError::Instantiation(format!(
+                "failed to add host_metric_histogram_observe: {}",
+                e
+            ))
         })?;
 
     // host_span_start - start a child span (stub - returns span ID)

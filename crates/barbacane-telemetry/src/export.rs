@@ -24,20 +24,16 @@ pub fn init_otlp_tracer(config: &TelemetryConfig) -> Result<(), TelemetryError> 
 
     // Build the exporter based on protocol
     let exporter = match config.otlp_protocol {
-        OtlpProtocol::Grpc => {
-            opentelemetry_otlp::SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(endpoint)
-                .build()
-                .map_err(|e| TelemetryError::OtlpInit(format!("gRPC exporter: {}", e)))?
-        }
-        OtlpProtocol::Http => {
-            opentelemetry_otlp::SpanExporter::builder()
-                .with_http()
-                .with_endpoint(endpoint)
-                .build()
-                .map_err(|e| TelemetryError::OtlpInit(format!("HTTP exporter: {}", e)))?
-        }
+        OtlpProtocol::Grpc => opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
+            .with_endpoint(endpoint)
+            .build()
+            .map_err(|e| TelemetryError::OtlpInit(format!("gRPC exporter: {}", e)))?,
+        OtlpProtocol::Http => opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .with_endpoint(endpoint)
+            .build()
+            .map_err(|e| TelemetryError::OtlpInit(format!("HTTP exporter: {}", e)))?,
     };
 
     // Configure sampler

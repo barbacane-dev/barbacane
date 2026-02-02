@@ -24,8 +24,8 @@ use rustls::ServerConfig;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
-use std::collections::HashMap;
 use barbacane_telemetry::MetricsRegistry;
+use std::collections::HashMap;
 
 use barbacane_compiler::{
     compile, compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs,
@@ -37,7 +37,9 @@ use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits, Val
 /// Extract a reason string from a validation error for metrics.
 fn validation_error_reason(err: &ValidationError2) -> String {
     match err {
-        ValidationError2::MissingRequiredParameter { .. } => "missing_required_parameter".to_string(),
+        ValidationError2::MissingRequiredParameter { .. } => {
+            "missing_required_parameter".to_string()
+        }
         ValidationError2::InvalidParameter { .. } => "invalid_parameter".to_string(),
         ValidationError2::MissingRequiredBody => "missing_required_body".to_string(),
         ValidationError2::UnsupportedContentType(_) => "unsupported_content_type".to_string(),
@@ -373,7 +375,14 @@ impl Gateway {
         // Check URI length limit early
         if let Err(e) = self.limits.validate_uri(&uri_string) {
             let response = self.validation_error_response(&[e]);
-            self.record_request_metrics(&method_str, &path, response.status().as_u16(), 0, 0, start_time);
+            self.record_request_metrics(
+                &method_str,
+                &path,
+                response.status().as_u16(),
+                0,
+                0,
+                start_time,
+            );
             return Ok(response);
         }
 
@@ -392,7 +401,14 @@ impl Gateway {
         // Check header limits
         if let Err(e) = self.limits.validate_headers(&headers) {
             let response = self.validation_error_response(&[e]);
-            self.record_request_metrics(&method_str, &path, response.status().as_u16(), 0, 0, start_time);
+            self.record_request_metrics(
+                &method_str,
+                &path,
+                response.status().as_u16(),
+                0,
+                0,
+                start_time,
+            );
             return Ok(response);
         }
 
@@ -401,7 +417,14 @@ impl Gateway {
             if let Ok(len) = content_length.parse::<usize>() {
                 if let Err(e) = self.limits.validate_body_size(len) {
                     let response = self.validation_error_response(&[e]);
-                    self.record_request_metrics(&method_str, &path, response.status().as_u16(), 0, 0, start_time);
+                    self.record_request_metrics(
+                        &method_str,
+                        &path,
+                        response.status().as_u16(),
+                        0,
+                        0,
+                        start_time,
+                    );
                     return Ok(response);
                 }
             }
@@ -421,7 +444,14 @@ impl Gateway {
                     Ok(collected) => collected.to_bytes(),
                     Err(_) => {
                         let response = self.bad_request_response("failed to read request body");
-                        self.record_request_metrics(&method_str, &route_path, response.status().as_u16(), 0, 0, start_time);
+                        self.record_request_metrics(
+                            &method_str,
+                            &route_path,
+                            response.status().as_u16(),
+                            0,
+                            0,
+                            start_time,
+                        );
                         return Ok(response);
                     }
                 };
@@ -430,9 +460,20 @@ impl Gateway {
 
                 // Validate actual body size (in case content-length was missing or wrong)
                 if let Err(e) = self.limits.validate_body_size(body_bytes.len()) {
-                    self.metrics.record_validation_failure(&method_str, &route_path, "body_too_large");
+                    self.metrics.record_validation_failure(
+                        &method_str,
+                        &route_path,
+                        "body_too_large",
+                    );
                     let response = self.validation_error_response(&[e]);
-                    self.record_request_metrics(&method_str, &route_path, response.status().as_u16(), request_size, 0, start_time);
+                    self.record_request_metrics(
+                        &method_str,
+                        &route_path,
+                        response.status().as_u16(),
+                        request_size,
+                        0,
+                        start_time,
+                    );
                     return Ok(response);
                 }
 
@@ -447,28 +488,58 @@ impl Gateway {
                     // Record validation failures - use error variant name as reason
                     for err in &errors {
                         let reason = validation_error_reason(err);
-                        self.metrics.record_validation_failure(&method_str, &route_path, &reason);
+                        self.metrics
+                            .record_validation_failure(&method_str, &route_path, &reason);
                     }
                     let response = self.validation_error_response(&errors);
-                    self.record_request_metrics(&method_str, &route_path, response.status().as_u16(), request_size, 0, start_time);
+                    self.record_request_metrics(
+                        &method_str,
+                        &route_path,
+                        response.status().as_u16(),
+                        request_size,
+                        0,
+                        start_time,
+                    );
                     return Ok(response);
                 }
 
-                let response = self.dispatch(operation, params, query_string, &body_bytes, &headers)
+                let response = self
+                    .dispatch(operation, params, query_string, &body_bytes, &headers)
                     .await?;
 
                 let response_size = response.body().size_hint().exact().unwrap_or(0);
-                self.record_request_metrics(&method_str, &route_path, response.status().as_u16(), request_size, response_size, start_time);
+                self.record_request_metrics(
+                    &method_str,
+                    &route_path,
+                    response.status().as_u16(),
+                    request_size,
+                    response_size,
+                    start_time,
+                );
                 Ok(response)
             }
             RouteMatch::MethodNotAllowed { allowed } => {
                 let response = self.method_not_allowed_response(allowed);
-                self.record_request_metrics(&method_str, &path, response.status().as_u16(), 0, 0, start_time);
+                self.record_request_metrics(
+                    &method_str,
+                    &path,
+                    response.status().as_u16(),
+                    0,
+                    0,
+                    start_time,
+                );
                 Ok(response)
             }
             RouteMatch::NotFound => {
                 let response = self.not_found_response();
-                self.record_request_metrics(&method_str, &path, response.status().as_u16(), 0, 0, start_time);
+                self.record_request_metrics(
+                    &method_str,
+                    &path,
+                    response.status().as_u16(),
+                    0,
+                    0,
+                    start_time,
+                );
                 Ok(response)
             }
         }
@@ -1371,7 +1442,13 @@ async fn run_serve(
         return ExitCode::from(1);
     }
 
-    let gateway = match Gateway::load(artifact_path, dev, limits, allow_plaintext_upstream, metrics.clone()) {
+    let gateway = match Gateway::load(
+        artifact_path,
+        dev,
+        limits,
+        allow_plaintext_upstream,
+        metrics.clone(),
+    ) {
         Ok(g) => Arc::new(g),
         Err(e) => {
             eprintln!("error: {}", e);
