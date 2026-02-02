@@ -1,5 +1,5 @@
 .PHONY: all test test-verbose clippy fmt check build release plugins clean help \
-        control-plane ui dev db-up db-down db-reset
+        control-plane ui dev db-up db-down db-reset seed-plugins
 
 # Default target
 all: check test
@@ -55,6 +55,10 @@ plugins:
 		fi \
 	done
 	@echo "Done building plugins"
+
+# Seed the plugin registry with built-in plugins
+seed-plugins: plugins
+	cargo run -p barbacane-control -- seed-plugins --plugins-dir plugins --database-url $(DATABASE_URL) --verbose
 
 # Clean build artifacts
 clean:
@@ -131,6 +135,7 @@ help:
 	@echo "  make build        - Build debug"
 	@echo "  make release      - Build release"
 	@echo "  make plugins      - Build all WASM plugins"
+	@echo "  make seed-plugins - Build plugins and seed registry"
 	@echo "  make clean        - Clean all build artifacts"
 	@echo ""
 	@echo "Development:"

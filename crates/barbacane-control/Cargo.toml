@@ -49,3 +49,6 @@ rand = { workspace = true }
 
 # API documentation
 scalar_api_reference = "0.1"
+
+# Plugin seeding
+toml = { workspace = true }
