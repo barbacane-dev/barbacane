@@ -64,7 +64,7 @@ jobs:
         run: make plugins
 
       - name: Run tests
-        run: cargo test --workspace -- --test-threads=4
+        run: cargo test --workspace -- --test-threads=2
 
   clippy:
     name: Clippy
