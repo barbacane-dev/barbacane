@@ -7,7 +7,7 @@
 <p align="center"><i>Your spec is your gateway.</i></p>
 
 <p align="center">
-  <a href="https://github.com/barbacane/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/tests-255%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
@@ -28,7 +28,7 @@ Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or 
 
 ```bash
 # Clone and build
-git clone https://github.com/barbacane/barbacane.git
+git clone https://github.com/barbacane-dev/barbacane.git
 cd barbacane
 cargo build --release
 
