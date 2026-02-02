@@ -169,7 +169,7 @@ HTTPS termination and JWT authentication — the most common production security
 - [x] TLS settings — TLS 1.2 min, 1.3 preferred, modern cipher suites
 - [x] ALPN — HTTP/1.1 and HTTP/2 negotiation
 - [x] `--tls-cert` and `--tls-key` CLI flags
-- [ ] `--tls-config` for advanced settings (min version, cipher suites)
+- [x] `--tls-min-version` flag for minimum TLS version (1.2 or 1.3)
 
 ### JWT Authentication
 - [x] `jwt-auth` middleware plugin — RS256/ES256 token validation (signature validation scaffolded)
