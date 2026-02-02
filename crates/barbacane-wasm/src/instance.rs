@@ -11,6 +11,7 @@ use wasmtime::{Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+use crate::broker::{BrokerMessage, BrokerRegistry};
 use crate::engine::CompiledModule;
 use crate::error::WasmError;
 use crate::http_client::{
@@ -100,6 +101,12 @@ pub struct PluginState {
 
     /// Metrics registry for plugin telemetry (shared).
     pub metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
+
+    /// Broker registry for Kafka/NATS publishing (shared).
+    pub brokers: Option<Arc<BrokerRegistry>>,
+
+    /// Result buffer for host_kafka_publish / host_nats_publish.
+    pub last_broker_result: Option<Vec<u8>>,
 }
 
 impl PluginState {
@@ -119,6 +126,8 @@ impl PluginState {
             response_cache: None,
             last_cache_result: None,
             metrics: None,
+            brokers: None,
+            last_broker_result: None,
         }
     }
 
@@ -142,6 +151,8 @@ impl PluginState {
             response_cache: None,
             last_cache_result: None,
             metrics: None,
+            brokers: None,
+            last_broker_result: None,
         }
     }
 
@@ -166,6 +177,8 @@ impl PluginState {
             response_cache: None,
             last_cache_result: None,
             metrics: None,
+            brokers: None,
+            last_broker_result: None,
         }
     }
 
@@ -192,6 +205,8 @@ impl PluginState {
             response_cache,
             last_cache_result: None,
             metrics: None,
+            brokers: None,
+            last_broker_result: None,
         }
     }
 
@@ -219,6 +234,8 @@ impl PluginState {
             response_cache,
             last_cache_result: None,
             metrics,
+            brokers: None,
+            last_broker_result: None,
         }
     }
 
@@ -1325,6 +1342,173 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| {
             WasmError::Instantiation(format!("failed to add host_span_set_attribute: {}", e))
+        })?;
+
+    // === Broker Host Functions (M10) ===
+
+    // host_kafka_publish - publish a message to Kafka
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_kafka_publish",
+            |mut caller: Caller<'_, PluginState>, msg_ptr: i32, msg_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = msg_ptr as usize;
+                let end = start + msg_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                // Parse the broker message from plugin memory
+                let message: BrokerMessage = match serde_json::from_slice(&data[start..end]) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::error!("failed to parse broker message: {}", e);
+                        return -1;
+                    }
+                };
+
+                // Get the broker registry
+                let brokers = match &caller.data().brokers {
+                    Some(b) => b.clone(),
+                    None => {
+                        tracing::error!("broker registry not available");
+                        return -1;
+                    }
+                };
+
+                // Publish to Kafka
+                let result = brokers.publish_kafka(message);
+
+                // Serialize the result
+                let result_json = match result {
+                    Ok(r) => serde_json::to_vec(&r),
+                    Err(e) => {
+                        let error_result = crate::broker::PublishResult::failure(
+                            "unknown".to_string(),
+                            e.to_string(),
+                        );
+                        serde_json::to_vec(&error_result)
+                    }
+                };
+
+                match result_json {
+                    Ok(json) => {
+                        let len = json.len() as i32;
+                        caller.data_mut().last_broker_result = Some(json);
+                        len
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to serialize broker result: {}", e);
+                        -1
+                    }
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_kafka_publish: {}", e))
+        })?;
+
+    // host_nats_publish - publish a message to NATS
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_nats_publish",
+            |mut caller: Caller<'_, PluginState>, msg_ptr: i32, msg_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = msg_ptr as usize;
+                let end = start + msg_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                // Parse the broker message from plugin memory
+                let message: BrokerMessage = match serde_json::from_slice(&data[start..end]) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::error!("failed to parse broker message: {}", e);
+                        return -1;
+                    }
+                };
+
+                // Get the broker registry
+                let brokers = match &caller.data().brokers {
+                    Some(b) => b.clone(),
+                    None => {
+                        tracing::error!("broker registry not available");
+                        return -1;
+                    }
+                };
+
+                // Publish to NATS
+                let result = brokers.publish_nats(message);
+
+                // Serialize the result
+                let result_json = match result {
+                    Ok(r) => serde_json::to_vec(&r),
+                    Err(e) => {
+                        let error_result = crate::broker::PublishResult::failure(
+                            "unknown".to_string(),
+                            e.to_string(),
+                        );
+                        serde_json::to_vec(&error_result)
+                    }
+                };
+
+                match result_json {
+                    Ok(json) => {
+                        let len = json.len() as i32;
+                        caller.data_mut().last_broker_result = Some(json);
+                        len
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to serialize broker result: {}", e);
+                        -1
+                    }
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_nats_publish: {}", e)))?;
+
+    // host_broker_read_result - read broker publish result into plugin memory
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_broker_read_result",
+            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let result = caller.data_mut().last_broker_result.take();
+                if let Some(data) = result {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
+
+                    if memory
+                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
+                        .is_ok()
+                    {
+                        return copy_len as i32;
+                    }
+                }
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_broker_read_result: {}", e))
         })?;
 
     Ok(())

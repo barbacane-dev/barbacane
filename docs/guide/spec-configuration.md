@@ -1,6 +1,6 @@
 # Spec Configuration
 
-Barbacane extends OpenAPI with custom `x-barbacane-*` extensions. These tell the gateway how to route requests, apply middleware, and connect to backends.
+Barbacane extends OpenAPI and AsyncAPI specs with custom `x-barbacane-*` extensions. These tell the gateway how to route requests, apply middleware, and connect to backends.
 
 ## Extension Overview
 
@@ -310,6 +310,109 @@ paths:
         "200":
           description: Payment processed
 ```
+
+## AsyncAPI Support
+
+Barbacane supports AsyncAPI 3.x for event-driven APIs. AsyncAPI specs work similarly to OpenAPI, with channels and operations instead of paths and methods.
+
+### Sync-to-Async Bridge Pattern
+
+AsyncAPI `send` operations are accessible via HTTP POST requests. This enables clients to publish messages to Kafka or NATS through the gateway:
+
+1. Client sends HTTP POST to the channel address
+2. Gateway validates the message against the schema
+3. Dispatcher publishes to Kafka/NATS
+4. Gateway returns 202 Accepted
+
+### Basic AsyncAPI Example
+
+```yaml
+asyncapi: "3.0.0"
+info:
+  title: User Events API
+  version: "1.0.0"
+
+channels:
+  userEvents:
+    address: /events/users
+    messages:
+      UserCreated:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - userId
+            - email
+          properties:
+            userId:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+
+operations:
+  publishUserCreated:
+    action: send
+    channel:
+      $ref: '#/channels/userEvents'
+    x-barbacane-dispatch:
+      name: kafka
+      config:
+        topic: "user-events"
+```
+
+### Channel Parameters
+
+AsyncAPI channels can have parameters (like path params in OpenAPI):
+
+```yaml
+channels:
+  orderEvents:
+    address: /events/orders/{orderId}
+    parameters:
+      orderId:
+        schema:
+          type: string
+          format: uuid
+    messages:
+      OrderPlaced:
+        payload:
+          type: object
+```
+
+### Message Validation
+
+Message payloads are validated against the schema before dispatch. Invalid messages receive a 400 response with validation details.
+
+### HTTP Method Mapping
+
+| AsyncAPI Action | HTTP Method |
+|-----------------|-------------|
+| `send` | POST |
+| `receive` | GET |
+
+### Middlewares
+
+AsyncAPI operations support the same middleware extensions as OpenAPI:
+
+```yaml
+operations:
+  publishEvent:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-middlewares:
+      - name: jwt-auth
+        config:
+          required: true
+    x-barbacane-dispatch:
+      name: kafka
+      config:
+        topic: "events"
+```
+
+---
 
 ## API Lifecycle
 

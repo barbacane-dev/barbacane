@@ -205,13 +205,14 @@ jobs:
             ${{ runner.os }}-criterion-main
 
       - name: Run benchmarks
-        run: cargo bench --workspace -- --noplot
+        # Only run benchmarks on packages that have them defined
+        run: cargo bench -p barbacane-router -p barbacane-validator -- --noplot
 
       - name: Check for regressions
         run: |
           # Parse criterion output for significant regressions (>10%)
           # Criterion reports "Performance has regressed" for significant changes
-          if cargo bench --workspace -- --noplot 2>&1 | grep -q "Performance has regressed"; then
+          if cargo bench -p barbacane-router -p barbacane-validator -- --noplot 2>&1 | grep -q "Performance has regressed"; then
             echo "::warning::Performance regression detected in benchmarks"
             # For now, warn but don't fail - can be made strict later
             # exit 1

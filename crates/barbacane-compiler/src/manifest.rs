@@ -488,6 +488,8 @@ plugins:
                     deprecated: false,
                     sunset: None,
                     extensions: BTreeMap::new(),
+                    messages: vec![],
+                    bindings: BTreeMap::new(),
                 },
                 Operation {
                     path: "/api".to_string(),
@@ -507,6 +509,8 @@ plugins:
                     deprecated: false,
                     sunset: None,
                     extensions: BTreeMap::new(),
+                    messages: vec![],
+                    bindings: BTreeMap::new(),
                 },
             ],
         };
@@ -551,6 +555,8 @@ plugins:
                 deprecated: false,
                 sunset: None,
                 extensions: BTreeMap::new(),
+                messages: vec![],
+                bindings: BTreeMap::new(),
             }],
         };
 
@@ -594,6 +600,8 @@ plugins:
                 deprecated: false,
                 sunset: None,
                 extensions: BTreeMap::new(),
+                messages: vec![],
+                bindings: BTreeMap::new(),
             }],
         };
 

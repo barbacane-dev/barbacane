@@ -6,6 +6,7 @@
 // Allow dead code for M3 host function scaffolding not yet integrated
 #![allow(dead_code)]
 
+pub mod broker;
 pub mod cache;
 mod chain;
 mod circuit_breaker;
@@ -53,6 +54,12 @@ pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use http_client::{
     HttpClient, HttpClientConfig, HttpClientError, HttpRequest, HttpResponse, TlsConfig,
     TlsConfigError,
+};
+
+// Message brokers for event dispatch (M10)
+pub use broker::{
+    BrokerError, BrokerMessage, BrokerRegistry, KafkaBroker, MessageBroker, MockBroker, NatsBroker,
+    PublishResult,
 };
 
 /// Re-export plugin SDK types for convenience.

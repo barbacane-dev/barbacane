@@ -1,6 +1,6 @@
 # Dispatchers
 
-Dispatchers handle how requests are processed and responses are generated. Every operation in your OpenAPI spec needs an `x-barbacane-dispatch` extension.
+Dispatchers handle how requests are processed and responses are generated. Every operation in your OpenAPI or AsyncAPI spec needs an `x-barbacane-dispatch` extension.
 
 ## Overview
 
@@ -297,6 +297,203 @@ Lambda response format:
 |--------|-----------|
 | 502 Bad Gateway | Lambda invocation failed or returned invalid response |
 | 504 Gateway Timeout | Request exceeded configured timeout |
+
+### kafka
+
+Publishes messages to Apache Kafka topics. Designed for AsyncAPI specs using the sync-to-async bridge pattern: HTTP POST requests publish messages and return 202 Accepted.
+
+```yaml
+x-barbacane-dispatch:
+  name: kafka
+  config:
+    topic: "user-events"
+```
+
+#### Configuration
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `topic` | string | Yes | - | Kafka topic to publish to |
+| `key` | string | No | - | Message key expression (see below) |
+| `ack_response` | object | No | - | Custom acknowledgment response |
+| `include_metadata` | boolean | No | false | Include partition/offset in response |
+| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
+
+##### Key Expression
+
+The `key` property supports dynamic expressions:
+
+| Expression | Description |
+|------------|-------------|
+| `$request.header.X-Key` | Extract key from request header |
+| `$request.path.userId` | Extract key from path parameter |
+| `literal-value` | Use a literal string value |
+
+##### Custom Acknowledgment Response
+
+Override the default 202 Accepted response:
+
+```yaml
+x-barbacane-dispatch:
+  name: kafka
+  config:
+    topic: "orders"
+    ack_response:
+      body: {"queued": true, "estimatedDelivery": "5s"}
+      headers:
+        X-Queue-Name: "orders"
+```
+
+#### Examples
+
+**Basic Kafka publish:**
+```yaml
+# AsyncAPI spec
+asyncapi: "3.0.0"
+info:
+  title: Order Events
+  version: "1.0.0"
+channels:
+  orderEvents:
+    address: /events/orders
+    messages:
+      OrderCreated:
+        payload:
+          type: object
+          properties:
+            orderId:
+              type: string
+operations:
+  publishOrder:
+    action: send
+    channel:
+      $ref: '#/channels/orderEvents'
+    x-barbacane-dispatch:
+      name: kafka
+      config:
+        topic: "order-events"
+        key: "$request.header.X-Order-Id"
+        include_metadata: true
+```
+
+**With request header forwarding:**
+```yaml
+x-barbacane-dispatch:
+  name: kafka
+  config:
+    topic: "audit-events"
+    headers_from_request:
+      - "x-correlation-id"
+      - "x-user-id"
+```
+
+#### Response
+
+On successful publish, returns 202 Accepted:
+
+```json
+{
+  "status": "accepted",
+  "topic": "order-events",
+  "partition": 3,
+  "offset": 12345
+}
+```
+
+(partition/offset only included if `include_metadata: true`)
+
+#### Error Handling
+
+| Status | Condition |
+|--------|-----------|
+| 502 Bad Gateway | Kafka publish failed |
+
+### nats
+
+Publishes messages to NATS subjects. Designed for AsyncAPI specs using the sync-to-async bridge pattern.
+
+```yaml
+x-barbacane-dispatch:
+  name: nats
+  config:
+    subject: "notifications.user"
+```
+
+#### Configuration
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `subject` | string | Yes | - | NATS subject to publish to (supports wildcards) |
+| `ack_response` | object | No | - | Custom acknowledgment response |
+| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
+
+#### Examples
+
+**Basic NATS publish:**
+```yaml
+asyncapi: "3.0.0"
+info:
+  title: Notification Service
+  version: "1.0.0"
+channels:
+  notifications:
+    address: /notifications/{userId}
+    parameters:
+      userId:
+        schema:
+          type: string
+    messages:
+      Notification:
+        payload:
+          type: object
+          required:
+            - title
+          properties:
+            title:
+              type: string
+            body:
+              type: string
+operations:
+  sendNotification:
+    action: send
+    channel:
+      $ref: '#/channels/notifications'
+    x-barbacane-dispatch:
+      name: nats
+      config:
+        subject: "notifications"
+        headers_from_request:
+          - "x-request-id"
+```
+
+**Custom acknowledgment:**
+```yaml
+x-barbacane-dispatch:
+  name: nats
+  config:
+    subject: "events.user.signup"
+    ack_response:
+      body: {"accepted": true}
+      headers:
+        X-Subject: "events.user.signup"
+```
+
+#### Response
+
+On successful publish, returns 202 Accepted:
+
+```json
+{
+  "status": "accepted",
+  "subject": "notifications"
+}
+```
+
+#### Error Handling
+
+| Status | Condition |
+|--------|-----------|
+| 502 Bad Gateway | NATS publish failed |
 
 ---
 

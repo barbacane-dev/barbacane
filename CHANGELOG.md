@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+#### AsyncAPI & Event Dispatch (M10)
+- AsyncAPI 3.x parser with channels, operations, messages, and protocol bindings
+- Channel parameters with templated addresses (e.g., `notifications/{userId}`)
+- Operation actions: `send` (gateway publishes) and `receive` (gateway subscribes)
+- Protocol bindings extraction for Kafka, NATS, MQTT, AMQP, WebSocket
+- Message schema validation for AsyncAPI payloads
+- Host functions: `host_kafka_publish`, `host_nats_publish`
+- `kafka` dispatcher plugin with topic routing, key expressions, and header forwarding
+- `nats` dispatcher plugin with subject routing
+- Sync-to-async bridge: HTTP request in, broker publish out, 202 ack response
+
+#### Other
 - HTTP/2 support with automatic protocol detection via ALPN
 - API lifecycle support with `deprecated` flag and `x-barbacane-sunset` extension
 - `Deprecation` and `Sunset` response headers for deprecated routes

@@ -1044,4 +1044,133 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().len(), 3); // URI + headers + body
     }
+
+    // ========================
+    // AsyncAPI Message Validation Tests
+    // ========================
+
+    #[test]
+    fn validate_asyncapi_message_payload() {
+        // Simulates how the parser creates request_body from AsyncAPI message payload
+        use barbacane_spec_parser::ContentSchema;
+        use std::collections::BTreeMap;
+
+        // Message schema with required fields (typical event payload)
+        let message_schema = serde_json::json!({
+            "type": "object",
+            "required": ["eventId", "userId", "timestamp"],
+            "properties": {
+                "eventId": { "type": "string", "format": "uuid" },
+                "userId": { "type": "string" },
+                "timestamp": { "type": "string", "format": "date-time" },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        });
+
+        let mut content = BTreeMap::new();
+        content.insert(
+            "application/json".to_string(),
+            ContentSchema {
+                schema: Some(message_schema),
+            },
+        );
+
+        let request_body = RequestBody {
+            required: true,
+            content,
+        };
+
+        let validator = OperationValidator::new(&[], Some(&request_body));
+
+        // Valid message payload
+        let valid_payload = br#"{
+            "eventId": "550e8400-e29b-41d4-a716-446655440000",
+            "userId": "user-123",
+            "timestamp": "2024-01-29T12:30:00Z"
+        }"#;
+        let result = validator.validate_body(Some("application/json"), valid_payload);
+        assert!(result.is_ok(), "Valid message should pass: {:?}", result);
+
+        // Invalid: missing required field
+        let missing_field = br#"{
+            "eventId": "550e8400-e29b-41d4-a716-446655440000",
+            "userId": "user-123"
+        }"#;
+        let result = validator.validate_body(Some("application/json"), missing_field);
+        assert!(result.is_err(), "Missing timestamp should fail");
+
+        // Invalid: wrong format for eventId
+        let wrong_format = br#"{
+            "eventId": "not-a-uuid",
+            "userId": "user-123",
+            "timestamp": "2024-01-29T12:30:00Z"
+        }"#;
+        let result = validator.validate_body(Some("application/json"), wrong_format);
+        assert!(result.is_err(), "Invalid UUID format should fail");
+    }
+
+    #[test]
+    fn validate_asyncapi_message_with_avro_content_type() {
+        // AsyncAPI can use different content types (avro, protobuf, etc.)
+        use barbacane_spec_parser::ContentSchema;
+        use std::collections::BTreeMap;
+
+        let message_schema = serde_json::json!({
+            "type": "object",
+            "required": ["key"],
+            "properties": {
+                "key": { "type": "string" }
+            }
+        });
+
+        let mut content = BTreeMap::new();
+        content.insert(
+            "application/vnd.apache.avro+json".to_string(),
+            ContentSchema {
+                schema: Some(message_schema),
+            },
+        );
+
+        let request_body = RequestBody {
+            required: true,
+            content,
+        };
+
+        let validator = OperationValidator::new(&[], Some(&request_body));
+
+        // JSON-encoded Avro message
+        let result = validator.validate_body(
+            Some("application/vnd.apache.avro+json"),
+            br#"{"key": "value"}"#,
+        );
+        assert!(result.is_ok());
+
+        // Unsupported content type should fail
+        let result =
+            validator.validate_body(Some("application/octet-stream"), br#"{"key": "value"}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_asyncapi_channel_parameter() {
+        // Channel parameters (e.g., notifications/{userId}) are path params
+        let schema = serde_json::json!({
+            "type": "string",
+            "pattern": "^user-[a-z0-9]+$"
+        });
+
+        let params = vec![make_param("userId", "path", true, Some(schema))];
+        let validator = OperationValidator::new(&params, None);
+
+        // Valid parameter matching pattern
+        let result = validator.validate_path_params(&[("userId".into(), "user-abc123".into())]);
+        assert!(result.is_ok());
+
+        // Invalid parameter not matching pattern
+        let result = validator.validate_path_params(&[("userId".into(), "invalid".into())]);
+        assert!(result.is_err());
+    }
 }
