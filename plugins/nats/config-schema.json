@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:nats-config",
+  "title": "NATS Dispatcher Config",
+  "description": "Configuration for the NATS dispatcher plugin",
+  "type": "object",
+  "required": ["subject"],
+  "properties": {
+    "subject": {
+      "type": "string",
+      "description": "NATS subject to publish messages to (supports wildcards like 'events.>')"
+    },
+    "ack_response": {
+      "type": "object",
+      "description": "Custom 202 Accepted response",
+      "properties": {
+        "body": {
+          "type": "object",
+          "description": "JSON body for the acknowledgment response"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Additional headers for the acknowledgment response"
+        }
+      }
+    },
+    "headers_from_request": {
+      "type": "array",
+      "description": "Request headers to pass as NATS message headers",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}

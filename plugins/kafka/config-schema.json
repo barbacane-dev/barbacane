@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:kafka-config",
+  "title": "Kafka Dispatcher Config",
+  "description": "Configuration for the Kafka dispatcher plugin",
+  "type": "object",
+  "required": ["topic"],
+  "properties": {
+    "topic": {
+      "type": "string",
+      "description": "Kafka topic to publish messages to"
+    },
+    "key": {
+      "type": "string",
+      "description": "Message key expression (supports $request.header.X-Key, $request.path.id, or literal value)"
+    },
+    "ack_response": {
+      "type": "object",
+      "description": "Custom 202 Accepted response",
+      "properties": {
+        "body": {
+          "type": "object",
+          "description": "JSON body for the acknowledgment response"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Additional headers for the acknowledgment response"
+        }
+      }
+    },
+    "include_metadata": {
+      "type": "boolean",
+      "description": "Include publish metadata (partition, offset) in response",
+      "default": false
+    },
+    "headers_from_request": {
+      "type": "array",
+      "description": "Request headers to pass as Kafka message headers",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}
