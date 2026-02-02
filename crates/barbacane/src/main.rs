@@ -655,6 +655,7 @@ impl Gateway {
     /// Execute middleware on_request chain.
     /// Returns the final request JSON and the middleware instances (for on_response),
     /// or a short-circuit response.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     fn execute_middleware_on_request(
         &self,
         middlewares: &[barbacane_compiler::MiddlewareConfig],
@@ -1587,7 +1588,7 @@ async fn main() -> ExitCode {
             tls_key,
         } => {
             // Initialize telemetry
-            let log_fmt = barbacane_telemetry::LogFormat::from_str(&log_format)
+            let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
                 .unwrap_or(barbacane_telemetry::LogFormat::Json);
 
             let mut telemetry_config = barbacane_telemetry::TelemetryConfig::new()

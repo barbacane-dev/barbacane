@@ -302,6 +302,7 @@ impl MetricsRegistry {
     }
 
     /// Record a completed request.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_request(
         &self,
         method: &str,
