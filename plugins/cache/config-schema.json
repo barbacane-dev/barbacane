@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cache Middleware Configuration",
+  "description": "Configuration for response caching middleware",
+  "type": "object",
+  "properties": {
+    "ttl": {
+      "type": "integer",
+      "description": "Time-to-live for cached responses in seconds",
+      "minimum": 1,
+      "maximum": 86400,
+      "default": 300
+    },
+    "vary": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Headers that differentiate cache entries (case-insensitive)",
+      "default": []
+    },
+    "methods": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "HTTP methods to cache (default: GET, HEAD)",
+      "default": ["GET", "HEAD"]
+    },
+    "cacheable_status": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "description": "Status codes that are cacheable (default: 200, 301, 404)",
+      "default": [200, 301, 404]
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

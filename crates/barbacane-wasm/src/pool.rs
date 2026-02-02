@@ -9,11 +9,13 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
 
+use crate::cache::ResponseCache;
 use crate::engine::{CompiledModule, WasmEngine};
 use crate::error::WasmError;
 use crate::http_client::HttpClient;
 use crate::instance::PluginInstance;
 use crate::limits::PluginLimits;
+use crate::rate_limiter::RateLimiter;
 use crate::secrets::SecretsStore;
 
 /// Key for identifying a plugin instance.
@@ -76,6 +78,12 @@ pub struct InstancePool {
     /// Resolved secrets store (shared across all instances).
     secrets: Option<SecretsStore>,
 
+    /// Rate limiter (shared across all instances).
+    rate_limiter: Option<RateLimiter>,
+
+    /// Response cache (shared across all instances).
+    response_cache: Option<ResponseCache>,
+
     /// Cache of compiled modules by plugin name.
     modules: DashMap<String, CompiledModule>,
 
@@ -96,6 +104,8 @@ impl InstancePool {
             limits,
             http_client: None,
             secrets: None,
+            rate_limiter: None,
+            response_cache: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -113,6 +123,8 @@ impl InstancePool {
             limits,
             http_client: Some(http_client),
             secrets: None,
+            rate_limiter: None,
+            response_cache: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -131,6 +143,30 @@ impl InstancePool {
             limits,
             http_client: Some(http_client),
             secrets: Some(secrets),
+            rate_limiter: None,
+            response_cache: None,
+            modules: DashMap::new(),
+            instances: DashMap::new(),
+            configs: DashMap::new(),
+        }
+    }
+
+    /// Create a new instance pool with all options.
+    pub fn with_all_options(
+        engine: Arc<WasmEngine>,
+        limits: PluginLimits,
+        http_client: Option<Arc<HttpClient>>,
+        secrets: Option<SecretsStore>,
+        rate_limiter: Option<RateLimiter>,
+        response_cache: Option<ResponseCache>,
+    ) -> Self {
+        Self {
+            engine,
+            limits,
+            http_client,
+            secrets,
+            rate_limiter,
+            response_cache,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -162,13 +198,15 @@ impl InstancePool {
             .get(key)
             .ok_or_else(|| WasmError::InitFailed(format!("config not found for: {}", key.name)))?;
 
-        // Create a new instance with HTTP client and secrets if available
-        let mut instance = PluginInstance::new_with_options(
+        // Create a new instance with all options
+        let mut instance = PluginInstance::new_with_all_options(
             self.engine.engine(),
             &module,
             self.limits.clone(),
             self.http_client.clone(),
             self.secrets.clone(),
+            self.rate_limiter.clone(),
+            self.response_cache.clone(),
         )?;
 
         // Initialize with config

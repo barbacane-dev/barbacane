@@ -31,7 +31,10 @@ use barbacane_compiler::{
 };
 use barbacane_router::{RouteEntry, RouteMatch, Router};
 use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits};
-use barbacane_wasm::{HttpClient, HttpClientConfig, InstancePool, PluginLimits, WasmEngine};
+use barbacane_wasm::{
+    HttpClient, HttpClientConfig, InstancePool, PluginLimits, RateLimiter, ResponseCache,
+    WasmEngine,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "barbacane", about = "Barbacane API gateway", version)]
@@ -241,12 +244,20 @@ impl Gateway {
                 barbacane_wasm::resolve_config_secrets(&op.dispatch.config, &secrets_store);
         }
 
-        // Create pool with secrets for host_get_secret calls
-        let plugin_pool = InstancePool::with_http_client_and_secrets(
+        // Create rate limiter for host_rate_limit_check calls
+        let rate_limiter = RateLimiter::new();
+
+        // Create response cache for host_cache_get/set calls
+        let response_cache = ResponseCache::new();
+
+        // Create pool with all options: HTTP client, secrets, rate limiter, and cache
+        let plugin_pool = InstancePool::with_all_options(
             wasm_engine.clone(),
             plugin_limits.clone(),
-            http_client.clone(),
-            secrets_store,
+            Some(http_client.clone()),
+            Some(secrets_store),
+            Some(rate_limiter),
+            Some(response_cache),
         );
 
         // Register all compiled modules in the pool
