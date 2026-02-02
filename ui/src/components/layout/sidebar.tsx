@@ -9,12 +9,14 @@ import {
   Moon,
   LogOut,
   User,
+  Plus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/hooks'
 import { useAuth } from '@/lib/auth'
 
 const navigation = [
+  { name: 'New Project', href: '/init', icon: Plus },
   { name: 'Specs', href: '/specs', icon: FileCode },
   { name: 'Plugins', href: '/plugins', icon: Puzzle },
   { name: 'Artifacts', href: '/artifacts', icon: Package },

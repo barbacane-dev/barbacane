@@ -3,6 +3,7 @@
 mod artifacts;
 mod compilations;
 mod health;
+mod init;
 mod plugins;
 mod router;
 mod specs;

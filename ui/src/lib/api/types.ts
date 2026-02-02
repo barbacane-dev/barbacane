@@ -90,3 +90,23 @@ export interface ValidationIssue {
   message: string
   location?: string
 }
+
+// Init types
+export type InitTemplate = 'basic' | 'minimal'
+
+export interface InitRequest {
+  name: string
+  template?: InitTemplate
+  description?: string
+  version?: string
+}
+
+export interface ProjectFile {
+  path: string
+  content: string
+}
+
+export interface InitResponse {
+  files: ProjectFile[]
+  next_steps: string[]
+}

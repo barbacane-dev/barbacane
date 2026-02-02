@@ -16,6 +16,8 @@ servers:
 tags:
   - name: Health
     description: Health check endpoints
+  - name: Init
+    description: Project initialization
   - name: Specs
     description: API specification management
   - name: Plugins
@@ -41,6 +43,34 @@ paths:
                 $ref: '#/components/schemas/HealthResponse'
         '503':
           description: Service unavailable (database connection failed)
+
+  /init:
+    post:
+      tags: [Init]
+      summary: Initialize project
+      description: |
+        Generate project files from a template. Returns the generated files
+        (barbacane.yaml, api.yaml, .gitignore) that can be downloaded.
+      operationId: initProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitRequest'
+      responses:
+        '200':
+          description: Project files generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
 
   /specs:
     get:
@@ -809,3 +839,49 @@ components:
         location:
           type: string
           description: JSON pointer to the error location
+
+    InitRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Project/API name (used in spec title)
+        template:
+          type: string
+          enum: [basic, minimal]
+          default: basic
+          description: Template to use
+        description:
+          type: string
+          description: Optional API description
+        version:
+          type: string
+          default: "1.0.0"
+          description: API version
+
+    InitResponse:
+      type: object
+      required: [files, next_steps]
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectFile'
+          description: Generated project files
+        next_steps:
+          type: array
+          items:
+            type: string
+          description: Instructions for the user
+
+    ProjectFile:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+          description: File path relative to project root
+        content:
+          type: string
+          description: File content

@@ -14,6 +14,7 @@ import {
   ActivityPage,
   SettingsPage,
   LoginPage,
+  InitPage,
 } from '@/pages'
 
 const queryClient = new QueryClient({
@@ -43,6 +44,7 @@ const router = createBrowserRouter([
       { path: 'plugins', element: <PluginsPage /> },
       { path: 'artifacts', element: <ArtifactsPage /> },
       { path: 'activity', element: <ActivityPage /> },
+      { path: 'init', element: <InitPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },
