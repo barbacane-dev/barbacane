@@ -424,6 +424,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
  "tower 0.5.3",
  "tower-http",
  "tracing",
