@@ -55,6 +55,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Build binaries
+        run: cargo build --workspace
+
       - name: Run tests
         run: cargo test --workspace -- --test-threads=4
 
