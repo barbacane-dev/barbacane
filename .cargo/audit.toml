@@ -15,5 +15,4 @@ ignore = [
 ]
 
 # Treat unmaintained crates as warnings, not errors
-[database]
-withdrawal = "warn"
+informational_warnings = ["unmaintained"]
