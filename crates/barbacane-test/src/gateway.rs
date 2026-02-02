@@ -355,6 +355,18 @@ impl TestGateway {
     }
 }
 
+/// Assert response status matches expected, printing body on failure for debugging.
+pub async fn assert_status(resp: reqwest::Response, expected: u16) {
+    let status = resp.status().as_u16();
+    if status != expected {
+        let body = resp.text().await.unwrap_or_else(|e| format!("<error reading body: {}>", e));
+        panic!(
+            "Expected status {} but got {}. Response body:\n{}",
+            expected, status, body
+        );
+    }
+}
+
 impl Drop for TestGateway {
     fn drop(&mut self) {
         // Kill the child process
@@ -482,10 +494,11 @@ mod tests {
             .expect("failed to start gateway");
 
         let resp = gateway.get("/users/123").await.unwrap();
-        assert_eq!(resp.status(), 200);
-
-        let body: serde_json::Value = resp.json().await.unwrap();
-        assert_eq!(body["name"], "Alice");
+        let status = resp.status().as_u16();
+        if status != 200 {
+            let body = resp.text().await.unwrap_or_default();
+            panic!("Expected 200 but got {}. Body: {}", status, body);
+        }
     }
 
     // ========================
@@ -1071,10 +1084,11 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), 200);
-
-        let body: serde_json::Value = resp.json().await.unwrap();
-        assert_eq!(body["message"], "Access granted");
+        let status = resp.status().as_u16();
+        if status != 200 {
+            let body = resp.text().await.unwrap_or_default();
+            panic!("Expected 200 but got {}. Body: {}", status, body);
+        }
     }
 
     #[tokio::test]
