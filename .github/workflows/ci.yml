@@ -206,13 +206,14 @@ jobs:
 
       - name: Run benchmarks
         # Only run benchmarks on packages that have them defined
-        run: cargo bench -p barbacane-router -p barbacane-validator -- --noplot
+        # Criterion 0.5+ auto-detects CI and disables plotting
+        run: cargo bench -p barbacane-router -p barbacane-validator
 
       - name: Check for regressions
         run: |
           # Parse criterion output for significant regressions (>10%)
           # Criterion reports "Performance has regressed" for significant changes
-          if cargo bench -p barbacane-router -p barbacane-validator -- --noplot 2>&1 | grep -q "Performance has regressed"; then
+          if cargo bench -p barbacane-router -p barbacane-validator 2>&1 | grep -q "Performance has regressed"; then
             echo "::warning::Performance regression detected in benchmarks"
             # For now, warn but don't fail - can be made strict later
             # exit 1
