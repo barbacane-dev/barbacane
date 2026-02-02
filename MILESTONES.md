@@ -359,7 +359,7 @@ The management layer — REST API, database, spec/artifact/plugin lifecycle.
 
 ---
 
-## M10 — AsyncAPI & Event Dispatch
+## M10 — AsyncAPI & Event Dispatch ✅
 
 Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 
@@ -378,7 +378,8 @@ Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 - [x] Host function: `host_nats_publish` — publish to NATS subject (mock broker for testing)
 - [x] `nats` dispatcher plugin — subject, ack-response config, header forwarding
 - [x] Sync-to-async bridge — dispatchers return 202 Accepted after publish
-- [ ] Integration tests — AsyncAPI compilation, Kafka/NATS dispatch (with mock brokers)
+- [x] HTTP method mapping — POST requests route to AsyncAPI SEND operations
+- [x] Integration tests — AsyncAPI compilation, message validation, dispatch via mock
 
 ---
 

@@ -345,9 +345,17 @@ impl Gateway {
         let mut validators = Vec::new();
 
         for op in &resolved_operations {
+            // Map AsyncAPI methods to HTTP methods for sync-to-async bridge pattern:
+            // - SEND → POST (publish message via HTTP POST, get 202 Accepted)
+            // - RECEIVE → GET (for SSE/WebSocket subscriptions, less common)
+            let http_method = match op.method.as_str() {
+                "SEND" => "POST",
+                "RECEIVE" => "GET",
+                other => other,
+            };
             router.insert(
                 &op.path,
-                &op.method,
+                http_method,
                 RouteEntry {
                     operation_index: op.index,
                 },

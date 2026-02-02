@@ -50,14 +50,18 @@ cd barbacane && cargo build --release
 - [Development Guide](contributing/development.md) - Setting up and building
 - [Plugin Development](contributing/plugins.md) - Creating WASM plugins
 
-## Supported OpenAPI Versions
+## Supported Spec Versions
 
-| Version | Status |
-|---------|--------|
-| OpenAPI 3.0.x | Supported |
-| OpenAPI 3.1.x | Supported |
-| OpenAPI 3.2.x | Supported (draft) |
-| AsyncAPI 2.x | Planned |
+| Format | Version | Status |
+|--------|---------|--------|
+| OpenAPI | 3.0.x | Supported |
+| OpenAPI | 3.1.x | Supported |
+| OpenAPI | 3.2.x | Supported (draft) |
+| AsyncAPI | 3.0.x | Supported |
+
+### AsyncAPI Support
+
+Barbacane supports AsyncAPI 3.x for event-driven APIs. AsyncAPI `send` operations are accessible via HTTP POST requests, enabling a sync-to-async bridge pattern where HTTP clients can publish messages to Kafka or NATS brokers.
 
 ## License
 
