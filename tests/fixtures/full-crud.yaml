@@ -1,0 +1,188 @@
+openapi: "3.1.0"
+info:
+  title: Full CRUD API
+  version: "1.0.0"
+  description: Complete example with all HTTP methods, request bodies, and validation
+
+servers:
+  - url: https://api.example.com
+    x-barbacane-upstream:
+      name: main-backend
+      timeout: 30s
+
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 1000
+      window: 60
+
+paths:
+  /users:
+    get:
+      operationId: listUsers
+      summary: List all users
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: string
+            pattern: "^[1-9][0-9]?$|^100$"
+            default: "20"
+        - name: offset
+          in: query
+          schema:
+            type: string
+            pattern: "^[0-9]+$"
+            default: "0"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"users":[],"total":0}'
+      responses:
+        "200":
+          description: List of users
+
+    post:
+      operationId: createUser
+      summary: Create a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - name
+              properties:
+                email:
+                  type: string
+                  format: email
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                age:
+                  type: integer
+                  minimum: 0
+                  maximum: 150
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{"id":"uuid-123","email":"test@example.com","name":"Test User"}'
+      responses:
+        "201":
+          description: User created
+        "400":
+          description: Validation error
+
+  /users/{userId}:
+    get:
+      operationId: getUser
+      summary: Get user by ID
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"uuid-123","email":"test@example.com","name":"Test User"}'
+      responses:
+        "200":
+          description: User found
+        "404":
+          description: User not found
+
+    put:
+      operationId: updateUser
+      summary: Update user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                age:
+                  type: integer
+                  minimum: 0
+                  maximum: 150
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"uuid-123","email":"updated@example.com","name":"Updated User"}'
+      responses:
+        "200":
+          description: User updated
+        "400":
+          description: Validation error
+        "404":
+          description: User not found
+
+    delete:
+      operationId: deleteUser
+      summary: Delete user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 204
+          body: ''
+      responses:
+        "204":
+          description: User deleted
+        "404":
+          description: User not found
+
+  /users/{userId}/orders:
+    get:
+      operationId: getUserOrders
+      summary: Get orders for a user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, shipped, delivered, cancelled]
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"orders":[]}'
+      responses:
+        "200":
+          description: List of orders

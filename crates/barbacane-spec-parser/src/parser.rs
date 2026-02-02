@@ -197,6 +197,18 @@ fn parse_openapi_paths(
 
                 let observability = extract_observability_opt(op_obj);
 
+                // Extract deprecated flag (standard OpenAPI field)
+                let deprecated = op_obj
+                    .get("deprecated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                // Extract sunset date from x-barbacane-sunset extension
+                let sunset = op_obj
+                    .get("x-barbacane-sunset")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
                 let extensions = extract_extensions(op_obj);
 
                 operations.push(Operation {
@@ -208,6 +220,8 @@ fn parse_openapi_paths(
                     dispatch,
                     middlewares,
                     observability,
+                    deprecated,
+                    sunset,
                     extensions,
                 });
             }
@@ -534,5 +548,49 @@ paths:
         let json_content = &body.content["application/json"];
         let schema = json_content.schema.as_ref().expect("should have schema");
         assert_eq!(schema.get("type").and_then(|v| v.as_str()), Some("object"));
+    }
+
+    #[test]
+    fn parse_deprecated_operation() {
+        let yaml = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /old-endpoint:
+    get:
+      deprecated: true
+      x-barbacane-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      x-barbacane-dispatch:
+        name: mock
+  /new-endpoint:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        assert_eq!(spec.operations.len(), 2);
+
+        // Check deprecated operation
+        let old_op = spec
+            .operations
+            .iter()
+            .find(|op| op.path == "/old-endpoint")
+            .unwrap();
+        assert!(old_op.deprecated);
+        assert_eq!(
+            old_op.sunset,
+            Some("Sat, 31 Dec 2025 23:59:59 GMT".to_string())
+        );
+
+        // Check non-deprecated operation
+        let new_op = spec
+            .operations
+            .iter()
+            .find(|op| op.path == "/new-endpoint")
+            .unwrap();
+        assert!(!new_op.deprecated);
+        assert!(new_op.sunset.is_none());
     }
 }

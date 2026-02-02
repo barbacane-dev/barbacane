@@ -1,0 +1,14 @@
+openapi: "3.1.0"
+info:
+  title: Invalid - Missing Dispatch
+  version: "1.0.0"
+  description: This spec is invalid because an operation is missing x-barbacane-dispatch
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      # Missing x-barbacane-dispatch - should trigger E1020 warning
+      responses:
+        "200":
+          description: OK

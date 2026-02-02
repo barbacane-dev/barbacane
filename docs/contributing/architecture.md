@@ -367,8 +367,7 @@ cargo test --workspace
 
 ## Future Directions
 
-- **HTTP/2 support**: Already in hyper, needs exposure
-- **gRPC passthrough**: Transparent proxying
+- **gRPC passthrough**: Transparent proxying for gRPC services
 - **Hot reload**: Reload artifacts without restart
-- **Cluster mode**: Distributed configuration
-- **Metrics**: Prometheus endpoint
+- **Cluster mode**: Distributed configuration across multiple nodes
+- **AsyncAPI support**: Event-driven APIs with Kafka/NATS dispatch

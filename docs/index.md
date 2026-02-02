@@ -13,15 +13,16 @@
 ## Quick Start
 
 ```bash
-# Install (coming soon)
-cargo install barbacane
+# Build from source (crates.io publishing planned for v1.0)
+git clone https://github.com/barbacane/barbacane.git
+cd barbacane && cargo build --release
 
 # Add x-barbacane-dispatch to your OpenAPI spec
 # Compile
-barbacane compile --spec api.yaml --output api.bca
+./target/release/barbacane compile --spec api.yaml --output api.bca
 
 # Run
-barbacane serve --artifact api.bca --listen 0.0.0.0:8080
+./target/release/barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
 ## Documentation

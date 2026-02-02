@@ -1,4 +1,4 @@
-### Barbacane API Test Scenarios (M2-M4)
+### Barbacane API Test Scenarios (M2-M11)
 ### Usage: Start gateway first with:
 ###   cargo build
 ###   ./target/debug/barbacane compile --spec tests/fixtures/validation.yaml --output /tmp/test.bca
@@ -269,3 +269,247 @@ GET {{baseUrl}}/delay/2
 
 ### Slow response (6 seconds, exceeds 5s timeout -> 504)
 GET {{baseUrl}}/delay/6
+
+### ================================================================
+### M11: API Lifecycle / Deprecation Tests
+### ================================================================
+### Usage: Start gateway with deprecated.yaml:
+###   ./target/debug/barbacane compile --spec tests/fixtures/deprecated.yaml -m tests/fixtures/barbacane.yaml -o /tmp/deprecated.bca
+###   ./target/debug/barbacane serve --artifact /tmp/deprecated.bca --dev
+
+### Current endpoint - no deprecation headers
+# Expected: 200 OK, no Deprecation/Sunset headers
+GET {{baseUrl}}/v2/users
+
+###
+
+### Deprecated endpoint (no sunset date)
+# Expected: 200 OK with Deprecation: true header
+GET {{baseUrl}}/v1/users
+
+###
+
+### Deprecated endpoint with sunset date
+# Expected: 200 OK with Deprecation: true AND Sunset headers
+GET {{baseUrl}}/v1/users/123
+
+###
+
+### Legacy endpoint with far-future sunset (2030)
+# Expected: 200 OK with Deprecation: true AND Sunset: 2030 headers
+GET {{baseUrl}}/legacy/status
+
+### ================================================================
+### M11: Full CRUD API Tests
+### ================================================================
+### Usage: Start gateway with full-crud.yaml:
+###   ./target/debug/barbacane compile --spec tests/fixtures/full-crud.yaml -m tests/fixtures/barbacane.yaml -o /tmp/full-crud.bca
+###   ./target/debug/barbacane serve --artifact /tmp/full-crud.bca --dev
+
+### ================================
+### List Users
+### ================================
+
+### List users - no params
+# Expected: 200 OK
+GET {{baseUrl}}/users
+
+###
+
+### List users - with pagination
+# Expected: 200 OK
+GET {{baseUrl}}/users?limit=10&offset=0
+
+###
+
+### List users - invalid limit (exceeds 100)
+# Expected: 400 Bad Request
+GET {{baseUrl}}/users?limit=200
+
+### ================================
+### Create User
+### ================================
+
+### Create user - valid
+# Expected: 201 Created
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"email": "test@example.com", "name": "Test User"}
+
+###
+
+### Create user - with optional age
+# Expected: 201 Created
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"email": "test@example.com", "name": "Test User", "age": 30}
+
+###
+
+### Create user - missing required name
+# Expected: 400 Bad Request
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"email": "test@example.com"}
+
+###
+
+### Create user - invalid email format
+# Expected: 400 Bad Request
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"email": "not-an-email", "name": "Test User"}
+
+### ================================
+### Get User
+### ================================
+
+### Get user - valid UUID
+# Expected: 200 OK
+GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
+
+###
+
+### Get user - invalid UUID format
+# Expected: 400 Bad Request
+GET {{baseUrl}}/users/not-a-uuid
+
+### ================================
+### Update User
+### ================================
+
+### Update user - valid
+# Expected: 200 OK
+PUT {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
+Content-Type: application/json
+
+{"name": "Updated Name", "email": "updated@example.com"}
+
+###
+
+### Update user - partial update
+# Expected: 200 OK
+PUT {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
+Content-Type: application/json
+
+{"name": "Just Name"}
+
+### ================================
+### Delete User
+### ================================
+
+### Delete user
+# Expected: 204 No Content
+DELETE {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
+
+### ================================
+### Nested Resources (User Orders)
+### ================================
+
+### Get user orders
+# Expected: 200 OK
+GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000/orders
+
+###
+
+### Get user orders - with status filter
+# Expected: 200 OK
+GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000/orders?status=pending
+
+###
+
+### Get user orders - invalid status enum
+# Expected: 400 Bad Request
+GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000/orders?status=invalid
+
+### ================================================================
+### M11: Multi-Spec API Tests
+### ================================================================
+### Usage: Start gateway with combined specs:
+###   ./target/debug/barbacane compile --spec tests/fixtures/multi-spec/users.yaml --spec tests/fixtures/multi-spec/orders.yaml -m tests/fixtures/multi-spec/barbacane.yaml -o /tmp/multi.bca
+###   ./target/debug/barbacane serve --artifact /tmp/multi.bca --dev
+
+### ================================
+### Users Service (from users.yaml)
+### ================================
+
+### List users
+# Expected: 200 OK
+GET {{baseUrl}}/users
+
+###
+
+### Create user
+# Expected: 201 Created
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"name": "Alice", "email": "alice@example.com"}
+
+###
+
+### Get user by ID
+# Expected: 200 OK
+GET {{baseUrl}}/users/user-123
+
+### ================================
+### Orders Service (from orders.yaml)
+### ================================
+
+### List orders
+# Expected: 200 OK
+GET {{baseUrl}}/orders
+
+###
+
+### List orders - with status filter
+# Expected: 200 OK
+GET {{baseUrl}}/orders?status=pending
+
+###
+
+### Create order
+# Expected: 201 Created
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "userId": "user-123",
+  "items": [
+    {"productId": "prod-1", "quantity": 2},
+    {"productId": "prod-2", "quantity": 1}
+  ]
+}
+
+###
+
+### Get order by ID
+# Expected: 200 OK
+GET {{baseUrl}}/orders/order-123
+
+###
+
+### Update order status
+# Expected: 200 OK
+PUT {{baseUrl}}/orders/order-123/status
+Content-Type: application/json
+
+{"status": "shipped"}
+
+### ================================
+### Combined Health Check
+### ================================
+
+### Gateway health (should show combined routes count)
+# Expected: 200 OK with routes from both specs
+GET {{baseUrl}}/__barbacane/health
+
+###
+
+### OpenAPI specs list
+# Expected: 200 OK with list of both specs
+GET {{baseUrl}}/__barbacane/openapi

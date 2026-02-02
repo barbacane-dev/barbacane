@@ -1,0 +1,25 @@
+openapi: "3.1.0"
+info:
+  title: Invalid - Unknown Extension
+  version: "1.0.0"
+  description: This spec has unknown x-barbacane-* extensions (E1015 warning)
+
+# Unknown global extension - should trigger E1015 warning
+x-barbacane-unknown-global:
+  some: config
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      # Unknown operation-level extension - should trigger E1015 warning
+      x-barbacane-custom-feature:
+        enabled: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      responses:
+        "200":
+          description: OK

@@ -1,0 +1,32 @@
+openapi: "3.1.0"
+info:
+  title: Service A - Users
+  version: "1.0.0"
+  description: First spec defining /users
+
+paths:
+  /users:
+    get:
+      operationId: listUsersA
+      summary: List users (from Service A)
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"source":"service-a","users":[]}'
+      responses:
+        "200":
+          description: List of users
+
+  /service-a/health:
+    get:
+      operationId: healthA
+      summary: Service A health
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok","service":"a"}'
+      responses:
+        "200":
+          description: OK

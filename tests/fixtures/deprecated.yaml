@@ -1,0 +1,69 @@
+openapi: "3.1.0"
+info:
+  title: API with Deprecated Endpoints
+  version: "2.0.0"
+  description: Demonstrates API lifecycle features (deprecated + sunset headers)
+
+paths:
+  /v2/users:
+    get:
+      operationId: listUsersV2
+      summary: List users (current version)
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"users":[],"version":"v2"}'
+      responses:
+        "200":
+          description: List of users
+
+  /v1/users:
+    get:
+      operationId: listUsersV1
+      summary: List users (deprecated, use /v2/users)
+      deprecated: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"users":[],"version":"v1"}'
+      responses:
+        "200":
+          description: List of users (deprecated response)
+
+  /v1/users/{id}:
+    get:
+      operationId: getUserV1
+      summary: Get user by ID (deprecated with sunset date)
+      deprecated: true
+      x-barbacane-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"1","name":"Alice","version":"v1"}'
+      responses:
+        "200":
+          description: User found
+
+  /legacy/status:
+    get:
+      operationId: legacyStatus
+      summary: Legacy status endpoint (deprecated with far future sunset)
+      deprecated: true
+      x-barbacane-sunset: "Wed, 01 Jan 2030 00:00:00 GMT"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"operational","deprecated":true}'
+      responses:
+        "200":
+          description: Legacy status response

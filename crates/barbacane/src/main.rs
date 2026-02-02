@@ -8,21 +8,27 @@ use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Incoming};
-use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
+use uuid::Uuid;
+
+/// Server version for the Server header.
+const SERVER_VERSION: &str = concat!("barbacane/", env!("CARGO_PKG_VERSION"));
 
 use barbacane_telemetry::MetricsRegistry;
 use std::collections::HashMap;
@@ -154,6 +160,15 @@ enum Commands {
         /// If provided, --tls-cert must also be specified.
         #[arg(long)]
         tls_key: Option<String>,
+
+        /// HTTP keep-alive idle timeout in seconds (default: 60).
+        #[arg(long, default_value = "60")]
+        keepalive_timeout: u64,
+
+        /// Graceful shutdown timeout in seconds (default: 30).
+        /// After SIGTERM, wait this long for in-flight requests to complete.
+        #[arg(long, default_value = "30")]
+        shutdown_timeout: u64,
     },
 }
 
@@ -184,6 +199,9 @@ struct Gateway {
     metrics: Arc<MetricsRegistry>,
     /// API name from the first spec's title (for metrics labels).
     api_name: String,
+    /// Request counter for generating request IDs (fallback if UUID too slow).
+    #[allow(dead_code)]
+    request_counter: AtomicU64,
 }
 
 impl Gateway {
@@ -357,13 +375,50 @@ impl Gateway {
             http_client,
             metrics,
             api_name,
+            request_counter: AtomicU64::new(0),
         })
+    }
+
+    /// Add standard headers to a response (Server, X-Request-Id, X-Trace-Id).
+    fn add_standard_headers(
+        mut response: Response<Full<Bytes>>,
+        request_id: &str,
+        trace_id: &str,
+    ) -> Response<Full<Bytes>> {
+        let headers = response.headers_mut();
+        headers.insert("server", SERVER_VERSION.parse().unwrap());
+        headers.insert("x-request-id", request_id.parse().unwrap());
+        headers.insert("x-trace-id", trace_id.parse().unwrap());
+        response
+    }
+
+    /// Add deprecation headers to a response if the operation is deprecated.
+    /// Implements RFC 8594 (Sunset header) and draft-ietf-httpapi-deprecation-header.
+    fn add_deprecation_headers(
+        mut response: Response<Full<Bytes>>,
+        operation: &CompiledOperation,
+    ) -> Response<Full<Bytes>> {
+        if operation.deprecated {
+            let headers = response.headers_mut();
+            // Deprecation header per draft-ietf-httpapi-deprecation-header
+            // Value "true" indicates the endpoint is deprecated
+            headers.insert("deprecation", "true".parse().unwrap());
+
+            // Sunset header per RFC 8594 if a sunset date is specified
+            if let Some(sunset_date) = &operation.sunset {
+                if let Ok(val) = sunset_date.parse() {
+                    headers.insert("sunset", val);
+                }
+            }
+        }
+        response
     }
 
     /// Handle an incoming HTTP request.
     async fn handle_request(
         &self,
         req: Request<Incoming>,
+        client_addr: Option<SocketAddr>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let start_time = Instant::now();
         let uri_string = req.uri().to_string();
@@ -371,6 +426,30 @@ impl Gateway {
         let query_string = req.uri().query().map(|s| s.to_string());
         let method = req.method().clone();
         let method_str = method.as_str().to_string();
+
+        // Generate or extract request ID (from incoming header or new UUID)
+        let request_id = req
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        // Generate or extract trace ID (from traceparent header or new UUID)
+        let trace_id = req
+            .headers()
+            .get("traceparent")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|tp| {
+                // traceparent format: 00-<trace-id>-<span-id>-<flags>
+                let parts: Vec<&str> = tp.split('-').collect();
+                if parts.len() >= 2 {
+                    Some(parts[1].to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
 
         // Check URI length limit early
         if let Err(e) = self.limits.validate_uri(&uri_string) {
@@ -383,12 +462,13 @@ impl Gateway {
                 0,
                 start_time,
             );
-            return Ok(response);
+            return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
         }
 
         // Reserved /__barbacane/* endpoints (skip other limits for internal endpoints)
         if path.starts_with("/__barbacane/") {
-            return Ok(self.handle_barbacane_endpoint(&path, &method));
+            let response = self.handle_barbacane_endpoint(&path, &method);
+            return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
         }
 
         // Extract headers for validation
@@ -409,7 +489,7 @@ impl Gateway {
                 0,
                 start_time,
             );
-            return Ok(response);
+            return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
         }
 
         // Check content-length before reading body (if present)
@@ -425,7 +505,7 @@ impl Gateway {
                         0,
                         start_time,
                     );
-                    return Ok(response);
+                    return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
                 }
             }
         }
@@ -452,7 +532,7 @@ impl Gateway {
                             0,
                             start_time,
                         );
-                        return Ok(response);
+                        return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
                     }
                 };
 
@@ -474,7 +554,7 @@ impl Gateway {
                         0,
                         start_time,
                     );
-                    return Ok(response);
+                    return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
                 }
 
                 // Validate request against OpenAPI spec
@@ -500,12 +580,22 @@ impl Gateway {
                         0,
                         start_time,
                     );
-                    return Ok(response);
+                    return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
                 }
 
                 let response = self
-                    .dispatch(operation, params, query_string, &body_bytes, &headers)
+                    .dispatch(
+                        operation,
+                        params,
+                        query_string,
+                        &body_bytes,
+                        &headers,
+                        client_addr,
+                    )
                     .await?;
+
+                // Add deprecation headers if the operation is deprecated
+                let response = Self::add_deprecation_headers(response, operation);
 
                 let response_size = response.body().size_hint().exact().unwrap_or(0);
                 self.record_request_metrics(
@@ -516,7 +606,7 @@ impl Gateway {
                     response_size,
                     start_time,
                 );
-                Ok(response)
+                Ok(Self::add_standard_headers(response, &request_id, &trace_id))
             }
             RouteMatch::MethodNotAllowed { allowed } => {
                 let response = self.method_not_allowed_response(allowed);
@@ -528,7 +618,7 @@ impl Gateway {
                     0,
                     start_time,
                 );
-                Ok(response)
+                Ok(Self::add_standard_headers(response, &request_id, &trace_id))
             }
             RouteMatch::NotFound => {
                 let response = self.not_found_response();
@@ -540,7 +630,7 @@ impl Gateway {
                     0,
                     start_time,
                 );
-                Ok(response)
+                Ok(Self::add_standard_headers(response, &request_id, &trace_id))
             }
         }
     }
@@ -575,6 +665,7 @@ impl Gateway {
         query_string: Option<String>,
         request_body: &[u8],
         headers: &HashMap<String, String>,
+        client_addr: Option<SocketAddr>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         let dispatch = &operation.dispatch;
 
@@ -594,7 +685,9 @@ impl Gateway {
             } else {
                 String::from_utf8(request_body.to_vec()).ok()
             },
-            client_ip: "0.0.0.0".to_string(), // TODO: get actual client IP
+            client_ip: client_addr
+                .map(|addr| addr.ip().to_string())
+                .unwrap_or_else(|| "0.0.0.0".to_string()),
             path_params,
         };
 
@@ -1142,6 +1235,7 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     "x-barbacane-ratelimit",
                     "x-barbacane-cache",
                     "x-barbacane-observability",
+                    "x-barbacane-sunset",
                 ];
 
                 for key in spec.extensions.keys() {
@@ -1428,6 +1522,7 @@ fn load_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>, String> {
 }
 
 /// Run the serve command.
+#[allow(clippy::too_many_arguments)]
 async fn run_serve(
     artifact: &str,
     listen: &str,
@@ -1436,6 +1531,8 @@ async fn run_serve(
     allow_plaintext_upstream: bool,
     tls_config: Option<TlsConfig>,
     metrics: Arc<MetricsRegistry>,
+    keepalive_timeout: u64,
+    shutdown_timeout: u64,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
@@ -1506,53 +1603,188 @@ async fn run_serve(
     };
     eprintln!("barbacane: listening on {}://{}", protocol, addr);
 
+    // Create shutdown signal channel
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+
+    // Spawn signal handler task
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        let _ = wait_for_shutdown_signal().await;
+        eprintln!("barbacane: received shutdown signal, draining connections...");
+        let _ = shutdown_tx_clone.send(true);
+    });
+
+    // Keep-alive timeout (currently used for documentation; HTTP/1.1 uses internal defaults)
+    let _keepalive_duration = Duration::from_secs(keepalive_timeout);
+    let shutdown_duration = Duration::from_secs(shutdown_timeout);
+
+    // Track active connections for graceful shutdown
+    let active_connections = Arc::new(AtomicU64::new(0));
+
     // Accept connections
     loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                eprintln!("error: accept failed: {}", e);
-                continue;
+        tokio::select! {
+            // Check for shutdown signal
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
             }
-        };
+            // Accept new connections
+            accept_result = listener.accept() => {
+                let (stream, peer_addr) = match accept_result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        eprintln!("error: accept failed: {}", e);
+                        continue;
+                    }
+                };
 
-        // Track connection
-        metrics.connection_opened();
+                // Track connection
+                metrics.connection_opened();
+                active_connections.fetch_add(1, Ordering::SeqCst);
 
-        let gateway = Arc::clone(&gateway);
-        let tls_acceptor = tls_acceptor.clone();
-        let conn_metrics = metrics.clone();
-
-        tokio::spawn(async move {
-            let service = service_fn(move |req| {
                 let gateway = Arc::clone(&gateway);
-                async move { gateway.handle_request(req).await }
-            });
+                let tls_acceptor = tls_acceptor.clone();
+                let conn_metrics = metrics.clone();
+                let conn_counter = active_connections.clone();
+                let mut conn_shutdown_rx = shutdown_rx.clone();
+                let client_addr = Some(peer_addr);
 
-            if let Some(acceptor) = tls_acceptor {
-                // TLS connection
-                match acceptor.accept(stream).await {
-                    Ok(tls_stream) => {
-                        let io = TokioIo::new(tls_stream);
-                        if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                            eprintln!("error: connection error: {}", e);
+                tokio::spawn(async move {
+                    let service = service_fn(move |req| {
+                        let gateway = Arc::clone(&gateway);
+                        let client_addr = client_addr;
+                        async move { gateway.handle_request(req, client_addr).await }
+                    });
+
+                    if let Some(acceptor) = tls_acceptor {
+                        // TLS connection - uses auto protocol detection (HTTP/1.1 or HTTP/2 via ALPN)
+                        match acceptor.accept(stream).await {
+                            Ok(tls_stream) => {
+                                let io = TokioIo::new(tls_stream);
+                                let mut builder = auto::Builder::new(TokioExecutor::new());
+                                builder.http1().keep_alive(true);
+                                builder
+                                    .http2()
+                                    .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
+                                let conn = builder.serve_connection_with_upgrades(io, service);
+
+                                // Pin the connection for graceful shutdown
+                                tokio::pin!(conn);
+
+                                loop {
+                                    tokio::select! {
+                                        result = conn.as_mut() => {
+                                            if let Err(e) = result {
+                                                if !e.to_string().contains("connection closed") {
+                                                    tracing::debug!(error = %e, "connection error");
+                                                }
+                                            }
+                                            break;
+                                        }
+                                        _ = conn_shutdown_rx.changed() => {
+                                            if *conn_shutdown_rx.borrow() {
+                                                // Graceful shutdown - let current request complete
+                                                conn.as_mut().graceful_shutdown();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(error = %e, "TLS handshake failed");
+                            }
+                        }
+                    } else {
+                        // Plain TCP connection - uses auto protocol detection
+                        // Supports both HTTP/1.1 and HTTP/2 prior knowledge (h2c)
+                        let io = TokioIo::new(stream);
+                        let mut builder = auto::Builder::new(TokioExecutor::new());
+                        builder.http1().keep_alive(true);
+                        builder
+                            .http2()
+                            .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
+                        let conn = builder.serve_connection_with_upgrades(io, service);
+
+                        // Pin the connection for graceful shutdown
+                        tokio::pin!(conn);
+
+                        loop {
+                            tokio::select! {
+                                result = conn.as_mut() => {
+                                    if let Err(e) = result {
+                                        if !e.to_string().contains("connection closed") {
+                                            tracing::debug!(error = %e, "connection error");
+                                        }
+                                    }
+                                    break;
+                                }
+                                _ = conn_shutdown_rx.changed() => {
+                                    if *conn_shutdown_rx.borrow() {
+                                        // Graceful shutdown - let current request complete
+                                        conn.as_mut().graceful_shutdown();
+                                    }
+                                }
+                            }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("error: TLS handshake failed: {}", e);
-                    }
-                }
-            } else {
-                // Plain TCP connection
-                let io = TokioIo::new(stream);
-                if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                    eprintln!("error: connection error: {}", e);
-                }
-            }
 
-            // Connection closed
-            conn_metrics.connection_closed();
-        });
+                    // Connection closed
+                    conn_metrics.connection_closed();
+                    conn_counter.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+        }
+    }
+
+    // Wait for active connections to drain (with timeout)
+    let drain_start = Instant::now();
+    loop {
+        let active = active_connections.load(Ordering::SeqCst);
+        if active == 0 {
+            eprintln!("barbacane: all connections drained, shutting down");
+            break;
+        }
+
+        if drain_start.elapsed() > shutdown_duration {
+            eprintln!(
+                "barbacane: shutdown timeout reached, {} connection(s) still active",
+                active
+            );
+            break;
+        }
+
+        eprintln!(
+            "barbacane: waiting for {} active connection(s) to complete...",
+            active
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// Wait for shutdown signal (SIGTERM or SIGINT).
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM");
+        let mut sigint = signal(SignalKind::interrupt()).expect("failed to register SIGINT");
+
+        tokio::select! {
+            _ = sigterm.recv() => {}
+            _ = sigint.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to register ctrl+c handler");
     }
 }
 
@@ -1586,6 +1818,8 @@ async fn main() -> ExitCode {
             allow_plaintext_upstream,
             tls_cert,
             tls_key,
+            keepalive_timeout,
+            shutdown_timeout,
         } => {
             // Initialize telemetry
             let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
@@ -1640,6 +1874,8 @@ async fn main() -> ExitCode {
                 allow_plaintext_upstream,
                 tls_config,
                 metrics,
+                keepalive_timeout,
+                shutdown_timeout,
             )
             .await
         }

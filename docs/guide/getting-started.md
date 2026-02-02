@@ -19,9 +19,10 @@ cargo build --release
 # Binary is in target/release/barbacane
 ```
 
-### Using Cargo (coming soon)
+### Using Cargo (planned for v1.0)
 
 ```bash
+# Not yet published to crates.io
 cargo install barbacane
 ```
 
@@ -105,7 +106,7 @@ plugins:
 
 The manifest declares all WASM plugins used by your spec. Plugins can be sourced from:
 - **Local path**: `path: ./plugins/name.wasm`
-- **URL** (coming soon): `url: https://plugins.example.com/name.wasm`
+- **URL** (planned): `url: https://plugins.example.com/name.wasm`
 
 ### 3. Validate the Spec
 
