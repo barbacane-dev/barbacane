@@ -90,3 +90,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for gu
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) for details.
+
+## Trademark
+
+Barbacane is a trademark. The software is open source; the brand is not. See [TRADEMARKS.md](TRADEMARKS.md) for usage guidelines.
