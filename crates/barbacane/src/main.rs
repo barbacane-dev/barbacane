@@ -114,6 +114,10 @@ enum Commands {
         /// Template to use: basic (full example) or minimal (bare bones).
         #[arg(short, long, default_value = "basic")]
         template: String,
+
+        /// Download official plugins (mock, http-upstream) from GitHub releases.
+        #[arg(long)]
+        fetch_plugins: bool,
     },
 
     /// Run the gateway server.
@@ -1403,8 +1407,52 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
     }
 }
 
+/// Official plugins available for download.
+const OFFICIAL_PLUGINS: &[(&str, &str)] = &[
+    ("mock", "mock.wasm"),
+    ("http-upstream", "http-upstream.wasm"),
+];
+
+/// GitHub release URL base for official plugins.
+const PLUGIN_RELEASE_BASE: &str =
+    "https://github.com/barbacane-dev/barbacane/releases/latest/download";
+
+/// Download a plugin from GitHub releases.
+async fn download_plugin(name: &str, filename: &str, dest_dir: &Path) -> Result<(), String> {
+    let url = format!("{}/{}", PLUGIN_RELEASE_BASE, filename);
+    let dest_path = dest_dir.join(filename);
+
+    eprint!("  Downloading {}...", name);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch {}: {}", url, e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "failed to download {}: HTTP {}",
+            filename,
+            response.status()
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("failed to read response: {}", e))?;
+
+    std::fs::write(&dest_path, &bytes)
+        .map_err(|e| format!("failed to write {}: {}", dest_path.display(), e))?;
+
+    eprintln!(" done ({} bytes)", bytes.len());
+    Ok(())
+}
+
 /// Run the init command.
-fn run_init(name: &str, template: &str) -> ExitCode {
+async fn run_init(name: &str, template: &str, fetch_plugins: bool) -> ExitCode {
     use std::fs;
 
     // Validate template
@@ -1446,17 +1494,52 @@ fn run_init(name: &str, template: &str) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // Create barbacane.yaml
-    let manifest_content = r#"# Barbacane project manifest
+    // Download plugins if requested
+    let mut downloaded_plugins = Vec::new();
+    if fetch_plugins {
+        eprintln!("Fetching official plugins...");
+        for (plugin_name, filename) in OFFICIAL_PLUGINS {
+            match download_plugin(plugin_name, filename, &plugins_dir).await {
+                Ok(()) => downloaded_plugins.push((*plugin_name, *filename)),
+                Err(e) => {
+                    eprintln!(" failed");
+                    eprintln!("warning: {}", e);
+                }
+            }
+        }
+        if downloaded_plugins.is_empty() {
+            eprintln!("warning: no plugins were downloaded");
+        }
+        eprintln!();
+    }
+
+    // Create barbacane.yaml with downloaded plugins or empty template
+    let manifest_content = if downloaded_plugins.is_empty() {
+        r#"# Barbacane project manifest
 # See https://barbacane.dev/docs/guide/spec-configuration for details
 
 plugins: {}
   # Example plugin configuration:
   # my-plugin:
   #   path: ./plugins/my-plugin.wasm
-"#;
+"#
+        .to_string()
+    } else {
+        let mut content = String::from(
+            "# Barbacane project manifest\n\
+             # See https://barbacane.dev/docs/guide/spec-configuration for details\n\n\
+             plugins:\n",
+        );
+        for (plugin_name, filename) in &downloaded_plugins {
+            content.push_str(&format!(
+                "  {}:\n    path: ./plugins/{}\n",
+                plugin_name, filename
+            ));
+        }
+        content
+    };
 
-    if let Err(e) = fs::write(project_dir.join("barbacane.yaml"), manifest_content) {
+    if let Err(e) = fs::write(project_dir.join("barbacane.yaml"), &manifest_content) {
         eprintln!("error: failed to create barbacane.yaml: {}", e);
         return ExitCode::from(1);
     }
@@ -1647,15 +1730,31 @@ Thumbs.db
         "  api.yaml        - OpenAPI specification ({} template)",
         template
     );
-    eprintln!("  plugins/        - directory for WASM plugins");
+    if !downloaded_plugins.is_empty() {
+        for (plugin_name, filename) in &downloaded_plugins {
+            eprintln!("  plugins/{}  - {} plugin", filename, plugin_name);
+        }
+    } else {
+        eprintln!("  plugins/        - directory for WASM plugins");
+    }
     eprintln!("  .gitignore      - Git ignore file");
     eprintln!();
     eprintln!("Next steps:");
-    eprintln!("  1. Edit api.yaml to define your API");
-    eprintln!(
-        "  2. Run: barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca"
-    );
-    eprintln!("  3. Run: barbacane serve --artifact api.bca --dev");
+    if downloaded_plugins.is_empty() && !fetch_plugins {
+        eprintln!("  1. Download plugins: barbacane init . --fetch-plugins");
+        eprintln!("     Or add them manually to plugins/");
+        eprintln!("  2. Edit api.yaml to define your API");
+        eprintln!(
+            "  3. Run: barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca"
+        );
+        eprintln!("  4. Run: barbacane serve --artifact api.bca --dev");
+    } else {
+        eprintln!("  1. Edit api.yaml to define your API");
+        eprintln!(
+            "  2. Run: barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca"
+        );
+        eprintln!("  3. Run: barbacane serve --artifact api.bca --dev");
+    }
 
     ExitCode::SUCCESS
 }
@@ -2074,7 +2173,11 @@ async fn main() -> ExitCode {
             allow_plaintext,
         } => run_compile(&spec, &output, manifest.as_deref(), allow_plaintext),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
-        Commands::Init { name, template } => run_init(&name, &template),
+        Commands::Init {
+            name,
+            template,
+            fetch_plugins,
+        } => run_init(&name, &template, fetch_plugins).await,
         Commands::Serve {
             artifact,
             listen,

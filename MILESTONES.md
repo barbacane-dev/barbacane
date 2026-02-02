@@ -149,7 +149,7 @@ Implement the `barbacane.yaml` manifest for explicit plugin configuration (ADR-0
 ### CLI & Templates
 - [x] `barbacane init --template basic` — create project with `barbacane.yaml`, `plugins/`, example spec
 - [x] `barbacane init --template minimal` — create minimal project skeleton
-- [ ] Plugin download — fetch official plugins from release URLs
+- [x] Plugin download — `barbacane init --fetch-plugins` fetches from GitHub releases
 
 ### Testing
 - [x] Update all test fixtures — add `barbacane.yaml` to each fixture directory

@@ -33,22 +33,23 @@ cargo install barbacane
 The fastest way to start a new project:
 
 ```bash
-# Create a new project with example spec
-barbacane init my-api
+# Create a new project with example spec and official plugins
+barbacane init my-api --fetch-plugins
 
 cd my-api
 ```
 
 This creates:
-- `barbacane.yaml` — project manifest for plugin configuration
+- `barbacane.yaml` — project manifest with plugins configured
 - `api.yaml` — OpenAPI spec with example endpoints
-- `plugins/` — directory for WASM plugins
+- `plugins/mock.wasm` — mock dispatcher plugin
+- `plugins/http-upstream.wasm` — HTTP proxy plugin
 - `.gitignore` — ignores build artifacts
 
 For a minimal skeleton without example endpoints:
 
 ```bash
-barbacane init my-api --template minimal
+barbacane init my-api --template minimal --fetch-plugins
 ```
 
 Skip to [Step 3: Validate the Spec](#3-validate-the-spec) if using `barbacane init`.
