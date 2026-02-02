@@ -3,12 +3,7 @@
 //! Implements 12-factor app logging: structured JSON to stdout.
 
 use crate::{LogFormat, TelemetryConfig, TelemetryError};
-use tracing_subscriber::{
-    fmt,
-    layer::SubscriberExt,
-    util::SubscriberInitExt,
-    EnvFilter, Layer,
-};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 /// Initialize the logging subsystem.
 ///
@@ -16,8 +11,8 @@ use tracing_subscriber::{
 /// respecting the configured log level.
 pub fn init_logging(config: &TelemetryConfig) -> Result<(), TelemetryError> {
     // Build the env filter from config or RUST_LOG
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
     match config.log_format {
         LogFormat::Json => init_json_logging(filter),
