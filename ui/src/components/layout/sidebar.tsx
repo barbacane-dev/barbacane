@@ -9,6 +9,7 @@ import {
   LogOut,
   User,
   FileText,
+  ExternalLink,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/hooks'
@@ -21,7 +22,7 @@ const mainNavigation = [
 const globalNavigation = [
   { name: 'Plugin Registry', href: '/plugin-registry', icon: Store },
   { name: 'Activity', href: '/activity', icon: Activity },
-  { name: 'API Docs', href: '/api-docs', icon: FileText },
+  { name: 'API Docs', href: '/api/docs', icon: FileText, external: true },
 ]
 
 export function Sidebar() {
@@ -64,23 +65,37 @@ export function Sidebar() {
           <p className="px-3 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
             Global
           </p>
-          {globalNavigation.map((item) => (
-            <NavLink
-              key={item.name}
-              to={item.href}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
-                  isActive
-                    ? 'bg-primary/10 text-primary glow-cyan'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                )
-              }
-            >
-              <item.icon className="h-5 w-5" />
-              {item.name}
-            </NavLink>
-          ))}
+          {globalNavigation.map((item) =>
+            item.external ? (
+              <a
+                key={item.name}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              >
+                <item.icon className="h-5 w-5" />
+                {item.name}
+                <ExternalLink className="h-3 w-3 ml-auto opacity-50" />
+              </a>
+            ) : (
+              <NavLink
+                key={item.name}
+                to={item.href}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
+                    isActive
+                      ? 'bg-primary/10 text-primary glow-cyan'
+                      : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                  )
+                }
+              >
+                <item.icon className="h-5 w-5" />
+                {item.name}
+              </NavLink>
+            )
+          )}
         </div>
       </nav>
       <div className="border-t border-sidebar-border p-3 space-y-1">
