@@ -3,6 +3,7 @@
 //! Provides `compile` and `validate` subcommands for spec compilation,
 //! plus spec/artifact/plugin management when connected to a control plane server.
 
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -10,6 +11,12 @@ use clap::{Parser, Subcommand};
 
 use barbacane_compiler::{compile, ARTIFACT_VERSION, COMPILER_VERSION};
 use barbacane_spec_parser::parse_spec_file;
+
+mod api;
+mod compiler;
+mod db;
+mod error;
+mod server;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -56,6 +63,21 @@ enum Command {
         /// Show detailed output.
         #[arg(long)]
         verbose: bool,
+    },
+
+    /// Start the control plane HTTP server.
+    Serve {
+        /// Listen address.
+        #[arg(long, default_value = "127.0.0.1:9090")]
+        listen: SocketAddr,
+
+        /// PostgreSQL database URL.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+
+        /// Run database migrations on startup.
+        #[arg(long, default_value_t = true)]
+        migrate: bool,
     },
 }
 
@@ -184,5 +206,48 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
+
+        Command::Serve {
+            listen,
+            database_url,
+            migrate,
+        } => {
+            // Initialize tracing
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::from_default_env()
+                        .add_directive("info".parse().unwrap()),
+                )
+                .init();
+
+            // Run async server
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+            rt.block_on(async {
+                match run_server(listen, &database_url, migrate).await {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        ExitCode::from(1)
+                    }
+                }
+            })
+        }
     }
+}
+
+async fn run_server(listen: SocketAddr, database_url: &str, migrate: bool) -> anyhow::Result<()> {
+    // Create database pool
+    let pool = db::create_pool(database_url).await?;
+
+    // Run migrations if requested
+    if migrate {
+        db::run_migrations(&pool).await?;
+    }
+
+    // Start server
+    server::run(server::ServerConfig {
+        listen_addr: listen,
+        pool,
+    })
+    .await
 }
