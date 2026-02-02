@@ -304,40 +304,58 @@ Metrics, traces, structured logs, and OpenTelemetry export.
 
 ---
 
-## M9 — Control Plane
+## M9 — Control Plane ✅
 
 The management layer — REST API, database, spec/artifact/plugin lifecycle.
 
 **Specs:** SPEC-006
 
-- [ ] PostgreSQL schema — specs, spec_revisions, plugins, artifacts, artifact_specs, compilations
-- [ ] Database migrations — setup and versioned migrations
-- [ ] `barbacane-control serve` — REST API server
-- [ ] `POST /specs` — upload and validate spec
-- [ ] `GET /specs` — list specs
-- [ ] `GET /specs/{id}` — get spec metadata + content
-- [ ] `PUT /specs/{id}` — replace spec (new revision)
-- [ ] `DELETE /specs/{id}` — delete spec and artifacts
-- [ ] `GET /specs/{id}/history` — list spec revisions
-- [ ] `POST /specs/{id}/compile` — async compilation
-- [ ] `GET /compilations/{id}` — poll compilation status
-- [ ] `GET /artifacts` — list artifacts
-- [ ] `GET /artifacts/{id}` — artifact metadata + manifest
-- [ ] `GET /artifacts/{id}/download` — download `.bca` file
-- [ ] `DELETE /artifacts/{id}` — delete artifact
-- [ ] `POST /plugins` — register plugin (manifest + wasm + schema)
-- [ ] `GET /plugins` — list plugins (filter by type/name)
-- [ ] `GET /plugins/{name}` — list plugin versions
-- [ ] `GET /plugins/{name}/{version}` — plugin metadata + config schema
-- [ ] `DELETE /plugins/{name}/{version}` — delete plugin (409 if referenced)
-- [ ] `GET /health` — database connectivity check
+### Database & Migrations
+- [x] PostgreSQL schema — specs, spec_revisions, plugins, artifacts, artifact_specs, compilations
+- [x] Database migrations — setup and versioned migrations (auto-run on startup)
+
+### REST API Server
+- [x] `barbacane-control serve` — REST API server with Axum
+- [x] `GET /health` — database connectivity check
+- [x] Error responses — RFC 9457 for all API errors
+
+### Specs API
+- [x] `POST /specs` — upload and validate spec (multipart)
+- [x] `GET /specs` — list specs (with type/name filters)
+- [x] `GET /specs/{id}` — get spec metadata
+- [x] `GET /specs/{id}/content` — download spec content (with revision query param)
+- [x] `DELETE /specs/{id}` — delete spec and revisions
+- [x] `GET /specs/{id}/history` — list spec revisions
+
+### Compilation API
+- [x] `POST /specs/{id}/compile` — async compilation (returns 202)
+- [x] `GET /compilations/{id}` — poll compilation status
+- [x] `GET /specs/{id}/compilations` — list compilations for spec
+- [x] Background worker — async compilation with channel-based job queue
+
+### Artifacts API
+- [x] `GET /artifacts` — list artifacts
+- [x] `GET /artifacts/{id}` — artifact metadata + manifest
+- [x] `GET /artifacts/{id}/download` — download `.bca` file
+- [x] `DELETE /artifacts/{id}` — delete artifact
+
+### Plugins API
+- [x] `POST /plugins` — register plugin (multipart: name, version, type, capabilities, schema, wasm)
+- [x] `GET /plugins` — list plugins (filter by type/name)
+- [x] `GET /plugins/{name}` — list plugin versions
+- [x] `GET /plugins/{name}/{version}` — plugin metadata + config schema
+- [x] `GET /plugins/{name}/{version}/download` — download WASM binary
+- [x] `DELETE /plugins/{name}/{version}` — delete plugin
+
+### Documentation
+- [x] OpenAPI specification — `crates/barbacane-control/openapi.yaml`
+- [x] Control Plane Guide — `docs/guide/control-plane.md`
+- [x] CLI Reference — updated with `barbacane-control serve`
+
+### Deferred
 - [ ] API versioning — `Accept: application/vnd.barbacane.v1+json`
-- [ ] Error responses — RFC 9457 for all API errors
-- [ ] CLI: `barbacane-control spec upload/list/show/delete/history`
-- [ ] CLI: `barbacane-control artifact list/download/inspect`
-- [ ] CLI: `barbacane-control plugin register/list/show/delete`
-- [ ] Remote compilation — `barbacane-control compile --spec-id`
-- [ ] Integration tests — full API lifecycle (upload → compile → download → inspect)
+- [ ] CLI subcommands — `barbacane-control spec/artifact/plugin` REST-based commands
+- [ ] Integration tests — full API lifecycle (requires running PostgreSQL)
 
 ---
 
