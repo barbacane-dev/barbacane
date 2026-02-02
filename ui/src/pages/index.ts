@@ -1,0 +1,5 @@
+export { SpecsPage } from './specs'
+export { PluginsPage } from './plugins'
+export { ArtifactsPage } from './artifacts'
+export { ActivityPage } from './activity'
+export { SettingsPage } from './settings'
