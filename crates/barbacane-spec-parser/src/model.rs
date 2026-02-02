@@ -18,6 +18,9 @@ pub struct ApiSpec {
     pub operations: Vec<Operation>,
     /// Global middlewares from root-level `x-barbacane-middlewares`.
     pub global_middlewares: Vec<MiddlewareConfig>,
+    /// Global observability config from root-level `x-barbacane-observability`.
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
     /// Raw `x-barbacane-*` extensions at root level.
     pub extensions: BTreeMap<String, serde_json::Value>,
 }
@@ -47,6 +50,9 @@ pub struct Operation {
     pub dispatch: Option<DispatchConfig>,
     /// Operation-level middlewares (replaces global chain if present).
     pub middlewares: Option<Vec<MiddlewareConfig>>,
+    /// Operation-level observability config (overrides global).
+    #[serde(default)]
+    pub observability: Option<ObservabilityConfig>,
     /// Operation-level `x-barbacane-*` extensions.
     pub extensions: BTreeMap<String, serde_json::Value>,
 }
@@ -98,4 +104,21 @@ pub struct RequestBody {
 pub struct ContentSchema {
     /// The JSON Schema for this content type.
     pub schema: Option<serde_json::Value>,
+}
+
+/// Observability configuration from `x-barbacane-observability`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ObservabilityConfig {
+    /// Override trace sampling rate (0.0 to 1.0).
+    #[serde(default)]
+    pub trace_sampling: Option<f64>,
+
+    /// Enable detailed validation failure logging.
+    #[serde(default)]
+    pub detailed_validation_logs: Option<bool>,
+
+    /// Latency SLO threshold in milliseconds.
+    /// Emit `barbacane_slo_violation_total` metric when exceeded.
+    #[serde(default)]
+    pub latency_slo_ms: Option<u64>,
 }

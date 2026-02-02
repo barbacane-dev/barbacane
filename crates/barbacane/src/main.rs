@@ -92,9 +92,18 @@ enum Commands {
         #[arg(long)]
         dev: bool,
 
-        /// Log level.
+        /// Log level (error, warn, info, debug, trace).
         #[arg(long, default_value = "info")]
         log_level: String,
+
+        /// Log format (json or pretty).
+        #[arg(long, default_value = "json")]
+        log_format: String,
+
+        /// OTLP endpoint for telemetry export (e.g., http://localhost:4317).
+        /// If not set, telemetry is collected locally but not exported.
+        #[arg(long)]
+        otlp_endpoint: Option<String>,
 
         /// Maximum request body size in bytes (default: 1048576 = 1MB).
         #[arg(long, default_value = "1048576")]
@@ -679,6 +688,7 @@ impl Gateway {
 
         match path {
             "/__barbacane/health" => self.health_response(),
+            "/__barbacane/metrics" => self.metrics_response(),
             "/__barbacane/openapi" => self.openapi_response(),
             _ => {
                 // Check for specific spec file: /__barbacane/openapi/{filename}
@@ -765,6 +775,21 @@ impl Gateway {
             .status(StatusCode::OK)
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body.to_string())))
+            .unwrap()
+    }
+
+    /// Build the Prometheus metrics response.
+    fn metrics_response(&self) -> Response<Full<Bytes>> {
+        // Note: Full metrics integration requires passing Telemetry to Gateway.
+        // For now, return a minimal placeholder. The metrics are being collected
+        // by the telemetry system and can be scraped via this endpoint once
+        // the Gateway is updated to hold a reference to the metrics registry.
+        let body = "# Barbacane metrics endpoint\n# HELP barbacane_up Gateway is running\n# TYPE barbacane_up gauge\nbarbacane_up 1\n";
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", barbacane_telemetry::PROMETHEUS_CONTENT_TYPE)
+            .body(Full::new(Bytes::from(body)))
             .unwrap()
     }
 
@@ -1377,6 +1402,9 @@ async fn main() -> ExitCode {
             artifact,
             listen,
             dev,
+            log_level,
+            log_format,
+            otlp_endpoint,
             max_body_size,
             max_headers,
             max_header_size,
@@ -1384,8 +1412,27 @@ async fn main() -> ExitCode {
             allow_plaintext_upstream,
             tls_cert,
             tls_key,
-            ..
         } => {
+            // Initialize telemetry
+            let log_fmt = barbacane_telemetry::LogFormat::from_str(&log_format)
+                .unwrap_or(barbacane_telemetry::LogFormat::Json);
+
+            let mut telemetry_config = barbacane_telemetry::TelemetryConfig::new()
+                .with_log_level(&log_level)
+                .with_log_format(log_fmt);
+
+            if let Some(endpoint) = otlp_endpoint {
+                telemetry_config = telemetry_config.with_otlp_endpoint(endpoint);
+            }
+
+            let _telemetry = match barbacane_telemetry::Telemetry::init(telemetry_config) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("error: failed to initialize telemetry: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
+
             // Validate TLS arguments
             let tls_config = match (tls_cert, tls_key) {
                 (Some(cert), Some(key)) => Some(TlsConfig {
