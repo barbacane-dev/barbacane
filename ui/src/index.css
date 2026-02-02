@@ -1,26 +1,45 @@
 @import "tailwindcss";
 
+/*
+ * Barbacane Brand Colors
+ * Primary: Cyan #00d4ff
+ * Secondary: Purple #8b5cf6
+ * Accent: Magenta #d946ef
+ * Background: Near black #0a0b14
+ */
+
+/* Dark theme (default) */
 @theme {
-  /* Colors - shadcn/ui compatible */
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(222.2 84% 4.9%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(222.2 84% 4.9%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(222.2 84% 4.9%);
-  --color-primary: hsl(222.2 47.4% 11.2%);
-  --color-primary-foreground: hsl(210 40% 98%);
-  --color-secondary: hsl(210 40% 96.1%);
-  --color-secondary-foreground: hsl(222.2 47.4% 11.2%);
-  --color-muted: hsl(210 40% 96.1%);
-  --color-muted-foreground: hsl(215.4 16.3% 46.9%);
-  --color-accent: hsl(210 40% 96.1%);
-  --color-accent-foreground: hsl(222.2 47.4% 11.2%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-destructive-foreground: hsl(210 40% 98%);
-  --color-border: hsl(214.3 31.8% 91.4%);
-  --color-input: hsl(214.3 31.8% 91.4%);
-  --color-ring: hsl(222.2 84% 4.9%);
+  /* Core colors */
+  --color-background: #0a0b14;
+  --color-foreground: #e2e8f0;
+  --color-card: #0f1019;
+  --color-card-foreground: #e2e8f0;
+  --color-popover: #0f1019;
+  --color-popover-foreground: #e2e8f0;
+
+  /* Brand colors */
+  --color-primary: #00d4ff;
+  --color-primary-foreground: #0a0b14;
+  --color-secondary: #8b5cf6;
+  --color-secondary-foreground: #ffffff;
+  --color-accent: #d946ef;
+  --color-accent-foreground: #ffffff;
+
+  /* Neutral */
+  --color-muted: #1e293b;
+  --color-muted-foreground: #94a3b8;
+  --color-border: #1e293b;
+  --color-input: #1e293b;
+  --color-ring: #00d4ff;
+
+  /* Semantic */
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-success: #10b981;
+  --color-success-foreground: #ffffff;
+  --color-warning: #f59e0b;
+  --color-warning-foreground: #0a0b14;
 
   /* Radius */
   --radius-sm: 0.25rem;
@@ -28,48 +47,59 @@
   --radius-lg: 0.5rem;
   --radius-xl: 0.75rem;
 
-  /* Sidebar specific */
-  --color-sidebar: hsl(0 0% 98%);
-  --color-sidebar-foreground: hsl(240 5.3% 26.1%);
-  --color-sidebar-primary: hsl(240 5.9% 10%);
-  --color-sidebar-primary-foreground: hsl(0 0% 98%);
-  --color-sidebar-accent: hsl(240 4.8% 95.9%);
-  --color-sidebar-accent-foreground: hsl(240 5.9% 10%);
-  --color-sidebar-border: hsl(220 13% 91%);
-  --color-sidebar-ring: hsl(217.2 91.2% 59.8%);
+  /* Sidebar */
+  --color-sidebar: #070810;
+  --color-sidebar-foreground: #e2e8f0;
+  --color-sidebar-primary: #00d4ff;
+  --color-sidebar-primary-foreground: #0a0b14;
+  --color-sidebar-accent: #1e293b;
+  --color-sidebar-accent-foreground: #e2e8f0;
+  --color-sidebar-border: #1e293b;
+  --color-sidebar-ring: #00d4ff;
+
+  /* Glow effects */
+  --color-glow-cyan: rgba(0, 212, 255, 0.15);
+  --color-glow-purple: rgba(139, 92, 246, 0.15);
+  --color-glow-magenta: rgba(217, 70, 239, 0.15);
 }
 
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-background: hsl(222.2 84% 4.9%);
-    --color-foreground: hsl(210 40% 98%);
-    --color-card: hsl(222.2 84% 4.9%);
-    --color-card-foreground: hsl(210 40% 98%);
-    --color-popover: hsl(222.2 84% 4.9%);
-    --color-popover-foreground: hsl(210 40% 98%);
-    --color-primary: hsl(210 40% 98%);
-    --color-primary-foreground: hsl(222.2 47.4% 11.2%);
-    --color-secondary: hsl(217.2 32.6% 17.5%);
-    --color-secondary-foreground: hsl(210 40% 98%);
-    --color-muted: hsl(217.2 32.6% 17.5%);
-    --color-muted-foreground: hsl(215 20.2% 65.1%);
-    --color-accent: hsl(217.2 32.6% 17.5%);
-    --color-accent-foreground: hsl(210 40% 98%);
-    --color-destructive: hsl(0 62.8% 30.6%);
-    --color-destructive-foreground: hsl(210 40% 98%);
-    --color-border: hsl(217.2 32.6% 17.5%);
-    --color-input: hsl(217.2 32.6% 17.5%);
-    --color-ring: hsl(212.7 26.8% 83.9%);
+/* Light theme */
+.light {
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
 
-    --color-sidebar: hsl(240 5.9% 10%);
-    --color-sidebar-foreground: hsl(240 4.8% 95.9%);
-    --color-sidebar-primary: hsl(224.3 76.3% 48%);
-    --color-sidebar-primary-foreground: hsl(0 0% 100%);
-    --color-sidebar-accent: hsl(240 3.7% 15.9%);
-    --color-sidebar-accent-foreground: hsl(240 4.8% 95.9%);
-    --color-sidebar-border: hsl(240 3.7% 15.9%);
-    --color-sidebar-ring: hsl(217.2 91.2% 59.8%);
-  }
+  --color-primary: #0891b2;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #7c3aed;
+  --color-secondary-foreground: #ffffff;
+  --color-accent: #c026d3;
+  --color-accent-foreground: #ffffff;
+
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-ring: #0891b2;
+
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+
+  --color-sidebar: #f1f5f9;
+  --color-sidebar-foreground: #0f172a;
+  --color-sidebar-primary: #0891b2;
+  --color-sidebar-primary-foreground: #ffffff;
+  --color-sidebar-accent: #e2e8f0;
+  --color-sidebar-accent-foreground: #0f172a;
+  --color-sidebar-border: #e2e8f0;
+  --color-sidebar-ring: #0891b2;
+
+  --color-glow-cyan: rgba(8, 145, 178, 0.1);
+  --color-glow-purple: rgba(124, 58, 237, 0.1);
+  --color-glow-magenta: rgba(192, 38, 211, 0.1);
 }
 
 @layer base {
@@ -77,8 +107,35 @@
     @apply border-border;
   }
 
+  html {
+    color-scheme: dark;
+  }
+
+  html.light {
+    color-scheme: light;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  .glow-cyan {
+    box-shadow: 0 0 20px var(--color-glow-cyan), 0 0 40px var(--color-glow-cyan);
+  }
+
+  .glow-purple {
+    box-shadow: 0 0 20px var(--color-glow-purple), 0 0 40px var(--color-glow-purple);
+  }
+
+  .glow-magenta {
+    box-shadow: 0 0 20px var(--color-glow-magenta), 0 0 40px var(--color-glow-magenta);
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #00d4ff, #8b5cf6, #d946ef);
   }
 }
