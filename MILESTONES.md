@@ -365,7 +365,12 @@ Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 
 **Specs:** SPEC-001 (section 2.1), SPEC-003 (section 4.6)
 
-- [ ] AsyncAPI 3.x parser — read channels, servers, messages, bindings
+- [x] AsyncAPI 3.x parser — read channels, operations, messages, bindings
+- [x] Message model — `Message` struct with payload, content type, protocol bindings
+- [x] Channel parameters — templated addresses (e.g., `notifications/{userId}`)
+- [x] Operation actions — `send` (gateway publishes) and `receive` (gateway subscribes)
+- [x] Protocol bindings — Kafka, NATS, MQTT, AMQP, WebSocket binding extraction
+- [x] Request body mapping — SEND operations create request body from message payload
 - [ ] Channel routing — topic-to-handler mapping in `routes.fb`
 - [ ] Message schema validation — AsyncAPI message schemas
 - [ ] Host function: `host_kafka_publish` — publish to Kafka topic
