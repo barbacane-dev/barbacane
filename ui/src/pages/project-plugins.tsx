@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Puzzle, Plus, Trash2, RefreshCw, Settings2 } from 'lucide-react'
+import { Puzzle, Plus, Trash2, RefreshCw, Settings2, AlertCircle } from 'lucide-react'
 import {
   listProjectPlugins,
   listPlugins,
@@ -12,6 +12,7 @@ import {
 import type { AddPluginToProjectRequest, Plugin, ProjectPluginConfig } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
 import { cn } from '@/lib/utils'
+import { useJsonSchema, type ValidationError } from '@/hooks'
 
 export function ProjectPluginsPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -20,6 +21,8 @@ export function ProjectPluginsPage() {
   const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null)
   const [editingConfig, setEditingConfig] = useState<ProjectPluginConfig | null>(null)
   const [configJson, setConfigJson] = useState('')
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
+  const [jsonParseError, setJsonParseError] = useState<string | null>(null)
 
   const configsQuery = useQuery({
     queryKey: ['project-plugins', projectId],
@@ -27,11 +30,23 @@ export function ProjectPluginsPage() {
     enabled: !!projectId,
   })
 
+  // Fetch all plugins (for schemas and add dialog)
   const availablePluginsQuery = useQuery({
     queryKey: ['plugins'],
     queryFn: () => listPlugins(),
-    enabled: showAddDialog,
   })
+
+  // Find the schema for the currently editing plugin
+  const editingPluginSchema = useMemo(() => {
+    if (!editingConfig || !availablePluginsQuery.data) return null
+    const plugin = availablePluginsQuery.data.find(
+      (p) => p.name === editingConfig.plugin_name
+    )
+    return plugin?.config_schema ?? null
+  }, [editingConfig, availablePluginsQuery.data])
+
+  // Use JSON Schema validation hook
+  const { validate, hasSchema } = useJsonSchema(editingPluginSchema)
 
   const addMutation = useMutation({
     mutationFn: (data: AddPluginToProjectRequest) =>
@@ -71,17 +86,46 @@ export function ProjectPluginsPage() {
     })
   }
 
+  const handleConfigChange = (value: string) => {
+    setConfigJson(value)
+    setJsonParseError(null)
+    setValidationErrors([])
+
+    // Try to parse and validate
+    try {
+      const config = JSON.parse(value)
+      const result = validate(config)
+      setValidationErrors(result.errors)
+    } catch {
+      // Don't set parse error while typing - only on save
+    }
+  }
+
   const handleSaveConfig = () => {
     if (!editingConfig) return
+
+    // First check JSON syntax
+    let config: Record<string, unknown>
     try {
-      const config = JSON.parse(configJson)
-      updateMutation.mutate({
-        pluginName: editingConfig.plugin_name,
-        config,
-      })
-    } catch {
-      alert('Invalid JSON')
+      config = JSON.parse(configJson)
+      setJsonParseError(null)
+    } catch (e) {
+      setJsonParseError('Invalid JSON syntax')
+      return
     }
+
+    // Then validate against schema
+    const result = validate(config)
+    setValidationErrors(result.errors)
+
+    if (!result.valid) {
+      return // Don't save if validation fails
+    }
+
+    updateMutation.mutate({
+      pluginName: editingConfig.plugin_name,
+      config,
+    })
   }
 
   const configs = configsQuery.data ?? []
@@ -199,16 +243,61 @@ export function ProjectPluginsPage() {
                 Configure {editingConfig.plugin_name}
               </h2>
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Configuration (JSON)
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium">
+                    Configuration (JSON)
+                  </label>
+                  {hasSchema && (
+                    <Badge variant="outline" className="text-xs">
+                      Schema validation enabled
+                    </Badge>
+                  )}
+                </div>
                 <textarea
                   value={configJson}
-                  onChange={(e) => setConfigJson(e.target.value)}
-                  className="w-full h-48 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  onChange={(e) => handleConfigChange(e.target.value)}
+                  className={cn(
+                    'w-full h-48 rounded-lg border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1',
+                    jsonParseError || validationErrors.length > 0
+                      ? 'border-destructive focus:border-destructive focus:ring-destructive'
+                      : 'border-input focus:border-primary focus:ring-primary'
+                  )}
                   placeholder="{}"
                 />
               </div>
+
+              {/* JSON Parse Error */}
+              {jsonParseError && (
+                <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                  <div className="flex items-center gap-2 text-destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <span className="text-sm font-medium">{jsonParseError}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Validation Errors */}
+              {validationErrors.length > 0 && !jsonParseError && (
+                <div className="mt-3 p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                  <div className="flex items-center gap-2 text-destructive mb-2">
+                    <AlertCircle className="h-4 w-4" />
+                    <span className="text-sm font-medium">
+                      Validation errors ({validationErrors.length})
+                    </span>
+                  </div>
+                  <ul className="space-y-1">
+                    {validationErrors.map((error, idx) => (
+                      <li key={idx} className="text-sm text-destructive/80">
+                        <code className="text-xs bg-destructive/10 px-1 py-0.5 rounded">
+                          {error.path}
+                        </code>{' '}
+                        {error.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {updateMutation.isError && (
                 <p className="text-sm text-destructive mt-4">
                   {updateMutation.error instanceof Error
@@ -217,12 +306,19 @@ export function ProjectPluginsPage() {
                 </p>
               )}
               <div className="flex justify-end gap-2 mt-4">
-                <Button variant="outline" onClick={() => setEditingConfig(null)}>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setEditingConfig(null)
+                    setValidationErrors([])
+                    setJsonParseError(null)
+                  }}
+                >
                   Cancel
                 </Button>
                 <Button
                   onClick={handleSaveConfig}
-                  disabled={updateMutation.isPending}
+                  disabled={updateMutation.isPending || validationErrors.length > 0}
                 >
                   {updateMutation.isPending ? 'Saving...' : 'Save'}
                 </Button>
@@ -294,6 +390,8 @@ export function ProjectPluginsPage() {
                       onClick={() => {
                         setEditingConfig(config)
                         setConfigJson(JSON.stringify(config.config, null, 2))
+                        setValidationErrors([])
+                        setJsonParseError(null)
                       }}
                     >
                       <Settings2 className="h-4 w-4 mr-1" />
