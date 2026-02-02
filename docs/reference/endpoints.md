@@ -130,13 +130,70 @@ paths:
 
 ---
 
+## Prometheus Metrics
+
+```
+GET /__barbacane/metrics
+```
+
+Returns gateway metrics in Prometheus text exposition format.
+
+### Response
+
+```
+# HELP barbacane_requests_total Total number of HTTP requests processed
+# TYPE barbacane_requests_total counter
+barbacane_requests_total{method="GET",path="/users",status="200",api="users-api"} 42
+
+# HELP barbacane_request_duration_seconds HTTP request duration in seconds
+# TYPE barbacane_request_duration_seconds histogram
+barbacane_request_duration_seconds_bucket{method="GET",path="/users",status="200",api="users-api",le="0.01"} 35
+...
+
+# HELP barbacane_active_connections Number of currently active connections
+# TYPE barbacane_active_connections gauge
+barbacane_active_connections 5
+```
+
+### Available Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `barbacane_requests_total` | counter | method, path, status, api | Total requests processed |
+| `barbacane_request_duration_seconds` | histogram | method, path, status, api | Request latency |
+| `barbacane_request_size_bytes` | histogram | method, path, status, api | Request body size |
+| `barbacane_response_size_bytes` | histogram | method, path, status, api | Response body size |
+| `barbacane_active_connections` | gauge | - | Current open connections |
+| `barbacane_connections_total` | counter | - | Total connections accepted |
+| `barbacane_validation_failures_total` | counter | method, path, reason | Validation errors |
+| `barbacane_middleware_duration_seconds` | histogram | middleware, phase | Middleware execution time |
+| `barbacane_dispatch_duration_seconds` | histogram | dispatcher, upstream | Dispatcher execution time |
+| `barbacane_wasm_execution_duration_seconds` | histogram | plugin, function | WASM plugin execution time |
+
+### Usage
+
+```bash
+# Scrape metrics
+curl http://localhost:8080/__barbacane/metrics
+```
+
+```yaml
+# Prometheus scrape config
+scrape_configs:
+  - job_name: 'barbacane'
+    static_configs:
+      - targets: ['barbacane:8080']
+    metrics_path: '/__barbacane/metrics'
+```
+
+---
+
 ## Future Endpoints
 
 These endpoints are planned for future releases:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `/__barbacane/metrics` | Prometheus metrics |
 | `/__barbacane/ready` | Readiness probe (after warm-up) |
 | `/__barbacane/config` | Runtime configuration |
 | `/__barbacane/routes` | Route table inspection |
