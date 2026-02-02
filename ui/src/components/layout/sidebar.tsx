@@ -8,6 +8,7 @@ import {
   Moon,
   LogOut,
   User,
+  FileText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/hooks'
@@ -20,6 +21,7 @@ const mainNavigation = [
 const globalNavigation = [
   { name: 'Plugin Registry', href: '/plugin-registry', icon: Store },
   { name: 'Activity', href: '/activity', icon: Activity },
+  { name: 'API Docs', href: '/api-docs', icon: FileText },
 ]
 
 export function Sidebar() {
@@ -28,7 +30,8 @@ export function Sidebar() {
 
   return (
     <div className="flex h-full w-64 flex-col border-r border-sidebar-border bg-sidebar">
-      <div className="flex h-16 items-center border-b border-sidebar-border px-6">
+      <div className="flex h-16 items-center border-b border-sidebar-border px-4">
+        <img src="/logo.png" alt="Barbacane" className="h-10 w-10 mr-3" />
         <span className="text-xl font-bold text-gradient">Barbacane</span>
       </div>
       <nav className="flex-1 px-3 py-4">

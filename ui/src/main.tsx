@@ -15,6 +15,7 @@ import {
   SettingsPage,
   LoginPage,
   InitPage,
+  ApiDocsPage,
   ProjectsPage,
   ProjectSpecsPage,
   ProjectPluginsPage,
@@ -66,6 +67,7 @@ const router = createBrowserRouter([
       { path: 'plugin-registry', element: <PluginsPage /> },
       { path: 'artifacts', element: <ArtifactsPage /> },
       { path: 'activity', element: <ActivityPage /> },
+      { path: 'api-docs', element: <ApiDocsPage /> },
       { path: 'init', element: <InitPage /> },
       { path: 'settings', element: <SettingsPage /> },
       // Legacy route redirect

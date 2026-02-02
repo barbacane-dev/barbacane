@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use axum::{
-    http::HeaderValue,
+    http::{header, HeaderValue, StatusCode},
+    response::{Html, IntoResponse},
     routing::{delete, get, post, put},
     Router,
 };
@@ -16,11 +17,16 @@ use tower_http::{
 };
 use uuid::Uuid;
 
+use scalar_api_reference::scalar_html_default;
+
 use super::ws::ConnectionManager;
 use super::{
     api_keys, artifacts, compilations, data_planes, health, init, plugins, project_plugins,
     projects, specs, ws,
 };
+
+/// OpenAPI spec content embedded at compile time.
+const OPENAPI_SPEC: &str = include_str!("../../openapi.yaml");
 
 /// API version header value.
 const API_VERSION: &str = "application/vnd.barbacane.v1+json";
@@ -33,6 +39,30 @@ pub struct AppState {
     pub compilation_tx: Option<mpsc::Sender<Uuid>>,
     /// WebSocket connection manager for data planes.
     pub connection_manager: Arc<ConnectionManager>,
+}
+
+/// Handler to serve the OpenAPI specification.
+async fn openapi_spec() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/yaml")],
+        OPENAPI_SPEC,
+    )
+}
+
+/// Handler to serve the Scalar API documentation UI.
+async fn api_docs() -> Html<String> {
+    let config = serde_json::json!({
+        "spec": {
+            "url": "/api/openapi"
+        },
+        "theme": "purple",
+        "layout": "modern",
+        "hideModels": false,
+        "hideDownloadButton": false
+    });
+
+    Html(scalar_html_default(&config))
 }
 
 /// Create the API router with all routes.
@@ -48,6 +78,9 @@ pub fn create_router(
     };
 
     Router::new()
+        // OpenAPI spec and documentation
+        .route("/openapi", get(openapi_spec))
+        .route("/docs", get(api_docs))
         // Health
         .route("/health", get(health::health_check))
         // Init
