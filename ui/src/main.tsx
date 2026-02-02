@@ -4,6 +4,8 @@ import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 
+import { AuthProvider } from '@/lib/auth'
+import { ProtectedRoute } from '@/components/auth'
 import { RootLayout } from '@/components/layout'
 import {
   SpecsPage,
@@ -11,6 +13,7 @@ import {
   ArtifactsPage,
   ActivityPage,
   SettingsPage,
+  LoginPage,
 } from '@/pages'
 
 const queryClient = new QueryClient({
@@ -24,8 +27,16 @@ const queryClient = new QueryClient({
 
 const router = createBrowserRouter([
   {
+    path: '/login',
+    element: <LoginPage />,
+  },
+  {
     path: '/',
-    element: <RootLayout />,
+    element: (
+      <ProtectedRoute>
+        <RootLayout />
+      </ProtectedRoute>
+    ),
     children: [
       { index: true, element: <Navigate to="/specs" replace /> },
       { path: 'specs', element: <SpecsPage /> },
@@ -39,8 +50,10 @@ const router = createBrowserRouter([
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </AuthProvider>
   </StrictMode>
 )
