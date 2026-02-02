@@ -390,7 +390,7 @@ Performance, testing infrastructure, lifecycle features, and hardening.
 - [x] `X-Trace-Id` header — trace ID on every response (extracted from traceparent or generated)
 - [x] `Server` header — `barbacane/<version>` on every response
 - [ ] HTTP/2 support — ALPN negotiation configured, needs connection-level implementation
-- [ ] API lifecycle — `deprecated: true` support, `x-barbacane-sunset` header
+- [x] API lifecycle — `deprecated: true` support, `x-barbacane-sunset` extension, `Deprecation` and `Sunset` response headers
 
 ### Testing Infrastructure
 - [x] `barbacane-test` crate — `TestGateway`, `PluginHarness`, `SpecBuilder`, `RequestBuilder`
@@ -399,7 +399,7 @@ Performance, testing infrastructure, lifecycle features, and hardening.
 - [ ] Benchmark regression check — fail CI on >10% regression
 
 ### CI/CD
-- [ ] CI/CD pipeline — fmt, clippy, test, bench, build, integration test
+- [x] CI/CD pipeline — fmt, clippy, audit, build, unit tests, integration tests (`.github/workflows/ci.yml`)
 
 ### Already Implemented (from previous milestones)
 - [x] Artifact checksum verification — SHA-256 check at data plane startup (exit code 11)

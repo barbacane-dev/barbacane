@@ -392,6 +392,28 @@ impl Gateway {
         response
     }
 
+    /// Add deprecation headers to a response if the operation is deprecated.
+    /// Implements RFC 8594 (Sunset header) and draft-ietf-httpapi-deprecation-header.
+    fn add_deprecation_headers(
+        mut response: Response<Full<Bytes>>,
+        operation: &CompiledOperation,
+    ) -> Response<Full<Bytes>> {
+        if operation.deprecated {
+            let headers = response.headers_mut();
+            // Deprecation header per draft-ietf-httpapi-deprecation-header
+            // Value "true" indicates the endpoint is deprecated
+            headers.insert("deprecation", "true".parse().unwrap());
+
+            // Sunset header per RFC 8594 if a sunset date is specified
+            if let Some(sunset_date) = &operation.sunset {
+                if let Ok(val) = sunset_date.parse() {
+                    headers.insert("sunset", val);
+                }
+            }
+        }
+        response
+    }
+
     /// Handle an incoming HTTP request.
     async fn handle_request(
         &self,
@@ -563,6 +585,9 @@ impl Gateway {
                 let response = self
                     .dispatch(operation, params, query_string, &body_bytes, &headers)
                     .await?;
+
+                // Add deprecation headers if the operation is deprecated
+                let response = Self::add_deprecation_headers(response, operation);
 
                 let response_size = response.body().size_hint().exact().unwrap_or(0);
                 self.record_request_metrics(

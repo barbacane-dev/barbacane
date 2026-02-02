@@ -426,6 +426,8 @@ plugins:
                     }),
                     middlewares: None,
                     observability: None,
+                    deprecated: false,
+                    sunset: None,
                     extensions: BTreeMap::new(),
                 },
                 Operation {
@@ -443,6 +445,8 @@ plugins:
                         config: serde_json::json!({}),
                     }]),
                     observability: None,
+                    deprecated: false,
+                    sunset: None,
                     extensions: BTreeMap::new(),
                 },
             ],
@@ -485,6 +489,8 @@ plugins:
                 }),
                 middlewares: None,
                 observability: None,
+                deprecated: false,
+                sunset: None,
                 extensions: BTreeMap::new(),
             }],
         };
@@ -526,6 +532,8 @@ plugins:
                 }),
                 middlewares: None,
                 observability: None,
+                deprecated: false,
+                sunset: None,
                 extensions: BTreeMap::new(),
             }],
         };
