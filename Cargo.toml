@@ -40,7 +40,7 @@ http = "1"
 bytes = "1"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 # Error handling
 thiserror = "2"
@@ -89,7 +89,18 @@ opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["http-proto", "grpc-tonic"] }
 prometheus-client = "0.22"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Web framework (control plane)
+axum = { version = "0.8", features = ["multipart"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# Database (control plane)
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+tempfile = "3"
 
 # Proc macros
 syn = { version = "2", features = ["full", "parsing"] }
