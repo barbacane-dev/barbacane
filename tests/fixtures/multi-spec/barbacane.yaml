@@ -1,0 +1,5 @@
+# Multi-spec test fixtures manifest
+
+plugins:
+  mock:
+    path: ../../../plugins/mock/mock.wasm
