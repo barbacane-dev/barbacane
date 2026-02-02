@@ -147,8 +147,8 @@ Implement the `barbacane.yaml` manifest for explicit plugin configuration (ADR-0
 - [x] Bare binary validation — fail if spec uses plugin not in artifact
 
 ### CLI & Templates
-- [ ] `barbacane init --template basic` — create project with `barbacane.yaml`, `plugins/`, example spec
-- [ ] `barbacane init --template minimal` — create minimal project skeleton
+- [x] `barbacane init --template basic` — create project with `barbacane.yaml`, `plugins/`, example spec
+- [x] `barbacane init --template minimal` — create minimal project skeleton
 - [ ] Plugin download — fetch official plugins from release URLs
 
 ### Testing

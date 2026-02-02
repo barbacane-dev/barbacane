@@ -103,6 +103,19 @@ enum Commands {
         format: String,
     },
 
+    /// Initialize a new Barbacane project.
+    ///
+    /// Creates a project directory with barbacane.yaml, spec files, and plugins directory.
+    Init {
+        /// Project name (creates a directory with this name).
+        #[arg(default_value = ".")]
+        name: String,
+
+        /// Template to use: basic (full example) or minimal (bare bones).
+        #[arg(short, long, default_value = "basic")]
+        template: String,
+    },
+
     /// Run the gateway server.
     Serve {
         /// Path to the .bca artifact file.
@@ -1390,6 +1403,263 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
     }
 }
 
+/// Run the init command.
+fn run_init(name: &str, template: &str) -> ExitCode {
+    use std::fs;
+
+    // Validate template
+    if template != "basic" && template != "minimal" {
+        eprintln!(
+            "error: unknown template '{}'. Use 'basic' or 'minimal'.",
+            template
+        );
+        return ExitCode::from(1);
+    }
+
+    // Determine project directory
+    let project_dir = if name == "." {
+        std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf())
+    } else {
+        Path::new(name).to_path_buf()
+    };
+
+    // Check if directory is empty (if not ".")
+    if name != "." {
+        if project_dir.exists() {
+            if fs::read_dir(&project_dir)
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false)
+            {
+                eprintln!("error: directory '{}' is not empty", name);
+                return ExitCode::from(1);
+            }
+        } else if let Err(e) = fs::create_dir_all(&project_dir) {
+            eprintln!("error: failed to create directory '{}': {}", name, e);
+            return ExitCode::from(1);
+        }
+    }
+
+    // Create plugins directory
+    let plugins_dir = project_dir.join("plugins");
+    if let Err(e) = fs::create_dir_all(&plugins_dir) {
+        eprintln!("error: failed to create plugins directory: {}", e);
+        return ExitCode::from(1);
+    }
+
+    // Create barbacane.yaml
+    let manifest_content = r#"# Barbacane project manifest
+# See https://barbacane.dev/docs/guide/spec-configuration for details
+
+plugins: {}
+  # Example plugin configuration:
+  # my-plugin:
+  #   path: ./plugins/my-plugin.wasm
+"#;
+
+    if let Err(e) = fs::write(project_dir.join("barbacane.yaml"), manifest_content) {
+        eprintln!("error: failed to create barbacane.yaml: {}", e);
+        return ExitCode::from(1);
+    }
+
+    // Create spec file based on template
+    let spec_content = if template == "basic" {
+        r#"openapi: "3.1.0"
+info:
+  title: My API
+  version: "1.0.0"
+  description: A Barbacane-powered API
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "ok"}'
+          headers:
+            Content-Type: application/json
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /users:
+    get:
+      summary: List users
+      operationId: listUsers
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"users": []}'
+          headers:
+            Content-Type: application/json
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      type: object
+
+    post:
+      summary: Create user
+      operationId: createUser
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{"id": "user-123", "message": "Created"}'
+          headers:
+            Content-Type: application/json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                email:
+                  type: string
+                  format: email
+      responses:
+        "201":
+          description: User created
+        "400":
+          description: Invalid request
+
+  /users/{id}:
+    get:
+      summary: Get user by ID
+      operationId: getUser
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id": "{id}", "name": "John Doe"}'
+          headers:
+            Content-Type: application/json
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User details
+        "404":
+          description: User not found
+"#
+    } else {
+        // minimal template
+        r#"openapi: "3.1.0"
+info:
+  title: My API
+  version: "1.0.0"
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "ok"}'
+      responses:
+        "200":
+          description: OK
+"#
+    };
+
+    if let Err(e) = fs::write(project_dir.join("api.yaml"), spec_content) {
+        eprintln!("error: failed to create api.yaml: {}", e);
+        return ExitCode::from(1);
+    }
+
+    // Create .gitignore
+    let gitignore_content = r#"# Build artifacts
+*.bca
+target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+"#;
+
+    if let Err(e) = fs::write(project_dir.join(".gitignore"), gitignore_content) {
+        eprintln!("error: failed to create .gitignore: {}", e);
+        return ExitCode::from(1);
+    }
+
+    // Success message
+    let dir_name = if name == "." {
+        "current directory"
+    } else {
+        name
+    };
+    eprintln!("✓ Initialized Barbacane project in {}", dir_name);
+    eprintln!();
+    eprintln!("Created:");
+    eprintln!("  barbacane.yaml  - project manifest");
+    eprintln!(
+        "  api.yaml        - OpenAPI specification ({} template)",
+        template
+    );
+    eprintln!("  plugins/        - directory for WASM plugins");
+    eprintln!("  .gitignore      - Git ignore file");
+    eprintln!();
+    eprintln!("Next steps:");
+    eprintln!("  1. Edit api.yaml to define your API");
+    eprintln!(
+        "  2. Run: barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca"
+    );
+    eprintln!("  3. Run: barbacane serve --artifact api.bca --dev");
+
+    ExitCode::SUCCESS
+}
+
 /// Run the compile command.
 fn run_compile(
     specs: &[String],
@@ -1804,6 +2074,7 @@ async fn main() -> ExitCode {
             allow_plaintext,
         } => run_compile(&spec, &output, manifest.as_deref(), allow_plaintext),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
+        Commands::Init { name, template } => run_init(&name, &template),
         Commands::Serve {
             artifact,
             listen,
