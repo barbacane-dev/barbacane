@@ -266,7 +266,7 @@ Built-in rate limiting aligned with draft-ietf-httpapi-ratelimit-headers, and re
 
 ---
 
-## M8 — Observability
+## M8 — Observability ✅
 
 Metrics, traces, structured logs, and OpenTelemetry export.
 
@@ -296,10 +296,11 @@ Metrics, traces, structured logs, and OpenTelemetry export.
 - [x] `x-barbacane-observability` extension — trace_sampling, detailed_validation_logs, latency_slo_ms
 - [x] Fire-and-forget — OTLP batch export with bounded queues
 
-### Remaining (requires deeper pipeline integration)
-- [ ] Full request pipeline span instrumentation (spans for each phase)
-- [ ] Metrics recording at each request lifecycle point
-- [ ] Integration tests — metrics scrape, trace propagation, log correlation
+### Pipeline Integration
+- [x] Request metrics recording — timing, sizes, status codes at each lifecycle point
+- [x] Validation failure tracking — metrics with reason labels
+- [x] Connection tracking — opened/closed connection metrics
+- [x] Integration tests — Prometheus endpoint format, request counts, validation failures, 404s, connection tracking
 
 ---
 
