@@ -154,12 +154,12 @@ pub mod nats {
 /// ```text
 /// host_metric_counter_inc(name_ptr, name_len, labels_ptr, labels_len, value: f64)
 /// host_metric_histogram_observe(name_ptr, name_len, labels_ptr, labels_len, value: f64)
-/// host_span_start(name_ptr: i32, name_len: i32)
+/// host_span_start(name_ptr: i32, name_len: i32) -> i32
 /// host_span_end()
 /// host_span_set_attribute(key_ptr, key_len, val_ptr, val_len)
 /// ```
 ///
-/// Not yet implemented (M7 milestone).
+/// Plugin metrics are auto-prefixed as `barbacane_plugin_{plugin_name}_{metric_name}`.
 pub mod telemetry {
     /// The capability name.
     pub const CAPABILITY: &str = "telemetry";

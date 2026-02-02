@@ -272,29 +272,33 @@ Metrics, traces, structured logs, and OpenTelemetry export.
 
 **Specs:** SPEC-005
 
-- [ ] Structured logging — JSON to stdout, timestamp/level/target/trace_id/span_id/request_id
-- [ ] Log events — startup, artifact_loaded, request_completed, validation_failure, wasm_trap, etc.
-- [ ] `--log-level` flag
-- [ ] Request metrics — `barbacane_requests_total`, `barbacane_request_duration_seconds`, sizes
-- [ ] Connection metrics — `barbacane_active_connections`, `barbacane_connections_total`
-- [ ] Validation metrics — `barbacane_validation_failures_total`
-- [ ] Middleware metrics — `barbacane_middleware_duration_seconds`, `barbacane_middleware_short_circuits_total`
-- [ ] Dispatch metrics — `barbacane_dispatch_duration_seconds`, `barbacane_dispatch_errors_total`
-- [ ] WASM metrics — `barbacane_wasm_execution_duration_seconds`, `barbacane_wasm_traps_total`
-- [ ] Deprecation metrics — `barbacane_deprecated_route_requests_total`
-- [ ] SLO metrics — `barbacane_slo_violation_total` (when `latency_slo` configured)
-- [ ] Prometheus endpoint — `GET /__barbacane/metrics`, text exposition format
-- [ ] Histogram buckets — duration and size bucket definitions
-- [ ] Distributed tracing — W3C Trace Context (`traceparent` / `tracestate`) propagation
-- [ ] Span tree — `barbacane.request` → routing → validation → middleware → dispatch → response
-- [ ] Span attributes — method, route, status, API name, artifact hash
-- [ ] Trace sampling — global + per-spec + per-operation `trace_sampling` config
-- [ ] OTLP export — gRPC/HTTP push to OpenTelemetry Collector
-- [ ] `--otlp-endpoint` flag
-- [ ] Plugin telemetry host functions — `host_metric_counter_inc`, `host_metric_histogram_observe`, `host_span_start/end/set_attribute`
-- [ ] Plugin metric auto-prefix — `barbacane_plugin_<name>_<metric>`
-- [ ] `x-barbacane-observability` extension — trace_sampling, detailed_validation_logs, latency_slo
-- [ ] Fire-and-forget — telemetry export never blocks request processing
+### Telemetry Infrastructure (`barbacane-telemetry` crate)
+- [x] Structured logging — JSON to stdout via tracing-subscriber
+- [x] Log events — startup, artifact_loaded, request_completed, validation_failure, wasm_trap, etc.
+- [x] `--log-level` and `--log-format` flags
+- [x] Request metrics — `barbacane_requests_total`, `barbacane_request_duration_seconds`, sizes
+- [x] Connection metrics — `barbacane_active_connections`, `barbacane_connections_total`
+- [x] Validation metrics — `barbacane_validation_failures_total`
+- [x] Middleware metrics — `barbacane_middleware_duration_seconds`, `barbacane_middleware_short_circuits_total`
+- [x] Dispatch metrics — `barbacane_dispatch_duration_seconds`, `barbacane_dispatch_errors_total`
+- [x] WASM metrics — `barbacane_wasm_execution_duration_seconds`, `barbacane_wasm_traps_total`
+- [x] Deprecation metrics — `barbacane_deprecated_route_requests_total`
+- [x] SLO metrics — `barbacane_slo_violation_total` (when `latency_slo` configured)
+- [x] Prometheus endpoint — `GET /__barbacane/metrics`, text exposition format
+- [x] Histogram buckets — duration and size bucket definitions
+- [x] Distributed tracing — W3C Trace Context (`traceparent` / `tracestate`) extraction/injection
+- [x] Span tree support — span names and attributes defined per ADR-0010
+- [x] Trace sampling — configurable sampling rate
+- [x] OTLP export — gRPC/HTTP push to OpenTelemetry Collector
+- [x] `--otlp-endpoint` flag
+- [x] Plugin telemetry host functions — `host_metric_counter_inc`, `host_metric_histogram_observe`, `host_span_start/end/set_attribute`
+- [x] Plugin metric auto-prefix — `barbacane_plugin_<name>_<metric>`
+- [x] `x-barbacane-observability` extension — trace_sampling, detailed_validation_logs, latency_slo_ms
+- [x] Fire-and-forget — OTLP batch export with bounded queues
+
+### Remaining (requires deeper pipeline integration)
+- [ ] Full request pipeline span instrumentation (spans for each phase)
+- [ ] Metrics recording at each request lifecycle point
 - [ ] Integration tests — metrics scrape, trace propagation, log correlation
 
 ---
