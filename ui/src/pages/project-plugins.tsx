@@ -12,13 +12,16 @@ import {
 import type { AddPluginToProjectRequest, Plugin, ProjectPluginConfig } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import { useJsonSchema, type ValidationError } from '@/hooks'
+import { useJsonSchema, generateSkeletonFromSchema, type ValidationError } from '@/hooks'
 
 export function ProjectPluginsPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null)
+  const [addConfigJson, setAddConfigJson] = useState('')
+  const [addValidationErrors, setAddValidationErrors] = useState<ValidationError[]>([])
+  const [addJsonParseError, setAddJsonParseError] = useState<string | null>(null)
   const [editingConfig, setEditingConfig] = useState<ProjectPluginConfig | null>(null)
   const [configJson, setConfigJson] = useState('')
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
@@ -36,6 +39,15 @@ export function ProjectPluginsPage() {
     queryFn: () => listPlugins(),
   })
 
+  // Find the schema for the selected plugin (add dialog)
+  const selectedPluginSchema = useMemo(() => {
+    if (!selectedPlugin) return null
+    return selectedPlugin.config_schema ?? null
+  }, [selectedPlugin])
+
+  // Use JSON Schema validation hook for add dialog
+  const { validate: validateAdd, hasSchema: hasAddSchema } = useJsonSchema(selectedPluginSchema)
+
   // Find the schema for the currently editing plugin
   const editingPluginSchema = useMemo(() => {
     if (!editingConfig || !availablePluginsQuery.data) return null
@@ -45,7 +57,7 @@ export function ProjectPluginsPage() {
     return plugin?.config_schema ?? null
   }, [editingConfig, availablePluginsQuery.data])
 
-  // Use JSON Schema validation hook
+  // Use JSON Schema validation hook for edit dialog
   const { validate, hasSchema } = useJsonSchema(editingPluginSchema)
 
   const addMutation = useMutation({
@@ -55,6 +67,9 @@ export function ProjectPluginsPage() {
       queryClient.invalidateQueries({ queryKey: ['project-plugins', projectId] })
       setShowAddDialog(false)
       setSelectedPlugin(null)
+      setAddConfigJson('')
+      setAddValidationErrors([])
+      setAddJsonParseError(null)
     },
   })
 
@@ -78,11 +93,57 @@ export function ProjectPluginsPage() {
     },
   })
 
+  const handleSelectPlugin = (plugin: Plugin) => {
+    setSelectedPlugin(plugin)
+    setAddJsonParseError(null)
+    setAddValidationErrors([])
+
+    // Generate skeleton config from schema
+    const skeleton = generateSkeletonFromSchema(plugin.config_schema)
+    setAddConfigJson(JSON.stringify(skeleton, null, 2))
+  }
+
+  const handleAddConfigChange = (value: string) => {
+    setAddConfigJson(value)
+    setAddJsonParseError(null)
+    setAddValidationErrors([])
+
+    // Try to parse and validate
+    try {
+      const config = JSON.parse(value)
+      const result = validateAdd(config)
+      setAddValidationErrors(result.errors)
+    } catch {
+      // Don't set parse error while typing - only on save
+    }
+  }
+
   const handleAddPlugin = () => {
     if (!selectedPlugin) return
+
+    // Parse and validate config
+    let config: Record<string, unknown> = {}
+    if (addConfigJson.trim()) {
+      try {
+        config = JSON.parse(addConfigJson)
+        setAddJsonParseError(null)
+      } catch {
+        setAddJsonParseError('Invalid JSON syntax')
+        return
+      }
+
+      // Validate against schema
+      const result = validateAdd(config)
+      setAddValidationErrors(result.errors)
+      if (!result.valid) {
+        return
+      }
+    }
+
     addMutation.mutate({
       plugin_name: selectedPlugin.name,
       plugin_version: selectedPlugin.version,
+      config,
     })
   }
 
@@ -109,7 +170,7 @@ export function ProjectPluginsPage() {
     try {
       config = JSON.parse(configJson)
       setJsonParseError(null)
-    } catch (e) {
+    } catch {
       setJsonParseError('Invalid JSON syntax')
       return
     }
@@ -168,7 +229,7 @@ export function ProjectPluginsPage() {
       {/* Add Plugin Dialog */}
       {showAddDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <Card className="w-full max-w-md">
+          <Card className="w-full max-w-lg">
             <CardContent className="p-6">
               <h2 className="text-lg font-semibold mb-4">Add Plugin</h2>
               {availablePluginsQuery.isLoading ? (
@@ -180,30 +241,91 @@ export function ProjectPluginsPage() {
                   No plugins available. Register plugins in the Plugin Registry first.
                 </p>
               ) : (
-                <div className="space-y-2 max-h-60 overflow-auto">
-                  {pluginsToAdd.map((plugin) => (
-                    <div
-                      key={`${plugin.name}-${plugin.version}`}
-                      className={cn(
-                        'p-3 rounded-lg border cursor-pointer transition-colors',
-                        selectedPlugin?.name === plugin.name
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border hover:border-primary/50'
-                      )}
-                      onClick={() => setSelectedPlugin(plugin)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium">{plugin.name}</span>
-                        <Badge variant="outline">v{plugin.version}</Badge>
+                <>
+                  <div className="space-y-2 max-h-40 overflow-auto">
+                    {pluginsToAdd.map((plugin) => (
+                      <div
+                        key={`${plugin.name}-${plugin.version}`}
+                        className={cn(
+                          'p-3 rounded-lg border cursor-pointer transition-colors',
+                          selectedPlugin?.name === plugin.name
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border hover:border-primary/50'
+                        )}
+                        onClick={() => handleSelectPlugin(plugin)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">{plugin.name}</span>
+                          <Badge variant="outline">v{plugin.version}</Badge>
+                        </div>
+                        {plugin.description && (
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {plugin.description}
+                          </p>
+                        )}
                       </div>
-                      {plugin.description && (
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {plugin.description}
-                        </p>
+                    ))}
+                  </div>
+
+                  {/* Config editor when plugin is selected */}
+                  {selectedPlugin && (
+                    <div className="mt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-sm font-medium">
+                          Configuration (JSON)
+                        </label>
+                        {hasAddSchema && (
+                          <Badge variant="outline" className="text-xs">
+                            Schema validation enabled
+                          </Badge>
+                        )}
+                      </div>
+                      <textarea
+                        value={addConfigJson}
+                        onChange={(e) => handleAddConfigChange(e.target.value)}
+                        className={cn(
+                          'w-full h-32 rounded-lg border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1',
+                          addJsonParseError || addValidationErrors.length > 0
+                            ? 'border-destructive focus:border-destructive focus:ring-destructive'
+                            : 'border-input focus:border-primary focus:ring-primary'
+                        )}
+                        placeholder="{}"
+                      />
+
+                      {/* JSON Parse Error */}
+                      {addJsonParseError && (
+                        <div className="mt-2 p-2 rounded-lg bg-destructive/10 border border-destructive/20">
+                          <div className="flex items-center gap-2 text-destructive">
+                            <AlertCircle className="h-4 w-4" />
+                            <span className="text-sm font-medium">{addJsonParseError}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Validation Errors */}
+                      {addValidationErrors.length > 0 && !addJsonParseError && (
+                        <div className="mt-2 p-2 rounded-lg bg-destructive/10 border border-destructive/20">
+                          <div className="flex items-center gap-2 text-destructive mb-1">
+                            <AlertCircle className="h-4 w-4" />
+                            <span className="text-sm font-medium">
+                              Validation errors ({addValidationErrors.length})
+                            </span>
+                          </div>
+                          <ul className="space-y-1">
+                            {addValidationErrors.map((error, idx) => (
+                              <li key={idx} className="text-sm text-destructive/80">
+                                <code className="text-xs bg-destructive/10 px-1 py-0.5 rounded">
+                                  {error.path}
+                                </code>{' '}
+                                {error.message}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       )}
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
               {addMutation.isError && (
                 <p className="text-sm text-destructive mt-4">
@@ -218,13 +340,16 @@ export function ProjectPluginsPage() {
                   onClick={() => {
                     setShowAddDialog(false)
                     setSelectedPlugin(null)
+                    setAddConfigJson('')
+                    setAddValidationErrors([])
+                    setAddJsonParseError(null)
                   }}
                 >
                   Cancel
                 </Button>
                 <Button
                   onClick={handleAddPlugin}
-                  disabled={!selectedPlugin || addMutation.isPending}
+                  disabled={!selectedPlugin || addMutation.isPending || addValidationErrors.length > 0}
                 >
                   {addMutation.isPending ? 'Adding...' : 'Add'}
                 </Button>

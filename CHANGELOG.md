@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New Web UI guide (`docs/guide/web-ui.md`)
 - Updated Control Plane guide with Projects, Data Planes, Deploy sections
 - Updated Development guide with Makefile targets and UI setup
-- Updated Dispatchers guide with AsyncAPI planned support
+- Updated Dispatchers guide with AsyncAPI support
 - Updated CLI Reference with `seed-plugins` command documentation
 - Added Interactive API Documentation section (Scalar at `/api/docs`)
 

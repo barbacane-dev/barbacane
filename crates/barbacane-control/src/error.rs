@@ -141,7 +141,18 @@ impl From<sqlx::Error> for ProblemDetails {
                 if db_err.is_unique_violation() {
                     Self::conflict("resource already exists")
                 } else if db_err.is_foreign_key_violation() {
-                    Self::conflict("referenced resource does not exist")
+                    // Foreign key violations can happen in two cases:
+                    // 1. INSERT/UPDATE referencing a non-existent resource
+                    // 2. DELETE when the resource is still referenced by other records
+                    // Check the error message to provide a more specific error
+                    let message = db_err.message();
+                    if message.contains("update or delete")
+                        || message.contains("is still referenced")
+                    {
+                        Self::conflict("resource is in use and cannot be deleted")
+                    } else {
+                        Self::conflict("referenced resource does not exist")
+                    }
                 } else {
                     Self::internal_error()
                 }

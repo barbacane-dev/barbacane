@@ -45,8 +45,10 @@ cargo build --release
 - [Spec Configuration](docs/guide/spec-configuration.md) — Configure routing and middleware
 - [Middlewares](docs/guide/middlewares.md) — Authentication, rate limiting, caching
 - [Dispatchers](docs/guide/dispatchers.md) — Route requests to backends
+- [Control Plane](docs/guide/control-plane.md) — REST API for spec and artifact management
+- [Web UI](docs/guide/web-ui.md) — Web-based management interface
 - [Plugin Development](docs/contributing/plugins.md) — Build custom WASM plugins
-- [Architecture](docs/contributing/architecture.md) — System design overview
+- [Development Guide](docs/contributing/development.md) — Setup and contribute
 
 ## Official Plugins
 

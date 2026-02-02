@@ -80,18 +80,20 @@ barbacane-test
 
 ### barbacane-spec-parser
 
-Parses OpenAPI 3.x specifications and extracts Barbacane extensions.
+Parses OpenAPI and AsyncAPI specifications and extracts Barbacane extensions.
 
 **Key types:**
 - `ApiSpec` - Parsed specification with operations and metadata
 - `Operation` - Single API operation with dispatch/middleware config
 - `DispatchConfig` - Dispatcher name and configuration
 - `MiddlewareConfig` - Middleware name and configuration
+- `Channel` - AsyncAPI channel with publish/subscribe operations
 
 **Supported formats:**
 - OpenAPI 3.0.x
 - OpenAPI 3.1.x
 - OpenAPI 3.2.x (draft)
+- AsyncAPI 3.x (parsing supported, dispatchers planned)
 
 ### barbacane-router
 
@@ -368,6 +370,6 @@ cargo test --workspace
 ## Future Directions
 
 - **gRPC passthrough**: Transparent proxying for gRPC services
-- **Hot reload**: Reload artifacts without restart
+- **Hot reload**: Reload artifacts without restart via control plane notifications
 - **Cluster mode**: Distributed configuration across multiple nodes
-- **AsyncAPI support**: Event-driven APIs with Kafka/NATS dispatch
+- **AsyncAPI dispatchers**: Event-driven APIs with Kafka/NATS dispatch (parsing already supported)

@@ -146,3 +146,166 @@ export function validateJsonSchema(
     }
   }
 }
+
+interface SchemaProperty {
+  type?: string
+  default?: unknown
+  enum?: unknown[]
+  properties?: Record<string, SchemaProperty>
+  items?: SchemaProperty
+  required?: string[]
+  description?: string
+  format?: string
+  minimum?: number
+  maximum?: number
+}
+
+/**
+ * Generate a skeleton configuration object from a JSON Schema
+ * Includes required fields and uses defaults where available
+ */
+export function generateSkeletonFromSchema(
+  schema: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  if (!schema || Object.keys(schema).length === 0) {
+    return {}
+  }
+
+  const typedSchema = schema as SchemaProperty
+  return generateValueFromSchema(typedSchema) as Record<string, unknown>
+}
+
+function generateValueFromSchema(schema: SchemaProperty): unknown {
+  // Use default if provided
+  if (schema.default !== undefined) {
+    return schema.default
+  }
+
+  // Use first enum value if available
+  if (schema.enum && schema.enum.length > 0) {
+    return schema.enum[0]
+  }
+
+  // Generate based on type
+  switch (schema.type) {
+    case 'object':
+      return generateObjectFromSchema(schema)
+
+    case 'array':
+      // Return empty array, or array with one item if items schema exists
+      if (schema.items) {
+        return [generateValueFromSchema(schema.items)]
+      }
+      return []
+
+    case 'string':
+      // Generate placeholder based on format
+      if (schema.format === 'uri' || schema.format === 'url') {
+        return 'https://example.com'
+      }
+      if (schema.format === 'email') {
+        return 'user@example.com'
+      }
+      if (schema.format === 'date') {
+        return new Date().toISOString().split('T')[0]
+      }
+      if (schema.format === 'date-time') {
+        return new Date().toISOString()
+      }
+      return ''
+
+    case 'number':
+    case 'integer':
+      // Use minimum if available, otherwise 0
+      if (schema.minimum !== undefined) {
+        return schema.minimum
+      }
+      return 0
+
+    case 'boolean':
+      return false
+
+    case 'null':
+      return null
+
+    default:
+      // If no type specified but has properties, treat as object
+      if (schema.properties) {
+        return generateObjectFromSchema(schema)
+      }
+      return null
+  }
+}
+
+function generateObjectFromSchema(schema: SchemaProperty): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  const required = new Set(schema.required || [])
+  const properties = schema.properties || {}
+
+  // First, add all required properties
+  for (const [key, propSchema] of Object.entries(properties)) {
+    if (required.has(key)) {
+      result[key] = generateValueFromSchema(propSchema)
+    }
+  }
+
+  // Then add optional properties that have defaults
+  for (const [key, propSchema] of Object.entries(properties)) {
+    if (!required.has(key) && propSchema.default !== undefined) {
+      result[key] = propSchema.default
+    }
+  }
+
+  return result
+}
+
+/**
+ * Generate a skeleton with comments showing all available options
+ * Returns a formatted string with inline comments
+ */
+export function generateSkeletonWithComments(
+  schema: Record<string, unknown> | null | undefined
+): string {
+  if (!schema || Object.keys(schema).length === 0) {
+    return '{}'
+  }
+
+  const typedSchema = schema as SchemaProperty
+  const skeleton = generateSkeletonFromSchema(schema)
+  const lines: string[] = ['{']
+
+  const properties = typedSchema.properties || {}
+  const required = new Set(typedSchema.required || [])
+  const entries = Object.entries(properties)
+
+  entries.forEach(([key, propSchema], index) => {
+    const isRequired = required.has(key)
+    const value = skeleton[key]
+    const hasValue = key in skeleton
+
+    // Build the comment
+    const comments: string[] = []
+    if (isRequired) comments.push('required')
+    if (propSchema.type) comments.push(propSchema.type)
+    if (propSchema.format) comments.push(`format: ${propSchema.format}`)
+    if (propSchema.enum) comments.push(`options: ${propSchema.enum.join(' | ')}`)
+    if (propSchema.minimum !== undefined) comments.push(`min: ${propSchema.minimum}`)
+    if (propSchema.maximum !== undefined) comments.push(`max: ${propSchema.maximum}`)
+
+    const commentStr = comments.length > 0 ? ` // ${comments.join(', ')}` : ''
+
+    if (hasValue) {
+      const valueStr = JSON.stringify(value)
+      const comma = index < entries.length - 1 ? ',' : ''
+      lines.push(`  "${key}": ${valueStr}${comma}${commentStr}`)
+    } else {
+      // Show commented-out optional field
+      const defaultValue = generateValueFromSchema(propSchema)
+      const valueStr = JSON.stringify(defaultValue)
+      lines.push(`  // "${key}": ${valueStr}${commentStr}`)
+    }
+  })
+
+  lines.push('}')
+  return lines.join('\n')
+}

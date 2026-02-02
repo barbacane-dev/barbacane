@@ -6,10 +6,66 @@ This guide helps you set up a development environment for contributing to Barbac
 
 - **Rust 1.75+** - Install via [rustup](https://rustup.rs/)
 - **Git** - For version control
+- **Node.js 20+** - For the UI (if working on the web interface)
+- **PostgreSQL 14+** - For the control plane (or use Docker)
+- **Docker** - For running PostgreSQL locally (optional)
 
 Optional:
 - **cargo-watch** - For auto-rebuild on file changes
-- **just** - Command runner (alternative to make)
+- **wasm32-unknown-unknown target** - For building WASM plugins (`rustup target add wasm32-unknown-unknown`)
+- **tmux** - For running multiple services in one terminal
+
+## Quick Start with Makefile
+
+The easiest way to get started is using the Makefile:
+
+```bash
+# Start PostgreSQL in Docker
+make db-up
+
+# Build all WASM plugins and seed them into the database
+make seed-plugins
+
+# Start the control plane (port 9090)
+make control-plane
+
+# In another terminal, start the UI (port 5173)
+make ui
+```
+
+Then open http://localhost:5173 in your browser.
+
+### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| **Build & Test** | |
+| `make` | Run check + test (default) |
+| `make test` | Run all workspace tests |
+| `make test-verbose` | Run tests with output |
+| `make test-one TEST=name` | Run specific test |
+| `make clippy` | Run clippy lints |
+| `make fmt` | Format all code |
+| `make check` | Run fmt-check + clippy |
+| `make build` | Build debug |
+| `make release` | Build release |
+| `make plugins` | Build all WASM plugins |
+| `make seed-plugins` | Build plugins and seed registry |
+| `make clean` | Clean all build artifacts |
+| **Development** | |
+| `make control-plane` | Start control plane server (port 9090) |
+| `make ui` | Start UI dev server (port 5173) |
+| `make dev` | Show instructions to start both |
+| `make dev-tmux` | Start both in tmux session |
+| **Database** | |
+| `make db-up` | Start PostgreSQL container |
+| `make db-down` | Stop PostgreSQL container |
+| `make db-reset` | Reset database (removes all data) |
+
+Override the database URL:
+```bash
+make control-plane DATABASE_URL=postgres://user:pass@host/db
+```
 
 ## Getting Started
 
@@ -64,15 +120,25 @@ cargo run --bin barbacane -- serve --artifact test.bca --listen 127.0.0.1:8080 -
 ```
 barbacane/
 ├── Cargo.toml              # Workspace definition
+├── Makefile                # Development shortcuts
+├── docker-compose.yml      # PostgreSQL for local dev
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── README.md
 │
 ├── crates/
-│   ├── barbacane/          # Main CLI (compile, validate, serve)
+│   ├── barbacane/          # Data plane CLI (compile, validate, serve)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── main.rs
+│   │
+│   ├── barbacane-control/  # Control plane server
+│   │   ├── Cargo.toml
+│   │   ├── openapi.yaml    # API specification
+│   │   └── src/
+│   │       ├── main.rs
+│   │       ├── server.rs
+│   │       └── db/
 │   │
 │   ├── barbacane-compiler/ # Compilation logic
 │   │   ├── Cargo.toml
@@ -81,12 +147,12 @@ barbacane/
 │   │       ├── artifact.rs
 │   │       └── error.rs
 │   │
-│   ├── barbacane-spec-parser/  # OpenAPI parsing
+│   ├── barbacane-spec-parser/  # OpenAPI/AsyncAPI parsing
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── parser.rs
-│   │       ├── model.rs
+│   │       ├── openapi.rs
+│   │       ├── asyncapi.rs
 │   │       └── error.rs
 │   │
 │   ├── barbacane-router/   # Request routing
@@ -95,7 +161,7 @@ barbacane/
 │   │       ├── lib.rs
 │   │       └── trie.rs
 │   │
-│   ├── barbacane-plugin-sdk/  # Plugin development
+│   ├── barbacane-plugin-sdk/  # Plugin development SDK
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── lib.rs
@@ -106,12 +172,33 @@ barbacane/
 │           ├── lib.rs
 │           └── gateway.rs
 │
+├── plugins/                # Built-in WASM plugins
+│   ├── http-upstream/      # HTTP reverse proxy dispatcher
+│   ├── mock/               # Mock response dispatcher
+│   ├── lambda/             # AWS Lambda dispatcher
+│   ├── kafka/              # Kafka dispatcher (AsyncAPI)
+│   ├── nats/               # NATS dispatcher (AsyncAPI)
+│   ├── rate-limit/         # Rate limiting middleware
+│   ├── cors/               # CORS middleware
+│   ├── cache/              # Caching middleware
+│   ├── jwt-auth/           # JWT authentication
+│   ├── apikey-auth/        # API key authentication
+│   └── oauth2-auth/        # OAuth2 token introspection
+│
+├── ui/                     # React web interface
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+│       ├── pages/          # Page components
+│       ├── components/     # UI components
+│       ├── hooks/          # Custom React hooks
+│       └── lib/            # API client, utilities
+│
 ├── tests/
 │   └── fixtures/           # Test spec files
 │       ├── minimal.yaml
 │       ├── train-travel-3.0.yaml
-│       ├── train-travel-3.1.yaml
-│       └── train-travel-3.2.yaml
+│       └── ...
 │
 ├── docs/                   # Documentation
 │   ├── index.md
@@ -273,6 +360,83 @@ paths:
         name: mock
         config:
           status: 200
+```
+
+## UI Development
+
+The web interface is a React application in the `ui/` directory.
+
+### Setup
+
+```bash
+cd ui
+npm install
+```
+
+### Development Server
+
+```bash
+# Using Makefile (from project root)
+make ui
+
+# Or manually
+cd ui && npm run dev
+```
+
+The UI runs at http://localhost:5173 and proxies API requests to the control plane at http://localhost:9090.
+
+### Testing
+
+```bash
+cd ui
+npm run test        # Run tests once
+npm run test:watch  # Watch mode
+```
+
+### Key Directories
+
+```
+ui/src/
+├── pages/         # Page components (ProjectPluginsPage, etc.)
+├── components/    # Reusable UI components
+│   └── ui/        # Base components (Button, Card, Badge)
+├── hooks/         # Custom hooks (useJsonSchema, usePlugins)
+├── lib/
+│   ├── api/       # API client (types, requests)
+│   └── utils.ts   # Utilities (cn, formatters)
+└── App.tsx        # Main app with routing
+```
+
+### Adding a New Page
+
+1. Create page component in `src/pages/`:
+   ```tsx
+   // src/pages/my-feature.tsx
+   export function MyFeaturePage() {
+     return <div>...</div>
+   }
+   ```
+
+2. Add route in `src/App.tsx`:
+   ```tsx
+   <Route path="/my-feature" element={<MyFeaturePage />} />
+   ```
+
+### API Client
+
+Use the typed API client from `@/lib/api`:
+
+```tsx
+import { useQuery } from '@tanstack/react-query'
+import { listPlugins } from '@/lib/api'
+
+function MyComponent() {
+  const { data: plugins, isLoading } = useQuery({
+    queryKey: ['plugins'],
+    queryFn: () => listPlugins(),
+  })
+  // ...
+}
 ```
 
 ## Debugging

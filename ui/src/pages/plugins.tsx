@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Puzzle, Upload, Trash2, RefreshCw, Github, ExternalLink } from 'lucide-react'
+import { Puzzle, Upload, Trash2, RefreshCw, Github, ExternalLink, AlertCircle, X } from 'lucide-react'
 import { listPlugins, registerPlugin, deletePlugin } from '@/lib/api'
 import type { PluginType } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
@@ -36,6 +36,9 @@ export function PluginsPage() {
     file: null as File | null,
   })
 
+  // Delete error state
+  const [deleteError, setDeleteError] = useState<{ pluginKey: string; message: string } | null>(null)
+
   // GitHub release state
   const [githubRepo, setGithubRepo] = useState('')
   const [releases, setReleases] = useState<GitHubRelease[]>([])
@@ -69,6 +72,21 @@ export function PluginsPage() {
       deletePlugin(name, version),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['plugins'] })
+      setDeleteError(null)
+    },
+    onError: (error, variables) => {
+      const pluginKey = `${variables.name}-${variables.version}`
+      const errorMessage = error instanceof Error ? error.message : String(error)
+
+      // Check if this is an "in use" error (plugin referenced by projects)
+      let message: string
+      if (errorMessage.includes('in use') || errorMessage.includes('cannot be deleted')) {
+        message = 'Cannot delete plugin: it is currently in use by one or more projects. Remove it from all projects first.'
+      } else {
+        message = errorMessage || 'Failed to delete plugin'
+      }
+
+      setDeleteError({ pluginKey, message })
     },
   })
 
@@ -541,6 +559,29 @@ export function PluginsPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Delete error banner */}
+      {deleteError && (
+        <div className="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-destructive">Delete failed</p>
+                <p className="text-sm text-destructive/80 mt-1">{deleteError.message}</p>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteError(null)}
+              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       )}
 
       {pluginsQuery.isLoading ? (

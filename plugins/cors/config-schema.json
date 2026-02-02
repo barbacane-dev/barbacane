@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:cors:config",
+  "title": "CORS Middleware Configuration",
+  "type": "object",
+  "required": ["allowed_origins"],
+  "properties": {
+    "allowed_origins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Allowed origins. Use [\"*\"] to allow any origin (not compatible with credentials). Supports wildcard patterns like \"*.example.com\"."
+    },
+    "allowed_methods": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
+      },
+      "default": ["GET", "POST"],
+      "description": "Allowed HTTP methods for CORS requests"
+    },
+    "allowed_headers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Allowed request headers. Use [\"*\"] to allow any header. Simple headers (Accept, Accept-Language, Content-Language, Content-Type) are always allowed."
+    },
+    "expose_headers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Headers to expose to the client in Access-Control-Expose-Headers"
+    },
+    "max_age": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 3600,
+      "description": "Max age for preflight cache in seconds"
+    },
+    "allow_credentials": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether to allow credentials (cookies, auth headers). Cannot be used with allowed_origins: [\"*\"]"
+    }
+  }
+}
