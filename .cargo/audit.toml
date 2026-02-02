@@ -1,0 +1,19 @@
+# cargo-audit configuration
+# https://docs.rs/cargo-audit/latest/cargo_audit/
+
+[advisories]
+# Ignore these known vulnerabilities in wasmtime
+# Both are low-severity and require major version upgrade to fix
+ignore = [
+    # Unsound API access to WebAssembly shared linear memory (low: 1.8)
+    # Fix requires wasmtime >= 36.0.3 (we use 28.0.1)
+    "RUSTSEC-2025-0118",
+
+    # Host panic with fd_renumber WASIp1 function (low: 3.3)
+    # Fix requires wasmtime >= 24.0.4 (we use 28.0.1, but need >= 34.0.2 for full fix)
+    "RUSTSEC-2025-0046",
+]
+
+# Treat unmaintained crates as warnings, not errors
+[database]
+withdrawal = "warn"
