@@ -9,8 +9,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::Builder;
 
+use std::collections::BTreeMap;
+
 use barbacane_spec_parser::{
-    parse_spec_file, ApiSpec, DispatchConfig, MiddlewareConfig, Parameter, RequestBody, SpecFormat,
+    parse_spec_file, ApiSpec, DispatchConfig, Message, MiddlewareConfig, Parameter, RequestBody,
+    SpecFormat,
 };
 
 use crate::error::CompileError;
@@ -79,7 +82,9 @@ pub struct CompiledRoutes {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompiledOperation {
     pub index: usize,
+    /// Path template (OpenAPI: "/users/{id}", AsyncAPI: channel address).
     pub path: String,
+    /// HTTP method (OpenAPI: "GET", AsyncAPI: "SEND"/"RECEIVE").
     pub method: String,
     pub operation_id: Option<String>,
     /// Parameters for validation (path, query, header).
@@ -98,6 +103,12 @@ pub struct CompiledOperation {
     /// Sunset date for deprecated operations (HTTP-date format per RFC 9110).
     #[serde(default)]
     pub sunset: Option<String>,
+    /// AsyncAPI messages (for async operations only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<Message>,
+    /// Protocol bindings (AsyncAPI: kafka, nats, mqtt, amqp, ws).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, serde_json::Value>,
 }
 
 /// Compile one or more spec files into a .bca artifact.
@@ -181,6 +192,8 @@ pub fn compile_with_options(
                 middlewares,
                 deprecated: op.deprecated,
                 sunset: op.sunset.clone(),
+                messages: op.messages.clone(),
+                bindings: op.bindings.clone(),
             });
         }
     }
@@ -356,6 +369,8 @@ pub fn compile_with_manifest(
                 middlewares,
                 deprecated: op.deprecated,
                 sunset: op.sunset.clone(),
+                messages: op.messages.clone(),
+                bindings: op.bindings.clone(),
             });
         }
     }
@@ -629,6 +644,8 @@ pub fn compile_with_plugins(
                 middlewares,
                 deprecated: op.deprecated,
                 sunset: op.sunset.clone(),
+                messages: op.messages.clone(),
+                bindings: op.bindings.clone(),
             });
         }
     }
@@ -1112,5 +1129,135 @@ paths:
         let (version, wasm_bytes) = loaded.get("test-plugin").unwrap();
         assert_eq!(version, "1.0.0");
         assert_eq!(wasm_bytes, &fake_wasm);
+    }
+
+    #[test]
+    fn compile_asyncapi_spec() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+asyncapi: "3.0.0"
+info:
+  title: User Events API
+  version: "1.0.0"
+channels:
+  userSignedUp:
+    address: user/signedup
+    messages:
+      UserSignedUpMessage:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            userId:
+              type: string
+    bindings:
+      kafka:
+        topic: user-events
+        partitions: 10
+operations:
+  processUserSignup:
+    action: receive
+    channel:
+      $ref: '#/channels/userSignedUp'
+    x-barbacane-dispatch:
+      name: kafka
+      config:
+        topic: user-events
+    bindings:
+      kafka:
+        groupId: user-processor
+"#;
+        let spec_path = create_test_spec(temp.path(), "events.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let manifest = compile(&[spec_path.as_path()], &output_path).unwrap();
+
+        assert_eq!(manifest.barbacane_artifact_version, ARTIFACT_VERSION);
+        assert_eq!(manifest.routes_count, 1);
+        assert_eq!(manifest.source_specs.len(), 1);
+        assert_eq!(manifest.source_specs[0].spec_type, "asyncapi");
+
+        // Load routes and verify AsyncAPI fields
+        let routes = load_routes(&output_path).unwrap();
+        assert_eq!(routes.operations.len(), 1);
+
+        let op = &routes.operations[0];
+        assert_eq!(op.path, "user/signedup");
+        assert_eq!(op.method, "RECEIVE");
+        assert_eq!(op.operation_id, Some("processUserSignup".to_string()));
+
+        // Verify messages are preserved
+        assert_eq!(op.messages.len(), 1);
+        assert_eq!(op.messages[0].name, "UserSignedUpMessage");
+        assert_eq!(
+            op.messages[0].content_type,
+            Some("application/json".to_string())
+        );
+
+        // Verify bindings are preserved (operation binding overrides channel)
+        assert!(op.bindings.contains_key("kafka"));
+        let kafka_binding = op.bindings.get("kafka").unwrap();
+        assert_eq!(
+            kafka_binding.get("groupId").and_then(|v| v.as_str()),
+            Some("user-processor")
+        );
+    }
+
+    #[test]
+    fn compile_asyncapi_send_operation() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+asyncapi: "3.0.0"
+info:
+  title: Notification Service
+  version: "1.0.0"
+channels:
+  notifications:
+    address: notifications/{userId}
+    parameters:
+      userId:
+        schema:
+          type: string
+    messages:
+      NotificationMessage:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - title
+          properties:
+            title:
+              type: string
+operations:
+  sendNotification:
+    action: send
+    channel:
+      $ref: '#/channels/notifications'
+    x-barbacane-dispatch:
+      name: nats
+      config:
+        subject: notifications
+"#;
+        let spec_path = create_test_spec(temp.path(), "notifications.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let manifest = compile(&[spec_path.as_path()], &output_path).unwrap();
+
+        assert_eq!(manifest.routes_count, 1);
+
+        let routes = load_routes(&output_path).unwrap();
+        let op = &routes.operations[0];
+
+        assert_eq!(op.path, "notifications/{userId}");
+        assert_eq!(op.method, "SEND");
+
+        // SEND operations should have channel parameters
+        assert_eq!(op.parameters.len(), 1);
+        assert_eq!(op.parameters[0].name, "userId");
+
+        // SEND operations should have request_body from message payload
+        assert!(op.request_body.is_some());
     }
 }

@@ -371,11 +371,11 @@ Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 - [x] Operation actions — `send` (gateway publishes) and `receive` (gateway subscribes)
 - [x] Protocol bindings — Kafka, NATS, MQTT, AMQP, WebSocket binding extraction
 - [x] Request body mapping — SEND operations create request body from message payload
-- [ ] Channel routing — topic-to-handler mapping in `routes.fb`
-- [ ] Message schema validation — AsyncAPI message schemas
-- [ ] Host function: `host_kafka_publish` — publish to Kafka topic
+- [x] Channel routing — AsyncAPI fields (messages, bindings) propagated to compiled operations
+- [x] Message schema validation — AsyncAPI message payloads validated via request body schema
+- [x] Host function: `host_kafka_publish` — publish to Kafka topic (mock broker for testing)
 - [ ] `kafka` dispatcher plugin — brokers, topic, key, ack-response config
-- [ ] Host function: `host_nats_publish` — publish to NATS subject
+- [x] Host function: `host_nats_publish` — publish to NATS subject (mock broker for testing)
 - [ ] `nats` dispatcher plugin — servers, subject config
 - [ ] Sync-to-async bridge — HTTP request in, broker publish out, 202 ack response
 - [ ] Integration tests — AsyncAPI compilation, Kafka/NATS dispatch (with mock brokers)
