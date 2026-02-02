@@ -9,6 +9,7 @@ members = [
     "crates/barbacane-plugin-sdk",
     "crates/barbacane-plugin-macros",
     "crates/barbacane-wasm",
+    "crates/barbacane-telemetry",
     "crates/barbacane-test",
 ]
 exclude = [
@@ -80,8 +81,15 @@ regex-lite = "0.1"
 # Concurrency
 dashmap = "6"
 
-# Logging
+# Logging & Telemetry
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
+tracing-opentelemetry = "0.28"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["http-proto", "grpc-tonic"] }
+prometheus-client = "0.22"
+uuid = { version = "1", features = ["v4"] }
 
 # Proc macros
 syn = { version = "2", features = ["full", "parsing"] }
@@ -96,4 +104,5 @@ barbacane-validator = { path = "crates/barbacane-validator" }
 barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk" }
 barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros" }
 barbacane-wasm = { path = "crates/barbacane-wasm" }
+barbacane-telemetry = { path = "crates/barbacane-telemetry" }
 barbacane-test = { path = "crates/barbacane-test" }

@@ -11,6 +11,7 @@ barbacane-router = { workspace = true }
 barbacane-validator = { workspace = true }
 barbacane-spec-parser = { workspace = true }
 barbacane-wasm = { workspace = true }
+barbacane-telemetry = { workspace = true }
 tokio = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }

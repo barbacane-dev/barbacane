@@ -38,14 +38,19 @@ build:
 release:
 	cargo build --workspace --release
 
-# Build all plugins (requires wasm32-wasip1 target)
+# Build all plugins (requires wasm32-unknown-unknown target)
 plugins:
 	@echo "Building plugins..."
 	@for plugin in plugins/*/; do \
 		if [ -f "$$plugin/Cargo.toml" ]; then \
-			echo "Building $$plugin..."; \
-			(cd "$$plugin" && cargo build --release --target wasm32-wasip1 && \
-			 cp target/wasm32-wasip1/release/*.wasm . 2>/dev/null || true); \
+			plugin_name=$$(basename "$$plugin"); \
+			echo "Building $$plugin_name..."; \
+			(cd "$$plugin" && cargo build --release --target wasm32-unknown-unknown); \
+			wasm_file=$$(ls "$$plugin/target/wasm32-unknown-unknown/release/"*.wasm 2>/dev/null | grep -v deps | head -1); \
+			if [ -n "$$wasm_file" ]; then \
+				cp "$$wasm_file" "$$plugin/$$plugin_name.wasm"; \
+				echo "  -> $$plugin_name.wasm"; \
+			fi \
 		fi \
 	done
 	@echo "Done building plugins"

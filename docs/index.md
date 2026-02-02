@@ -7,6 +7,7 @@
 - **Spec-first**: Your OpenAPI spec is the source of truth
 - **Compile-time validation**: Catch misconfigurations before deployment
 - **Plugin architecture**: Extend with WASM plugins for auth, rate limiting, transforms
+- **Observable**: Prometheus metrics, structured JSON logging, distributed tracing with OTLP export
 - **European-made**: Built in Europe, hosted on EU infrastructure
 
 ## Quick Start
@@ -31,6 +32,7 @@ barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 - [Spec Configuration](guide/spec-configuration.md) - Configure routing and middleware in your OpenAPI spec
 - [Dispatchers](guide/dispatchers.md) - Route requests to backends
 - [Middlewares](guide/middlewares.md) - Add authentication, rate limiting, and more
+- [Observability](guide/observability.md) - Metrics, logging, and distributed tracing
 
 ### Reference
 
