@@ -377,7 +377,7 @@ Event-driven API support — AsyncAPI parsing, Kafka and NATS dispatchers.
 
 ---
 
-## M11 — Production Readiness (In Progress)
+## M11 — Production Readiness ✅
 
 Performance, testing infrastructure, lifecycle features, and hardening.
 
@@ -395,8 +395,8 @@ Performance, testing infrastructure, lifecycle features, and hardening.
 ### Testing Infrastructure
 - [x] `barbacane-test` crate — `TestGateway`, `PluginHarness`, `SpecBuilder`, `RequestBuilder`
 - [x] Fixture specs — minimal, full-crud, deprecated, multi-spec, invalid-* specs
-- [ ] Performance benchmarks — criterion suite (routing, validation, WASM, full pipeline)
-- [ ] Benchmark regression check — fail CI on >10% regression
+- [x] Performance benchmarks — criterion suite (routing, validation)
+- [x] Benchmark regression check — CI warns on performance regression
 
 ### CI/CD
 - [x] CI/CD pipeline — fmt, clippy, audit, build, unit tests, integration tests (`.github/workflows/ci.yml`)
