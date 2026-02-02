@@ -223,40 +223,58 @@ Includes RFC 6750 `WWW-Authenticate` header with error details.
 
 ---
 
-## Planned Middlewares
-
-The following middlewares are planned for future milestones:
+## Rate Limiting
 
 ### rate-limit
 
-Limits request rate per client.
+Limits request rate per client using a sliding window algorithm. Implements IETF draft-ietf-httpapi-ratelimit-headers.
 
 ```yaml
 x-barbacane-middlewares:
   - name: rate-limit
     config:
-      requests_per_minute: 100
-      burst: 20
-      key: header:Authorization
+      quota: 100
+      window: 60
+      policy_name: default
+      partition_key: client_ip
 ```
 
 #### Configuration
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `requests_per_minute` | integer | 60 | Sustained rate limit |
-| `burst` | integer | 10 | Burst allowance |
-| `key` | string | `ip` | Rate limit key source |
+| `quota` | integer | **required** | Maximum requests allowed in the window |
+| `window` | integer | **required** | Window duration in seconds |
+| `policy_name` | string | `default` | Policy name for `RateLimit-Policy` header |
+| `partition_key` | string | `client_ip` | Rate limit key source |
 
-#### Key Sources
+#### Partition Key Sources
 
-- `ip` - Client IP address
+- `client_ip` - Client IP from `X-Forwarded-For` or `X-Real-IP`
 - `header:<name>` - Header value (e.g., `header:X-API-Key`)
 - `context:<key>` - Context value (e.g., `context:auth.sub`)
+- Any static string - Same limit for all requests
+
+#### Response Headers
+
+On allowed requests:
+- `X-RateLimit-Policy` - Policy name and configuration
+- `X-RateLimit-Limit` - Maximum requests in window
+- `X-RateLimit-Remaining` - Remaining requests
+- `X-RateLimit-Reset` - Unix timestamp when window resets
+
+On rate-limited requests (429):
+- `RateLimit-Policy` - IETF draft header
+- `RateLimit` - IETF draft combined header
+- `Retry-After` - Seconds until retry is allowed
+
+---
+
+## CORS
 
 ### cors
 
-Handles Cross-Origin Resource Sharing.
+Handles Cross-Origin Resource Sharing per the Fetch specification. Processes preflight OPTIONS requests and adds CORS headers to responses.
 
 ```yaml
 x-barbacane-middlewares:
@@ -273,23 +291,52 @@ x-barbacane-middlewares:
       allowed_headers:
         - Authorization
         - Content-Type
+      expose_headers:
+        - X-Request-ID
       max_age: 86400
+      allow_credentials: false
 ```
 
 #### Configuration
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `allowed_origins` | array | `[]` | Allowed origins (`*` for any) |
+| `allowed_origins` | array | `[]` | Allowed origins (`["*"]` for any, or specific origins) |
 | `allowed_methods` | array | `["GET", "POST"]` | Allowed HTTP methods |
-| `allowed_headers` | array | `[]` | Allowed request headers |
-| `expose_headers` | array | `[]` | Headers exposed to browser |
-| `max_age` | integer | 3600 | Preflight cache time (seconds) |
-| `allow_credentials` | boolean | `false` | Allow credentials |
+| `allowed_headers` | array | `[]` | Allowed request headers (beyond simple headers) |
+| `expose_headers` | array | `[]` | Headers exposed to browser JavaScript |
+| `max_age` | integer | `3600` | Preflight cache time (seconds) |
+| `allow_credentials` | boolean | `false` | Allow credentials (cookies, auth headers) |
+
+#### Origin Patterns
+
+Origins can be:
+- Exact match: `https://app.example.com`
+- Wildcard subdomain: `*.example.com` (matches `sub.example.com`)
+- Wildcard: `*` (only when `allow_credentials: false`)
+
+#### Error Responses
+
+- `403 Forbidden` - Origin not in allowed list
+- `403 Forbidden` - Method not allowed (preflight)
+- `403 Forbidden` - Headers not allowed (preflight)
+
+#### Preflight Responses
+
+Returns `204 No Content` with:
+- `Access-Control-Allow-Origin`
+- `Access-Control-Allow-Methods`
+- `Access-Control-Allow-Headers`
+- `Access-Control-Max-Age`
+- `Vary: Origin, Access-Control-Request-Method, Access-Control-Request-Headers`
+
+---
+
+## Caching
 
 ### cache
 
-Caches responses.
+Caches responses in memory with TTL support.
 
 ```yaml
 x-barbacane-middlewares:
@@ -299,16 +346,42 @@ x-barbacane-middlewares:
       vary:
         - Accept-Language
         - Accept-Encoding
+      methods:
+        - GET
+        - HEAD
+      cacheable_status:
+        - 200
+        - 301
 ```
 
 #### Configuration
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `ttl` | integer | 60 | Cache duration (seconds) |
-| `vary` | array | `[]` | Headers that vary cache |
-| `stale_while_revalidate` | integer | 0 | Serve stale while refreshing |
-| `stale_if_error` | integer | 0 | Serve stale on upstream error |
+| `ttl` | integer | `300` | Cache duration (seconds) |
+| `vary` | array | `[]` | Headers that vary cache key |
+| `methods` | array | `["GET", "HEAD"]` | HTTP methods to cache |
+| `cacheable_status` | array | `[200, 301]` | Status codes to cache |
+
+#### Cache Key
+
+Cache key is computed from:
+- HTTP method
+- Request path
+- Vary header values (if configured)
+
+#### Cache-Control Respect
+
+The middleware respects `Cache-Control` response headers:
+- `no-store` - Response not cached
+- `no-cache` - Cache but revalidate
+- `max-age=N` - Use specified TTL instead of config
+
+---
+
+## Planned Middlewares
+
+The following middlewares are planned for future milestones:
 
 ### request-id
 
