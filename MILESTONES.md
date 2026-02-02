@@ -389,12 +389,12 @@ Performance, testing infrastructure, lifecycle features, and hardening.
 - [x] `X-Request-Id` header — UUID v4 on every response (propagates incoming header if present)
 - [x] `X-Trace-Id` header — trace ID on every response (extracted from traceparent or generated)
 - [x] `Server` header — `barbacane/<version>` on every response
-- [ ] HTTP/2 support — ALPN negotiation configured, needs connection-level implementation
+- [x] HTTP/2 support — auto protocol detection via ALPN (HTTP/1.1 or HTTP/2)
 - [x] API lifecycle — `deprecated: true` support, `x-barbacane-sunset` extension, `Deprecation` and `Sunset` response headers
 
 ### Testing Infrastructure
 - [x] `barbacane-test` crate — `TestGateway`, `PluginHarness`, `SpecBuilder`, `RequestBuilder`
-- [ ] Fixture specs — minimal, full-crud, async-kafka, multi-spec, invalid-* specs
+- [x] Fixture specs — minimal, full-crud, deprecated, multi-spec, invalid-* specs
 - [ ] Performance benchmarks — criterion suite (routing, validation, WASM, full pipeline)
 - [ ] Benchmark regression check — fail CI on >10% regression
 

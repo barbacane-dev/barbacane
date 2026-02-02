@@ -16,10 +16,10 @@ use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Incoming};
-use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use tokio::net::TcpListener;
@@ -1224,6 +1224,7 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     "x-barbacane-ratelimit",
                     "x-barbacane-cache",
                     "x-barbacane-observability",
+                    "x-barbacane-sunset",
                 ];
 
                 for key in spec.extensions.keys() {
@@ -1645,14 +1646,16 @@ async fn run_serve(
                     });
 
                     if let Some(acceptor) = tls_acceptor {
-                        // TLS connection
+                        // TLS connection - uses auto protocol detection (HTTP/1.1 or HTTP/2 via ALPN)
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
                                 let io = TokioIo::new(tls_stream);
-                                let conn = http1::Builder::new()
-                                    .keep_alive(true)
-                                    .serve_connection(io, service)
-                                    .with_upgrades();
+                                let mut builder = auto::Builder::new(TokioExecutor::new());
+                                builder.http1().keep_alive(true);
+                                builder
+                                    .http2()
+                                    .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
+                                let conn = builder.serve_connection_with_upgrades(io, service);
 
                                 // Pin the connection for graceful shutdown
                                 tokio::pin!(conn);
@@ -1681,12 +1684,15 @@ async fn run_serve(
                             }
                         }
                     } else {
-                        // Plain TCP connection
+                        // Plain TCP connection - uses auto protocol detection
+                        // Supports both HTTP/1.1 and HTTP/2 prior knowledge (h2c)
                         let io = TokioIo::new(stream);
-                        let conn = http1::Builder::new()
-                            .keep_alive(true)
-                            .serve_connection(io, service)
-                            .with_upgrades();
+                        let mut builder = auto::Builder::new(TokioExecutor::new());
+                        builder.http1().keep_alive(true);
+                        builder
+                            .http2()
+                            .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
+                        let conn = builder.serve_connection_with_upgrades(io, service);
 
                         // Pin the connection for graceful shutdown
                         tokio::pin!(conn);

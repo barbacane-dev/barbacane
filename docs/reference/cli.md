@@ -243,6 +243,30 @@ barbacane serve --artifact api.bca \
 - Certificate file can contain the full chain (cert + intermediates)
 - Both `--tls-cert` and `--tls-key` must be provided together
 
+### HTTP/2 Support
+
+The gateway supports both HTTP/1.1 and HTTP/2 with automatic protocol detection:
+
+- **With TLS**: HTTP/2 is negotiated via ALPN (Application-Layer Protocol Negotiation). Clients that support HTTP/2 will automatically use it when connecting over HTTPS.
+- **Without TLS**: HTTP/1.1 is used by default. HTTP/2 cleartext (h2c) is also supported via protocol detection.
+
+**HTTP/2 Features:**
+- Multiplexed streams over a single connection
+- Header compression (HPACK)
+- Keep-alive with configurable ping intervals (20 seconds)
+- Full support for all gateway features (routing, validation, middlewares)
+
+No configuration is needed—HTTP/2 works automatically when TLS is enabled. To verify HTTP/2 is working:
+
+```bash
+# Test HTTP/2 with curl
+curl -v --http2 https://localhost:8080/__barbacane/health
+
+# Expected output shows HTTP/2:
+# * Using HTTP/2
+# < HTTP/2 200
+```
+
 ### Development Mode
 
 The `--dev` flag enables:

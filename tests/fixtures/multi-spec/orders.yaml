@@ -1,0 +1,109 @@
+openapi: "3.1.0"
+info:
+  title: Orders Service API
+  version: "1.0.0"
+  description: Order management endpoints
+
+paths:
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List all orders
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, shipped, delivered]
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"orders":[{"id":"order-1","status":"pending"}]}'
+      responses:
+        "200":
+          description: List of orders
+
+    post:
+      operationId: createOrder
+      summary: Create a new order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, items]
+              properties:
+                userId:
+                  type: string
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [productId, quantity]
+                    properties:
+                      productId:
+                        type: string
+                      quantity:
+                        type: integer
+                        minimum: 1
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{"id":"order-new","status":"pending"}'
+      responses:
+        "201":
+          description: Order created
+
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Get order by ID
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"order-1","status":"pending","items":[]}'
+      responses:
+        "200":
+          description: Order found
+        "404":
+          description: Order not found
+
+  /orders/{orderId}/status:
+    put:
+      operationId: updateOrderStatus
+      summary: Update order status
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [pending, processing, shipped, delivered, cancelled]
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"order-1","status":"shipped"}'
+      responses:
+        "200":
+          description: Status updated
