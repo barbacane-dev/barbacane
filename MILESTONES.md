@@ -353,7 +353,7 @@ The management layer — REST API, database, spec/artifact/plugin lifecycle.
 - [x] CLI Reference — updated with `barbacane-control serve`
 
 ### Deferred
-- [ ] API versioning — `Accept: application/vnd.barbacane.v1+json`
+- [x] API versioning — `Content-Type: application/vnd.barbacane.v1+json` on all responses
 - [ ] CLI subcommands — `barbacane-control spec/artifact/plugin` REST-based commands
 - [ ] Integration tests — full API lifecycle (requires running PostgreSQL)
 
