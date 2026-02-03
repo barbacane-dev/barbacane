@@ -65,7 +65,7 @@ If you see the Barbacane trademarks being used in ways that violate this policy,
 
 ## Contact
 
-For trademark permissions or questions, contact: ndreno@gmail.com
+For trademark permissions or questions, contact: contact@barbacane.dev
 
 ## Changes to This Policy
 

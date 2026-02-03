@@ -2,12 +2,16 @@
 target/
 **/*.rs.bk
 
+# Build artifacts
+**/*.wasm
+
 # IDE & Editors
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
+.claude/settings.local.json
 
 # Environment
 .env
@@ -21,5 +25,6 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
 test.bca
-target/
