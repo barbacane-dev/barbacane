@@ -27,47 +27,62 @@ impl CompilationsRepository {
         Self { pool }
     }
 
-    /// Create a new pending compilation job.
+    /// Create a new pending compilation job for a spec.
     pub async fn create(
         &self,
         spec_id: Uuid,
+        project_id: Option<Uuid>,
         production: bool,
         additional_specs: serde_json::Value,
     ) -> Result<Compilation, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
-            INSERT INTO compilations (spec_id, production, additional_specs)
-            VALUES ($1, $2, $3)
-            RETURNING id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
+            INSERT INTO compilations (spec_id, project_id, production, additional_specs)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *
             "#,
         )
         .bind(spec_id)
+        .bind(project_id)
         .bind(production)
         .bind(&additional_specs)
         .fetch_one(&self.pool)
         .await
     }
 
-    /// Get a compilation by ID.
-    pub async fn get(&self, id: Uuid) -> Result<Option<Compilation>, sqlx::Error> {
+    /// Create a new pending compilation job for a project.
+    #[allow(dead_code)]
+    pub async fn create_for_project(
+        &self,
+        project_id: Uuid,
+        production: bool,
+    ) -> Result<Compilation, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
-            SELECT id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
-            FROM compilations
-            WHERE id = $1
+            INSERT INTO compilations (project_id, production, additional_specs)
+            VALUES ($1, $2, '[]')
+            RETURNING *
             "#,
         )
-        .bind(id)
-        .fetch_optional(&self.pool)
+        .bind(project_id)
+        .bind(production)
+        .fetch_one(&self.pool)
         .await
+    }
+
+    /// Get a compilation by ID.
+    pub async fn get(&self, id: Uuid) -> Result<Option<Compilation>, sqlx::Error> {
+        sqlx::query_as::<_, Compilation>("SELECT * FROM compilations WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
     }
 
     /// List compilations for a spec.
     pub async fn list_for_spec(&self, spec_id: Uuid) -> Result<Vec<Compilation>, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
-            SELECT id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
-            FROM compilations
+            SELECT * FROM compilations
             WHERE spec_id = $1
             ORDER BY started_at DESC
             "#,
@@ -77,13 +92,29 @@ impl CompilationsRepository {
         .await
     }
 
+    /// List compilations for a project.
+    pub async fn list_for_project(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<Compilation>, sqlx::Error> {
+        sqlx::query_as::<_, Compilation>(
+            r#"
+            SELECT * FROM compilations
+            WHERE project_id = $1
+            ORDER BY started_at DESC
+            "#,
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
     /// List pending compilations (for worker to pick up).
     #[allow(dead_code)]
     pub async fn list_pending(&self, limit: i64) -> Result<Vec<Compilation>, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
-            SELECT id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
-            FROM compilations
+            SELECT * FROM compilations
             WHERE status = 'pending'
             ORDER BY started_at ASC
             LIMIT $1
@@ -102,7 +133,7 @@ impl CompilationsRepository {
             UPDATE compilations
             SET status = 'compiling'
             WHERE id = $1 AND status = 'pending'
-            RETURNING id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
+            RETURNING *
             "#,
         )
         .bind(id)
@@ -122,7 +153,7 @@ impl CompilationsRepository {
             UPDATE compilations
             SET status = 'succeeded', artifact_id = $2, warnings = $3, completed_at = $4
             WHERE id = $1
-            RETURNING id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
+            RETURNING *
             "#,
         )
         .bind(id)
@@ -144,7 +175,7 @@ impl CompilationsRepository {
             UPDATE compilations
             SET status = 'failed', errors = $2, completed_at = $3
             WHERE id = $1
-            RETURNING id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
+            RETURNING *
             "#,
         )
         .bind(id)
@@ -168,8 +199,7 @@ impl CompilationsRepository {
     pub async fn list_by_status(&self, status: &str) -> Result<Vec<Compilation>, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
-            SELECT id, spec_id, status, production, additional_specs, artifact_id, errors, warnings, started_at, completed_at
-            FROM compilations
+            SELECT * FROM compilations
             WHERE status = $1
             ORDER BY started_at DESC
             "#,

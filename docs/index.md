@@ -36,6 +36,7 @@ cd barbacane && cargo build --release
 - [Secrets](guide/secrets.md) - Manage secrets in plugin configurations
 - [Observability](guide/observability.md) - Metrics, logging, and distributed tracing
 - [Control Plane](guide/control-plane.md) - REST API for spec and artifact management
+- [Web UI](guide/web-ui.md) - Web-based management interface
 
 ### Reference
 

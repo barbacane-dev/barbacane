@@ -26,9 +26,10 @@ anyhow = { workspace = true }
 tokio = { workspace = true }
 
 # Web framework
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 tower = { workspace = true }
 tower-http = { workspace = true }
+futures-util = { workspace = true }
 
 # Database
 sqlx = { workspace = true }
@@ -39,6 +40,15 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
+base64-simd = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+dashmap = { workspace = true }
+rand = { workspace = true }
+
+# API documentation
+scalar_api_reference = "0.1"
+
+# Plugin seeding
+toml = { workspace = true }

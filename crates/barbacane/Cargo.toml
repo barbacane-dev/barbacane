@@ -5,6 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "barbacane_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "barbacane"
+path = "src/main.rs"
+
 [dependencies]
 barbacane-compiler = { workspace = true }
 barbacane-router = { workspace = true }
@@ -28,3 +36,11 @@ tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+arc-swap = "1.7"
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

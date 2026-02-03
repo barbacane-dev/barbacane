@@ -20,6 +20,7 @@ impl ArtifactsRepository {
     /// Store a new artifact.
     pub async fn create(
         &self,
+        project_id: Option<Uuid>,
         manifest: serde_json::Value,
         data: Vec<u8>,
         sha256: &str,
@@ -28,11 +29,12 @@ impl ArtifactsRepository {
         let size_bytes = data.len() as i64;
         sqlx::query_as::<_, Artifact>(
             r#"
-            INSERT INTO artifacts (manifest, data, sha256, size_bytes, compiler_version)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING id, manifest, sha256, size_bytes, compiler_version, compiled_at
+            INSERT INTO artifacts (project_id, manifest, data, sha256, size_bytes, compiler_version)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
             "#,
         )
+        .bind(project_id)
         .bind(&manifest)
         .bind(&data)
         .bind(sha256)
@@ -44,58 +46,44 @@ impl ArtifactsRepository {
 
     /// List all artifacts.
     pub async fn list(&self) -> Result<Vec<Artifact>, sqlx::Error> {
+        sqlx::query_as::<_, Artifact>("SELECT * FROM artifacts ORDER BY compiled_at DESC")
+            .fetch_all(&self.pool)
+            .await
+    }
+
+    /// List artifacts for a project.
+    pub async fn list_for_project(&self, project_id: Uuid) -> Result<Vec<Artifact>, sqlx::Error> {
         sqlx::query_as::<_, Artifact>(
-            r#"
-            SELECT id, manifest, sha256, size_bytes, compiler_version, compiled_at
-            FROM artifacts
-            ORDER BY compiled_at DESC
-            "#,
+            "SELECT * FROM artifacts WHERE project_id = $1 ORDER BY compiled_at DESC",
         )
+        .bind(project_id)
         .fetch_all(&self.pool)
         .await
     }
 
     /// Get an artifact by ID (metadata only).
     pub async fn get(&self, id: Uuid) -> Result<Option<Artifact>, sqlx::Error> {
-        sqlx::query_as::<_, Artifact>(
-            r#"
-            SELECT id, manifest, sha256, size_bytes, compiler_version, compiled_at
-            FROM artifacts
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
+        sqlx::query_as::<_, Artifact>("SELECT * FROM artifacts WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
     }
 
     /// Get an artifact with its binary data for download.
     pub async fn get_with_data(&self, id: Uuid) -> Result<Option<ArtifactWithData>, sqlx::Error> {
-        sqlx::query_as::<_, ArtifactWithData>(
-            r#"
-            SELECT id, manifest, data, sha256, size_bytes, compiler_version, compiled_at
-            FROM artifacts
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
+        sqlx::query_as::<_, ArtifactWithData>("SELECT * FROM artifacts WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
     }
 
     /// Get an artifact by SHA256 hash.
     #[allow(dead_code)]
     pub async fn get_by_sha256(&self, sha256: &str) -> Result<Option<Artifact>, sqlx::Error> {
-        sqlx::query_as::<_, Artifact>(
-            r#"
-            SELECT id, manifest, sha256, size_bytes, compiler_version, compiled_at
-            FROM artifacts
-            WHERE sha256 = $1
-            "#,
-        )
-        .bind(sha256)
-        .fetch_optional(&self.pool)
-        .await
+        sqlx::query_as::<_, Artifact>("SELECT * FROM artifacts WHERE sha256 = $1")
+            .bind(sha256)
+            .fetch_optional(&self.pool)
+            .await
     }
 
     /// Delete an artifact.
@@ -112,7 +100,7 @@ impl ArtifactsRepository {
     pub async fn list_for_spec(&self, spec_id: Uuid) -> Result<Vec<Artifact>, sqlx::Error> {
         sqlx::query_as::<_, Artifact>(
             r#"
-            SELECT a.id, a.manifest, a.sha256, a.size_bytes, a.compiler_version, a.compiled_at
+            SELECT a.*
             FROM artifacts a
             INNER JOIN artifact_specs aps ON a.id = aps.artifact_id
             WHERE aps.spec_id = $1

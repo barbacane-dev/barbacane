@@ -39,6 +39,9 @@ http-body-util = "0.1"
 http = "1"
 bytes = "1"
 
+# WebSocket
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
@@ -55,7 +58,7 @@ flate2 = "1"
 tar = "0.4"
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "stream"] }
 
 # TLS
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
@@ -80,6 +83,13 @@ regex-lite = "0.1"
 
 # Concurrency
 dashmap = "6"
+futures-util = "0.3"
+
+# Random
+rand = "0.9"
+
+# Encoding
+base64-simd = "0.8"
 
 # Logging & Telemetry
 tracing = "0.1"

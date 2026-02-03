@@ -642,6 +642,88 @@ barbacane-control <COMMAND> [OPTIONS]
 | `compile` | Compile spec(s) into a `.bca` artifact (local) |
 | `validate` | Validate spec(s) without compiling |
 | `serve` | Start the control plane REST API server |
+| `seed-plugins` | Seed the plugin registry with built-in plugins |
+
+---
+
+## barbacane-control seed-plugins
+
+Seed the plugin registry with built-in plugins from the local `plugins/` directory. This command scans plugin directories, reads their manifests (`plugin.toml`), and registers them in the database.
+
+```bash
+barbacane-control seed-plugins [OPTIONS]
+```
+
+### Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--plugins-dir` | No | `plugins` | Path to the plugins directory |
+| `--database-url` | Yes | - | PostgreSQL connection URL |
+| `--skip-existing` | No | `true` | Skip plugins that already exist in the registry |
+| `--verbose` | No | `false` | Show detailed output |
+
+The `--database-url` can also be set via the `DATABASE_URL` environment variable.
+
+### Plugin Directory Structure
+
+Each plugin directory should contain:
+
+```
+plugins/
+├── http-upstream/
+│   ├── plugin.toml          # Plugin manifest (required)
+│   ├── config-schema.json   # JSON Schema for config (optional)
+│   ├── http-upstream.wasm   # Compiled WASM binary (required)
+│   └── src/
+│       └── lib.rs
+├── rate-limit/
+│   ├── plugin.toml
+│   ├── config-schema.json
+│   └── rate-limit.wasm
+└── ...
+```
+
+### Plugin Manifest (`plugin.toml`)
+
+```toml
+[plugin]
+name = "http-upstream"
+version = "0.1.0"
+type = "dispatcher"                    # or "middleware"
+description = "HTTP upstream proxy"    # optional
+wasm = "http-upstream.wasm"           # optional, defaults to {name}.wasm
+
+[capabilities]
+host_functions = ["host_http_call", "host_log"]
+```
+
+### Examples
+
+```bash
+# Build plugins and seed them into the registry
+make seed-plugins
+
+# Or manually:
+cargo run -p barbacane-control -- seed-plugins \
+  --plugins-dir plugins \
+  --database-url postgres://localhost/barbacane \
+  --verbose
+
+# Output:
+#   Registered http-upstream v0.1.0 (dispatcher)
+#   Registered rate-limit v0.1.0 (middleware)
+#   Registered cors v0.1.0 (middleware)
+#   ...
+# Seeded 9 plugin(s) into the registry.
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Error (database connection, invalid manifest, etc.) |
 
 ---
 
@@ -695,11 +777,14 @@ barbacane-control serve --database-url postgres://localhost/barbacane
 
 ### API Endpoints
 
-The server exposes a REST API for managing specs, plugins, and artifacts:
+The server exposes a REST API for managing specs, plugins, artifacts, and projects:
 
 | Endpoint | Description |
 |----------|-------------|
+| **System** | |
 | `GET /health` | Health check |
+| `GET /api/docs` | Interactive API documentation (Scalar) |
+| **Specs** | |
 | `POST /specs` | Upload spec (multipart) |
 | `GET /specs` | List specs |
 | `GET /specs/{id}` | Get spec metadata |
@@ -708,15 +793,47 @@ The server exposes a REST API for managing specs, plugins, and artifacts:
 | `GET /specs/{id}/content` | Download spec content |
 | `POST /specs/{id}/compile` | Start async compilation |
 | `GET /compilations/{id}` | Poll compilation status |
+| **Plugins** | |
 | `POST /plugins` | Register plugin (multipart) |
 | `GET /plugins` | List plugins |
 | `GET /plugins/{name}/{version}` | Get plugin metadata |
 | `DELETE /plugins/{name}/{version}` | Delete plugin |
 | `GET /plugins/{name}/{version}/download` | Download WASM binary |
+| **Artifacts** | |
 | `GET /artifacts` | List artifacts |
 | `GET /artifacts/{id}` | Get artifact metadata |
 | `GET /artifacts/{id}/download` | Download `.bca` file |
+| **Projects** | |
+| `POST /projects` | Create a new project |
+| `GET /projects` | List all projects |
+| `GET /projects/{id}` | Get project details |
+| `PUT /projects/{id}` | Update project |
+| `DELETE /projects/{id}` | Delete project |
+| `GET /projects/{id}/plugins` | List plugins configured for project |
+| `POST /projects/{id}/plugins` | Add plugin to project |
+| `PUT /projects/{id}/plugins/{name}` | Update plugin config |
+| `DELETE /projects/{id}/plugins/{name}` | Remove plugin from project |
+| `POST /projects/{id}/deploy` | Deploy artifact to connected data planes |
+| **Data Planes** | |
+| `GET /projects/{id}/data-planes` | List connected data planes |
+| `GET /data-planes/{id}` | Get data plane status |
+| **API Keys** | |
+| `POST /projects/{id}/api-keys` | Create API key for data plane auth |
+| `GET /projects/{id}/api-keys` | List API keys |
+| `DELETE /projects/{id}/api-keys/{id}` | Revoke API key |
 
-Full API documentation: [Control Plane OpenAPI](../../crates/barbacane-control/openapi.yaml)
+### Interactive API Documentation
+
+The control plane includes interactive API documentation powered by [Scalar](https://scalar.com/). Access it at:
+
+```
+http://localhost:9090/api/docs
+```
+
+This provides a browsable interface for exploring and testing all API endpoints.
+
+### Full API Specification
+
+Full OpenAPI specification: [Control Plane OpenAPI](../../crates/barbacane-control/openapi.yaml)
 
 See the [Control Plane Guide](../guide/control-plane.md) for detailed usage examples.

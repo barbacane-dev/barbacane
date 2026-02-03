@@ -2,6 +2,8 @@
 //!
 //! Compiles OpenAPI specs into artifacts and runs the data plane server.
 
+use barbacane_lib::{control_plane, hot_reload};
+
 use std::convert::Infallible;
 use std::fs::File;
 use std::io::BufReader;
@@ -11,6 +13,8 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use arc_swap::ArcSwap;
 
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
@@ -69,6 +73,7 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Compile OpenAPI spec(s) into a .bca artifact.
     Compile {
@@ -191,8 +196,42 @@ enum Commands {
         /// After SIGTERM, wait this long for in-flight requests to complete.
         #[arg(long, default_value = "30")]
         shutdown_timeout: u64,
+
+        // Connected mode options (optional)
+        /// Control plane WebSocket URL (e.g., ws://control:8080/ws/data-plane).
+        /// When provided, the data plane connects to the control plane for centralized management.
+        #[arg(long)]
+        control_plane: Option<String>,
+
+        /// Project ID (UUID) for control plane registration.
+        /// Required if --control-plane is specified.
+        #[arg(long)]
+        project_id: Option<String>,
+
+        /// API key for control plane authentication.
+        /// Required if --control-plane is specified.
+        #[arg(long, env = "BARBACANE_API_KEY")]
+        api_key: Option<String>,
+
+        /// Data plane name for identification in control plane.
+        #[arg(long)]
+        data_plane_name: Option<String>,
     },
 }
+
+// =============================================================================
+// Hot-Reload Types
+// =============================================================================
+
+/// Shared gateway state that can be atomically swapped for hot-reload.
+type SharedGateway = Arc<ArcSwap<Gateway>>;
+
+// Re-export from library for local use
+use hot_reload::HotReloadResult;
+
+// =============================================================================
+// Gateway
+// =============================================================================
 
 /// Shared gateway state.
 struct Gateway {
@@ -1784,6 +1823,107 @@ Thumbs.db
     ExitCode::SUCCESS
 }
 
+// =============================================================================
+// Hot-Reload Functions
+// =============================================================================
+
+/// Perform hot-reload: download, verify, load, and swap the gateway state.
+async fn perform_hot_reload(
+    notification: control_plane::ArtifactNotification,
+    shared_gateway: &SharedGateway,
+    artifact_dir: &Path,
+    dev_mode: bool,
+    limits: RequestLimits,
+    allow_plaintext_upstream: bool,
+    metrics: Arc<MetricsRegistry>,
+) -> HotReloadResult {
+    let artifact_id = notification.artifact_id;
+
+    // Acquire lock to prevent concurrent hot-reloads
+    let _guard = match hot_reload::HOT_RELOAD_LOCK.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            tracing::warn!(
+                artifact_id = %artifact_id,
+                "Hot-reload already in progress, skipping"
+            );
+            return HotReloadResult::Failed {
+                artifact_id,
+                error: "hot-reload already in progress".to_string(),
+            };
+        }
+    };
+
+    tracing::info!(
+        artifact_id = %artifact_id,
+        download_url = %notification.download_url,
+        "Starting hot-reload"
+    );
+
+    // Create HTTP client for download
+    let http_client = reqwest::Client::new();
+
+    // Step 1: Download and verify artifact
+    let artifact_path = match hot_reload::download_artifact(
+        &http_client,
+        &notification.download_url,
+        &notification.sha256,
+        artifact_dir,
+    )
+    .await
+    {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!(
+                artifact_id = %artifact_id,
+                error = %e,
+                "Hot-reload download failed"
+            );
+            return HotReloadResult::Failed {
+                artifact_id,
+                error: format!("download failed: {}", e),
+            };
+        }
+    };
+
+    // Step 2: Load and compile new Gateway
+    let new_gateway = match Gateway::load(
+        &artifact_path,
+        dev_mode,
+        limits,
+        allow_plaintext_upstream,
+        metrics,
+    ) {
+        Ok(g) => g,
+        Err(e) => {
+            // Clean up downloaded artifact on failure
+            let _ = tokio::fs::remove_file(&artifact_path).await;
+            tracing::error!(
+                artifact_id = %artifact_id,
+                error = %e,
+                "Hot-reload load failed"
+            );
+            return HotReloadResult::Failed {
+                artifact_id,
+                error: format!("load failed: {}", e),
+            };
+        }
+    };
+
+    // Step 3: Atomic swap
+    let old_gateway = shared_gateway.swap(Arc::new(new_gateway));
+
+    tracing::info!(
+        artifact_id = %artifact_id,
+        old_routes = old_gateway.manifest.routes_count,
+        new_routes = shared_gateway.load().manifest.routes_count,
+        "Hot-reload completed successfully"
+    );
+
+    // Old gateway will be dropped when the last in-flight request completes
+    HotReloadResult::Success { artifact_id }
+}
+
 /// Run the compile command.
 fn run_compile(
     specs: &[String],
@@ -1867,6 +2007,19 @@ struct TlsConfig {
     min_version: String,
 }
 
+/// Configuration for connected mode (optional control plane connection).
+#[derive(Clone)]
+struct ConnectedModeConfig {
+    /// WebSocket URL for the control plane (e.g., ws://control:8080/ws/data-plane).
+    control_plane_url: String,
+    /// Project ID to register with.
+    project_id: uuid::Uuid,
+    /// API key for authentication.
+    api_key: String,
+    /// Optional name for this data plane.
+    data_plane_name: Option<String>,
+}
+
 /// Load TLS certificates and create a rustls ServerConfig.
 ///
 /// Configuration:
@@ -1934,6 +2087,7 @@ async fn run_serve(
     metrics: Arc<MetricsRegistry>,
     keepalive_timeout: u64,
     shutdown_timeout: u64,
+    connected_mode: Option<ConnectedModeConfig>,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
@@ -1941,14 +2095,20 @@ async fn run_serve(
         return ExitCode::from(1);
     }
 
-    let gateway = match Gateway::load(
+    // Determine artifact directory for hot-reload downloads
+    let artifact_dir = artifact_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+
+    let gateway: SharedGateway = match Gateway::load(
         artifact_path,
         dev,
-        limits,
+        limits.clone(),
         allow_plaintext_upstream,
         metrics.clone(),
     ) {
-        Ok(g) => Arc::new(g),
+        Ok(g) => Arc::new(ArcSwap::new(Arc::new(g))),
         Err(e) => {
             eprintln!("error: {}", e);
             // Exit code 13 for secret resolution failures
@@ -1961,7 +2121,7 @@ async fn run_serve(
 
     eprintln!(
         "barbacane: loaded {} route(s) from artifact",
-        gateway.manifest.routes_count
+        gateway.load().manifest.routes_count
     );
 
     // Parse listen address
@@ -2015,6 +2175,24 @@ async fn run_serve(
         let _ = shutdown_tx_clone.send(true);
     });
 
+    // Start control plane client if in connected mode
+    let (mut artifact_rx, response_tx) = if let Some(config) = connected_mode {
+        eprintln!(
+            "barbacane: connecting to control plane at {}",
+            config.control_plane_url
+        );
+        let client = control_plane::ControlPlaneClient::new(control_plane::ControlPlaneConfig {
+            control_plane_url: config.control_plane_url,
+            project_id: config.project_id,
+            api_key: config.api_key,
+            data_plane_name: config.data_plane_name,
+        });
+        let (rx, tx) = client.start(shutdown_rx.clone());
+        (Some(rx), Some(tx))
+    } else {
+        (None, None)
+    };
+
     // Keep-alive timeout (currently used for documentation; HTTP/1.1 uses internal defaults)
     let _keepalive_duration = Duration::from_secs(keepalive_timeout);
     let shutdown_duration = Duration::from_secs(shutdown_timeout);
@@ -2031,6 +2209,71 @@ async fn run_serve(
                     break;
                 }
             }
+            // Handle artifact notifications from control plane
+            Some(notification) = async {
+                match artifact_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                eprintln!(
+                    "barbacane: new artifact available: {}, initiating hot-reload",
+                    notification.artifact_id
+                );
+
+                // Clone values for the spawned task
+                let gateway_clone = gateway.clone();
+                let artifact_dir_clone = artifact_dir.clone();
+                let limits_clone = limits.clone();
+                let metrics_clone = metrics.clone();
+                let response_tx_clone = response_tx.clone();
+
+                tokio::spawn(async move {
+                    let result = perform_hot_reload(
+                        notification,
+                        &gateway_clone,
+                        &artifact_dir_clone,
+                        dev,
+                        limits_clone,
+                        allow_plaintext_upstream,
+                        metrics_clone,
+                    )
+                    .await;
+
+                    // Send response to control plane
+                    let response = match &result {
+                        HotReloadResult::Success { artifact_id } => {
+                            eprintln!(
+                                "barbacane: hot-reload successful for artifact {}",
+                                artifact_id
+                            );
+                            control_plane::ArtifactDownloadedResponse {
+                                artifact_id: *artifact_id,
+                                success: true,
+                                error: None,
+                            }
+                        }
+                        HotReloadResult::Failed { artifact_id, error } => {
+                            eprintln!(
+                                "barbacane: hot-reload failed for artifact {}: {}",
+                                artifact_id, error
+                            );
+                            control_plane::ArtifactDownloadedResponse {
+                                artifact_id: *artifact_id,
+                                success: false,
+                                error: Some(error.clone()),
+                            }
+                        }
+                    };
+
+                    // Send response if we have a channel
+                    if let Some(tx) = response_tx_clone {
+                        if let Err(e) = tx.send(response).await {
+                            tracing::warn!(error = %e, "Failed to send hot-reload response");
+                        }
+                    }
+                });
+            }
             // Accept new connections
             accept_result = listener.accept() => {
                 let (stream, peer_addr) = match accept_result {
@@ -2045,7 +2288,10 @@ async fn run_serve(
                 metrics.connection_opened();
                 active_connections.fetch_add(1, Ordering::SeqCst);
 
-                let gateway = Arc::clone(&gateway);
+                // Get a snapshot of the gateway for this connection.
+                // All requests on this connection will use this version,
+                // allowing in-flight requests to complete during hot-reload.
+                let gateway_snapshot = gateway.load_full();
                 let tls_acceptor = tls_acceptor.clone();
                 let conn_metrics = metrics.clone();
                 let conn_counter = active_connections.clone();
@@ -2054,7 +2300,7 @@ async fn run_serve(
 
                 tokio::spawn(async move {
                     let service = service_fn(move |req| {
-                        let gateway = Arc::clone(&gateway);
+                        let gateway = Arc::clone(&gateway_snapshot);
                         let client_addr = client_addr;
                         async move { gateway.handle_request(req, client_addr).await }
                     });
@@ -2227,6 +2473,10 @@ async fn main() -> ExitCode {
             tls_min_version,
             keepalive_timeout,
             shutdown_timeout,
+            control_plane,
+            project_id,
+            api_key,
+            data_plane_name,
         } => {
             // Initialize telemetry
             let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
@@ -2283,6 +2533,34 @@ async fn main() -> ExitCode {
                 max_header_size,
                 max_uri_length,
             };
+
+            // Validate connected mode options
+            let connected_mode = match (&control_plane, &project_id, &api_key) {
+                (Some(cp), Some(pid), Some(key)) => {
+                    // Parse project_id as UUID
+                    let project_uuid = match uuid::Uuid::parse_str(pid) {
+                        Ok(u) => u,
+                        Err(_) => {
+                            eprintln!("error: --project-id must be a valid UUID");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    Some(ConnectedModeConfig {
+                        control_plane_url: cp.clone(),
+                        project_id: project_uuid,
+                        api_key: key.clone(),
+                        data_plane_name: data_plane_name.clone(),
+                    })
+                }
+                (None, None, None) => None,
+                _ => {
+                    eprintln!(
+                        "error: --control-plane, --project-id, and --api-key must all be specified together"
+                    );
+                    return ExitCode::from(1);
+                }
+            };
+
             run_serve(
                 &artifact,
                 &listen,
@@ -2293,6 +2571,7 @@ async fn main() -> ExitCode {
                 metrics,
                 keepalive_timeout,
                 shutdown_timeout,
+                connected_mode,
             )
             .await
         }

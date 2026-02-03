@@ -33,9 +33,9 @@ pub async fn start_compilation(
     Path(spec_id): Path<Uuid>,
     Json(request): Json<CompileRequest>,
 ) -> Result<(StatusCode, Json<Compilation>), ProblemDetails> {
-    // Verify spec exists
+    // Verify spec exists and get project_id
     let specs_repo = SpecsRepository::new(state.pool.clone());
-    let _ = specs_repo
+    let spec = specs_repo
         .get_by_id(spec_id)
         .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("Spec {} not found", spec_id)))?;
@@ -45,6 +45,7 @@ pub async fn start_compilation(
     let compilation = compilations_repo
         .create(
             spec_id,
+            Some(spec.project_id),
             request.production,
             serde_json::to_value(&request.additional_specs).unwrap_or(serde_json::json!([])),
         )

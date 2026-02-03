@@ -14,6 +14,12 @@ use crate::error::ProblemDetails;
 
 use super::router::AppState;
 
+/// Default project UUID for backward compatibility.
+/// Specs uploaded via the global /specs endpoint go to this project.
+const DEFAULT_PROJECT_ID: Uuid = Uuid::from_bytes([
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+]);
+
 #[derive(Debug, Deserialize)]
 pub struct ListSpecsQuery {
     pub name: Option<String>,
@@ -97,13 +103,17 @@ pub async fn upload_spec(
 
     let repo = SpecsRepository::new(state.pool.clone());
 
-    // Check if spec with this name exists
-    let existing = repo.get_by_name(&name).await?;
+    // Use default project for backward compatibility
+    let project_id = DEFAULT_PROJECT_ID;
+
+    // Check if spec with this name exists in the default project
+    let existing = repo.get_by_project_and_name(project_id, &name).await?;
 
     let (spec, revision) = if let Some(_existing_spec) = existing {
         // Create new revision
         let (spec, revision) = repo
             .update(
+                project_id,
                 &name,
                 spec_type,
                 &parsed.version,
@@ -114,8 +124,9 @@ pub async fn upload_spec(
             .await?;
         (spec, revision)
     } else {
-        // Create new spec
+        // Create new spec in default project
         let new_spec = NewSpec {
+            project_id,
             name: name.clone(),
             spec_type: spec_type.to_string(),
             spec_version: parsed.version.clone(),

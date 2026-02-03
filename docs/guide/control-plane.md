@@ -196,6 +196,185 @@ Response:
 }
 ```
 
+## Projects
+
+Projects organize your APIs and configure which plugins to use. Each project can have its own set of specs, plugin configurations, and connected data planes.
+
+### Create a Project
+
+```bash
+curl -X POST http://localhost:9090/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My API Gateway", "description": "Production gateway"}'
+```
+
+Response:
+```json
+{
+  "id": "880e8400-e29b-41d4-a716-446655440003",
+  "name": "My API Gateway",
+  "description": "Production gateway",
+  "created_at": "2024-01-15T10:00:00Z"
+}
+```
+
+### Configure Plugins for a Project
+
+Add plugins from the registry to your project with custom configuration:
+
+```bash
+curl -X POST http://localhost:9090/projects/880e8400.../plugins \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plugin_name": "rate-limit",
+    "plugin_version": "0.1.0",
+    "enabled": true,
+    "config": {
+      "quota": 1000,
+      "window": 60
+    }
+  }'
+```
+
+Each plugin's configuration is validated against its JSON Schema (if one is defined).
+
+## Data Planes
+
+Data planes are gateway instances that connect to the control plane to receive configuration updates.
+
+### Data Plane Connection
+
+Data planes connect via WebSocket to receive artifacts and configuration:
+
+```bash
+# Start a data plane connected to the control plane
+barbacane serve \
+  --control-plane ws://localhost:9090/ws/data-plane \
+  --project-id 880e8400-e29b-41d4-a716-446655440003 \
+  --api-key dp_key_abc123
+```
+
+### Create API Key for Data Plane
+
+```bash
+curl -X POST http://localhost:9090/projects/880e8400.../api-keys \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Production Data Plane"}'
+```
+
+Response:
+```json
+{
+  "id": "990e8400-e29b-41d4-a716-446655440004",
+  "name": "Production Data Plane",
+  "key": "dp_key_abc123...",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Note:** The API key is only shown once at creation time. Store it securely.
+
+### List Connected Data Planes
+
+```bash
+curl http://localhost:9090/projects/880e8400.../data-planes
+```
+
+Response:
+```json
+[
+  {
+    "id": "aa0e8400-e29b-41d4-a716-446655440005",
+    "name": "production-1",
+    "status": "connected",
+    "current_artifact_id": "770e8400...",
+    "connected_at": "2024-01-15T10:35:00Z"
+  }
+]
+```
+
+## Deploy
+
+Deploy compiled artifacts to connected data planes for zero-downtime updates.
+
+### Trigger Deployment
+
+```bash
+curl -X POST http://localhost:9090/projects/880e8400.../deploy \
+  -H "Content-Type: application/json" \
+  -d '{"artifact_id": "770e8400-e29b-41d4-a716-446655440002"}'
+```
+
+Response:
+```json
+{
+  "deployment_id": "bb0e8400-e29b-41d4-a716-446655440006",
+  "artifact_id": "770e8400...",
+  "target_data_planes": 3,
+  "status": "in_progress"
+}
+```
+
+The control plane notifies all connected data planes, which download the new artifact, verify its checksum, and perform a hot-reload.
+
+## Web UI
+
+The control plane includes a web-based management interface at `http://localhost:5173` (when running the UI development server).
+
+### Running the UI
+
+```bash
+# Using Makefile
+make ui
+
+# Or manually
+cd ui && npm run dev
+```
+
+The UI provides:
+
+- **Dashboard** - Overview of specs, artifacts, and data planes
+- **Specs Management** - Upload, view, and delete API specifications
+- **Plugin Registry** - Browse registered plugins with their schemas
+- **Projects** - Create projects and configure plugins
+- **Artifacts** - View compiled artifacts and download them
+
+### Plugin Configuration
+
+When adding plugins to a project, the UI:
+- Shows the plugin's JSON Schema (if available)
+- Pre-fills a skeleton configuration based on required fields
+- Validates configuration in real-time before saving
+
+## Interactive API Documentation
+
+The control plane includes interactive API documentation powered by Scalar:
+
+```
+http://localhost:9090/api/docs
+```
+
+This provides a browsable interface for exploring and testing all API endpoints directly from your browser.
+
+## Seeding the Plugin Registry
+
+Use the `seed-plugins` command to populate the plugin registry with built-in plugins:
+
+```bash
+# Using Makefile (builds plugins first)
+make seed-plugins
+
+# Or manually
+barbacane-control seed-plugins \
+  --plugins-dir plugins \
+  --database-url postgres://localhost/barbacane \
+  --verbose
+```
+
+This scans the `plugins/` directory for plugin manifests (`plugin.toml`) and registers them in the database along with their WASM binaries and JSON Schemas.
+
+See [CLI Reference](../reference/cli.md#barbacane-control-seed-plugins) for full options.
+
 ## Error Handling
 
 All errors follow RFC 9457 Problem Details format:
@@ -225,10 +404,14 @@ The control plane uses PostgreSQL with the following tables:
 
 - `specs` - Spec metadata (name, type, version, timestamps)
 - `spec_revisions` - Version history with content (BYTEA)
-- `plugins` - Plugin registry with WASM binaries
+- `plugins` - Plugin registry with WASM binaries and JSON Schemas
 - `artifacts` - Compiled `.bca` files with manifests
 - `artifact_specs` - Junction table linking artifacts to specs
 - `compilations` - Async job tracking
+- `projects` - Project definitions
+- `project_plugin_configs` - Plugin configurations per project
+- `data_planes` - Connected gateway instances
+- `api_keys` - Authentication keys for data planes
 
 Migrations run automatically on startup with `--migrate` (enabled by default).
 
