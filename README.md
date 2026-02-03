@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/tests-255%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
@@ -41,14 +42,16 @@ cargo build --release
 
 ## Documentation
 
-- [Getting Started](docs/guide/getting-started.md) — First steps with Barbacane
-- [Spec Configuration](docs/guide/spec-configuration.md) — Configure routing and middleware
-- [Middlewares](docs/guide/middlewares.md) — Authentication, rate limiting, caching
-- [Dispatchers](docs/guide/dispatchers.md) — Route requests to backends
-- [Control Plane](docs/guide/control-plane.md) — REST API for spec and artifact management
-- [Web UI](docs/guide/web-ui.md) — Web-based management interface
-- [Plugin Development](docs/contributing/plugins.md) — Build custom WASM plugins
-- [Development Guide](docs/contributing/development.md) — Setup and contribute
+Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane.dev)**.
+
+- [Getting Started](https://docs.barbacane.dev/guide/getting-started.html) — First steps with Barbacane
+- [Spec Configuration](https://docs.barbacane.dev/guide/spec-configuration.html) — Configure routing and middleware
+- [Middlewares](https://docs.barbacane.dev/guide/middlewares.html) — Authentication, rate limiting, caching
+- [Dispatchers](https://docs.barbacane.dev/guide/dispatchers.html) — Route requests to backends
+- [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) — REST API for spec and artifact management
+- [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Web-based management interface
+- [Plugin Development](https://docs.barbacane.dev/contributing/plugins.html) — Build custom WASM plugins
+- [Development Guide](https://docs.barbacane.dev/contributing/development.html) — Setup and contribute
 
 ## Official Plugins
 

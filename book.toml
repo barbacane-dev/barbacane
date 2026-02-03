@@ -1,0 +1,28 @@
+[book]
+title = "Barbacane Documentation"
+description = "Documentation for Barbacane, the spec-driven API gateway"
+authors = ["Barbacane Contributors"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/barbacane-dev/barbacane"
+edit-url-template = "https://github.com/barbacane-dev/barbacane/edit/main/{path}"
+site-url = "https://docs.barbacane.dev/"
+cname = "docs.barbacane.dev"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+
+[output.html.playground]
+runnable = false

@@ -28,3 +28,6 @@ Thumbs.db
 
 # Test artifacts
 test.bca
+
+# Documentation build
+book/
