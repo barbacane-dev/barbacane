@@ -44,11 +44,13 @@ We will publish the following artifacts for each release:
 |----|--------------|----------|-------|
 | Linux | x86_64 (gnu) | P0 | Primary server target |
 | Linux | aarch64 (gnu) | P0 | ARM servers, Graviton, Ampere |
-| Linux | x86_64 (musl) | P1 | Alpine, static linking |
-| Linux | aarch64 (musl) | P1 | Alpine ARM |
+| Linux | x86_64 (musl) | P1 | Alpine, static linking (via `cross-rs`) |
+| Linux | aarch64 (musl) | P1 | Alpine ARM (via `cross-rs`) |
 | macOS | x86_64 | P1 | Intel Macs (development) |
 | macOS | aarch64 | P1 | Apple Silicon (development) |
 | Windows | x86_64 | P2 | Development only, not recommended for production |
+
+**TLS stack:** Barbacane uses `rustls` with the `aws-lc-rs` crypto backend — no OpenSSL dependency. This simplifies cross-compilation but musl targets still require `cross-rs` for the C dependencies in `aws-lc-rs`.
 
 **Container images:**
 
@@ -75,17 +77,20 @@ We will publish the following artifacts for each release:
 **Dockerfile approach:**
 
 ```dockerfile
-# Data plane - multi-stage build
+# Data plane - multi-stage build, rootless
 FROM rust:1.83-slim AS builder
 WORKDIR /build
 COPY . .
 RUN cargo build --release --package barbacane
 
-FROM gcr.io/distroless/cc-debian12
+FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /build/target/release/barbacane /barbacane
+USER nonroot:nonroot
 ENTRYPOINT ["/barbacane"]
 CMD ["serve", "--artifact", "/config/api.bca"]
 ```
+
+**Security:** All container images run as non-root user (`nonroot:nonroot`, UID 65532) for defense in depth.
 
 **NOT providing:**
 - All-in-one images (control + data plane) — violates separation principle (ADR-0007)
@@ -129,28 +134,23 @@ CMD ["serve", "--artifact", "/config/api.bca"]
 
 ### crates.io Publication
 
-**Published crates:**
+**All workspace crates are published** to satisfy Cargo's requirement that path dependencies must be available on crates.io.
 
-| Crate | Purpose | Published |
-|-------|---------|-----------|
-| `barbacane` | Data plane CLI | Yes |
-| `barbacane-control` | Control plane CLI | Yes |
-| `barbacane-plugin-sdk` | Plugin development | Yes |
-| `barbacane-plugin-macros` | Plugin proc macros | Yes |
+| Crate | Purpose | API Stability |
+|-------|---------|---------------|
+| `barbacane` | Data plane CLI | Stable (SemVer) |
+| `barbacane-control` | Control plane CLI | Stable (SemVer) |
+| `barbacane-plugin-sdk` | Plugin development | Stable (SemVer) |
+| `barbacane-plugin-macros` | Plugin proc macros | Stable (SemVer) |
+| `barbacane-compiler` | Spec compilation | Internal |
+| `barbacane-router` | Routing engine | Internal |
+| `barbacane-validator` | Request validation | Internal |
+| `barbacane-spec-parser` | OpenAPI/AsyncAPI parsing | Internal |
+| `barbacane-wasm` | WASM runtime | Internal |
+| `barbacane-telemetry` | Observability | Internal |
+| `barbacane-test` | Test utilities | Internal |
 
-**Internal crates (not published):**
-
-| Crate | Reason |
-|-------|--------|
-| `barbacane-compiler` | Internal implementation |
-| `barbacane-router` | Internal implementation |
-| `barbacane-validator` | Internal implementation |
-| `barbacane-spec-parser` | Internal implementation |
-| `barbacane-wasm` | Internal implementation |
-| `barbacane-telemetry` | Internal implementation |
-| `barbacane-test` | Test utilities only |
-
-Users who want to embed Barbacane should use the CLI binaries or contribute an embedding API if needed.
+**Internal crates disclaimer:** Crates marked "Internal" are implementation details of Barbacane and are **not subject to SemVer guarantees**. Their APIs may change without notice in any release. Do not depend on them directly.
 
 ### Signing and Verification
 
@@ -188,21 +188,37 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            cross: false
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
+            cross: true
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
+            cross: true  # Required for aws-lc-rs C dependencies
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
+            cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
+            cross: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build with cargo
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build with cross
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: barbacane-${{ matrix.target }}
@@ -229,8 +245,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Publish in dependency order (leaves first, roots last)
       - run: cargo publish -p barbacane-plugin-macros
       - run: cargo publish -p barbacane-plugin-sdk
+      - run: cargo publish -p barbacane-telemetry
+      - run: cargo publish -p barbacane-spec-parser
+      - run: cargo publish -p barbacane-router
+      - run: cargo publish -p barbacane-validator
+      - run: cargo publish -p barbacane-wasm
+      - run: cargo publish -p barbacane-compiler
       - run: cargo publish -p barbacane
       - run: cargo publish -p barbacane-control
     env:
@@ -316,11 +339,9 @@ To revisit after initial release:
 
 1. **Container registry:** ghcr.io vs Docker Hub? Current choice (ghcr.io) favors GitHub integration and no rate limits, but Docker Hub offers better discoverability. May publish to both eventually.
 
-2. **crates.io scope:** Currently only publishing CLI binaries + plugin SDK. If users want to embed Barbacane as a library, we may need to expose more internal crates.
+2. **Nightly builds:** Currently minimal (container images only). Evaluate whether binary nightlies are worth the CI and storage cost based on user demand.
 
-3. **Nightly builds:** Currently minimal (container images only). Evaluate whether binary nightlies are worth the CI and storage cost based on user demand.
-
-4. **Helm charts:** Deferred per ADR-0018. Revisit once Kubernetes deployment patterns stabilize and user demand emerges.
+3. **Helm charts:** Deferred per ADR-0018. Revisit once Kubernetes deployment patterns stabilize and user demand emerges.
 
 ## Related ADRs
 
