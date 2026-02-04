@@ -16,7 +16,7 @@ We are building a next-generation API gateway that will involve many significant
 We will use Architecture Decision Records (ADRs) to document all significant architecture decisions. Each ADR will:
 
 - Be numbered sequentially (0001, 0002, ...)
-- Be stored in `docs/adr/`
+- Be stored in `adr/`
 - Follow the lightweight template in `TEMPLATE.md`
 - Be immutable once accepted (superseded by new ADRs if changed)
 
