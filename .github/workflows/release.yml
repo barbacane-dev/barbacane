@@ -162,13 +162,15 @@ jobs:
           echo "minor=$MINOR" >> $GITHUB_OUTPUT
 
       # Build and push data plane image
+      # Note: arm64 builds disabled due to slow QEMU emulation (~2hrs)
+      # TODO: Re-enable with native arm64 runners when available
       - name: Build and push data plane
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: |
             ghcr.io/${{ github.repository_owner }}/barbacane:latest
             ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}
@@ -184,7 +186,7 @@ jobs:
           context: .
           file: ./Dockerfile.control
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: |
             ghcr.io/${{ github.repository_owner }}/barbacane-control:latest
             ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}
