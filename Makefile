@@ -26,13 +26,26 @@ all: check test
 # Build
 # -----------------------------------------------------------------------------
 
-.PHONY: build release plugins seed-plugins clean
+.PHONY: build release plugins seed-plugins clean compile
 
 build:
 	cargo build --workspace
 
 release:
 	cargo build --workspace --release
+
+# Compile a spec to artifact (requires plugins to be built first)
+# Override: make compile SPEC=path/to/api.yaml
+SPEC ?= tests/fixtures/minimal.yaml
+MANIFEST ?= tests/fixtures/barbacane.yaml
+ARTIFACT ?= artifact.bca
+
+compile: plugins
+	cargo run --bin barbacane -- compile \
+		--spec $(SPEC) \
+		--manifest $(MANIFEST) \
+		--output $(ARTIFACT)
+	@echo "Compiled $(ARTIFACT)"
 
 plugins:
 	@echo "Building plugins..."
@@ -178,6 +191,7 @@ help:
 	@echo "  make clippy         Run clippy lints"
 	@echo "  make fmt            Format code"
 	@echo "  make plugins        Build WASM plugins"
+	@echo "  make compile        Compile spec to artifact.bca"
 	@echo "  make seed-plugins   Build and seed plugin registry"
 	@echo "  make clean          Clean build artifacts"
 	@echo ""

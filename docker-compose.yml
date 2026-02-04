@@ -5,7 +5,8 @@
 #   docker compose up -d                # Full stack (postgres + control plane)
 #
 # Data plane requires a pre-compiled artifact:
-#   cargo run --bin barbacane -- compile --spec api.yaml --output artifact.bca
+#   make compile                                  # Uses tests/fixtures/minimal.yaml
+#   make compile SPEC=path/to/api.yaml            # Custom spec
 #   docker compose --profile with-data-plane up -d
 
 services:

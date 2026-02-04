@@ -50,6 +50,7 @@ Then open http://localhost:5173 in your browser.
 | `make build` | Build debug |
 | `make release` | Build release |
 | `make plugins` | Build all WASM plugins |
+| `make compile` | Compile spec to artifact.bca |
 | `make seed-plugins` | Build plugins and seed registry |
 | `make clean` | Clean all build artifacts |
 | **Development** | |
