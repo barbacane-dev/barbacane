@@ -158,6 +158,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Build and push data plane
         uses: docker/build-push-action@v5
         with:
@@ -165,7 +171,9 @@ jobs:
           file: ./Dockerfile
           push: true
           platforms: ${{ matrix.platform }}
-          tags: ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+            docker.io/barbacane/barbacane:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
           cache-from: type=gha,scope=barbacane-${{ matrix.suffix }}
           cache-to: type=gha,mode=max,scope=barbacane-${{ matrix.suffix }}
 
@@ -176,7 +184,9 @@ jobs:
           file: ./Dockerfile.control
           push: true
           platforms: ${{ matrix.platform }}
-          tags: ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+            docker.io/barbacane/barbacane-control:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
           cache-from: type=gha,scope=barbacane-control-${{ matrix.suffix }}
           cache-to: type=gha,mode=max,scope=barbacane-control-${{ matrix.suffix }}
 
@@ -209,7 +219,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create data plane manifest
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create GHCR data plane manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
           docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane:latest \
@@ -219,7 +235,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION-amd64 \
             ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION-arm64
 
-      - name: Create control plane manifest
+      - name: Create GHCR control plane manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
           docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-control:latest \
@@ -228,6 +244,26 @@ jobs:
             -t ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.major }} \
             ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION-amd64 \
             ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION-arm64
+
+      - name: Create Docker Hub data plane manifest
+        run: |
+          VERSION=${{ steps.tag.outputs.version }}
+          docker buildx imagetools create -t docker.io/barbacane/barbacane:latest \
+            -t docker.io/barbacane/barbacane:$VERSION \
+            -t docker.io/barbacane/barbacane:${{ steps.version.outputs.minor }} \
+            -t docker.io/barbacane/barbacane:${{ steps.version.outputs.major }} \
+            docker.io/barbacane/barbacane:$VERSION-amd64 \
+            docker.io/barbacane/barbacane:$VERSION-arm64
+
+      - name: Create Docker Hub control plane manifest
+        run: |
+          VERSION=${{ steps.tag.outputs.version }}
+          docker buildx imagetools create -t docker.io/barbacane/barbacane-control:latest \
+            -t docker.io/barbacane/barbacane-control:$VERSION \
+            -t docker.io/barbacane/barbacane-control:${{ steps.version.outputs.minor }} \
+            -t docker.io/barbacane/barbacane-control:${{ steps.version.outputs.major }} \
+            docker.io/barbacane/barbacane-control:$VERSION-amd64 \
+            docker.io/barbacane/barbacane-control:$VERSION-arm64
 
   # Security scan the multi-arch images
   scan-containers:
