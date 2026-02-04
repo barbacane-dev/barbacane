@@ -193,6 +193,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Security scan images
+      - name: Scan data plane image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-data-plane.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Scan control plane image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-control-plane.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: '.'
+
   # Publish crates to crates.io
   publish-crates:
     name: Publish Crates
