@@ -451,6 +451,7 @@ docker pull ghcr.io/barbacane-dev/barbacane:latest
 
 Images are available for:
 - `linux/amd64` (x86_64)
+- `linux/arm64` (ARM64/Graviton)
 
 Tags:
 - `latest` - Latest stable release

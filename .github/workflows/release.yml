@@ -124,11 +124,20 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Build and push container images
+  # Build container images per architecture using native runners
   build-containers:
-    name: Build Containers
+    name: Build Containers (${{ matrix.platform }})
     needs: [validate-version, validate-changelog]
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            os: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            os: macos-15  # Native ARM64 runner (much faster than QEMU)
+            suffix: arm64
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
       packages: write
@@ -138,9 +147,6 @@ jobs:
       - name: Extract version from tag
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -152,6 +158,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build and push data plane
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+          cache-from: type=gha,scope=barbacane-${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=barbacane-${{ matrix.suffix }}
+
+      - name: Build and push control plane
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.control
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+          cache-from: type=gha,scope=barbacane-control-${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=barbacane-control-${{ matrix.suffix }}
+
+  # Create multi-arch manifests combining platform-specific images
+  create-manifests:
+    name: Create Multi-arch Manifests
+    needs: [validate-version, build-containers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Extract version from tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
       - name: Extract version components
         id: version
         run: |
@@ -161,39 +202,48 @@ jobs:
           echo "major=$MAJOR" >> $GITHUB_OUTPUT
           echo "minor=$MINOR" >> $GITHUB_OUTPUT
 
-      # Build and push data plane image
-      # Note: arm64 builds disabled due to slow QEMU emulation (~2hrs)
-      # TODO: Re-enable with native arm64 runners when available
-      - name: Build and push data plane
-        uses: docker/build-push-action@v5
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/barbacane:latest
-            ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.minor }}
-            ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.major }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push control plane image
-      - name: Build and push control plane
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.control
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/barbacane-control:latest
-            ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.minor }}
-            ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.major }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create data plane manifest
+        run: |
+          VERSION=${{ steps.tag.outputs.version }}
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane:latest \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.minor }} \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.major }} \
+            ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION-amd64 \
+            ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION-arm64
+
+      - name: Create control plane manifest
+        run: |
+          VERSION=${{ steps.tag.outputs.version }}
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-control:latest \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.minor }} \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.major }} \
+            ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION-amd64 \
+            ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION-arm64
+
+  # Security scan the multi-arch images
+  scan-containers:
+    name: Scan Containers
+    needs: [validate-version, create-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       # Security scan images
       - name: Scan data plane image
@@ -301,7 +351,7 @@ jobs:
   # Create GitHub Release with all artifacts
   create-release:
     name: Create Release
-    needs: [build-binaries, build-containers, publish-crates]
+    needs: [build-binaries, create-manifests, scan-containers, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
