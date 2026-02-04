@@ -135,7 +135,7 @@ jobs:
             os: ubuntu-latest
             suffix: amd64
           - platform: linux/arm64
-            os: macos-15  # Native ARM64 runner (much faster than QEMU)
+            os: ubuntu-24.04-arm  # Native ARM64 Linux runner
             suffix: arm64
     runs-on: ${{ matrix.os }}
     permissions:
