@@ -34,7 +34,7 @@ services:
     environment:
       DATABASE_URL: postgres://barbacane:barbacane@postgres:5432/barbacane
     ports:
-      - "80:80"      # Web UI (nginx)
+      - "3000:80"    # Web UI (nginx)
       - "9090:9090"  # API
     depends_on:
       postgres:
