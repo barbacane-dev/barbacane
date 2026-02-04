@@ -1,46 +1,39 @@
-.PHONY: all test test-verbose clippy fmt check build release plugins clean help \
-        control-plane ui dev db-up db-down db-reset seed-plugins \
-        docker-build docker-build-gateway docker-build-control docker-run
+# =============================================================================
+# Barbacane Makefile
+# =============================================================================
+#
+# Quick reference:
+#   make              Run checks and tests (default)
+#   make dev-tmux     Start control plane + UI in tmux
+#   make help         Show all targets
+#
+# =============================================================================
 
-# Default target
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+
+DATABASE_URL ?= postgres://barbacane:barbacane@localhost:5432/barbacane
+
+# -----------------------------------------------------------------------------
+# Default
+# -----------------------------------------------------------------------------
+
+.PHONY: all
 all: check test
 
-# Run all tests
-test:
-	cargo test --workspace
+# -----------------------------------------------------------------------------
+# Build
+# -----------------------------------------------------------------------------
 
-# Run tests with output
-test-verbose:
-	cargo test --workspace -- --nocapture
+.PHONY: build release plugins seed-plugins clean
 
-# Run a specific test (usage: make test-one TEST=test_name)
-test-one:
-	cargo test --workspace $(TEST) -- --nocapture
-
-# Run clippy lints
-clippy:
-	cargo clippy --workspace
-
-# Format code
-fmt:
-	cargo fmt --all
-
-# Check formatting without modifying
-fmt-check:
-	cargo fmt --all -- --check
-
-# Full check (fmt + clippy + test)
-check: fmt-check clippy
-
-# Build debug
 build:
 	cargo build --workspace
 
-# Build release
 release:
 	cargo build --workspace --release
 
-# Build all plugins (requires wasm32-unknown-unknown target)
 plugins:
 	@echo "Building plugins..."
 	@for plugin in plugins/*/; do \
@@ -57,11 +50,9 @@ plugins:
 	done
 	@echo "Done building plugins"
 
-# Seed the plugin registry with built-in plugins
 seed-plugins: plugins
 	cargo run -p barbacane-control -- seed-plugins --plugins-dir plugins --database-url $(DATABASE_URL) --verbose
 
-# Clean build artifacts
 clean:
 	cargo clean
 	@for plugin in plugins/*/; do \
@@ -70,70 +61,70 @@ clean:
 		fi \
 	done
 
-# =============================================================================
-# Development servers
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Test & Lint
+# -----------------------------------------------------------------------------
 
-# Default database URL for local development
-DATABASE_URL ?= postgres://barbacane:barbacane@localhost:5432/barbacane
+.PHONY: test test-verbose test-one check clippy fmt fmt-check
 
-# Start the control plane server
+test:
+	cargo test --workspace
+
+test-verbose:
+	cargo test --workspace -- --nocapture
+
+test-one:
+	cargo test --workspace $(TEST) -- --nocapture
+
+check: fmt-check clippy
+
+clippy:
+	cargo clippy --workspace
+
+fmt:
+	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all -- --check
+
+# -----------------------------------------------------------------------------
+# Development (native)
+# -----------------------------------------------------------------------------
+
+.PHONY: control-plane ui dev dev-tmux
+
 control-plane:
 	cargo run -p barbacane-control -- serve --database-url $(DATABASE_URL)
 
-# Start the UI development server
 ui:
 	cd ui && npm run dev
 
-# Start both control plane and UI (requires terminal multiplexer or run in separate terminals)
 dev:
-	@echo "Starting development environment..."
-	@echo "Run 'make control-plane' in one terminal"
-	@echo "Run 'make ui' in another terminal"
+	@echo "Run in separate terminals:"
+	@echo "  make db-up          # Start PostgreSQL"
+	@echo "  make control-plane  # Start API (port 9090)"
+	@echo "  make ui             # Start UI (port 5173)"
 	@echo ""
-	@echo "Or use: make dev-tmux (requires tmux)"
+	@echo "Or use: make dev-tmux"
 
-# Start dev environment with tmux
 dev-tmux:
 	@command -v tmux >/dev/null 2>&1 || { echo "tmux is required but not installed."; exit 1; }
 	tmux new-session -d -s barbacane 'make control-plane' \; \
 		split-window -h 'make ui' \; \
 		attach
 
-# =============================================================================
-# Docker
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
 
-# Build Docker images
-docker-build:
-	docker build -t barbacane .
-	docker build -f Dockerfile.control -t barbacane-control .
+.PHONY: db-up db-down db-reset
 
-# Build data plane image only
-docker-build-gateway:
-	docker build -t barbacane .
-
-# Build control plane image only
-docker-build-control:
-	docker build -f Dockerfile.control -t barbacane-control .
-
-# Run data plane with Docker (requires api.bca artifact)
-docker-run:
-	docker run -p 8080:8080 -v ./artifact.bca:/config/api.bca barbacane
-
-# =============================================================================
-# Database commands
-# =============================================================================
-
-# Start the database (requires docker-compose)
 db-up:
 	docker-compose up -d postgres
 
-# Stop the database
 db-down:
 	docker-compose down
 
-# Reset the database (stop, remove volume, start fresh)
 db-reset:
 	docker-compose down -v
 	docker-compose up -d postgres
@@ -141,42 +132,74 @@ db-reset:
 	@sleep 3
 	@echo "Database reset complete"
 
-# Show help
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+
+.PHONY: docker-build docker-build-gateway docker-build-control \
+        docker-up docker-down docker-run docker-run-control
+
+docker-build: docker-build-gateway docker-build-control
+
+docker-build-gateway:
+	docker build -t barbacane .
+
+docker-build-control:
+	docker build -f Dockerfile.control -t barbacane-control .
+
+docker-up:
+	docker-compose up -d
+
+docker-down:
+	docker-compose down
+
+docker-run:
+	docker run -p 8080:8080 -v ./artifact.bca:/config/api.bca barbacane
+
+docker-run-control:
+	docker-compose up control-plane
+
+# -----------------------------------------------------------------------------
+# Help
+# -----------------------------------------------------------------------------
+
+.PHONY: help
 help:
-	@echo "Barbacane Makefile targets:"
+	@echo "Barbacane Makefile"
 	@echo ""
 	@echo "Build & Test:"
-	@echo "  make              - Run check + test (default)"
-	@echo "  make test         - Run all workspace tests"
-	@echo "  make test-verbose - Run tests with output"
-	@echo "  make test-one TEST=name - Run specific test"
-	@echo "  make clippy       - Run clippy lints"
-	@echo "  make fmt          - Format all code"
-	@echo "  make fmt-check    - Check formatting"
-	@echo "  make check        - Run fmt-check + clippy"
-	@echo "  make build        - Build debug"
-	@echo "  make release      - Build release"
-	@echo "  make plugins      - Build all WASM plugins"
-	@echo "  make seed-plugins - Build plugins and seed registry"
-	@echo "  make clean        - Clean all build artifacts"
+	@echo "  make                Run check + test (default)"
+	@echo "  make build          Build debug"
+	@echo "  make release        Build release"
+	@echo "  make test           Run all tests"
+	@echo "  make test-verbose   Run tests with output"
+	@echo "  make test-one TEST=name"
+	@echo "  make check          Run fmt-check + clippy"
+	@echo "  make clippy         Run clippy lints"
+	@echo "  make fmt            Format code"
+	@echo "  make plugins        Build WASM plugins"
+	@echo "  make seed-plugins   Build and seed plugin registry"
+	@echo "  make clean          Clean build artifacts"
 	@echo ""
 	@echo "Development:"
-	@echo "  make control-plane - Start control plane server (port 9090)"
-	@echo "  make ui            - Start UI dev server (port 5173)"
-	@echo "  make dev           - Show instructions to start both"
-	@echo "  make dev-tmux      - Start both in tmux session"
-	@echo ""
-	@echo "  Override DATABASE_URL: make control-plane DATABASE_URL=postgres://..."
-	@echo ""
-	@echo "Docker:"
-	@echo "  make docker-build         - Build both Docker images"
-	@echo "  make docker-build-gateway - Build data plane image"
-	@echo "  make docker-build-control - Build control plane image"
-	@echo "  make docker-run           - Run data plane (needs artifact.bca)"
+	@echo "  make control-plane  Start API server (port 9090)"
+	@echo "  make ui             Start UI dev server (port 5173)"
+	@echo "  make dev            Show dev instructions"
+	@echo "  make dev-tmux       Start both in tmux"
 	@echo ""
 	@echo "Database:"
-	@echo "  make db-up         - Start PostgreSQL container"
-	@echo "  make db-down       - Stop PostgreSQL container"
-	@echo "  make db-reset      - Reset database (removes all data)"
+	@echo "  make db-up          Start PostgreSQL"
+	@echo "  make db-down        Stop PostgreSQL"
+	@echo "  make db-reset       Reset database"
 	@echo ""
-	@echo "  make help          - Show this help"
+	@echo "Docker:"
+	@echo "  make docker-build          Build all images"
+	@echo "  make docker-build-gateway  Build data plane image"
+	@echo "  make docker-build-control  Build control plane image"
+	@echo "  make docker-up             Start full stack (compose)"
+	@echo "  make docker-down           Stop full stack"
+	@echo "  make docker-run            Run data plane standalone"
+	@echo "  make docker-run-control    Run control plane only"
+	@echo ""
+	@echo "Override DATABASE_URL:"
+	@echo "  make control-plane DATABASE_URL=postgres://..."

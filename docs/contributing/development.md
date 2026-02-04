@@ -61,7 +61,10 @@ Then open http://localhost:5173 in your browser.
 | `make docker-build` | Build both Docker images |
 | `make docker-build-gateway` | Build data plane image |
 | `make docker-build-control` | Build control plane image |
-| `make docker-run` | Run data plane (needs artifact.bca) |
+| `make docker-up` | Start full stack (compose) |
+| `make docker-down` | Stop full stack |
+| `make docker-run` | Run data plane standalone |
+| `make docker-run-control` | Run control plane only |
 | **Database** | |
 | `make db-up` | Start PostgreSQL container |
 | `make db-down` | Stop PostgreSQL container |

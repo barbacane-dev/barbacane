@@ -1,5 +1,12 @@
 # Docker Compose for local development
-# Run: docker compose up -d
+#
+# Usage:
+#   docker compose up -d postgres       # Database only (for cargo run dev)
+#   docker compose up -d                # Full stack (postgres + control plane)
+#
+# Data plane requires a pre-compiled artifact:
+#   cargo run --bin barbacane -- compile --spec api.yaml --output artifact.bca
+#   docker compose --profile with-data-plane up -d
 
 services:
   postgres:
@@ -17,6 +24,32 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  control-plane:
+    image: barbacane-control
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    environment:
+      DATABASE_URL: postgres://barbacane:barbacane@postgres:5432/barbacane
+    ports:
+      - "80:80"      # Web UI (nginx)
+      - "9090:9090"  # API
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  data-plane:
+    image: barbacane
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./artifact.bca:/config/api.bca:ro
+    profiles:
+      - with-data-plane
 
 volumes:
   postgres_data:
