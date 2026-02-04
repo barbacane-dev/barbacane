@@ -23,6 +23,11 @@ RUN cargo build --release --package barbacane
 # Runtime stage - distroless for minimal attack surface
 FROM gcr.io/distroless/cc-debian12:nonroot
 
+# OCI labels for GitHub Container Registry
+LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"
+LABEL org.opencontainers.image.description="Barbacane API Gateway - Data Plane"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
 # Copy the binary from builder
 COPY --from=builder /build/target/release/barbacane /barbacane
 
