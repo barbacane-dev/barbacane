@@ -8,7 +8,6 @@ license.workspace = true
 [dependencies]
 # WASM runtime
 wasmtime.workspace = true
-wasmtime-wasi.workspace = true
 
 # Serialization
 serde.workspace = true
