@@ -462,3 +462,53 @@ Connected mode for centralized fleet management — WebSocket communication betw
 - [ ] Hot-reload — download and swap artifact at runtime without restart
 - [ ] Health metrics — report CPU, memory, request rates to control plane
 - [ ] Data plane groups — deploy to specific subsets of data planes
+
+---
+
+## M13 — Packaging and Releases
+
+Automated release pipeline, multi-platform binaries, container images, and crates.io publication.
+
+**Specs:** ADR-0019
+
+### Release Automation
+- [ ] GitHub Actions release workflow — triggered on `vX.Y.Z` tags
+- [ ] Version bump validation — CI checks version in `Cargo.toml` matches tag
+- [ ] Changelog validation — CI checks `CHANGELOG.md` has entry for version
+
+### Binary Builds
+- [ ] Linux x86_64 (gnu) binary — primary server target
+- [ ] Linux aarch64 (gnu) binary — ARM servers (Graviton, Ampere)
+- [ ] Linux x86_64 (musl) binary — Alpine/static linking
+- [ ] Linux aarch64 (musl) binary — Alpine ARM
+- [ ] macOS x86_64 binary — Intel Macs
+- [ ] macOS aarch64 binary — Apple Silicon
+- [ ] SHA256 checksums file — `barbacane-vX.Y.Z-checksums.txt`
+- [ ] GitHub Release creation — upload binaries and checksums
+
+### Container Images
+- [ ] `Dockerfile` for data plane — multi-stage build, distroless base
+- [ ] `Dockerfile` for control plane — includes UI assets
+- [ ] Multi-arch builds — linux/amd64 + linux/arm64
+- [ ] Push to ghcr.io — `ghcr.io/barbacane-dev/barbacane`
+- [ ] Push to ghcr.io — `ghcr.io/barbacane-dev/barbacane-control`
+- [ ] Image tagging — `latest`, `x.y.z`, `x.y`, `x`
+- [ ] Alpine variant — `x.y.z-alpine` tag
+- [ ] Cosign signing — container image signatures
+- [ ] SBOM generation — software bill of materials
+
+### crates.io Publication
+- [ ] Publish `barbacane-plugin-macros` — proc macros for plugin development
+- [ ] Publish `barbacane-plugin-sdk` — SDK for WASM plugins
+- [ ] Publish `barbacane` — data plane CLI
+- [ ] Publish `barbacane-control` — control plane CLI
+- [ ] Publication order — dependencies first, then dependents
+
+### WASM Plugins
+- [ ] Build official plugins in CI — all plugins in `plugins/` directory
+- [ ] Attach plugins to GitHub Release — `.wasm` files as release assets
+
+### Documentation
+- [ ] Installation guide update — document binary download, container, cargo install
+- [ ] Getting started update — simplify with pre-built artifacts
+- [ ] Release process documentation — for maintainers
