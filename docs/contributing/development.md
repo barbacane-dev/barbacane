@@ -57,6 +57,11 @@ Then open http://localhost:5173 in your browser.
 | `make ui` | Start UI dev server (port 5173) |
 | `make dev` | Show instructions to start both |
 | `make dev-tmux` | Start both in tmux session |
+| **Docker** | |
+| `make docker-build` | Build both Docker images |
+| `make docker-build-gateway` | Build data plane image |
+| `make docker-build-control` | Build control plane image |
+| `make docker-run` | Run data plane (needs artifact.bca) |
 | **Database** | |
 | `make db-up` | Start PostgreSQL container |
 | `make db-down` | Stop PostgreSQL container |
@@ -121,7 +126,12 @@ cargo run --bin barbacane -- serve --artifact test.bca --listen 127.0.0.1:8080 -
 barbacane/
 ├── Cargo.toml              # Workspace definition
 ├── Makefile                # Development shortcuts
+├── Dockerfile              # Data plane container image
+├── Dockerfile.control      # Control plane container image
 ├── docker-compose.yml      # PostgreSQL for local dev
+├── docker/                 # Docker support files
+│   ├── nginx-control.conf  # Nginx config for control plane UI
+│   └── control-entrypoint.sh
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── README.md

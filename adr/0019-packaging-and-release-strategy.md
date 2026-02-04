@@ -78,7 +78,8 @@ We will publish the following artifacts for each release:
 
 ```dockerfile
 # Data plane - multi-stage build, rootless
-FROM rust:1.83-slim AS builder
+# Use -bookworm suffix to match glibc in distroless cc-debian12
+FROM rust:1.93-slim-bookworm AS builder
 WORKDIR /build
 COPY . .
 RUN cargo build --release --package barbacane

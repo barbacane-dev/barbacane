@@ -1,5 +1,6 @@
 .PHONY: all test test-verbose clippy fmt check build release plugins clean help \
-        control-plane ui dev db-up db-down db-reset seed-plugins
+        control-plane ui dev db-up db-down db-reset seed-plugins \
+        docker-build docker-build-gateway docker-build-control docker-run
 
 # Default target
 all: check test
@@ -100,6 +101,27 @@ dev-tmux:
 		attach
 
 # =============================================================================
+# Docker
+# =============================================================================
+
+# Build Docker images
+docker-build:
+	docker build -t barbacane .
+	docker build -f Dockerfile.control -t barbacane-control .
+
+# Build data plane image only
+docker-build-gateway:
+	docker build -t barbacane .
+
+# Build control plane image only
+docker-build-control:
+	docker build -f Dockerfile.control -t barbacane-control .
+
+# Run data plane with Docker (requires api.bca artifact)
+docker-run:
+	docker run -p 8080:8080 -v ./artifact.bca:/config/api.bca barbacane
+
+# =============================================================================
 # Database commands
 # =============================================================================
 
@@ -145,6 +167,12 @@ help:
 	@echo "  make dev-tmux      - Start both in tmux session"
 	@echo ""
 	@echo "  Override DATABASE_URL: make control-plane DATABASE_URL=postgres://..."
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-build         - Build both Docker images"
+	@echo "  make docker-build-gateway - Build data plane image"
+	@echo "  make docker-build-control - Build control plane image"
+	@echo "  make docker-run           - Run data plane (needs artifact.bca)"
 	@echo ""
 	@echo "Database:"
 	@echo "  make db-up         - Start PostgreSQL container"
