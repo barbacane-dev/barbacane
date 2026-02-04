@@ -437,11 +437,31 @@ Options:
 
 ## Deployment
 
+### Container Images
+
+Official container images are available from GitHub Container Registry:
+
+```bash
+# Control plane (includes web UI)
+docker pull ghcr.io/barbacane-dev/barbacane-control:latest
+
+# Data plane
+docker pull ghcr.io/barbacane-dev/barbacane:latest
+```
+
+Images are available for:
+- `linux/amd64` (x86_64)
+- `linux/arm64` (ARM64/Graviton)
+
+Tags:
+- `latest` - Latest stable release
+- `x.y.z` - Specific version (e.g., `0.2.0`)
+- `x.y` - Latest patch for minor version (e.g., `0.2`)
+- `x` - Latest minor for major version (e.g., `0`)
+
 ### Docker Compose Example
 
 ```yaml
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16
@@ -452,12 +472,26 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   control-plane:
-    image: barbacane/control:latest
-    command: serve --database-url postgres://postgres:barbacane@postgres/barbacane
+    image: ghcr.io/barbacane-dev/barbacane-control:latest
+    environment:
+      DATABASE_URL: postgres://postgres:barbacane@postgres/barbacane
     ports:
-      - "9090:9090"
+      - "80:80"      # Web UI
+      - "9090:9090"  # API
     depends_on:
       - postgres
+
+  data-plane:
+    image: ghcr.io/barbacane-dev/barbacane:latest
+    command: >
+      serve
+      --control-plane ws://control-plane:9090/ws/data-plane
+      --project-id ${PROJECT_ID}
+      --api-key ${DATA_PLANE_API_KEY}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - control-plane
 
 volumes:
   pgdata:

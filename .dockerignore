@@ -1,0 +1,42 @@
+# Build artifacts
+target/
+*.bca
+
+# Dependencies
+ui/node_modules/
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed for build)
+docs/
+book/
+adr/
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Test fixtures and development
+fixtures/
+tests/
+benches/
+*.test.*
+
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# Environment files
+.env
+.env.*

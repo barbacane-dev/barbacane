@@ -4,26 +4,79 @@ This guide walks you through creating your first Barbacane-powered API gateway.
 
 ## Prerequisites
 
-- Rust 1.75+ (for building from source)
 - An OpenAPI 3.x specification
+- One of the installation methods below
 
 ## Installation
 
+### Pre-built Binaries (Recommended)
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/barbacane-dev/barbacane/releases):
+
+```bash
+# Linux (x86_64)
+curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-x86_64-unknown-linux-gnu
+chmod +x barbacane-x86_64-unknown-linux-gnu
+sudo mv barbacane-x86_64-unknown-linux-gnu /usr/local/bin/barbacane
+
+# Linux (ARM64)
+curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-aarch64-unknown-linux-gnu
+chmod +x barbacane-aarch64-unknown-linux-gnu
+sudo mv barbacane-aarch64-unknown-linux-gnu /usr/local/bin/barbacane
+
+# macOS (Intel)
+curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-x86_64-apple-darwin
+chmod +x barbacane-x86_64-apple-darwin
+sudo mv barbacane-x86_64-apple-darwin /usr/local/bin/barbacane
+
+# macOS (Apple Silicon)
+curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-aarch64-apple-darwin
+chmod +x barbacane-aarch64-apple-darwin
+sudo mv barbacane-aarch64-apple-darwin /usr/local/bin/barbacane
+```
+
+Verify installation:
+```bash
+barbacane --version
+```
+
+### Container Images
+
+For Docker or Kubernetes deployments:
+
+```bash
+# Data plane
+docker pull ghcr.io/barbacane-dev/barbacane:latest
+
+# Control plane (includes web UI)
+docker pull ghcr.io/barbacane-dev/barbacane-control:latest
+```
+
+Quick start with Docker:
+```bash
+docker run -v ./api.bca:/config/api.bca -p 8080:8080 \
+  ghcr.io/barbacane-dev/barbacane serve --artifact /config/api.bca
+```
+
+### Using Cargo
+
+If you have Rust installed:
+
+```bash
+cargo install barbacane
+cargo install barbacane-control  # Optional: control plane CLI
+```
+
 ### From Source
+
+For development or custom builds:
 
 ```bash
 git clone https://github.com/barbacane-dev/barbacane.git
 cd barbacane
 cargo build --release
 
-# Binary is in target/release/barbacane
-```
-
-### Using Cargo (planned for v1.0)
-
-```bash
-# Not yet published to crates.io
-cargo install barbacane
+# Binaries are in target/release/
 ```
 
 ## Your First Gateway

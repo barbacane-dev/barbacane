@@ -1,0 +1,70 @@
+# Barbacane Control Plane - Multi-stage build
+# Includes REST API and web UI
+
+# UI build stage
+FROM node:22-slim AS ui-builder
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui/ ./
+RUN npm run build
+
+# Rust build stage - Rust 1.85+ required for edition 2024 deps
+FROM rust:1.93-slim-bookworm AS rust-builder
+
+# Install build dependencies for aws-lc-rs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    clang \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy manifests first for better layer caching
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+# Build the control plane binary
+RUN cargo build --release --package barbacane-control
+
+# Runtime stage - Debian slim (needs libc for control plane dependencies)
+FROM debian:bookworm-slim
+
+# Install runtime dependencies and nginx for serving UI
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    nginx \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/www/html/*
+
+# Create non-root user
+RUN groupadd -r barbacane && useradd -r -g barbacane barbacane
+
+# Copy the binary from rust builder
+COPY --from=rust-builder /build/target/release/barbacane-control /usr/local/bin/barbacane-control
+
+# Copy UI assets from ui builder
+COPY --from=ui-builder /ui/dist /var/www/html
+
+# Copy nginx configuration
+COPY docker/nginx-control.conf /etc/nginx/sites-available/default
+
+# Copy entrypoint script
+COPY docker/control-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create directories for runtime
+RUN mkdir -p /var/run/nginx /var/log/nginx \
+    && chown -R barbacane:barbacane /var/run/nginx /var/log/nginx /var/www/html
+
+# Expose ports
+# 80   - UI (nginx)
+# 9090 - Control plane API
+EXPOSE 80 9090
+
+# Health check (using bash /dev/tcp to avoid adding curl/wget)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD bash -c 'echo > /dev/tcp/localhost/9090' || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]
