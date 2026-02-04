@@ -269,11 +269,19 @@ jobs:
           output: 'trivy-control-plane.sarif'
           severity: 'CRITICAL,HIGH'
 
-      - name: Upload Trivy scan results
+      - name: Upload data plane scan results
         uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
-          sarif_file: '.'
+          sarif_file: 'trivy-data-plane.sarif'
+          category: 'trivy-data-plane'
+
+      - name: Upload control plane scan results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: 'trivy-control-plane.sarif'
+          category: 'trivy-control-plane'
 
   # Publish crates to crates.io
   publish-crates:
