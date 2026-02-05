@@ -365,8 +365,9 @@ jobs:
 
             echo "::endgroup::"
 
-            # Wait for crates.io index to update before next publish
-            sleep 30
+            # Wait for crates.io index to update and avoid rate limits
+            # New crate names have stricter limits than version updates
+            sleep 60
           }
 
           # Publish in dependency order
