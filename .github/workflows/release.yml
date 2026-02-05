@@ -355,7 +355,7 @@ jobs:
             if [ $EXIT_CODE -eq 0 ]; then
               echo "✓ $crate published successfully"
               SUCCESS="$SUCCESS $crate"
-            elif echo "$OUTPUT" | grep -q "already uploaded"; then
+            elif echo "$OUTPUT" | grep -qE "already uploaded|already exists"; then
               echo "⊘ $crate already published, skipping"
               SKIPPED="$SKIPPED $crate"
             else
