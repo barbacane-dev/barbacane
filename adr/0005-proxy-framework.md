@@ -34,10 +34,15 @@ The de facto Rust HTTP stack. Hyper handles HTTP protocol, Tower provides compos
 Barbacane's core differentiator is **spec-driven request processing**. Every request passes through:
 
 ```
-TLS → Parse → Route (from spec) → Validate (from spec) → Auth (from spec) → Proxy → Validate response
+TLS → Parse → Route (from spec) → Validate (from spec) → Middleware Chain (rate-limit/auth from spec) → Dispatch
 ```
 
 This means we need **deep control over every phase of the request lifecycle**. The validation and routing layers are not bolted on — they ARE the proxy logic.
+
+**Key ordering rationale:**
+- **Validation before auth**: Reject malformed requests before expensive auth lookups
+- **Rate limiting after validation**: Can be placed in middleware chain (auth plugins may include their own rate limiting)
+- **Middleware execution order**: Configurable per-operation via `x-barbacane-middlewares`
 
 ## Decision
 
