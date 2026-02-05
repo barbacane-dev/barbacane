@@ -53,7 +53,7 @@ paths:
   /users/{id}/legacy-profile:
     get:
       deprecated: true
-      x-barbacane-sunset: "2026-06-01"
+      x-sunset: "Sat, 01 Jun 2026 00:00:00 GMT"
 ```
 
 Produces response header:

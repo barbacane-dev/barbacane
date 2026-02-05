@@ -60,6 +60,330 @@ fn validation_error_reason(err: &ValidationError2) -> String {
         ValidationError2::UriTooLong { .. } => "uri_too_long".to_string(),
     }
 }
+
+/// Recursively remove all keys starting with "x-barbacane-" from a JSON value.
+/// Preserves standard OpenAPI/AsyncAPI fields and the x-sunset extension (RFC 8594).
+fn strip_barbacane_keys_recursive(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Remove x-barbacane-* keys
+            map.retain(|k, _| !k.starts_with("x-barbacane-"));
+            // Recurse into remaining values
+            for v in map.values_mut() {
+                strip_barbacane_keys_recursive(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                strip_barbacane_keys_recursive(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Detected spec type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpecType {
+    OpenApi,
+    AsyncApi,
+    Unknown,
+}
+
+/// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
+fn detect_spec_type(content: &str) -> SpecType {
+    // Try to parse as YAML (also handles JSON)
+    let parsed: Result<serde_json::Value, _> = serde_yaml::from_str(content);
+    match parsed {
+        Ok(value) => {
+            if value.get("openapi").is_some() {
+                SpecType::OpenApi
+            } else if value.get("asyncapi").is_some() {
+                SpecType::AsyncApi
+            } else {
+                SpecType::Unknown
+            }
+        }
+        Err(_) => SpecType::Unknown,
+    }
+}
+
+/// Merge multiple OpenAPI specs into one.
+/// Combines paths, components, and uses the first spec's info as base.
+fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
+    let mut merged = serde_json::json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Merged API",
+            "version": "1.0.0"
+        },
+        "paths": {},
+        "components": {
+            "schemas": {},
+            "securitySchemes": {},
+            "parameters": {},
+            "responses": {},
+            "headers": {},
+            "requestBodies": {}
+        }
+    });
+
+    let mut titles = Vec::new();
+
+    for (filename, content) in specs {
+        let parsed: Option<serde_json::Value> = serde_yaml::from_str(content).ok();
+        if let Some(mut spec) = parsed {
+            // Strip barbacane extensions
+            strip_barbacane_keys_recursive(&mut spec);
+
+            // Collect title for merged info
+            if let Some(title) = spec.pointer("/info/title").and_then(|t| t.as_str()) {
+                titles.push(title.to_string());
+            }
+
+            // Use first spec's info as base
+            if titles.len() == 1 {
+                if let Some(info) = spec.get("info") {
+                    merged["info"] = info.clone();
+                }
+                if let Some(version) = spec.get("openapi") {
+                    merged["openapi"] = version.clone();
+                }
+            }
+
+            // Merge paths
+            if let Some(paths) = spec.get("paths").and_then(|p| p.as_object()) {
+                let merged_paths = merged["paths"].as_object_mut().unwrap();
+                for (path, methods) in paths {
+                    merged_paths.insert(path.clone(), methods.clone());
+                }
+            }
+
+            // Merge components
+            if let Some(components) = spec.get("components").and_then(|c| c.as_object()) {
+                let merged_components = merged["components"].as_object_mut().unwrap();
+                for (component_type, items) in components {
+                    if let Some(items_obj) = items.as_object() {
+                        let target = merged_components
+                            .entry(component_type.clone())
+                            .or_insert_with(|| serde_json::json!({}));
+                        if let Some(target_obj) = target.as_object_mut() {
+                            for (name, value) in items_obj {
+                                // Prefix with source filename to avoid conflicts
+                                let key = if specs.len() > 1 && target_obj.contains_key(name) {
+                                    let base = filename
+                                        .trim_end_matches(".yaml")
+                                        .trim_end_matches(".json");
+                                    format!("{}_{}", base, name)
+                                } else {
+                                    name.clone()
+                                };
+                                target_obj.insert(key, value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Merge servers
+            if let Some(servers) = spec.get("servers").and_then(|s| s.as_array()) {
+                let merged_servers = merged
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("servers")
+                    .or_insert_with(|| serde_json::json!([]));
+                if let Some(arr) = merged_servers.as_array_mut() {
+                    for server in servers {
+                        if !arr.contains(server) {
+                            arr.push(server.clone());
+                        }
+                    }
+                }
+            }
+
+            // Merge tags
+            if let Some(tags) = spec.get("tags").and_then(|t| t.as_array()) {
+                let merged_tags = merged
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("tags")
+                    .or_insert_with(|| serde_json::json!([]));
+                if let Some(arr) = merged_tags.as_array_mut() {
+                    for tag in tags {
+                        if !arr.contains(tag) {
+                            arr.push(tag.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Update title if multiple specs were merged
+    if titles.len() > 1 {
+        merged["info"]["title"] = serde_json::json!(titles.join(" + "));
+    }
+
+    // Clean up empty component sections
+    if let Some(components) = merged.get_mut("components").and_then(|c| c.as_object_mut()) {
+        components.retain(|_, v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false));
+    }
+    if merged
+        .get("components")
+        .and_then(|c| c.as_object())
+        .map(|o| o.is_empty())
+        .unwrap_or(false)
+    {
+        merged.as_object_mut().unwrap().remove("components");
+    }
+
+    merged
+}
+
+/// Merge multiple AsyncAPI specs into one.
+/// Combines channels, operations, components, and uses the first spec's info as base.
+fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
+    let mut merged = serde_json::json!({
+        "asyncapi": "3.0.0",
+        "info": {
+            "title": "Merged Async API",
+            "version": "1.0.0"
+        },
+        "channels": {},
+        "operations": {},
+        "components": {
+            "schemas": {},
+            "messages": {},
+            "securitySchemes": {},
+            "parameters": {}
+        }
+    });
+
+    let mut titles = Vec::new();
+
+    for (filename, content) in specs {
+        let parsed: Option<serde_json::Value> = serde_yaml::from_str(content).ok();
+        if let Some(mut spec) = parsed {
+            // Strip barbacane extensions
+            strip_barbacane_keys_recursive(&mut spec);
+
+            // Collect title for merged info
+            if let Some(title) = spec.pointer("/info/title").and_then(|t| t.as_str()) {
+                titles.push(title.to_string());
+            }
+
+            // Use first spec's info as base
+            if titles.len() == 1 {
+                if let Some(info) = spec.get("info") {
+                    merged["info"] = info.clone();
+                }
+                if let Some(version) = spec.get("asyncapi") {
+                    merged["asyncapi"] = version.clone();
+                }
+            }
+
+            // Merge channels
+            if let Some(channels) = spec.get("channels").and_then(|c| c.as_object()) {
+                let merged_channels = merged["channels"].as_object_mut().unwrap();
+                for (name, channel) in channels {
+                    // Prefix with source filename to avoid conflicts
+                    let key = if specs.len() > 1 && merged_channels.contains_key(name) {
+                        let base = filename.trim_end_matches(".yaml").trim_end_matches(".json");
+                        format!("{}_{}", base, name)
+                    } else {
+                        name.clone()
+                    };
+                    merged_channels.insert(key, channel.clone());
+                }
+            }
+
+            // Merge operations
+            if let Some(operations) = spec.get("operations").and_then(|o| o.as_object()) {
+                let merged_ops = merged["operations"].as_object_mut().unwrap();
+                for (name, op) in operations {
+                    let key = if specs.len() > 1 && merged_ops.contains_key(name) {
+                        let base = filename.trim_end_matches(".yaml").trim_end_matches(".json");
+                        format!("{}_{}", base, name)
+                    } else {
+                        name.clone()
+                    };
+                    merged_ops.insert(key, op.clone());
+                }
+            }
+
+            // Merge components
+            if let Some(components) = spec.get("components").and_then(|c| c.as_object()) {
+                let merged_components = merged["components"].as_object_mut().unwrap();
+                for (component_type, items) in components {
+                    if let Some(items_obj) = items.as_object() {
+                        let target = merged_components
+                            .entry(component_type.clone())
+                            .or_insert_with(|| serde_json::json!({}));
+                        if let Some(target_obj) = target.as_object_mut() {
+                            for (name, value) in items_obj {
+                                let key = if specs.len() > 1 && target_obj.contains_key(name) {
+                                    let base = filename
+                                        .trim_end_matches(".yaml")
+                                        .trim_end_matches(".json");
+                                    format!("{}_{}", base, name)
+                                } else {
+                                    name.clone()
+                                };
+                                target_obj.insert(key, value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Merge servers
+            if let Some(servers) = spec.get("servers").and_then(|s| s.as_object()) {
+                let merged_servers = merged
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("servers")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = merged_servers.as_object_mut() {
+                    for (name, server) in servers {
+                        if !map.contains_key(name) {
+                            map.insert(name.clone(), server.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Update title if multiple specs were merged
+    if titles.len() > 1 {
+        merged["info"]["title"] = serde_json::json!(titles.join(" + "));
+    }
+
+    // Clean up empty sections
+    if let Some(channels) = merged.get("channels").and_then(|c| c.as_object()) {
+        if channels.is_empty() {
+            merged.as_object_mut().unwrap().remove("channels");
+        }
+    }
+    if let Some(operations) = merged.get("operations").and_then(|o| o.as_object()) {
+        if operations.is_empty() {
+            merged.as_object_mut().unwrap().remove("operations");
+        }
+    }
+    if let Some(components) = merged.get_mut("components").and_then(|c| c.as_object_mut()) {
+        components.retain(|_, v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false));
+    }
+    if merged
+        .get("components")
+        .and_then(|c| c.as_object())
+        .map(|o| o.is_empty())
+        .unwrap_or(false)
+    {
+        merged.as_object_mut().unwrap().remove("components");
+    }
+
+    merged
+}
 use barbacane_wasm::{
     HttpClient, HttpClientConfig, InstancePool, PluginLimits, RateLimiter, ResponseCache,
     WasmEngine,
@@ -548,7 +872,7 @@ impl Gateway {
 
         // Reserved /__barbacane/* endpoints (skip other limits for internal endpoints)
         if path.starts_with("/__barbacane/") {
-            let response = self.handle_barbacane_endpoint(&path, &method);
+            let response = self.handle_barbacane_endpoint(&path, &method, query_string.as_deref());
             return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
         }
 
@@ -1019,19 +1343,31 @@ impl Gateway {
     }
 
     /// Handle reserved /__barbacane/* endpoints.
-    fn handle_barbacane_endpoint(&self, path: &str, method: &Method) -> Response<Full<Bytes>> {
+    fn handle_barbacane_endpoint(
+        &self,
+        path: &str,
+        method: &Method,
+        query: Option<&str>,
+    ) -> Response<Full<Bytes>> {
         if method != Method::GET {
             return self.method_not_allowed_response(vec!["GET".to_string()]);
         }
 
+        // Parse format from query string (default: yaml for specs, json for index)
+        let format = query
+            .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("format=")))
+            .unwrap_or("yaml");
+
         match path {
             "/__barbacane/health" => self.health_response(),
             "/__barbacane/metrics" => self.metrics_response(),
-            "/__barbacane/openapi" => self.openapi_response(),
+            "/__barbacane/specs" => self.specs_index_response(),
+            "/__barbacane/specs/openapi" => self.merged_openapi_response(format),
+            "/__barbacane/specs/asyncapi" => self.merged_asyncapi_response(format),
             _ => {
-                // Check for specific spec file: /__barbacane/openapi/{filename}
-                if let Some(filename) = path.strip_prefix("/__barbacane/openapi/") {
-                    self.spec_file_response(filename)
+                // Check for specific spec file: /__barbacane/specs/{filename}
+                if let Some(filename) = path.strip_prefix("/__barbacane/specs/") {
+                    self.spec_file_response(filename, format)
                 } else {
                     self.not_found_response()
                 }
@@ -1039,39 +1375,35 @@ impl Gateway {
         }
     }
 
-    /// Build the OpenAPI response (list of specs or single merged spec).
-    fn openapi_response(&self) -> Response<Full<Bytes>> {
-        // If there's exactly one spec, return it directly
-        if self.specs.len() == 1 {
-            let (filename, content) = self.specs.iter().next().unwrap();
-            let content_type = if filename.ends_with(".json") {
-                "application/json"
-            } else {
-                "text/yaml"
-            };
+    /// Build the specs index response (always JSON).
+    fn specs_index_response(&self) -> Response<Full<Bytes>> {
+        let mut openapi_specs = Vec::new();
+        let mut asyncapi_specs = Vec::new();
 
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", content_type)
-                .body(Full::new(Bytes::from(content.clone())))
-                .unwrap();
+        for (name, content) in &self.specs {
+            let spec_type = detect_spec_type(content);
+            let entry = serde_json::json!({
+                "name": name,
+                "url": format!("/__barbacane/specs/{}", name),
+            });
+            match spec_type {
+                SpecType::OpenApi => openapi_specs.push(entry),
+                SpecType::AsyncApi => asyncapi_specs.push(entry),
+                SpecType::Unknown => {} // Skip unknown specs
+            }
         }
 
-        // Multiple specs: return a JSON index
-        let spec_list: Vec<_> = self
-            .specs
-            .keys()
-            .map(|name| {
-                serde_json::json!({
-                    "name": name,
-                    "url": format!("/__barbacane/openapi/{}", name),
-                })
-            })
-            .collect();
-
         let body = serde_json::json!({
-            "specs": spec_list,
-            "count": self.specs.len(),
+            "openapi": {
+                "specs": openapi_specs,
+                "count": openapi_specs.len(),
+                "merged_url": "/__barbacane/specs/openapi"
+            },
+            "asyncapi": {
+                "specs": asyncapi_specs,
+                "count": asyncapi_specs.len(),
+                "merged_url": "/__barbacane/specs/asyncapi"
+            }
         });
 
         Response::builder()
@@ -1081,20 +1413,95 @@ impl Gateway {
             .unwrap()
     }
 
+    /// Serve merged OpenAPI spec (all OpenAPI specs combined).
+    fn merged_openapi_response(&self, format: &str) -> Response<Full<Bytes>> {
+        // Collect all OpenAPI specs
+        let openapi_specs: Vec<_> = self
+            .specs
+            .iter()
+            .filter(|(_, content)| matches!(detect_spec_type(content), SpecType::OpenApi))
+            .collect();
+
+        if openapi_specs.is_empty() {
+            return self.not_found_response();
+        }
+
+        // Merge specs
+        let merged = merge_openapi_specs(&openapi_specs);
+        self.serve_spec_content(&merged, format)
+    }
+
+    /// Serve merged AsyncAPI spec (all AsyncAPI specs combined).
+    fn merged_asyncapi_response(&self, format: &str) -> Response<Full<Bytes>> {
+        // Collect all AsyncAPI specs
+        let asyncapi_specs: Vec<_> = self
+            .specs
+            .iter()
+            .filter(|(_, content)| matches!(detect_spec_type(content), SpecType::AsyncApi))
+            .collect();
+
+        if asyncapi_specs.is_empty() {
+            return self.not_found_response();
+        }
+
+        // Merge specs
+        let merged = merge_asyncapi_specs(&asyncapi_specs);
+        self.serve_spec_content(&merged, format)
+    }
+
+    /// Serve spec content in requested format.
+    fn serve_spec_content(&self, value: &serde_json::Value, format: &str) -> Response<Full<Bytes>> {
+        let (content, content_type) = if format == "json" {
+            (
+                serde_json::to_string_pretty(value).unwrap_or_default(),
+                "application/json",
+            )
+        } else {
+            (
+                serde_yaml::to_string(value).unwrap_or_default(),
+                "text/yaml",
+            )
+        };
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", content_type)
+            .body(Full::new(Bytes::from(content)))
+            .unwrap()
+    }
+
     /// Serve a specific spec file.
-    fn spec_file_response(&self, filename: &str) -> Response<Full<Bytes>> {
+    fn spec_file_response(&self, filename: &str, format: &str) -> Response<Full<Bytes>> {
         if let Some(content) = self.specs.get(filename) {
-            let content_type = if filename.ends_with(".json") {
-                "application/json"
+            let is_source_json = filename.ends_with(".json");
+
+            // Parse the spec
+            let parsed: Option<serde_json::Value> = if is_source_json {
+                serde_json::from_str(content).ok()
             } else {
-                "text/yaml"
+                serde_yaml::from_str(content).ok()
             };
 
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", content_type)
-                .body(Full::new(Bytes::from(content.clone())))
-                .unwrap()
+            match parsed {
+                Some(mut value) => {
+                    // Strip x-barbacane-* extensions
+                    strip_barbacane_keys_recursive(&mut value);
+                    self.serve_spec_content(&value, format)
+                }
+                None => {
+                    // If parsing fails, return original content
+                    let content_type = if is_source_json {
+                        "application/json"
+                    } else {
+                        "text/yaml"
+                    };
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", content_type)
+                        .body(Full::new(Bytes::from(content.clone())))
+                        .unwrap()
+                }
+            }
         } else {
             self.not_found_response()
         }
@@ -1310,13 +1717,13 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                 }
 
                 // Check for unknown x-barbacane-* extensions (E1015 - warning)
+                // Note: x-sunset is not a barbacane extension (RFC 8594), so not in this list
                 let known_extensions = [
                     "x-barbacane-dispatch",
                     "x-barbacane-middlewares",
                     "x-barbacane-ratelimit",
                     "x-barbacane-cache",
                     "x-barbacane-observability",
-                    "x-barbacane-sunset",
                 ];
 
                 for key in spec.extensions.keys() {

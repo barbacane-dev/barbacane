@@ -2070,7 +2070,7 @@ paths:
         // This endpoint has no sunset date configured
         assert!(
             !resp.headers().contains_key("sunset"),
-            "Endpoint without x-barbacane-sunset should not have Sunset header"
+            "Endpoint without x-sunset should not have Sunset header"
         );
     }
 
@@ -2094,7 +2094,7 @@ paths:
         let sunset = resp.headers().get("sunset");
         assert!(
             sunset.is_some(),
-            "Endpoint with x-barbacane-sunset should have Sunset header"
+            "Endpoint with x-sunset should have Sunset header"
         );
         let sunset_val = sunset.unwrap().to_str().unwrap();
         assert!(

@@ -219,7 +219,7 @@ compiled 1 spec(s) to api.bca (3 routes, 2 plugin(s) bundled)
 
 The `.bca` (Barbacane Compiled Artifact) file contains:
 - Compiled routing table
-- Embedded source specs (for `/__barbacane/openapi`)
+- Embedded source specs (for `/__barbacane/specs`)
 - Bundled WASM plugins
 - Manifest with checksums
 
@@ -246,9 +246,9 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/__barbacane/health
 # {"status":"healthy","artifact_version":1,"compiler_version":"0.1.0","routes_count":3}
 
-# View the OpenAPI spec
-curl http://127.0.0.1:8080/__barbacane/openapi
-# Returns your original spec
+# View the API specs
+curl http://127.0.0.1:8080/__barbacane/specs
+# Returns index of specs with links to merged OpenAPI/AsyncAPI
 
 # Try a non-existent route
 curl http://127.0.0.1:8080/nonexistent
