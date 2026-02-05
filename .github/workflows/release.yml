@@ -332,72 +332,78 @@ jobs:
 
       # Publish in dependency order (leaves first, roots last)
       # Wait between publishes for crates.io index to update
-      - name: Publish barbacane-plugin-macros
-        run: cargo publish -p barbacane-plugin-macros --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+      # Track failures to report at the end
+      - name: Publish all crates
+        id: publish
+        run: |
+          FAILED=""
+          SKIPPED=""
+          SUCCESS=""
 
-      - name: Wait for index
-        run: sleep 30
+          publish_crate() {
+            local crate=$1
+            echo "::group::Publishing $crate"
 
-      - name: Publish barbacane-plugin-sdk
-        run: cargo publish -p barbacane-plugin-sdk --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+            # Capture output and exit code
+            set +e
+            OUTPUT=$(cargo publish -p "$crate" --token ${{ secrets.CARGO_REGISTRY_TOKEN }} 2>&1)
+            EXIT_CODE=$?
+            set -e
 
-      - name: Wait for index
-        run: sleep 30
+            echo "$OUTPUT"
 
-      - name: Publish barbacane-telemetry
-        run: cargo publish -p barbacane-telemetry --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "✓ $crate published successfully"
+              SUCCESS="$SUCCESS $crate"
+            elif echo "$OUTPUT" | grep -q "already uploaded"; then
+              echo "⊘ $crate already published, skipping"
+              SKIPPED="$SKIPPED $crate"
+            else
+              echo "✗ $crate failed to publish"
+              FAILED="$FAILED $crate"
+            fi
 
-      - name: Wait for index
-        run: sleep 30
+            echo "::endgroup::"
 
-      - name: Publish barbacane-spec-parser
-        run: cargo publish -p barbacane-spec-parser --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+            # Wait for crates.io index to update before next publish
+            sleep 30
+          }
 
-      - name: Wait for index
-        run: sleep 30
+          # Publish in dependency order
+          publish_crate "barbacane-plugin-macros"
+          publish_crate "barbacane-plugin-sdk"
+          publish_crate "barbacane-telemetry"
+          publish_crate "barbacane-spec-parser"
+          publish_crate "barbacane-router"
+          publish_crate "barbacane-validator"
+          publish_crate "barbacane-wasm"
+          publish_crate "barbacane-compiler"
+          publish_crate "barbacane"
+          publish_crate "barbacane-control"
 
-      - name: Publish barbacane-router
-        run: cargo publish -p barbacane-router --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+          # Summary
+          echo ""
+          echo "=========================================="
+          echo "Publish Summary"
+          echo "=========================================="
 
-      - name: Wait for index
-        run: sleep 30
+          if [ -n "$SUCCESS" ]; then
+            echo "✓ Published:$SUCCESS"
+          fi
 
-      - name: Publish barbacane-validator
-        run: cargo publish -p barbacane-validator --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+          if [ -n "$SKIPPED" ]; then
+            echo "⊘ Already published:$SKIPPED"
+          fi
 
-      - name: Wait for index
-        run: sleep 30
+          if [ -n "$FAILED" ]; then
+            echo "✗ Failed:$FAILED"
+            echo ""
+            echo "::error::Some crates failed to publish:$FAILED"
+            exit 1
+          fi
 
-      - name: Publish barbacane-wasm
-        run: cargo publish -p barbacane-wasm --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
-
-      - name: Wait for index
-        run: sleep 30
-
-      - name: Publish barbacane-compiler
-        run: cargo publish -p barbacane-compiler --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
-
-      - name: Wait for index
-        run: sleep 30
-
-      - name: Publish barbacane
-        run: cargo publish -p barbacane --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
-
-      - name: Wait for index
-        run: sleep 30
-
-      - name: Publish barbacane-control
-        run: cargo publish -p barbacane-control --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+          echo ""
+          echo "All crates published successfully!"
 
   # Create GitHub Release with all artifacts
   create-release:

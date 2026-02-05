@@ -120,13 +120,13 @@ proc-macro2 = "1"
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }
 
-# Workspace crates
-barbacane-spec-parser = { path = "crates/barbacane-spec-parser" }
-barbacane-compiler = { path = "crates/barbacane-compiler" }
-barbacane-router = { path = "crates/barbacane-router" }
-barbacane-validator = { path = "crates/barbacane-validator" }
-barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk" }
-barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros" }
-barbacane-wasm = { path = "crates/barbacane-wasm" }
-barbacane-telemetry = { path = "crates/barbacane-telemetry" }
-barbacane-test = { path = "crates/barbacane-test" }
+# Workspace crates (version required for crates.io publishing)
+barbacane-spec-parser = { path = "crates/barbacane-spec-parser", version = "0.1.0" }
+barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.1.0" }
+barbacane-router = { path = "crates/barbacane-router", version = "0.1.0" }
+barbacane-validator = { path = "crates/barbacane-validator", version = "0.1.0" }
+barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.1.0" }
+barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "0.1.0" }
+barbacane-wasm = { path = "crates/barbacane-wasm", version = "0.1.0" }
+barbacane-telemetry = { path = "crates/barbacane-telemetry", version = "0.1.0" }
+barbacane-test = { path = "crates/barbacane-test", version = "0.1.0" }
