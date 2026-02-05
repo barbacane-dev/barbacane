@@ -439,13 +439,19 @@ Options:
 
 ### Container Images
 
-Official container images are available from GitHub Container Registry:
+Official container images are available from Docker Hub:
 
 ```bash
 # Control plane (includes web UI)
-docker pull ghcr.io/barbacane-dev/barbacane-control:latest
+docker pull barbacane/barbacane-control:latest
 
 # Data plane
+docker pull barbacane/barbacane:latest
+```
+
+Also available from GitHub Container Registry:
+```bash
+docker pull ghcr.io/barbacane-dev/barbacane-control:latest
 docker pull ghcr.io/barbacane-dev/barbacane:latest
 ```
 

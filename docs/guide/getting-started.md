@@ -45,10 +45,16 @@ barbacane --version
 For Docker or Kubernetes deployments:
 
 ```bash
-# Data plane
-docker pull ghcr.io/barbacane-dev/barbacane:latest
+# Data plane (from Docker Hub)
+docker pull barbacane/barbacane:latest
 
-# Control plane (includes web UI)
+# Control plane (from Docker Hub)
+docker pull barbacane/barbacane-control:latest
+```
+
+Also available from GitHub Container Registry:
+```bash
+docker pull ghcr.io/barbacane-dev/barbacane:latest
 docker pull ghcr.io/barbacane-dev/barbacane-control:latest
 ```
 
