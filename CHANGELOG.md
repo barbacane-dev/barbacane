@@ -62,12 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type-aware index response separating OpenAPI and AsyncAPI specs
 - Internal `x-barbacane-*` extensions stripped from served specs
 
+#### Plugins
+- New `observability` middleware plugin for per-operation observability:
+  - Latency SLO monitoring with `latency_slo_ms` config
+  - Detailed request/response logging with `detailed_request_logs` and `detailed_response_logs`
+  - Custom latency histogram emission with `emit_latency_histogram`
+  - Emits `barbacane_plugin_observability_slo_violation` counter when SLO exceeded
+
 #### Other
 - HTTP/2 support with automatic protocol detection via ALPN
 - API lifecycle support with `deprecated` flag and `x-sunset` extension (RFC 8594)
 - `Deprecation` and `Sunset` response headers for deprecated routes
 - Fixture-based test specs for comprehensive integration testing
-- SLO violation metrics (`barbacane_slo_violation_total`)
 - Deprecation metrics (`barbacane_deprecated_route_requests_total`)
 
 ### Changed
@@ -78,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - CORS plugin now includes JSON Schema (`config-schema.json`) for UI configuration
 - Plugin deletion errors now display user-friendly messages in the UI
+
+### Removed
+- `x-barbacane-observability` extension (dead code - was parsed but never used at runtime)
+  - Per-operation observability should be achieved via the middleware plugin system
+  - Global trace sampling remains configurable via `--trace-sampling` CLI flag
 
 ## [0.1.0] - 2026-01-28
 

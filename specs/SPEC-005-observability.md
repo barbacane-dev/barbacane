@@ -32,18 +32,8 @@ If the collector is unreachable, telemetry is silently dropped. Request processi
 --otlp-endpoint <URL>       OTel Collector endpoint (default: http://localhost:4317)
 --otlp-protocol <PROTO>     "grpc" | "http" (default: grpc)
 --otlp-headers <K=V,...>    Additional headers for OTLP export (e.g. auth tokens)
+--trace-sampling <RATE>     Global trace sampling rate 0.0-1.0 (default: 1.0)
 ```
-
-### 3.2 Spec-level tuning
-
-```yaml
-x-barbacane-observability:
-  trace_sampling: 0.1              # sample 10% of traces (default: 1.0)
-  detailed_validation_logs: true   # log every validation failure detail (default: false)
-  latency_slo: 50ms               # emit alert metric when p99 exceeds this
-```
-
-Placement: spec root (global) or operation level (override per route).
 
 ---
 
@@ -116,15 +106,7 @@ All metrics use the `barbacane_` prefix. Labels never contain unbounded cardinal
 |--------|------|--------|-------------|
 | `barbacane_deprecated_route_requests_total` | Counter | `method`, `path_template`, `api` | Requests to deprecated operations |
 
-### 4.8 SLO metrics
-
-When `x-barbacane-observability.latency_slo` is configured:
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `barbacane_slo_violation_total` | Counter | `method`, `path_template`, `api` | Requests exceeding the latency SLO |
-
-### 4.9 Plugin-emitted metrics
+### 4.8 Plugin-emitted metrics
 
 Plugins emit custom metrics via host functions (SPEC-003 section 4.8). These are auto-prefixed:
 
@@ -134,7 +116,7 @@ barbacane_plugin_<plugin_name>_<metric_name>
 
 Example: plugin `jwt-auth` emits `tokens_validated` → `barbacane_plugin_jwt_auth_tokens_validated`.
 
-### 4.10 Histogram buckets
+### 4.9 Histogram buckets
 
 All duration histograms use these bucket boundaries (seconds):
 
@@ -217,11 +199,7 @@ barbacane.request                           (root span)
 
 ### 5.4 Sampling
 
-Trace sampling is configurable:
-
-- **Global default:** 100% (`trace_sampling: 1.0`)
-- **Per-spec override:** `x-barbacane-observability.trace_sampling`
-- **Per-operation override:** same field at operation level
+Trace sampling is configurable via the `--trace-sampling` CLI flag (default: 1.0 = 100%).
 
 Sampling decision is made at the root span and propagated to all child spans.
 

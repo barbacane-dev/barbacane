@@ -25,7 +25,7 @@ pub mod metrics;
 pub mod prometheus;
 pub mod tracing;
 
-pub use config::{LogFormat, ObservabilityConfig, OtlpProtocol, TelemetryConfig};
+pub use config::{LogFormat, OtlpProtocol, TelemetryConfig};
 pub use logging::events;
 pub use metrics::MetricsRegistry;
 pub use prometheus::PROMETHEUS_CONTENT_TYPE;

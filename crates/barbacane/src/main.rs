@@ -477,6 +477,11 @@ enum Commands {
         #[arg(long)]
         otlp_endpoint: Option<String>,
 
+        /// Trace sampling rate (0.0 to 1.0). Default: 1.0 (100% sampling).
+        /// Set to 0.0 to disable tracing, 0.1 for 10% sampling, etc.
+        #[arg(long, default_value = "1.0")]
+        trace_sampling: f64,
+
         /// Maximum request body size in bytes (default: 1048576 = 1MB).
         #[arg(long, default_value = "1048576")]
         max_body_size: usize,
@@ -2975,6 +2980,7 @@ async fn main() -> ExitCode {
             log_level,
             log_format,
             otlp_endpoint,
+            trace_sampling,
             max_body_size,
             max_headers,
             max_header_size,
@@ -2996,7 +3002,8 @@ async fn main() -> ExitCode {
 
             let mut telemetry_config = barbacane_telemetry::TelemetryConfig::new()
                 .with_log_level(&log_level)
-                .with_log_format(log_fmt);
+                .with_log_format(log_fmt)
+                .with_trace_sampling(trace_sampling);
 
             if let Some(endpoint) = otlp_endpoint {
                 telemetry_config = telemetry_config.with_otlp_endpoint(endpoint);

@@ -302,6 +302,26 @@ Adds `X-Cache` header to responses:
     ttl: 86400
 ```
 
+### observability
+
+Per-operation observability middleware for SLO monitoring, detailed logging, and custom metrics.
+
+```yaml
+- name: observability
+  config:
+    latency_slo_ms: 200           # Emit SLO violation metric if exceeded
+    detailed_request_logs: true   # Log request details (method, path, headers, body size)
+    detailed_response_logs: true  # Log response details (status, duration, body size)
+    emit_latency_histogram: true  # Emit per-operation latency histogram
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `latency_slo_ms` | integer | - | Latency threshold in ms; emits `barbacane_plugin_observability_slo_violation` counter when exceeded |
+| `detailed_request_logs` | boolean | `false` | Log incoming request details |
+| `detailed_response_logs` | boolean | `false` | Log outgoing response details including duration |
+| `emit_latency_histogram` | boolean | `false` | Emit `barbacane_plugin_observability_latency_ms` histogram |
+
 ---
 
 ## Validation Errors

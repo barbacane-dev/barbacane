@@ -15,6 +15,7 @@ members = [
 exclude = [
     "plugins/mock",
     "plugins/lambda",
+    "plugins/observability",
 ]
 resolver = "2"
 

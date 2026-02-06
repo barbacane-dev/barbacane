@@ -1,7 +1,5 @@
 //! Telemetry configuration.
 
-use std::time::Duration;
-
 /// Log output format.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LogFormat {
@@ -134,30 +132,5 @@ impl TelemetryConfig {
     pub fn with_artifact_hash(mut self, hash: impl Into<String>) -> Self {
         self.artifact_hash = Some(hash.into());
         self
-    }
-}
-
-/// Per-operation observability configuration from `x-barbacane-observability`.
-#[derive(Debug, Clone, Default)]
-pub struct ObservabilityConfig {
-    /// Override trace sampling rate for this operation (0.0 to 1.0).
-    pub trace_sampling: Option<f64>,
-
-    /// Enable detailed validation failure logging.
-    pub detailed_validation_logs: Option<bool>,
-
-    /// Latency SLO threshold. Emit metric when exceeded.
-    pub latency_slo: Option<Duration>,
-}
-
-impl ObservabilityConfig {
-    /// Merge with global config, returning effective sampling rate.
-    pub fn effective_trace_sampling(&self, global: f64) -> f64 {
-        self.trace_sampling.unwrap_or(global)
-    }
-
-    /// Check if detailed validation logs are enabled.
-    pub fn should_log_validation_details(&self) -> bool {
-        self.detailed_validation_logs.unwrap_or(false)
     }
 }

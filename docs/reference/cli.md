@@ -257,6 +257,7 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
 | `--log-format` | No | `json` | Log format (`json` or `pretty`) |
 | `--otlp-endpoint` | No | - | OpenTelemetry endpoint for trace export (e.g., `http://localhost:4317`) |
+| `--trace-sampling` | No | `1.0` | Trace sampling rate (0.0 to 1.0). 1.0 = 100%, 0.1 = 10%, 0.0 = disabled |
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes (1MB) |
 | `--max-headers` | No | `100` | Maximum number of request headers |
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
@@ -294,6 +295,11 @@ barbacane serve --artifact api.bca \
 barbacane serve --artifact api.bca \
   --log-format json \
   --otlp-endpoint http://otel-collector:4317
+
+# With reduced trace sampling (10%)
+barbacane serve --artifact api.bca \
+  --otlp-endpoint http://otel-collector:4317 \
+  --trace-sampling 0.1
 
 # Development mode with pretty logging
 barbacane serve --artifact api.bca --dev --log-format pretty

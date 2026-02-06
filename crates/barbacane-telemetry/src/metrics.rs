@@ -64,15 +64,6 @@ pub struct RouteLabels {
     pub api: String,
 }
 
-/// SLO labels.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
-pub struct SloLabels {
-    pub method: String,
-    pub path: String,
-    pub api: String,
-    pub slo_ms: u64,
-}
-
 /// Connection labels.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ConnectionLabels {
@@ -118,9 +109,6 @@ pub struct MetricsRegistry {
 
     // Deprecation metrics
     pub deprecated_route_requests_total: Family<RouteLabels, Counter>,
-
-    // SLO metrics
-    pub slo_violation_total: Family<SloLabels, Counter>,
 
     // Plugin metrics (dynamically registered)
     pub plugin_counters: Family<PluginMetricLabels, Counter>,
@@ -253,14 +241,6 @@ impl MetricsRegistry {
             deprecated_route_requests_total.clone(),
         );
 
-        // SLO metrics
-        let slo_violation_total = Family::<SloLabels, Counter>::default();
-        registry.register(
-            "barbacane_slo_violation_total",
-            "Total number of SLO latency violations",
-            slo_violation_total.clone(),
-        );
-
         // Plugin metrics
         let plugin_counters = Family::<PluginMetricLabels, Counter>::default();
         registry.register(
@@ -295,7 +275,6 @@ impl MetricsRegistry {
             wasm_execution_duration_seconds,
             wasm_traps_total,
             deprecated_route_requests_total,
-            slo_violation_total,
             plugin_counters,
             plugin_histograms,
         }
@@ -414,17 +393,6 @@ impl MetricsRegistry {
         self.deprecated_route_requests_total
             .get_or_create(&labels)
             .inc();
-    }
-
-    /// Record an SLO violation.
-    pub fn record_slo_violation(&self, method: &str, path: &str, api: &str, slo_ms: u64) {
-        let labels = SloLabels {
-            method: method.to_string(),
-            path: path.to_string(),
-            api: api.to_string(),
-            slo_ms,
-        };
-        self.slo_violation_total.get_or_create(&labels).inc();
     }
 
     /// Increment a connection.
