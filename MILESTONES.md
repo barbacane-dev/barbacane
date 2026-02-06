@@ -8,31 +8,49 @@ See [BACKLOG.md](BACKLOG.md) for the full prioritized backlog.
 
 ## Current Sprint
 
-### Sprint 14 — Packaging & Release Pipeline
+### Sprint 15 — Core Plugins & CORS
+**Goal:** Additional middleware plugins and CORS improvements.
+
+- [x] `correlation-id` plugin — propagate/generate X-Correlation-ID
+- [x] `ip-restriction` plugin — allow/deny by IP/CIDR
+- [x] `request-size-limit` plugin — reject requests exceeding size
+- [x] `observability` plugin — trace sampling and SLO monitoring
+- [x] CORS auto-preflight — automatic OPTIONS response handling
+- [x] Per-middleware timing metrics — Prometheus histograms per plugin
+- [x] Playground environment — Docker Compose with Grafana, Prometheus, Loki
+- [ ] `request-transformer` plugin — modify headers, query params, body
+- [ ] `response-transformer` plugin — modify response headers/body
+- [ ] Documentation for transformation plugins
+
+---
+
+## Completed Sprints
+
+### Sprint 14 — Packaging & Release Pipeline ✓
 **Goal:** Ship the first official release with pre-built binaries and container images.
 **Spec:** [ADR-0019](adr/0019-packaging-and-release-strategy.md)
 
 #### Release Automation
-- [ ] GitHub Actions release workflow — triggered on `vX.Y.Z` tags
-- [ ] Version bump validation — CI checks version in `Cargo.toml` matches tag
-- [ ] Changelog validation — CI checks `CHANGELOG.md` has entry for version
+- [x] GitHub Actions release workflow — triggered on `vX.Y.Z` tags
+- [x] Version bump validation — CI checks version in `Cargo.toml` matches tag
+- [x] Changelog validation — CI checks `CHANGELOG.md` has entry for version
 
 #### Binary Builds
-- [ ] Linux x86_64 (gnu) binary
-- [ ] Linux aarch64 (gnu) binary
-- [ ] Linux x86_64 (musl) binary
-- [ ] Linux aarch64 (musl) binary
-- [ ] macOS x86_64 binary
-- [ ] macOS aarch64 binary
-- [ ] SHA256 checksums file
-- [ ] GitHub Release creation
+- [x] Linux x86_64 (gnu) binary
+- [x] Linux aarch64 (gnu) binary
+- [x] Linux x86_64 (musl) binary
+- [x] Linux aarch64 (musl) binary
+- [x] macOS x86_64 binary
+- [x] macOS aarch64 binary
+- [x] SHA256 checksums file
+- [x] GitHub Release creation
 
 #### Container Images
-- [ ] `Dockerfile` for data plane — multi-stage build, distroless base
-- [ ] `Dockerfile` for control plane — includes UI assets
-- [ ] Multi-arch builds — linux/amd64 + linux/arm64
-- [ ] Push to ghcr.io
-- [ ] Image tagging — `latest`, `x.y.z`, `x.y`, `x`
+- [x] `Dockerfile` for data plane — multi-stage build, distroless base
+- [x] `Dockerfile` for control plane — includes UI assets
+- [x] Multi-arch builds — linux/amd64 + linux/arm64
+- [x] Push to ghcr.io and Docker Hub
+- [x] Image tagging — `latest`, `x.y.z`, `x.y`, `x`
 
 #### Documentation
 - [ ] Installation guide update
@@ -42,18 +60,9 @@ See [BACKLOG.md](BACKLOG.md) for the full prioritized backlog.
 
 ## Upcoming Sprints
 
-### Sprint 15 — Core Plugins (Transformers)
-**Goal:** Request/response transformation — the most requested missing feature.
-
-- [ ] `request-transformer` plugin — modify headers, query params, body
-- [ ] `response-transformer` plugin — modify response headers/body
-- [ ] `correlation-id` plugin — propagate/generate X-Correlation-ID
-- [ ] Documentation for transformation plugins
-
 ### Sprint 16 — Security Plugins
-**Goal:** IP restriction and basic auth for common security patterns.
+**Goal:** Additional authentication and authorization plugins.
 
-- [ ] `ip-restriction` plugin — allow/deny by IP/CIDR
 - [ ] `basic-auth` plugin — username/password authentication
 - [ ] `acl` plugin — access control lists after authentication
 - [ ] Security plugins documentation
@@ -236,6 +245,23 @@ Connected mode for fleet management.
 - WebSocket connection between data plane and control plane
 - API key authentication
 - Deploy tab in control plane UI
+</details>
+
+<details>
+<summary><strong>M13 — Release Pipeline & Plugins</strong></summary>
+
+Packaging, release automation, and additional plugins.
+
+- GitHub Actions release workflow for binaries and containers
+- Multi-platform builds (Linux, macOS, ARM64)
+- Docker Hub and ghcr.io publishing
+- `correlation-id` middleware plugin
+- `ip-restriction` middleware plugin
+- `request-size-limit` middleware plugin
+- `observability` middleware plugin
+- CORS automatic preflight handling
+- Per-middleware timing metrics
+- Playground environment (Docker Compose with Grafana stack)
 </details>
 
 ---

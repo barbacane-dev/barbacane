@@ -23,7 +23,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 
 | Plugin | Type | Description | Source |
 |--------|------|-------------|--------|
-| `observability` | Middleware | Trace sampling, detailed validation logs, latency SLO monitoring | ADR-0010 |
+| ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ | **DONE** |
 | `acl` | Middleware | Access control by consumer/group after auth | Competitive analysis |
 | ~~`request-size-limit`~~ | ~~Middleware~~ | ~~Reject requests exceeding size (per-route)~~ | **DONE** |
 | `bot-detection` | Middleware | Block known bots by User-Agent patterns | Competitive analysis |
@@ -58,6 +58,8 @@ Items are tagged with their source ADR or SPEC for traceability.
 | Feature | Description | Priority | Source |
 |---------|-------------|----------|--------|
 | ~~Hot-reload~~ | ~~Download and swap artifact at runtime without restart~~ | ~~P0~~ | **DONE** |
+| ~~CORS auto-preflight~~ | ~~Automatic OPTIONS response for CORS preflight requests~~ | ~~P1~~ | **DONE** |
+| ~~Per-middleware timing metrics~~ | ~~Record execution duration per middleware in Prometheus~~ | ~~P1~~ | **DONE** |
 | HTTP/3 support | QUIC-based HTTP/3 ingress via `quinn` crate | P3 | ADR-0004 |
 | gRPC support | Native gRPC proxying | P2 | ADR-0004 |
 | Response streaming | Stream large responses without buffering | P2 | — |
@@ -80,6 +82,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 
 | Feature | Description | Priority | Source |
 |---------|-------------|----------|--------|
+| ~~Playground environment~~ | ~~Docker Compose with Prometheus, Grafana, Loki, WireMock~~ | ~~P1~~ | **DONE** |
 | `barbacane dev` | Local development server with file watching | P1 | ADR-0014 |
 | `barbacane plugin init` | Scaffold new plugin projects from template | P1 | ADR-0017 |
 | Plugin template repo | `barbacane-plugin-template` repository with minimal scaffolding | P1 | ADR-0017 |
