@@ -43,7 +43,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(barbacane_requests_total[1m]))",
+          "expr": "sum(rate(barbacane_requests_total_total[1m]))",
           "refId": "A"
         }
       ],
@@ -111,7 +111,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(barbacane_requests_total{status=~\"5..\"}[5m])) / sum(rate(barbacane_requests_total[5m])) * 100",
+          "expr": "sum(rate(barbacane_requests_total_total{status=~\"5..\"}[5m])) / sum(rate(barbacane_requests_total_total[5m])) * 100",
           "refId": "A"
         }
       ],
@@ -203,7 +203,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (method, path) (rate(barbacane_requests_total[1m]))",
+          "expr": "sum by (method, path) (rate(barbacane_requests_total_total[1m]))",
           "legendFormat": "{{method}} {{path}}",
           "refId": "A"
         }
@@ -258,7 +258,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (status) (rate(barbacane_requests_total[1m]))",
+          "expr": "sum by (status) (rate(barbacane_requests_total_total[1m]))",
           "legendFormat": "{{status}}",
           "refId": "A"
         }
