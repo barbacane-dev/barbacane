@@ -1,0 +1,225 @@
+# Barbacane Playground
+#
+# Full-featured demo environment with observability stack.
+#
+# Quick start:
+#   docker compose up -d
+#
+# Then visit:
+#   - Gateway: http://localhost:8080
+#   - Control Plane UI: http://localhost:3001
+#   - Grafana: http://localhost:3000 (admin/admin)
+#   - Prometheus: http://localhost:9090
+#   - WireMock: http://localhost:8081/__admin
+
+services:
+  # ==========================================================================
+  # Spec Compiler (init container - compiles specs before gateway starts)
+  # ==========================================================================
+  compiler:
+    build:
+      context: ..
+      dockerfile: playground/Dockerfile.compile
+    command: ["compile", "--spec", "/specs/train-travel-api.yaml", "--spec", "/specs/train-events.yaml", "--manifest", "/manifest/barbacane.yaml", "--output", "/output/api.bca", "--allow-plaintext"]
+    volumes:
+      - ./specs:/specs:ro
+      - ./barbacane.yaml:/manifest/barbacane.yaml:ro
+      - ../plugins:/plugins:ro
+      - artifact_data:/output
+    # Only run once, then exit
+    restart: "no"
+
+  # ==========================================================================
+  # API Gateway (Data Plane)
+  # ==========================================================================
+  barbacane:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["serve", "--artifact", "/config/api.bca", "--allow-plaintext-upstream"]
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - artifact_data:/config:ro
+    environment:
+      RUST_LOG: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317
+      OTEL_SERVICE_NAME: barbacane-playground
+    depends_on:
+      compiler:
+        condition: service_completed_successfully
+      wiremock:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/__barbacane/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    labels:
+      - "logging=alloy"
+
+  # ==========================================================================
+  # Control Plane (Web UI + API)
+  # ==========================================================================
+  control-plane:
+    build:
+      context: ..
+      dockerfile: Dockerfile.control
+    ports:
+      - "3001:80"    # Web UI
+      - "9091:9090"  # Control Plane API
+    environment:
+      DATABASE_URL: postgres://barbacane:barbacane@postgres:5432/barbacane
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9090"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # PostgreSQL (for Control Plane)
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: barbacane
+      POSTGRES_PASSWORD: barbacane
+      POSTGRES_DB: barbacane
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barbacane"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Mock Backend (WireMock)
+  # ==========================================================================
+  wiremock:
+    image: wiremock/wiremock:3.10.0
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./wiremock/mappings:/home/wiremock/mappings:ro
+      - ./wiremock/__files:/home/wiremock/__files:ro
+    command: --verbose
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/__admin/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ==========================================================================
+  # Observability: Metrics (Prometheus)
+  # ==========================================================================
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+      - '--web.enable-remote-write-receiver'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Observability: Logs (Loki)
+  # ==========================================================================
+  loki:
+    image: grafana/loki:3.3.2
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./configs/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Observability: Log & Metrics Collector (Grafana Alloy)
+  # ==========================================================================
+  alloy:
+    image: grafana/alloy:v1.5.1
+    volumes:
+      - ./configs/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  # ==========================================================================
+  # Observability: Traces (Tempo)
+  # ==========================================================================
+  tempo:
+    image: grafana/tempo:2.6.1
+    ports:
+      - "3200:3200"   # Tempo HTTP
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    volumes:
+      - ./configs/tempo/tempo-config.yaml:/etc/tempo/config.yaml:ro
+      - tempo_data:/var/tempo
+    command: -config.file=/etc/tempo/config.yaml
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3200/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Observability: Visualization (Grafana)
+  # ==========================================================================
+  grafana:
+    image: grafana/grafana:11.4.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor tempoSearch tempoBackendSearch
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  artifact_data:
+  postgres_data:
+  prometheus_data:
+  loki_data:
+  tempo_data:
+  grafana_data:

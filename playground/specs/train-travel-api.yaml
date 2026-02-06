@@ -1,0 +1,925 @@
+# Barbacane Playground - Train Travel API
+# OpenAPI 3.1 specification demonstrating all gateway features
+openapi: "3.1.0"
+info:
+  title: Train Travel API
+  summary: European train booking API (Playground Demo)
+  description: |
+    Demo API for the Barbacane API Gateway playground.
+
+    This spec demonstrates:
+    - Rate limiting per API key
+    - CORS configuration
+    - Request validation
+    - Caching
+    - JWT authentication (on booking endpoints)
+    - SLO monitoring with the observability middleware
+  version: "3.0.0"
+  contact:
+    name: Train Support
+    email: support@trains.example.com
+
+servers:
+  - url: http://localhost:8080
+    description: Playground Gateway
+
+# Global Barbacane middlewares
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      requests_per_minute: 60
+      burst: 20
+      key: "header:X-API-Key"
+  - name: cors
+    config:
+      allowed_origins: ["*"]
+      allowed_methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+      allowed_headers: ["Authorization", "Content-Type", "X-API-Key", "X-Request-ID", "Idempotency-Key"]
+      max_age: 86400
+  - name: correlation-id
+    config:
+      header: X-Request-ID
+      generate_if_missing: true
+
+tags:
+  - name: Stations
+    description: Train station search and details
+  - name: Trips
+    description: Trip search and availability
+  - name: Bookings
+    description: Booking management (requires auth)
+  - name: Payments
+    description: Payment processing
+
+paths:
+  # ===========================================================================
+  # Stations - Public endpoints with caching
+  # ===========================================================================
+  /stations:
+    get:
+      summary: List all train stations
+      operationId: listStations
+      tags: [Stations]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/stations"
+          timeout: 10.0
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 300
+            vary: ["Accept-Language"]
+        - name: observability
+          config:
+            latency_slo_ms: 500
+            detailed_response_logs: true
+      parameters:
+        - name: country
+          in: query
+          description: Filter by country code (ISO 3166-1 alpha-2)
+          schema:
+            type: string
+            pattern: "^[A-Z]{2}$"
+        - name: search
+          in: query
+          description: Search by station name
+          schema:
+            type: string
+            minLength: 2
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: List of stations
+          headers:
+            X-Total-Count:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StationList"
+
+  /stations/{stationId}:
+    get:
+      summary: Get station details
+      operationId: getStation
+      tags: [Stations]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/stations/{stationId}"
+          timeout: 5.0
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 3600
+        - name: observability
+          config:
+            latency_slo_ms: 200
+      parameters:
+        - name: stationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Station details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Station"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /stations/{stationId}/departures:
+    get:
+      summary: Get live departures from a station
+      operationId: getStationDepartures
+      tags: [Stations]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/stations/{stationId}/departures"
+          timeout: 5.0
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 30
+            stale_if_error: 60
+        - name: observability
+          config:
+            latency_slo_ms: 100
+            emit_latency_histogram: true
+      parameters:
+        - name: stationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: Live departures
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepartureList"
+
+  # ===========================================================================
+  # Trips - Public search
+  # ===========================================================================
+  /trips:
+    get:
+      summary: Search for available trips
+      operationId: searchTrips
+      tags: [Trips]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/trips"
+          timeout: 20.0
+      x-barbacane-middlewares:
+        - name: observability
+          config:
+            latency_slo_ms: 2000
+            detailed_request_logs: true
+            detailed_response_logs: true
+            emit_latency_histogram: true
+      parameters:
+        - name: origin
+          in: query
+          required: true
+          description: Origin station ID
+          schema:
+            type: string
+            format: uuid
+        - name: destination
+          in: query
+          required: true
+          description: Destination station ID
+          schema:
+            type: string
+            format: uuid
+        - name: departure_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: passengers
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 9
+            default: 1
+        - name: class
+          in: query
+          schema:
+            type: string
+            enum: [first, second]
+      responses:
+        "200":
+          description: Available trips
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripSearchResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /trips/{tripId}:
+    get:
+      summary: Get trip details
+      operationId: getTrip
+      tags: [Trips]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/trips/{tripId}"
+          timeout: 5.0
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Trip details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /trips/{tripId}/realtime:
+    get:
+      summary: Get real-time trip status
+      operationId: getTripRealtime
+      tags: [Trips]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/trips/{tripId}/realtime"
+          timeout: 5.0
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 15
+        - name: observability
+          config:
+            latency_slo_ms: 100
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Real-time status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealtimeStatus"
+
+  # ===========================================================================
+  # Bookings - Requires JWT authentication
+  # ===========================================================================
+  /bookings:
+    get:
+      summary: List user's bookings
+      operationId: listBookings
+      tags: [Bookings]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/bookings"
+          timeout: 10.0
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            required: true
+            skip_signature_validation: true  # Demo mode - don't validate signatures
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [pending, awaiting_payment, confirmed, cancelled, completed, refunded]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Booking list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      summary: Create a new booking
+      operationId: createBooking
+      tags: [Bookings]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/bookings"
+          timeout: 15.0
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            required: true
+            skip_signature_validation: true
+        - name: request-size-limit
+          config:
+            max_bytes: 65536
+        - name: observability
+          config:
+            latency_slo_ms: 1000
+            detailed_request_logs: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingRequest"
+      responses:
+        "201":
+          description: Booking created
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /bookings/{bookingId}:
+    get:
+      summary: Get booking details
+      operationId: getBooking
+      tags: [Bookings]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/bookings/{bookingId}"
+          timeout: 5.0
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            required: true
+            skip_signature_validation: true
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      summary: Cancel a booking
+      operationId: cancelBooking
+      tags: [Bookings]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/bookings/{bookingId}"
+          timeout: 10.0
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            required: true
+            skip_signature_validation: true
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Booking cancelled
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bookings/{bookingId}/tickets:
+    get:
+      summary: Get tickets for a booking
+      operationId: getTickets
+      tags: [Bookings]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/bookings/{bookingId}/tickets"
+          timeout: 5.0
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            required: true
+            skip_signature_validation: true
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Tickets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketList"
+
+  # ===========================================================================
+  # Payments
+  # ===========================================================================
+  /bookings/{bookingId}/payment:
+    get:
+      summary: Get payment status
+      operationId: getPayment
+      tags: [Payments]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/bookings/{bookingId}/payment"
+          timeout: 5.0
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            required: true
+            skip_signature_validation: true
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Payment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
+    post:
+      summary: Process payment
+      operationId: createPayment
+      tags: [Payments]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "http://wiremock:8080"
+          path: "/api/v3/bookings/{bookingId}/payment"
+          timeout: 45.0
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            required: true
+            skip_signature_validation: true
+        - name: observability
+          config:
+            latency_slo_ms: 5000
+            detailed_request_logs: true
+            detailed_response_logs: true
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentRequest"
+      responses:
+        "200":
+          description: Payment processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "402":
+          $ref: "#/components/responses/PaymentRequired"
+
+components:
+  schemas:
+    Station:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        code:
+          type: string
+        city:
+          type: string
+        country_code:
+          type: string
+        timezone:
+          type: string
+        coordinates:
+          $ref: "#/components/schemas/Coordinates"
+        amenities:
+          type: array
+          items:
+            type: string
+        accessibility:
+          type: object
+
+    StationList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Station"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    Coordinates:
+      type: object
+      properties:
+        latitude:
+          type: number
+        longitude:
+          type: number
+
+    Departure:
+      type: object
+      properties:
+        trip_id:
+          type: string
+          format: uuid
+        train_number:
+          type: string
+        destination:
+          type: string
+        scheduled_time:
+          type: string
+          format: date-time
+        expected_time:
+          type: string
+          format: date-time
+        platform:
+          type: string
+        status:
+          type: string
+          enum: [on_time, delayed, cancelled, departed]
+        delay_minutes:
+          type: integer
+
+    DepartureList:
+      type: object
+      properties:
+        station_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        departures:
+          type: array
+          items:
+            $ref: "#/components/schemas/Departure"
+
+    Trip:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        origin:
+          $ref: "#/components/schemas/Station"
+        destination:
+          $ref: "#/components/schemas/Station"
+        departure_time:
+          type: string
+          format: date-time
+        arrival_time:
+          type: string
+          format: date-time
+        duration_minutes:
+          type: integer
+        train_number:
+          type: string
+        operator:
+          type: object
+        prices:
+          type: array
+          items:
+            type: object
+        amenities:
+          type: array
+          items:
+            type: string
+        available_seats:
+          type: integer
+
+    TripSearchResult:
+      type: object
+      properties:
+        search_id:
+          type: string
+          format: uuid
+        outbound:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trip"
+        return:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trip"
+        meta:
+          type: object
+
+    RealtimeStatus:
+      type: object
+      properties:
+        trip_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        current_location:
+          $ref: "#/components/schemas/Coordinates"
+        next_stop:
+          $ref: "#/components/schemas/Station"
+        delay_minutes:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        status:
+          type: string
+          enum: [pending, awaiting_payment, confirmed, cancelled, completed, refunded]
+        trip:
+          $ref: "#/components/schemas/Trip"
+        passengers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Passenger"
+        total_price:
+          type: object
+        payment:
+          $ref: "#/components/schemas/Payment"
+        created_at:
+          type: string
+          format: date-time
+
+    BookingList:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Booking"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    BookingRequest:
+      type: object
+      required: [trip_id, passengers]
+      properties:
+        trip_id:
+          type: string
+          format: uuid
+        passengers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Passenger"
+          minItems: 1
+          maxItems: 9
+        price_class:
+          type: string
+          enum: [first, second]
+
+    Passenger:
+      type: object
+      required: [name, email]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        passenger_type:
+          type: string
+          enum: [adult, child, infant, senior]
+          default: adult
+
+    TicketList:
+      type: object
+      properties:
+        tickets:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              passenger:
+                $ref: "#/components/schemas/Passenger"
+              qr_code:
+                type: string
+              barcode:
+                type: string
+              valid_from:
+                type: string
+                format: date-time
+              valid_until:
+                type: string
+                format: date-time
+
+    PaymentRequest:
+      type: object
+      required: [method]
+      properties:
+        method:
+          type: object
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [card, bank_transfer, wallet]
+            token:
+              type: string
+        return_url:
+          type: string
+          format: uri
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        amount:
+          type: number
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [pending, requires_action, succeeded, failed, refunded]
+        method:
+          type: string
+        requires_action:
+          type: boolean
+        action_url:
+          type: string
+          format: uri
+        created_at:
+          type: string
+          format: date-time
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        total_pages:
+          type: integer
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        documentation_url:
+          type: string
+          format: uri
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Unauthorized:
+      description: Unauthorized
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: Not Found
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    PaymentRequired:
+      description: Payment Required
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"

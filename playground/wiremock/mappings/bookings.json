@@ -1,0 +1,214 @@
+{
+  "mappings": [
+    {
+      "name": "List Bookings",
+      "request": {
+        "method": "GET",
+        "urlPath": "/api/v3/bookings"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "data": [
+            {
+              "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+              "reference": "BK-2025-001234",
+              "status": "confirmed",
+              "trip": {
+                "id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
+                "origin": { "name": "Berlin Hauptbahnhof" },
+                "destination": { "name": "Paris Gare du Nord" },
+                "departure_time": "2025-03-15T08:00:00Z"
+              },
+              "passengers": [
+                { "name": "John Doe", "email": "john@example.com", "passenger_type": "adult" }
+              ],
+              "total_price": { "amount": 89.90, "currency": "EUR" },
+              "created_at": "2025-02-01T10:30:00Z",
+              "confirmed_at": "2025-02-01T10:35:00Z"
+            },
+            {
+              "id": "e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b",
+              "reference": "BK-2025-001235",
+              "status": "awaiting_payment",
+              "trip": {
+                "id": "a19e3d4f-9e7f-8f6f-3d2f-5f6a7b8c9d0e",
+                "origin": { "name": "Berlin Hauptbahnhof" },
+                "destination": { "name": "Amsterdam Centraal" },
+                "departure_time": "2025-03-20T14:00:00Z"
+              },
+              "passengers": [
+                { "name": "Jane Smith", "email": "jane@example.com", "passenger_type": "adult" },
+                { "name": "Tom Smith", "email": "tom@example.com", "passenger_type": "child" }
+              ],
+              "total_price": { "amount": 159.80, "currency": "EUR" },
+              "created_at": "2025-02-05T15:00:00Z",
+              "expires_at": "2025-02-05T15:30:00Z"
+            }
+          ],
+          "meta": { "page": 1, "limit": 20, "total": 2, "total_pages": 1 },
+          "links": { "self": "/api/v3/bookings?page=1", "first": "/api/v3/bookings?page=1", "last": "/api/v3/bookings?page=1" }
+        }
+      }
+    },
+    {
+      "name": "Create Booking",
+      "request": {
+        "method": "POST",
+        "urlPath": "/api/v3/bookings",
+        "headers": {
+          "Content-Type": { "equalTo": "application/json" }
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Type": "application/json",
+          "Location": "/api/v3/bookings/{{randomValue type='UUID'}}"
+        },
+        "jsonBody": {
+          "id": "{{randomValue type='UUID'}}",
+          "reference": "BK-2025-{{randomValue type='NUMERIC' length=6}}",
+          "status": "pending",
+          "trip": {
+            "id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
+            "origin": { "name": "Berlin Hauptbahnhof" },
+            "destination": { "name": "Paris Gare du Nord" },
+            "departure_time": "2025-03-15T08:00:00Z"
+          },
+          "passengers": [
+            { "id": "{{randomValue type='UUID'}}", "name": "Demo User", "email": "demo@example.com", "passenger_type": "adult" }
+          ],
+          "total_price": { "class": "second", "amount": 89.90, "currency": "EUR", "flexibility": "non_refundable" },
+          "created_at": "{{now format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
+          "expires_at": "{{now offset='+30 minutes' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}"
+        },
+        "transformers": ["response-template"]
+      }
+    },
+    {
+      "name": "Get Booking",
+      "request": {
+        "method": "GET",
+        "urlPath": "/api/v3/bookings/d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+          "reference": "BK-2025-001234",
+          "status": "confirmed",
+          "trip": {
+            "id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
+            "origin": {
+              "id": "efdbb9d1-02c2-4bc3-afb7-6788d8782b1e",
+              "name": "Berlin Hauptbahnhof",
+              "code": "BHF"
+            },
+            "destination": {
+              "id": "b2e783e1-c824-4d63-b37a-d8ee6c0b95da",
+              "name": "Paris Gare du Nord",
+              "code": "XPG"
+            },
+            "departure_time": "2025-03-15T08:00:00Z",
+            "arrival_time": "2025-03-15T16:00:00Z"
+          },
+          "passengers": [
+            {
+              "id": "f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c",
+              "name": "John Doe",
+              "email": "john@example.com",
+              "passenger_type": "adult",
+              "seat": { "car": "12", "seat": "45A", "preference": "window" }
+            }
+          ],
+          "total_price": { "class": "second", "amount": 89.90, "currency": "EUR", "flexibility": "non_refundable" },
+          "payment": {
+            "id": "a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d",
+            "booking_id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+            "amount": 89.90,
+            "currency": "EUR",
+            "status": "succeeded",
+            "method": "card",
+            "created_at": "2025-02-01T10:35:00Z"
+          },
+          "created_at": "2025-02-01T10:30:00Z",
+          "confirmed_at": "2025-02-01T10:35:00Z"
+        }
+      }
+    },
+    {
+      "name": "Update Booking",
+      "request": {
+        "method": "PATCH",
+        "urlPathPattern": "/api/v3/bookings/.*"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+          "reference": "BK-2025-001234",
+          "status": "confirmed",
+          "message": "Booking updated successfully"
+        }
+      }
+    },
+    {
+      "name": "Cancel Booking",
+      "request": {
+        "method": "DELETE",
+        "urlPathPattern": "/api/v3/bookings/.*"
+      },
+      "response": {
+        "status": 204
+      }
+    },
+    {
+      "name": "Get Booking - Not Found",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v3/bookings/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+      },
+      "response": {
+        "status": 404,
+        "headers": { "Content-Type": "application/problem+json" },
+        "jsonBody": {
+          "code": "BOOKING_NOT_FOUND",
+          "message": "Booking not found",
+          "documentation_url": "https://docs.trains.example.com/errors#BOOKING_NOT_FOUND"
+        }
+      },
+      "priority": 10
+    },
+    {
+      "name": "Get Tickets",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/v3/bookings/.*/tickets"
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "tickets": [
+            {
+              "id": "b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e",
+              "passenger": {
+                "id": "f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c",
+                "name": "John Doe",
+                "email": "john@example.com"
+              },
+              "qr_code": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+              "barcode": "TKT2025001234JDOE",
+              "valid_from": "2025-03-15T06:00:00Z",
+              "valid_until": "2025-03-15T18:00:00Z"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

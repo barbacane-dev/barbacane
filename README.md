@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/tests-332%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-355%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
@@ -53,6 +53,21 @@ Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane
 - [Plugin Development](https://docs.barbacane.dev/contributing/plugins.html) — Build custom WASM plugins
 - [Development Guide](https://docs.barbacane.dev/contributing/development.html) — Setup and contribute
 
+## Playground
+
+Try Barbacane locally with the full-featured playground:
+
+```bash
+cd playground
+docker-compose up -d
+
+# Gateway: http://localhost:8080
+# Grafana: http://localhost:3000 (admin/admin)
+# Control Plane: http://localhost:3001
+```
+
+The playground includes a Train Travel API demo with WireMock backend, full observability stack (Prometheus, Loki, Tempo, Grafana), and the control plane UI.
+
 ## Official Plugins
 
 | Plugin | Type | Description |
@@ -60,12 +75,18 @@ Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane
 | `http-upstream` | Dispatcher | Reverse proxy to HTTP/HTTPS backends |
 | `mock` | Dispatcher | Return static responses |
 | `lambda` | Dispatcher | Invoke AWS Lambda functions |
+| `kafka` | Dispatcher | Publish messages to Kafka |
+| `nats` | Dispatcher | Publish messages to NATS |
 | `jwt-auth` | Middleware | JWT token validation |
 | `apikey-auth` | Middleware | API key authentication |
 | `oauth2-auth` | Middleware | OAuth2 token introspection |
 | `rate-limit` | Middleware | Sliding window rate limiting |
 | `cache` | Middleware | Response caching |
 | `cors` | Middleware | CORS header management |
+| `correlation-id` | Middleware | Request correlation ID propagation |
+| `request-size-limit` | Middleware | Request body size limits |
+| `ip-restriction` | Middleware | IP allowlist/blocklist |
+| `observability` | Middleware | SLO monitoring and detailed logging |
 
 ## Performance
 

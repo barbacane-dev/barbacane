@@ -1,0 +1,28 @@
+# Prometheus configuration for Barbacane playground
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Scrape Barbacane gateway metrics
+  - job_name: 'barbacane'
+    static_configs:
+      - targets: ['barbacane:8080']
+    metrics_path: '/__barbacane/metrics'
+    scrape_interval: 5s
+
+  # Scrape Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape Tempo metrics
+  - job_name: 'tempo'
+    static_configs:
+      - targets: ['tempo:3200']
+
+  # Scrape Loki metrics
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']

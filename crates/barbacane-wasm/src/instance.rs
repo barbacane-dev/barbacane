@@ -686,6 +686,22 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_clock_now: {}", e)))?;
 
+    // host_time_now - alias for host_clock_now (deprecated, use host_clock_now)
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_time_now",
+            |_caller: Caller<'_, PluginState>| -> i64 {
+                use std::time::Instant;
+
+                static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+                let start = START.get_or_init(Instant::now);
+
+                start.elapsed().as_millis() as i64
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_time_now: {}", e)))?;
+
     // host_get_unix_timestamp - returns current Unix timestamp in seconds
     linker
         .func_wrap(

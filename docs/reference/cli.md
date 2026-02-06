@@ -113,7 +113,7 @@ my-api/
 Compile one or more OpenAPI specs into a `.bca` artifact.
 
 ```bash
-barbacane compile --spec <FILES>... --output <PATH>
+barbacane compile --spec <FILES>... --manifest <PATH> --output <PATH>
 ```
 
 ### Options
@@ -122,7 +122,7 @@ barbacane compile --spec <FILES>... --output <PATH>
 |--------|----------|---------|-------------|
 | `--spec`, `-s` | Yes | - | One or more spec files (YAML or JSON) |
 | `--output`, `-o` | Yes | - | Output artifact path |
-| `--manifest`, `-m` | No | - | Path to `barbacane.yaml` manifest (required for plugin bundling) |
+| `--manifest`, `-m` | Yes | - | Path to `barbacane.yaml` manifest |
 | `--allow-plaintext` | No | `false` | Allow `http://` upstream URLs during compilation |
 
 ### Examples
@@ -136,9 +136,6 @@ barbacane compile -s users.yaml -s orders.yaml -m barbacane.yaml -o combined.bca
 
 # Short form
 barbacane compile -s api.yaml -m barbacane.yaml -o api.bca
-
-# Legacy compilation without manifest (no plugins bundled)
-barbacane compile -s api.yaml -o api.bca
 ```
 
 ### Exit Codes
@@ -610,6 +607,7 @@ barbacane compile \
   --spec users-api.yaml \
   --spec orders-api.yaml \
   --spec payments-api.yaml \
+  --manifest barbacane.yaml \
   --output combined.bca
 
 # Routes from all specs are merged
