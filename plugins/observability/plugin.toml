@@ -1,0 +1,13 @@
+[plugin]
+name = "observability"
+version = "0.1.0"
+type = "middleware"
+description = "Per-operation observability middleware for SLO monitoring, detailed logging, and custom metrics"
+wasm = "observability.wasm"
+
+[capabilities]
+log = true
+telemetry = true
+time = true
+context_get = true
+context_set = true

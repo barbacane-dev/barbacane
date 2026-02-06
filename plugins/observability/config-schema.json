@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Observability Middleware Configuration",
+  "type": "object",
+  "properties": {
+    "latency_slo_ms": {
+      "type": "integer",
+      "description": "Latency SLO threshold in milliseconds. Emits barbacane_plugin_observability_slo_violation_total metric when exceeded.",
+      "minimum": 1
+    },
+    "detailed_request_logs": {
+      "type": "boolean",
+      "description": "Log detailed request information (method, path, headers count, body size)",
+      "default": false
+    },
+    "detailed_response_logs": {
+      "type": "boolean",
+      "description": "Log detailed response information (status, headers count, body size, duration)",
+      "default": false
+    },
+    "emit_latency_histogram": {
+      "type": "boolean",
+      "description": "Emit a per-operation latency histogram metric",
+      "default": false
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

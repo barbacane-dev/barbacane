@@ -74,7 +74,6 @@ curl http://localhost:8080/__barbacane/metrics
 | `barbacane_middleware_duration_seconds` | histogram | Middleware execution time |
 | `barbacane_dispatch_duration_seconds` | histogram | Dispatcher execution time |
 | `barbacane_wasm_execution_duration_seconds` | histogram | WASM plugin execution time |
-| `barbacane_slo_violation_total` | counter | SLO violations (when configured) |
 
 ### Prometheus Integration
 
@@ -177,46 +176,6 @@ exporters:
       key: ${DD_API_KEY}
 ```
 
-## Per-Operation Configuration
-
-Use `x-barbacane-observability` to configure observability per operation:
-
-```yaml
-# Global defaults
-x-barbacane-observability:
-  trace_sampling: 0.1    # Sample 10% of traces
-
-paths:
-  /health:
-    get:
-      x-barbacane-observability:
-        trace_sampling: 0.0  # Don't trace health checks
-      x-barbacane-dispatch:
-        name: mock
-        config:
-          status: 200
-          body: '{"status":"ok"}'
-
-  /payments:
-    post:
-      x-barbacane-observability:
-        trace_sampling: 1.0           # 100% for critical endpoints
-        latency_slo_ms: 200           # SLO threshold
-        detailed_validation_logs: true # Debug validation issues
-      x-barbacane-dispatch:
-        name: http-upstream
-        config:
-          url: "https://payments.internal"
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `trace_sampling` | number | `1.0` | Sampling rate (0.0 = none, 1.0 = all) |
-| `latency_slo_ms` | integer | - | Latency threshold; emits `barbacane_slo_violation_total` when exceeded |
-| `detailed_validation_logs` | boolean | `false` | Include full validation error details in logs |
-
 ## Production Setup
 
 A typical production observability stack:
@@ -259,18 +218,10 @@ groups:
           severity: warning
         annotations:
           summary: "P99 latency exceeds 1 second"
-
-      - alert: SLOViolations
-        expr: rate(barbacane_slo_violation_total[5m]) > 0.01
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "SLO violations detected"
 ```
 
 ## What's Next?
 
 - [CLI Reference](../reference/cli.md) - All command-line options
 - [Reserved Endpoints](../reference/endpoints.md) - Full metrics endpoint documentation
-- [Spec Extensions](../reference/extensions.md) - Complete `x-barbacane-observability` reference
+- [Spec Extensions](../reference/extensions.md) - Barbacane spec extensions reference

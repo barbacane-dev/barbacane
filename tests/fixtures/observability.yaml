@@ -1,0 +1,77 @@
+openapi: "3.1.0"
+info:
+  title: Observability Test API
+  version: "1.0.0"
+
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      responses:
+        "200":
+          description: OK
+
+  /fast:
+    get:
+      operationId: fastEndpoint
+      x-barbacane-middlewares:
+        - name: observability
+          config:
+            latency_slo_ms: 100
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"fast":true}'
+      responses:
+        "200":
+          description: Fast response
+
+  /slow:
+    get:
+      operationId: slowEndpoint
+      x-barbacane-middlewares:
+        - name: observability
+          config:
+            latency_slo_ms: 10
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"slow":true}'
+          delay_ms: 50
+      responses:
+        "200":
+          description: Slow response (will violate SLO)
+
+  /detailed:
+    post:
+      operationId: detailedEndpoint
+      x-barbacane-middlewares:
+        - name: observability
+          config:
+            detailed_request_logs: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{"created":true}'
+      responses:
+        "201":
+          description: Created

@@ -470,7 +470,6 @@ plugins:
                 name: "rate-limit".to_string(),
                 config: serde_json::json!({}),
             }],
-            observability: Default::default(),
             extensions: BTreeMap::new(),
             operations: vec![
                 Operation {
@@ -484,7 +483,6 @@ plugins:
                         config: serde_json::json!({}),
                     }),
                     middlewares: None,
-                    observability: None,
                     deprecated: false,
                     sunset: None,
                     extensions: BTreeMap::new(),
@@ -505,7 +503,6 @@ plugins:
                         name: "jwt-auth@1.0.0".to_string(),
                         config: serde_json::json!({}),
                     }]),
-                    observability: None,
                     deprecated: false,
                     sunset: None,
                     extensions: BTreeMap::new(),
@@ -538,7 +535,6 @@ plugins:
             title: "Test".to_string(),
             api_version: "1.0.0".to_string(),
             global_middlewares: vec![],
-            observability: Default::default(),
             extensions: BTreeMap::new(),
             operations: vec![Operation {
                 path: "/health".to_string(),
@@ -551,7 +547,6 @@ plugins:
                     config: serde_json::json!({}),
                 }),
                 middlewares: None,
-                observability: None,
                 deprecated: false,
                 sunset: None,
                 extensions: BTreeMap::new(),
@@ -583,7 +578,6 @@ plugins:
             title: "Test".to_string(),
             api_version: "1.0.0".to_string(),
             global_middlewares: vec![],
-            observability: Default::default(),
             extensions: BTreeMap::new(),
             operations: vec![Operation {
                 path: "/proxy".to_string(),
@@ -596,7 +590,6 @@ plugins:
                     config: serde_json::json!({}),
                 }),
                 middlewares: None,
-                observability: None,
                 deprecated: false,
                 sunset: None,
                 extensions: BTreeMap::new(),
