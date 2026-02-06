@@ -99,7 +99,7 @@ opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["http-proto", "grpc-tonic"] }
 prometheus-client = "0.22"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 # Web framework (control plane)
 axum = { version = "0.8", features = ["multipart"] }

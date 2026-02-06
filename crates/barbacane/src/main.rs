@@ -1109,14 +1109,19 @@ impl Gateway {
         };
 
         // Execute middleware on_request chain
-        let (final_request_json, middleware_instances) = if !operation.middlewares.is_empty() {
-            match self.execute_middleware_on_request(&operation.middlewares, &request_json) {
-                Ok((req, instances)) => (req, instances),
-                Err(resp) => return Ok(resp), // Short-circuit response
-            }
-        } else {
-            (request_json, Vec::new())
-        };
+        let (final_request_json, middleware_instances, middleware_context) =
+            if !operation.middlewares.is_empty() {
+                match self.execute_middleware_on_request(&operation.middlewares, &request_json) {
+                    Ok((req, instances, ctx)) => (req, instances, ctx),
+                    Err(resp) => return Ok(resp), // Short-circuit response
+                }
+            } else {
+                (
+                    request_json,
+                    Vec::new(),
+                    barbacane_wasm::RequestContext::default(),
+                )
+            };
 
         // All dispatchers must be WASM plugins loaded from the artifact
         if !self.plugin_pool.has_plugin(&dispatch.name) {
@@ -1142,7 +1147,11 @@ impl Gateway {
 
         // Execute middleware on_response chain (reverse order)
         let final_response = if !middleware_instances.is_empty() {
-            self.execute_middleware_on_response(middleware_instances, plugin_response)
+            self.execute_middleware_on_response(
+                middleware_instances,
+                plugin_response,
+                middleware_context,
+            )
         } else {
             plugin_response
         };
@@ -1151,14 +1160,21 @@ impl Gateway {
     }
 
     /// Execute middleware on_request chain.
-    /// Returns the final request JSON and the middleware instances (for on_response),
+    /// Returns the final request JSON, middleware instances, and context (for on_response),
     /// or a short-circuit response.
     #[allow(clippy::result_large_err, clippy::type_complexity)]
     fn execute_middleware_on_request(
         &self,
         middlewares: &[barbacane_compiler::MiddlewareConfig],
         request_json: &[u8],
-    ) -> Result<(Vec<u8>, Vec<barbacane_wasm::PluginInstance>), Response<Full<Bytes>>> {
+    ) -> Result<
+        (
+            Vec<u8>,
+            Vec<barbacane_wasm::PluginInstance>,
+            barbacane_wasm::RequestContext,
+        ),
+        Response<Full<Bytes>>,
+    > {
         use barbacane_wasm::{execute_on_request, ChainResult, RequestContext};
 
         let mut instances = Vec::new();
@@ -1198,16 +1214,13 @@ impl Gateway {
         }
 
         if instances.is_empty() {
-            return Ok((request_json.to_vec(), instances));
+            return Ok((request_json.to_vec(), instances, RequestContext::default()));
         }
 
         // Execute the on_request chain
         let context = RequestContext::default();
         match execute_on_request(&mut instances, request_json, context) {
-            ChainResult::Continue {
-                request,
-                context: _,
-            } => Ok((request, instances)),
+            ChainResult::Continue { request, context } => Ok((request, instances, context)),
             ChainResult::ShortCircuit {
                 response,
                 middleware_index: _,
@@ -1247,15 +1260,15 @@ impl Gateway {
         &self,
         mut instances: Vec<barbacane_wasm::PluginInstance>,
         response: barbacane_wasm::Response,
+        context: barbacane_wasm::RequestContext,
     ) -> barbacane_wasm::Response {
-        use barbacane_wasm::{execute_on_response, RequestContext};
+        use barbacane_wasm::execute_on_response;
 
         let response_json = match serde_json::to_vec(&response) {
             Ok(j) => j,
             Err(_) => return response,
         };
 
-        let context = RequestContext::default();
         let final_response_json = execute_on_response(&mut instances, &response_json, context);
 
         // Parse the final response - middlewares can modify status/headers/body

@@ -134,7 +134,7 @@ pub fn execute_on_request(
     context: RequestContext,
 ) -> ChainResult {
     let mut current_request = initial_request.to_vec();
-    let current_context = context;
+    let mut current_context = context;
 
     for (index, instance) in instances.iter_mut().enumerate() {
         // Set context for this middleware
@@ -149,14 +149,16 @@ pub fn execute_on_request(
                 match parse_middleware_output(&output, result_code) {
                     Ok(OnRequestResult::Continue(new_request)) => {
                         current_request = new_request;
-                        // Preserve any context modifications from the middleware
-                        // (context is updated via host functions during execution)
+                        // Get context modifications from the middleware
+                        current_context = instance.get_context();
                     }
                     Ok(OnRequestResult::ShortCircuit(response)) => {
+                        // Get context modifications before short-circuit
+                        let final_context = instance.get_context();
                         return ChainResult::ShortCircuit {
                             response,
                             middleware_index: index,
-                            context: current_context,
+                            context: final_context,
                         };
                     }
                     Err(e) => {

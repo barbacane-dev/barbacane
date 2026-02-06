@@ -2908,4 +2908,144 @@ paths:
         let resp = gateway.get("/__barbacane/specs/asyncapi").await.unwrap();
         assert_eq!(resp.status(), 404);
     }
+
+    // =========================================================================
+    // Correlation ID Middleware Tests
+    // =========================================================================
+
+    /// Create a temporary spec file for correlation-id testing.
+    fn create_correlation_id_spec() -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let spec_path = temp_dir.path().join("correlation-id.yaml");
+
+        // Get absolute paths to plugins
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let plugins_dir = manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("plugins");
+        let mock_path = plugins_dir.join("mock/mock.wasm");
+        let correlation_id_path = plugins_dir.join("correlation-id/correlation-id.wasm");
+
+        // Create barbacane.yaml manifest in temp dir
+        let manifest_path = temp_dir.path().join("barbacane.yaml");
+        let manifest_content = format!(
+            r#"# Test manifest for correlation-id tests
+
+plugins:
+  mock:
+    path: {}
+  correlation-id:
+    path: {}
+"#,
+            mock_path.display(),
+            correlation_id_path.display()
+        );
+        std::fs::write(&manifest_path, manifest_content).expect("failed to write manifest file");
+
+        let spec_content = r#"openapi: "3.0.3"
+info:
+  title: Correlation ID Test API
+  version: "1.0.0"
+  description: API for testing correlation ID middleware
+
+x-barbacane-middlewares:
+  - name: correlation-id
+    config:
+      header_name: "x-correlation-id"
+      generate_if_missing: true
+      trust_incoming: true
+      include_in_response: true
+
+paths:
+  /test:
+    get:
+      summary: Test endpoint
+      operationId: getTest
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "OK"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+"#;
+
+        std::fs::write(&spec_path, spec_content).expect("failed to write spec file");
+        (temp_dir, spec_path)
+    }
+
+    #[tokio::test]
+    async fn test_correlation_id_generates_when_missing() {
+        let (_temp_dir, spec_path) = create_correlation_id_spec();
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        // Make request without correlation ID header
+        let resp = gateway.get("/test").await.unwrap();
+
+        let status = resp.status();
+        if status != 200 {
+            let body = resp.text().await.unwrap_or_default();
+            panic!("Expected 200, got {} with body: {}", status, body);
+        }
+
+        // Should have generated a correlation ID in response
+        let all_headers: Vec<_> = resp
+            .headers()
+            .iter()
+            .map(|(k, v)| format!("{}: {:?}", k, v))
+            .collect();
+        let correlation_id = resp.headers().get("x-correlation-id");
+        assert!(
+            correlation_id.is_some(),
+            "Expected x-correlation-id header in response. All headers: {:?}",
+            all_headers
+        );
+
+        // Verify it's a valid UUID v7 format (36 chars, version 7)
+        let id = correlation_id.unwrap().to_str().unwrap();
+        assert_eq!(id.len(), 36, "UUID should be 36 characters");
+        assert_eq!(
+            id.chars().nth(14),
+            Some('7'),
+            "Should be UUID v7 (version marker at position 14)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_correlation_id_preserves_incoming() {
+        let (_temp_dir, spec_path) = create_correlation_id_spec();
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        // Make request with existing correlation ID
+        let incoming_id = "my-custom-correlation-id-12345";
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/test")
+            .header("x-correlation-id", incoming_id)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+
+        // Should preserve the incoming correlation ID
+        let correlation_id = resp.headers().get("x-correlation-id");
+        assert!(
+            correlation_id.is_some(),
+            "Expected x-correlation-id header in response"
+        );
+        assert_eq!(
+            correlation_id.unwrap().to_str().unwrap(),
+            incoming_id,
+            "Should preserve incoming correlation ID"
+        );
+    }
 }

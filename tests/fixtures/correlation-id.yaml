@@ -1,0 +1,90 @@
+openapi: "3.1.0"
+info:
+  title: Correlation ID Test API
+  version: "1.0.0"
+  description: API for testing correlation ID middleware
+
+paths:
+  /with-correlation:
+    get:
+      operationId: withCorrelation
+      summary: Endpoint with correlation ID middleware
+      x-barbacane-middlewares:
+        - name: correlation-id
+          config:
+            header_name: "x-correlation-id"
+            generate_if_missing: true
+            trust_incoming: true
+            include_in_response: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /custom-header:
+    get:
+      operationId: customHeader
+      summary: Endpoint with custom correlation header name
+      x-barbacane-middlewares:
+        - name: correlation-id
+          config:
+            header_name: "x-request-trace-id"
+            generate_if_missing: true
+            trust_incoming: true
+            include_in_response: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"custom header"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /no-generate:
+    get:
+      operationId: noGenerate
+      summary: Endpoint that does not generate correlation IDs
+      x-barbacane-middlewares:
+        - name: correlation-id
+          config:
+            header_name: "x-correlation-id"
+            generate_if_missing: false
+            trust_incoming: true
+            include_in_response: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"no generate"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /no-response-header:
+    get:
+      operationId: noResponseHeader
+      summary: Endpoint that does not include correlation ID in response
+      x-barbacane-middlewares:
+        - name: correlation-id
+          config:
+            header_name: "x-correlation-id"
+            generate_if_missing: true
+            trust_incoming: true
+            include_in_response: false
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"no response header"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success

@@ -17,7 +17,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 | `ip-restriction` | Middleware | Allow/deny by IP or CIDR range | Competitive analysis |
 | `basic-auth` | Middleware | Username/password authentication | Competitive analysis |
 | `http-log` | Middleware | Send request/response logs to HTTP endpoint | Competitive analysis |
-| `correlation-id` | Middleware | Propagate/generate X-Correlation-ID header | Competitive analysis |
+| ~~`correlation-id`~~ | ~~Middleware~~ | ~~Propagate/generate X-Correlation-ID header~~ | **DONE** |
 
 ### P1 — Important for Production
 
@@ -58,7 +58,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 
 | Feature | Description | Priority | Source |
 |---------|-------------|----------|--------|
-| Hot-reload | Download and swap artifact at runtime without restart | P0 | ADR-0007 |
+| ~~Hot-reload~~ | ~~Download and swap artifact at runtime without restart~~ | ~~P0~~ | **DONE** |
 | HTTP/3 support | QUIC-based HTTP/3 ingress via `quinn` crate | P3 | ADR-0004 |
 | gRPC support | Native gRPC proxying | P2 | ADR-0004 |
 | Response streaming | Stream large responses without buffering | P2 | — |

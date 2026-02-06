@@ -107,6 +107,9 @@ pub struct PluginState {
 
     /// Result buffer for host_kafka_publish / host_nats_publish.
     pub last_broker_result: Option<Vec<u8>>,
+
+    /// Result buffer for host_uuid_read_result.
+    pub last_uuid_result: Option<Vec<u8>>,
 }
 
 impl PluginState {
@@ -128,6 +131,7 @@ impl PluginState {
             metrics: None,
             brokers: None,
             last_broker_result: None,
+            last_uuid_result: None,
         }
     }
 
@@ -153,6 +157,7 @@ impl PluginState {
             metrics: None,
             brokers: None,
             last_broker_result: None,
+            last_uuid_result: None,
         }
     }
 
@@ -179,6 +184,7 @@ impl PluginState {
             metrics: None,
             brokers: None,
             last_broker_result: None,
+            last_uuid_result: None,
         }
     }
 
@@ -207,6 +213,7 @@ impl PluginState {
             metrics: None,
             brokers: None,
             last_broker_result: None,
+            last_uuid_result: None,
         }
     }
 
@@ -236,6 +243,7 @@ impl PluginState {
             metrics,
             brokers: None,
             last_broker_result: None,
+            last_uuid_result: None,
         }
     }
 
@@ -498,6 +506,11 @@ impl PluginInstance {
     pub fn set_context(&mut self, context: RequestContext) {
         self.store.data_mut().set_context(context);
     }
+
+    /// Get the current request context (after modifications by host functions).
+    pub fn get_context(&self) -> RequestContext {
+        self.store.data().context.clone()
+    }
 }
 
 /// Add host functions to the linker.
@@ -689,6 +702,51 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| {
             WasmError::Instantiation(format!("failed to add host_get_unix_timestamp: {}", e))
+        })?;
+
+    // host_uuid_generate - generates UUID v7 and returns length
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_uuid_generate",
+            |mut caller: Caller<'_, PluginState>| -> i32 {
+                let uuid = uuid::Uuid::now_v7().to_string();
+                let len = uuid.len() as i32;
+                caller.data_mut().last_uuid_result = Some(uuid.into_bytes());
+                len
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_uuid_generate: {}", e))
+        })?;
+
+    // host_uuid_read_result - copies generated UUID to WASM memory
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_uuid_read_result",
+            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let result = caller.data_mut().last_uuid_result.take();
+                if let Some(data) = result {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+
+                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
+
+                    if memory
+                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
+                        .is_ok()
+                    {
+                        return copy_len as i32;
+                    }
+                }
+                0
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_uuid_read_result: {}", e))
         })?;
 
     // host_http_call - make outbound HTTP request
@@ -1535,5 +1593,20 @@ mod tests {
         let output = state.take_output();
         assert_eq!(output, vec![1, 2, 3]);
         assert!(state.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn plugin_state_uuid_result_initialized() {
+        let limits = PluginLimits::default();
+        let state = PluginState::new("test".into(), &limits);
+        assert!(state.last_uuid_result.is_none());
+    }
+
+    #[test]
+    fn uuid_v7_format() {
+        // Test that UUID v7 generates valid format
+        let uuid = uuid::Uuid::now_v7().to_string();
+        assert_eq!(uuid.len(), 36); // UUID string format: 8-4-4-4-12
+        assert!(uuid.chars().nth(14) == Some('7')); // Version 7 marker
     }
 }
