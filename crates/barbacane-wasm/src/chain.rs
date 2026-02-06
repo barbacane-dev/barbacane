@@ -4,11 +4,17 @@
 //! and reverse order for on_response. A middleware returning 1 from
 //! on_request short-circuits the chain with an immediate response.
 
+use std::time::Instant;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::WasmError;
 use crate::instance::{PluginInstance, RequestContext};
 use crate::trap::{TrapContext, TrapResult};
+
+/// Callback for recording middleware metrics.
+/// Parameters: middleware_name, phase ("request" or "response"), duration_secs, short_circuit
+pub type MetricsCallback<'a> = Option<&'a dyn Fn(&str, &str, f64, bool)>;
 
 /// The result of executing on_request on a single middleware.
 #[derive(Debug)]
@@ -133,12 +139,26 @@ pub fn execute_on_request(
     initial_request: &[u8],
     context: RequestContext,
 ) -> ChainResult {
+    execute_on_request_with_metrics(instances, initial_request, context, None)
+}
+
+/// Execute the on_request chain with optional metrics recording.
+pub fn execute_on_request_with_metrics(
+    instances: &mut [PluginInstance],
+    initial_request: &[u8],
+    context: RequestContext,
+    metrics_callback: MetricsCallback<'_>,
+) -> ChainResult {
     let mut current_request = initial_request.to_vec();
     let mut current_context = context;
 
     for (index, instance) in instances.iter_mut().enumerate() {
         // Set context for this middleware
         instance.set_context(current_context.clone());
+
+        // Record start time
+        let start = Instant::now();
+        let middleware_name = instance.name().to_string();
 
         // Call on_request
         match instance.on_request(&current_request) {
@@ -148,11 +168,29 @@ pub fn execute_on_request(
                 // Parse the output to determine action
                 match parse_middleware_output(&output, result_code) {
                     Ok(OnRequestResult::Continue(new_request)) => {
+                        // Record metrics (not a short-circuit)
+                        if let Some(callback) = metrics_callback {
+                            callback(
+                                &middleware_name,
+                                "request",
+                                start.elapsed().as_secs_f64(),
+                                false,
+                            );
+                        }
                         current_request = new_request;
                         // Get context modifications from the middleware
                         current_context = instance.get_context();
                     }
                     Ok(OnRequestResult::ShortCircuit(response)) => {
+                        // Record metrics (short-circuit)
+                        if let Some(callback) = metrics_callback {
+                            callback(
+                                &middleware_name,
+                                "request",
+                                start.elapsed().as_secs_f64(),
+                                true,
+                            );
+                        }
                         // Get context modifications before short-circuit
                         let final_context = instance.get_context();
                         return ChainResult::ShortCircuit {
@@ -162,6 +200,15 @@ pub fn execute_on_request(
                         };
                     }
                     Err(e) => {
+                        // Record metrics for error case
+                        if let Some(callback) = metrics_callback {
+                            callback(
+                                &middleware_name,
+                                "request",
+                                start.elapsed().as_secs_f64(),
+                                false,
+                            );
+                        }
                         return ChainResult::Error {
                             trap_result: TrapResult::from_error(&e, TrapContext::OnRequest),
                             error: e,
@@ -170,6 +217,15 @@ pub fn execute_on_request(
                 }
             }
             Err(e) => {
+                // Record metrics for error case
+                if let Some(callback) = metrics_callback {
+                    callback(
+                        &middleware_name,
+                        "request",
+                        start.elapsed().as_secs_f64(),
+                        false,
+                    );
+                }
                 return ChainResult::Error {
                     trap_result: TrapResult::from_error(&e, TrapContext::OnRequest),
                     error: e,
@@ -193,20 +249,52 @@ pub fn execute_on_response(
     initial_response: &[u8],
     context: RequestContext,
 ) -> Vec<u8> {
+    execute_on_response_with_metrics(instances, initial_response, context, None)
+}
+
+/// Execute the on_response chain with optional metrics recording.
+pub fn execute_on_response_with_metrics(
+    instances: &mut [PluginInstance],
+    initial_response: &[u8],
+    context: RequestContext,
+    metrics_callback: MetricsCallback<'_>,
+) -> Vec<u8> {
     let mut current_response = initial_response.to_vec();
 
     // Process in reverse order
     for instance in instances.iter_mut().rev() {
         instance.set_context(context.clone());
 
+        // Record start time
+        let start = Instant::now();
+        let middleware_name = instance.name().to_string();
+
         match instance.on_response(&current_response) {
             Ok(_result_code) => {
+                // Record metrics
+                if let Some(callback) = metrics_callback {
+                    callback(
+                        &middleware_name,
+                        "response",
+                        start.elapsed().as_secs_f64(),
+                        false,
+                    );
+                }
                 let output = instance.take_output();
                 if !output.is_empty() {
                     current_response = output;
                 }
             }
             Err(e) => {
+                // Record metrics for error case
+                if let Some(callback) = metrics_callback {
+                    callback(
+                        &middleware_name,
+                        "response",
+                        start.elapsed().as_secs_f64(),
+                        false,
+                    );
+                }
                 // Fault-tolerant: log and continue with current response
                 let trap_result = TrapResult::from_error(&e, TrapContext::OnResponse);
                 tracing::warn!(
@@ -362,5 +450,86 @@ mod tests {
     fn parse_empty_short_circuit_fails() {
         let result = parse_middleware_output(&[], 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn metrics_callback_type_accepts_closure() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Verify the callback type works with a recording closure
+        let invocations = Rc::new(RefCell::new(Vec::new()));
+        let invocations_clone = invocations.clone();
+
+        let callback = move |name: &str, phase: &str, duration: f64, short_circuit: bool| {
+            invocations_clone.borrow_mut().push((
+                name.to_string(),
+                phase.to_string(),
+                duration,
+                short_circuit,
+            ));
+        };
+
+        // Verify the callback can be used as MetricsCallback
+        let metrics_callback: MetricsCallback<'_> = Some(&callback);
+        assert!(metrics_callback.is_some());
+
+        // Invoke the callback
+        if let Some(cb) = metrics_callback {
+            cb("test-middleware", "request", 0.001, false);
+            cb("test-middleware", "response", 0.002, true);
+        }
+
+        // Verify invocations were recorded
+        let recorded = invocations.borrow();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0].0, "test-middleware");
+        assert_eq!(recorded[0].1, "request");
+        assert!(!recorded[0].3); // not short-circuit
+        assert_eq!(recorded[1].1, "response");
+        assert!(recorded[1].3); // short-circuit
+    }
+
+    #[test]
+    fn execute_on_request_empty_instances_returns_continue() {
+        let mut instances: Vec<PluginInstance> = vec![];
+        let request = b"test request";
+        let context = RequestContext::default();
+
+        let result = execute_on_request(&mut instances, request, context);
+        assert!(matches!(result, ChainResult::Continue { .. }));
+
+        if let ChainResult::Continue {
+            request: req,
+            context: _,
+        } = result
+        {
+            assert_eq!(req, request.to_vec());
+        }
+    }
+
+    #[test]
+    fn execute_on_response_empty_instances_returns_input() {
+        let mut instances: Vec<PluginInstance> = vec![];
+        let response = b"test response";
+        let context = RequestContext::default();
+
+        let result = execute_on_response(&mut instances, response, context);
+        assert_eq!(result, response.to_vec());
+    }
+
+    #[test]
+    fn execute_with_metrics_none_callback_works() {
+        let mut instances: Vec<PluginInstance> = vec![];
+        let request = b"test";
+        let context = RequestContext::default();
+
+        // Verify None callback doesn't cause issues
+        let result =
+            execute_on_request_with_metrics(&mut instances, request, context.clone(), None);
+        assert!(matches!(result, ChainResult::Continue { .. }));
+
+        let response = execute_on_response_with_metrics(&mut instances, request, context, None);
+        assert_eq!(response, request.to_vec());
     }
 }

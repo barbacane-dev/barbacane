@@ -1223,7 +1223,7 @@ impl Gateway {
         ),
         Response<Full<Bytes>>,
     > {
-        use barbacane_wasm::{execute_on_request, ChainResult, RequestContext};
+        use barbacane_wasm::{execute_on_request_with_metrics, ChainResult, RequestContext};
 
         let mut instances = Vec::new();
 
@@ -1265,9 +1265,18 @@ impl Gateway {
             return Ok((request_json.to_vec(), instances, RequestContext::default()));
         }
 
-        // Execute the on_request chain
+        // Execute the on_request chain with metrics recording
         let context = RequestContext::default();
-        match execute_on_request(&mut instances, request_json, context) {
+        let metrics = &self.metrics;
+        let metrics_callback = |name: &str, phase: &str, duration: f64, short_circuit: bool| {
+            metrics.record_middleware(name, phase, duration, short_circuit);
+        };
+        match execute_on_request_with_metrics(
+            &mut instances,
+            request_json,
+            context,
+            Some(&metrics_callback),
+        ) {
             ChainResult::Continue { request, context } => Ok((request, instances, context)),
             ChainResult::ShortCircuit {
                 response,
@@ -1310,14 +1319,23 @@ impl Gateway {
         response: barbacane_wasm::Response,
         context: barbacane_wasm::RequestContext,
     ) -> barbacane_wasm::Response {
-        use barbacane_wasm::execute_on_response;
+        use barbacane_wasm::execute_on_response_with_metrics;
 
         let response_json = match serde_json::to_vec(&response) {
             Ok(j) => j,
             Err(_) => return response,
         };
 
-        let final_response_json = execute_on_response(&mut instances, &response_json, context);
+        let metrics = &self.metrics;
+        let metrics_callback = |name: &str, phase: &str, duration: f64, short_circuit: bool| {
+            metrics.record_middleware(name, phase, duration, short_circuit);
+        };
+        let final_response_json = execute_on_response_with_metrics(
+            &mut instances,
+            &response_json,
+            context,
+            Some(&metrics_callback),
+        );
 
         // Parse the final response - middlewares can modify status/headers/body
         serde_json::from_slice::<barbacane_wasm::Response>(&final_response_json).unwrap_or(response)

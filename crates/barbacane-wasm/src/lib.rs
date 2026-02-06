@@ -26,7 +26,8 @@ mod validate;
 pub mod version;
 
 pub use chain::{
-    execute_on_request, execute_on_response, execute_on_response_partial, ChainResult,
+    execute_on_request, execute_on_request_with_metrics, execute_on_response,
+    execute_on_response_partial, execute_on_response_with_metrics, ChainResult, MetricsCallback,
     MiddlewareChain, MiddlewareConfig, OnRequestResult,
 };
 pub use engine::WasmEngine;

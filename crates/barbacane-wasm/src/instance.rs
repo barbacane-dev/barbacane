@@ -393,6 +393,11 @@ impl PluginInstance {
         })
     }
 
+    /// Get the plugin name.
+    pub fn name(&self) -> &str {
+        &self.store.data().plugin_name
+    }
+
     /// Write data to the plugin's memory and return the pointer.
     pub fn write_to_memory(&mut self, data: &[u8]) -> Result<i32, WasmError> {
         let mem_size = self.memory.data_size(&self.store);
