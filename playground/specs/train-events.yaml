@@ -1,0 +1,354 @@
+# Barbacane Playground - Train Events
+# AsyncAPI 3.0 specification for train domain events
+asyncapi: "3.0.0"
+info:
+  title: Train Events API
+  version: "1.0.0"
+  description: |
+    Event-driven API for train travel notifications.
+
+    Demonstrates Barbacane's AsyncAPI support for:
+    - Webhook-style event publishing
+    - Event validation
+    - Rate limiting on event endpoints
+
+channels:
+  tripDelayEvents:
+    address: /events/trips/delayed
+    description: Train delay notifications
+    messages:
+      TripDelayed:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - event_type
+            - trip_id
+            - delay_minutes
+            - timestamp
+          properties:
+            event_type:
+              type: string
+              const: trip.delayed
+            trip_id:
+              type: string
+              format: uuid
+              description: ID of the delayed trip
+            delay_minutes:
+              type: integer
+              minimum: 1
+              description: Current delay in minutes
+            reason:
+              type: string
+              enum:
+                - weather
+                - technical_issue
+                - track_work
+                - staffing
+                - unknown
+            affected_stations:
+              type: array
+              items:
+                type: string
+                format: uuid
+            timestamp:
+              type: string
+              format: date-time
+
+  tripCancelledEvents:
+    address: /events/trips/cancelled
+    description: Train cancellation notifications
+    messages:
+      TripCancelled:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - event_type
+            - trip_id
+            - timestamp
+          properties:
+            event_type:
+              type: string
+              const: trip.cancelled
+            trip_id:
+              type: string
+              format: uuid
+            reason:
+              type: string
+            refund_eligible:
+              type: boolean
+            timestamp:
+              type: string
+              format: date-time
+
+  platformChangeEvents:
+    address: /events/stations/{stationId}/platform-changes
+    description: Platform change notifications
+    parameters:
+      stationId:
+        description: Station ID
+        schema:
+          type: string
+          format: uuid
+    messages:
+      PlatformChanged:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - event_type
+            - trip_id
+            - station_id
+            - old_platform
+            - new_platform
+            - timestamp
+          properties:
+            event_type:
+              type: string
+              const: platform.changed
+            trip_id:
+              type: string
+              format: uuid
+            station_id:
+              type: string
+              format: uuid
+            train_number:
+              type: string
+            old_platform:
+              type: string
+            new_platform:
+              type: string
+            timestamp:
+              type: string
+              format: date-time
+
+  bookingConfirmedEvents:
+    address: /events/bookings/confirmed
+    description: Booking confirmation events
+    messages:
+      BookingConfirmed:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - event_type
+            - booking_id
+            - timestamp
+          properties:
+            event_type:
+              type: string
+              const: booking.confirmed
+            booking_id:
+              type: string
+              format: uuid
+            reference:
+              type: string
+            passenger_count:
+              type: integer
+            trip_id:
+              type: string
+              format: uuid
+            timestamp:
+              type: string
+              format: date-time
+
+  bookingCancelledEvents:
+    address: /events/bookings/cancelled
+    description: Booking cancellation events
+    messages:
+      BookingCancelled:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - event_type
+            - booking_id
+            - timestamp
+          properties:
+            event_type:
+              type: string
+              const: booking.cancelled
+            booking_id:
+              type: string
+              format: uuid
+            reason:
+              type: string
+              enum:
+                - customer_request
+                - trip_cancelled
+                - payment_failed
+                - no_show
+            refund_amount:
+              type: number
+            timestamp:
+              type: string
+              format: date-time
+
+  paymentSucceededEvents:
+    address: /events/payments/succeeded
+    description: Payment success events
+    messages:
+      PaymentSucceeded:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - event_type
+            - payment_id
+            - booking_id
+            - amount
+            - currency
+            - timestamp
+          properties:
+            event_type:
+              type: string
+              const: payment.succeeded
+            payment_id:
+              type: string
+              format: uuid
+            booking_id:
+              type: string
+              format: uuid
+            amount:
+              type: number
+            currency:
+              type: string
+            method:
+              type: string
+              enum: [card, bank_transfer, wallet]
+            timestamp:
+              type: string
+              format: date-time
+
+  paymentFailedEvents:
+    address: /events/payments/failed
+    description: Payment failure events
+    messages:
+      PaymentFailed:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - event_type
+            - payment_id
+            - booking_id
+            - error_code
+            - timestamp
+          properties:
+            event_type:
+              type: string
+              const: payment.failed
+            payment_id:
+              type: string
+              format: uuid
+            booking_id:
+              type: string
+              format: uuid
+            error_code:
+              type: string
+            error_message:
+              type: string
+            retry_allowed:
+              type: boolean
+            timestamp:
+              type: string
+              format: date-time
+
+operations:
+  publishTripDelayed:
+    action: send
+    channel:
+      $ref: '#/channels/tripDelayEvents'
+    summary: Publish train delay event
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","event_type":"trip.delayed"}'
+        content_type: application/json
+    x-barbacane-middlewares:
+      - name: rate-limit
+        config:
+          requests_per_minute: 1000
+          burst: 100
+      - name: correlation-id
+        config:
+          header: X-Event-ID
+          generate_if_missing: true
+
+  publishTripCancelled:
+    action: send
+    channel:
+      $ref: '#/channels/tripCancelledEvents'
+    summary: Publish train cancellation event
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","event_type":"trip.cancelled"}'
+        content_type: application/json
+
+  publishPlatformChange:
+    action: send
+    channel:
+      $ref: '#/channels/platformChangeEvents'
+    summary: Publish platform change event
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","event_type":"platform.changed"}'
+        content_type: application/json
+
+  publishBookingConfirmed:
+    action: send
+    channel:
+      $ref: '#/channels/bookingConfirmedEvents'
+    summary: Publish booking confirmation event
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","event_type":"booking.confirmed"}'
+        content_type: application/json
+    x-barbacane-middlewares:
+      - name: observability
+        config:
+          detailed_request_logs: true
+
+  publishBookingCancelled:
+    action: send
+    channel:
+      $ref: '#/channels/bookingCancelledEvents'
+    summary: Publish booking cancellation event
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","event_type":"booking.cancelled"}'
+        content_type: application/json
+
+  publishPaymentSucceeded:
+    action: send
+    channel:
+      $ref: '#/channels/paymentSucceededEvents'
+    summary: Publish payment success event
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","event_type":"payment.succeeded"}'
+        content_type: application/json
+
+  publishPaymentFailed:
+    action: send
+    channel:
+      $ref: '#/channels/paymentFailedEvents'
+    summary: Publish payment failure event
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+        body: '{"status":"accepted","event_type":"payment.failed"}'
+        content_type: application/json
