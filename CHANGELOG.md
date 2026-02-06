@@ -55,9 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated CLI Reference with `seed-plugins` command documentation
 - Added Interactive API Documentation section (Scalar at `/api/docs`)
 
+#### API Spec Endpoint
+- New `/__barbacane/specs` endpoint replacing `/__barbacane/openapi`
+- Merged spec endpoints: `/__barbacane/specs/openapi` and `/__barbacane/specs/asyncapi`
+- Format selection via `?format=json` or `?format=yaml` query parameter
+- Type-aware index response separating OpenAPI and AsyncAPI specs
+- Internal `x-barbacane-*` extensions stripped from served specs
+
 #### Other
 - HTTP/2 support with automatic protocol detection via ALPN
-- API lifecycle support with `deprecated` flag and `x-barbacane-sunset` extension
+- API lifecycle support with `deprecated` flag and `x-sunset` extension (RFC 8594)
 - `Deprecation` and `Sunset` response headers for deprecated routes
 - Fixture-based test specs for comprehensive integration testing
 - SLO violation metrics (`barbacane_slo_violation_total`)

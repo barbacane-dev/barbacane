@@ -47,69 +47,92 @@ curl -f http://localhost:8080/__barbacane/health
 
 ---
 
-## OpenAPI Spec
+## API Specs
 
 ```
-GET /__barbacane/openapi
+GET /__barbacane/specs
 ```
 
-Returns the embedded OpenAPI specification(s).
+Returns an index of all embedded API specifications (OpenAPI and AsyncAPI).
 
-### Single Spec
-
-When the artifact contains one spec, returns it directly:
+### Index Response
 
 ```bash
-curl http://localhost:8080/__barbacane/openapi
-```
-
-Response: The original YAML/JSON spec
-
-Headers:
-- `Content-Type: application/x-yaml` (for YAML files)
-- `Content-Type: application/json` (for JSON files)
-
-### Multiple Specs
-
-When the artifact contains multiple specs, returns an index:
-
-```bash
-curl http://localhost:8080/__barbacane/openapi
+curl http://localhost:8080/__barbacane/specs
 ```
 
 ```json
 {
-  "specs": [
-    {
-      "name": "users-api.yaml",
-      "url": "/__barbacane/openapi/users-api.yaml"
-    },
-    {
-      "name": "orders-api.yaml",
-      "url": "/__barbacane/openapi/orders-api.yaml"
-    }
-  ],
-  "count": 2
+  "openapi": {
+    "specs": [
+      { "name": "users-api.yaml", "url": "/__barbacane/specs/users-api.yaml" },
+      { "name": "orders-api.yaml", "url": "/__barbacane/specs/orders-api.yaml" }
+    ],
+    "count": 2,
+    "merged_url": "/__barbacane/specs/openapi"
+  },
+  "asyncapi": {
+    "specs": [
+      { "name": "events.yaml", "url": "/__barbacane/specs/events.yaml" }
+    ],
+    "count": 1,
+    "merged_url": "/__barbacane/specs/asyncapi"
+  }
 }
 ```
 
-Then fetch individual specs:
+### Merged Specs
+
+Get all OpenAPI specs merged into one (for Swagger UI):
 
 ```bash
-curl http://localhost:8080/__barbacane/openapi/users-api.yaml
+curl http://localhost:8080/__barbacane/specs/openapi
 ```
+
+Get all AsyncAPI specs merged into one (for AsyncAPI Studio):
+
+```bash
+curl http://localhost:8080/__barbacane/specs/asyncapi
+```
+
+### Individual Specs
+
+Fetch a specific spec by filename:
+
+```bash
+curl http://localhost:8080/__barbacane/specs/users-api.yaml
+```
+
+### Format Selection
+
+Request specs in JSON or YAML format using the `format` query parameter:
+
+```bash
+# Get merged OpenAPI as JSON (for tools that prefer JSON)
+curl "http://localhost:8080/__barbacane/specs/openapi?format=json"
+
+# Get merged OpenAPI as YAML (default)
+curl "http://localhost:8080/__barbacane/specs/openapi?format=yaml"
+```
+
+### Extension Stripping
+
+All specs served via these endpoints have internal `x-barbacane-*` extensions stripped automatically. Only standard OpenAPI/AsyncAPI fields and the `x-sunset` extension (RFC 8594) are preserved.
 
 ### Usage
 
 ```bash
-# Swagger UI integration
-# Point Swagger UI to: http://your-gateway/__barbacane/openapi
+# Swagger UI integration (for OpenAPI specs)
+# Point Swagger UI to: http://your-gateway/__barbacane/specs/openapi
 
-# Download spec for documentation
-curl -o api.yaml http://localhost:8080/__barbacane/openapi
+# AsyncAPI Studio integration (for AsyncAPI specs)
+# Point to: http://your-gateway/__barbacane/specs/asyncapi
+
+# Download merged spec for documentation
+curl -o api.yaml http://localhost:8080/__barbacane/specs/openapi
 
 # API client generation
-curl http://localhost:8080/__barbacane/openapi | \
+curl http://localhost:8080/__barbacane/specs/openapi | \
   openapi-generator generate -i /dev/stdin -g typescript-fetch -o ./client
 ```
 

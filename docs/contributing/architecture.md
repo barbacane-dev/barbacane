@@ -335,7 +335,7 @@ Plugins are WebAssembly (WASM) modules that implement dispatchers or middlewares
 **Decision**: Embed source specs in the artifact.
 
 **Rationale**:
-- Self-documenting: `/__barbacane/openapi` always works
+- Self-documenting: `/__barbacane/specs` always works
 - No external dependencies at runtime
 - Version consistency
 

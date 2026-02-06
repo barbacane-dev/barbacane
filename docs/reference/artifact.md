@@ -135,7 +135,7 @@ Compiled operations with routing information.
 
 Directory containing the original source specifications. These are embedded for:
 
-- Serving via `/__barbacane/openapi` endpoint
+- Serving via `/__barbacane/specs` endpoint
 - Documentation and debugging
 - Audit trail
 
@@ -198,7 +198,7 @@ sha256sum extracted/routes.json
 
 ### Contents
 
-- Source specs are embedded and served publicly via `/__barbacane/openapi`
+- Source specs are embedded and served publicly via `/__barbacane/specs`
 - Do not include secrets in spec files
 - Use environment variables or secret management for sensitive config
 

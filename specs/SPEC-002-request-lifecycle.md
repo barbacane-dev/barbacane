@@ -233,7 +233,7 @@ The final response is sent to the client. The gateway adds these headers to ever
 |--------|-------|----------------|
 | `X-Request-Id` | UUID v4 (generated at request start) | Yes |
 | `X-Trace-Id` | W3C trace ID (from `traceparent`) | Yes |
-| `Sunset` | RFC 8594 date (if `x-barbacane-sunset` is set on the operation) | Conditional |
+| `Sunset` | RFC 8594 date (if `x-sunset` is set on the operation) | Conditional |
 | `Server` | `barbacane/<version>` | Yes |
 | `RateLimit-Policy` | Quota policy per [draft-ietf-httpapi-ratelimit-headers](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/) | If rate limiting is active on the operation |
 | `RateLimit` | Remaining quota and reset time | If rate limiting is active on the operation |

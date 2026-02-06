@@ -37,7 +37,7 @@ paths:
       operationId: getUserV1
       summary: Get user by ID (deprecated with sunset date)
       deprecated: true
-      x-barbacane-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      x-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
       parameters:
         - name: id
           in: path
@@ -58,7 +58,7 @@ paths:
       operationId: legacyStatus
       summary: Legacy status endpoint (deprecated with far future sunset)
       deprecated: true
-      x-barbacane-sunset: "Wed, 01 Jan 2030 00:00:00 GMT"
+      x-sunset: "Wed, 01 Jan 2030 00:00:00 GMT"
       x-barbacane-dispatch:
         name: mock
         config:

@@ -619,7 +619,7 @@ barbacane serve --artifact api.bca --dev --listen 127.0.0.1:8080 &
 # Test endpoints
 curl http://localhost:8080/health
 curl http://localhost:8080/__barbacane/health
-curl http://localhost:8080/__barbacane/openapi
+curl http://localhost:8080/__barbacane/specs
 
 # Stop gateway
 kill %1

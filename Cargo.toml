@@ -130,3 +130,5 @@ barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "
 barbacane-wasm = { path = "crates/barbacane-wasm", version = "0.1.0" }
 barbacane-telemetry = { path = "crates/barbacane-telemetry", version = "0.1.0" }
 barbacane-test = { path = "crates/barbacane-test", version = "0.1.0" }
+barbacane = { path = "crates/barbacane", version = "0.1.0" }
+barbacane-control = { path = "crates/barbacane-control", version = "0.1.0" }

@@ -203,9 +203,9 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                // Extract sunset date from x-barbacane-sunset extension
+                // Extract sunset date from x-sunset extension (RFC 8594)
                 let sunset = op_obj
-                    .get("x-barbacane-sunset")
+                    .get("x-sunset")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
@@ -385,7 +385,7 @@ fn parse_asyncapi_channels(
             .unwrap_or(false);
 
         let sunset = op_obj
-            .get("x-barbacane-sunset")
+            .get("x-sunset")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -923,7 +923,7 @@ paths:
   /old-endpoint:
     get:
       deprecated: true
-      x-barbacane-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      x-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
       x-barbacane-dispatch:
         name: mock
   /new-endpoint:

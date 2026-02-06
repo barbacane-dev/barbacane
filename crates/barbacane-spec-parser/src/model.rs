@@ -56,7 +56,7 @@ pub struct Operation {
     /// Whether this operation is deprecated (OpenAPI `deprecated` field).
     #[serde(default)]
     pub deprecated: bool,
-    /// Sunset date for deprecated operations (from `x-barbacane-sunset`).
+    /// Sunset date for deprecated operations (from `x-sunset` per RFC 8594).
     /// Format: HTTP-date per RFC 9110 (e.g., "Sat, 31 Dec 2024 23:59:59 GMT").
     pub sunset: Option<String>,
     /// Operation-level `x-barbacane-*` extensions.

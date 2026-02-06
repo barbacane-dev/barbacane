@@ -416,7 +416,7 @@ operations:
 
 ## API Lifecycle
 
-Barbacane supports API lifecycle management through standard OpenAPI deprecation and the `x-barbacane-sunset` extension.
+Barbacane supports API lifecycle management through standard OpenAPI deprecation and the `x-sunset` extension.
 
 ### Marking Operations as Deprecated
 
@@ -438,14 +438,14 @@ When a client calls a deprecated endpoint, the response includes a `Deprecation:
 
 ### Setting a Sunset Date
 
-Use `x-barbacane-sunset` to specify when an endpoint will be removed:
+Use `x-sunset` to specify when an endpoint will be removed (per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594)):
 
 ```yaml
 paths:
   /v1/users:
     get:
       deprecated: true
-      x-barbacane-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      x-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
       x-barbacane-dispatch:
         name: http-upstream
         config:

@@ -103,15 +103,17 @@ x-barbacane-cache:
   vary: [<string>]              # optional — headers that vary the cache key
 ```
 
-### 3.5 `x-barbacane-sunset`
+### 3.5 `x-sunset`
 
 **Placement:** operation level, alongside `deprecated: true`.
 
+Per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594), this extension specifies when an endpoint will be removed:
+
 ```yaml
-x-barbacane-sunset: "<ISO-8601 date>"   # e.g. "2026-06-01"
+x-sunset: "<HTTP-date>"   # e.g. "Sat, 31 Dec 2025 23:59:59 GMT"
 ```
 
-If `x-barbacane-sunset` is present but `deprecated` is not `true`, compilation fails with `E1030`.
+If `x-sunset` is present but `deprecated` is not `true`, compilation fails with `E1030`.
 
 ### 3.6 `x-barbacane-observability`
 
@@ -164,7 +166,7 @@ The compiler performs validation in order. Compilation stops at the first catego
 
 | Code | Condition |
 |------|-----------|
-| `E1030` | `x-barbacane-sunset` present but `deprecated` is not `true` |
+| `E1030` | `x-sunset` present but `deprecated` is not `true` |
 | `E1031` | `http://` upstream URL in production mode |
 | `E1032` | Operation declares `security` but no matching auth middleware in the chain |
 
