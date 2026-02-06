@@ -270,8 +270,8 @@ operations:
     x-barbacane-middlewares:
       - name: rate-limit
         config:
-          requests_per_minute: 1000
-          burst: 100
+          quota: 1000
+          window: 60
       - name: correlation-id
         config:
           header: X-Event-ID

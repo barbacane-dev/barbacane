@@ -27,9 +27,9 @@ servers:
 x-barbacane-middlewares:
   - name: rate-limit
     config:
-      requests_per_minute: 60
-      burst: 20
-      key: "header:X-API-Key"
+      quota: 60
+      window: 60
+      partition_key: "header:X-API-Key"
   - name: cors
     config:
       allowed_origins: ["*"]
