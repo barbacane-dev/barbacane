@@ -214,7 +214,7 @@ The dispatcher returns RFC 9457 error responses:
 #### Security
 
 - **HTTPS required in production**: `http://` URLs are rejected by the compiler (E1031)
-- **Development mode**: Use `--allow-plaintext-upstream` flag to allow `http://` URLs
+- **Development mode**: Use `--allow-plaintext` at compile time and `--allow-plaintext-upstream` at runtime
 - **TLS**: Uses rustls with system CA roots by default
 - **mTLS**: Configure `tls.client_cert` and `tls.client_key` for mutual TLS authentication
 - **Custom CA**: Use `tls.ca` to add a custom CA certificate for private PKI
@@ -622,12 +622,26 @@ Then switch to real backend:
 
 ### Use HTTPS in Production
 
-The compiler rejects `http://` URLs by default (E1031). For development with local services:
+Barbacane enforces HTTPS for upstream connections at two levels:
+
+| Flag | Command | Purpose |
+|------|---------|---------|
+| `--allow-plaintext` | `compile` | Allow `http://` URLs in spec (bypasses E1031 validation) |
+| `--allow-plaintext-upstream` | `serve` | Allow runtime HTTP client to connect to `http://` upstreams |
+
+**Why two flags?**
+
+- **Compile-time validation** catches insecure URLs early in your CI pipeline
+- **Runtime enforcement** provides defense-in-depth, even if specs are modified
+
+For local development with services like WireMock or Docker containers:
 
 ```bash
-# Compile allows http:// - the check happens at runtime
-barbacane compile --spec api.yaml --output api.bca
+# Allow http:// URLs during compilation
+barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca --allow-plaintext
 
-# Serve with plaintext upstream allowed (dev only!)
+# Allow plaintext connections at runtime
 barbacane serve --artifact api.bca --dev --allow-plaintext-upstream
 ```
+
+In production, omit both flags to ensure all upstream connections use TLS.

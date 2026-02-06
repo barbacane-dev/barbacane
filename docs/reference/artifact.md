@@ -265,6 +265,7 @@ Don't commit `.bca` files to git. Instead:
 # Compile in CI
 barbacane compile \
   --spec specs/*.yaml \
+  --manifest barbacane.yaml \
   --output dist/gateway-${VERSION}.bca
 
 # Upload to registry

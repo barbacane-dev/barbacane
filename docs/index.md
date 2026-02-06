@@ -19,7 +19,7 @@ cd barbacane && cargo build --release
 
 # Add x-barbacane-dispatch to your OpenAPI spec
 # Compile
-./target/release/barbacane compile --spec api.yaml --output api.bca
+./target/release/barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 
 # Run
 ./target/release/barbacane serve --artifact api.bca --listen 0.0.0.0:8080

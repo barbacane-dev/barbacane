@@ -113,9 +113,8 @@ A plugin registry may be added later when the need arises.
 Plugins are resolved at compile time and bundled into the `.bca` artifact:
 
 ```bash
-barbacane compile --spec api.yaml --output api.bca
-# Reads barbacane.yaml
-# Resolves all plugin sources
+barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
+# Resolves all plugin sources from manifest
 # Bundles .wasm files into api.bca
 ```
 

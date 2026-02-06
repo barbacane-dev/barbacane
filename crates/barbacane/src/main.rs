@@ -38,8 +38,8 @@ use barbacane_telemetry::MetricsRegistry;
 use std::collections::HashMap;
 
 use barbacane_compiler::{
-    compile, compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs,
-    CompileOptions, CompiledOperation, Manifest, ProjectManifest,
+    compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs, CompileOptions,
+    CompiledOperation, Manifest, ProjectManifest,
 };
 use barbacane_router::{RouteEntry, RouteMatch, Router};
 use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits, ValidationError2};
@@ -409,9 +409,9 @@ enum Commands {
         #[arg(short, long)]
         output: String,
 
-        /// Path to barbacane.yaml manifest (required for plugin resolution).
-        #[arg(short, long)]
-        manifest: Option<String>,
+        /// Path to barbacane.yaml manifest.
+        #[arg(short, long, required = true)]
+        manifest: String,
 
         /// Allow plaintext HTTP upstream URLs (development only).
         #[arg(long)]
@@ -2427,7 +2427,7 @@ async fn perform_hot_reload(
 fn run_compile(
     specs: &[String],
     output: &str,
-    manifest_path: Option<&str>,
+    manifest_file: &str,
     allow_plaintext: bool,
 ) -> ExitCode {
     let spec_paths: Vec<&Path> = specs.iter().map(Path::new).collect();
@@ -2446,37 +2446,31 @@ fn run_compile(
         ..Default::default()
     };
 
-    let result = if let Some(manifest_file) = manifest_path {
-        // Manifest-based compilation: validates plugins and bundles them
-        let manifest_path = Path::new(manifest_file);
-        if !manifest_path.exists() {
-            eprintln!("error: manifest file not found: {}", manifest_file);
+    let manifest_path = Path::new(manifest_file);
+    if !manifest_path.exists() {
+        eprintln!("error: manifest file not found: {}", manifest_file);
+        return ExitCode::from(1);
+    }
+
+    // Load the project manifest
+    let project_manifest = match ProjectManifest::load(manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: failed to load manifest: {}", e);
             return ExitCode::from(1);
         }
-
-        // Load the project manifest
-        let project_manifest = match ProjectManifest::load(manifest_path) {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("error: failed to load manifest: {}", e);
-                return ExitCode::from(1);
-            }
-        };
-
-        // Get the base path for resolving plugin paths (directory containing the manifest)
-        let base_path = manifest_path.parent().unwrap_or(Path::new("."));
-
-        compile_with_manifest(
-            &spec_paths,
-            &project_manifest,
-            base_path,
-            output_path,
-            &options,
-        )
-    } else {
-        // Legacy compilation without manifest (no plugin validation)
-        compile(&spec_paths, output_path)
     };
+
+    // Get the base path for resolving plugin paths (directory containing the manifest)
+    let base_path = manifest_path.parent().unwrap_or(Path::new("."));
+
+    let result = compile_with_manifest(
+        &spec_paths,
+        &project_manifest,
+        base_path,
+        output_path,
+        &options,
+    );
 
     match result {
         Ok(compile_result) => {
@@ -2966,7 +2960,7 @@ async fn main() -> ExitCode {
             output,
             manifest,
             allow_plaintext,
-        } => run_compile(&spec, &output, manifest.as_deref(), allow_plaintext),
+        } => run_compile(&spec, &output, &manifest, allow_plaintext),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
         Commands::Init {
             name,
