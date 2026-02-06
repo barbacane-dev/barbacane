@@ -16,3 +16,5 @@ plugins:
     path: ../../plugins/rate-limit/rate-limit.wasm
   cache:
     path: ../../plugins/cache/cache.wasm
+  cors:
+    path: ../../plugins/cors/cors.wasm

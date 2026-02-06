@@ -1,0 +1,85 @@
+openapi: "3.1.0"
+info:
+  title: CORS Test API
+  version: "1.0.0"
+  description: API for testing CORS middleware with automatic preflight handling
+
+paths:
+  /cors-any:
+    get:
+      operationId: corsAnyGet
+      summary: Endpoint allowing any origin
+      x-barbacane-middlewares:
+        - name: cors
+          config:
+            allowed_origins: ["*"]
+            allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+            allowed_headers: ["Content-Type", "Authorization"]
+            max_age: 3600
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /cors-specific:
+    get:
+      operationId: corsSpecificGet
+      summary: Endpoint allowing specific origins
+      x-barbacane-middlewares:
+        - name: cors
+          config:
+            allowed_origins: ["https://example.com", "https://app.example.com"]
+            allowed_methods: ["GET", "POST"]
+            allowed_headers: ["Content-Type"]
+            expose_headers: ["X-Response-Id"]
+            max_age: 7200
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"specific origin"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /cors-credentials:
+    get:
+      operationId: corsCredentialsGet
+      summary: Endpoint allowing credentials
+      x-barbacane-middlewares:
+        - name: cors
+          config:
+            allowed_origins: ["https://trusted.example.com"]
+            allowed_methods: ["GET", "POST"]
+            allowed_headers: ["Content-Type", "Authorization"]
+            allow_credentials: true
+            max_age: 3600
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"with credentials"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /no-cors:
+    get:
+      operationId: noCorsGet
+      summary: Endpoint without CORS middleware
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"no cors"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success

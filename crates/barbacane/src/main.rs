@@ -1014,6 +1014,48 @@ impl Gateway {
                 Ok(Self::add_standard_headers(response, &request_id, &trace_id))
             }
             RouteMatch::MethodNotAllowed { allowed } => {
+                // Check if this is a CORS preflight request
+                // Preflight = OPTIONS + Origin + Access-Control-Request-Method headers
+                if method == Method::OPTIONS
+                    && headers.contains_key("origin")
+                    && headers.contains_key("access-control-request-method")
+                {
+                    // Try to handle as CORS preflight by finding an operation with CORS middleware
+                    if let Some(first_method) = allowed.first() {
+                        if let RouteMatch::Found { entry, params: _ } =
+                            self.router.lookup(&path, first_method)
+                        {
+                            let operation = &self.operations[entry.operation_index];
+
+                            // Check if this operation has a CORS middleware
+                            let cors_middleware =
+                                operation.middlewares.iter().find(|mw| mw.name == "cors");
+
+                            if let Some(cors_mw) = cors_middleware {
+                                // Execute only the CORS middleware for preflight
+                                let response = self
+                                    .handle_cors_preflight(
+                                        cors_mw,
+                                        &headers,
+                                        &request_id,
+                                        &trace_id,
+                                    )
+                                    .await;
+                                self.record_request_metrics(
+                                    &method_str,
+                                    &path,
+                                    response.status().as_u16(),
+                                    0,
+                                    0,
+                                    start_time,
+                                );
+                                return Ok(response);
+                            }
+                        }
+                    }
+                }
+
+                // Not a CORS preflight or no CORS middleware found - return 405
                 let response = self.method_not_allowed_response(allowed);
                 self.record_request_metrics(
                     &method_str,
@@ -1556,6 +1598,66 @@ impl Gateway {
             .header("allow", allow_header)
             .body(Full::new(Bytes::from(body)))
             .unwrap()
+    }
+
+    /// Handle CORS preflight request by executing only the CORS middleware.
+    ///
+    /// This is called when an OPTIONS request with CORS headers is received
+    /// for a path that has a CORS middleware configured on one of its operations.
+    async fn handle_cors_preflight(
+        &self,
+        cors_middleware: &barbacane_compiler::MiddlewareConfig,
+        headers: &HashMap<String, String>,
+        request_id: &str,
+        trace_id: &str,
+    ) -> Response<Full<Bytes>> {
+        // Build a minimal request for the CORS middleware
+        let headers_btree: std::collections::BTreeMap<String, String> = headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let plugin_request = barbacane_wasm::Request {
+            method: "OPTIONS".to_string(),
+            path: String::new(),
+            query: None,
+            headers: headers_btree,
+            body: None,
+            client_ip: "0.0.0.0".to_string(),
+            path_params: std::collections::BTreeMap::new(),
+        };
+
+        let request_json = match serde_json::to_vec(&plugin_request) {
+            Ok(j) => j,
+            Err(_) => {
+                return Self::add_standard_headers(
+                    self.internal_error_response(None),
+                    request_id,
+                    trace_id,
+                );
+            }
+        };
+
+        // Execute only the CORS middleware
+        let middlewares = vec![cors_middleware.clone()];
+        match self.execute_middleware_on_request(&middlewares, &request_json) {
+            Ok((_, _)) => {
+                // CORS middleware didn't short-circuit, return empty 204
+                // (This shouldn't happen for valid preflights, but handle it gracefully)
+                Self::add_standard_headers(
+                    Response::builder()
+                        .status(StatusCode::NO_CONTENT)
+                        .body(Full::new(Bytes::new()))
+                        .unwrap(),
+                    request_id,
+                    trace_id,
+                )
+            }
+            Err(response) => {
+                // CORS middleware short-circuited with a response (expected for preflights)
+                Self::add_standard_headers(response, request_id, trace_id)
+            }
+        }
     }
 
     /// Build a 400 Bad Request response for generic errors.
