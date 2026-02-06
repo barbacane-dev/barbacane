@@ -3100,4 +3100,69 @@ paths:
             "Should return 405 when no CORS middleware configured"
         );
     }
+
+    #[tokio::test]
+    async fn test_cors_global_middleware_applies_to_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // /global-cors endpoint inherits global CORS middleware config
+        // Preflight should work without operation-level middleware
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/global-cors")
+            .header("Origin", "https://example.com")
+            .header("Access-Control-Request-Method", "GET")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            204,
+            "Preflight should succeed with global CORS middleware"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("*"),
+            "Should have wildcard origin from global config"
+        );
+        assert!(
+            resp.headers()
+                .get("access-control-allow-methods")
+                .map(|v| v.to_str().unwrap())
+                .unwrap_or("")
+                .contains("GET"),
+            "Should include GET in allowed methods from global config"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_global_middleware_simple_request() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Simple GET request with Origin header on endpoint using global config
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/global-cors")
+            .header("Origin", "https://example.com")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("*"),
+            "Response should include CORS header from global middleware"
+        );
+    }
+
+    // Note: Correlation ID tests are pending implementation of host_uuid_generate
+    // host function in the WASM runtime. See BACKLOG.md for tracking.
 }

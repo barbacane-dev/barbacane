@@ -4,7 +4,31 @@ info:
   version: "1.0.0"
   description: API for testing CORS middleware with automatic preflight handling
 
+# Global CORS middleware - applies to all endpoints by default
+x-barbacane-middlewares:
+  - name: cors
+    config:
+      allowed_origins: ["*"]
+      allowed_methods: ["GET", "POST", "PUT", "DELETE"]
+      allowed_headers: ["Content-Type", "Authorization"]
+      max_age: 3600
+
 paths:
+  /global-cors:
+    get:
+      operationId: globalCorsGet
+      summary: Endpoint inheriting global CORS config
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"global cors"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+
   /cors-any:
     get:
       operationId: corsAnyGet
@@ -73,7 +97,8 @@ paths:
   /no-cors:
     get:
       operationId: noCorsGet
-      summary: Endpoint without CORS middleware
+      summary: Endpoint without CORS middleware (overrides global)
+      x-barbacane-middlewares: []  # Empty array removes global middleware
       x-barbacane-dispatch:
         name: mock
         config:
