@@ -518,6 +518,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "uuid",
  "wasmtime",
 ]
 

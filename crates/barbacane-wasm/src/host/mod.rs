@@ -256,3 +256,25 @@ pub mod cache {
     pub const SET_FUNCTION: &str = "host_cache_set";
     pub const READ_RESULT_FUNCTION: &str = "host_cache_read_result";
 }
+
+/// Host functions for UUID generation.
+///
+/// ```text
+/// host_uuid_generate() -> i32
+/// host_uuid_read_result(buf_ptr: i32, buf_len: i32) -> i32
+/// ```
+///
+/// Generates a UUID v7 (time-ordered) and returns it as a string.
+/// First call `host_uuid_generate()` to generate the UUID and get its length (36 bytes),
+/// then call `host_uuid_read_result()` with a buffer to read the UUID string.
+///
+/// UUID v7 format: `xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx`
+/// where the first 48 bits encode a Unix timestamp in milliseconds.
+pub mod uuid {
+    /// The capability name.
+    pub const CAPABILITY: &str = "generate_uuid";
+
+    /// The function names.
+    pub const GENERATE_FUNCTION: &str = "host_uuid_generate";
+    pub const READ_RESULT_FUNCTION: &str = "host_uuid_read_result";
+}

@@ -199,6 +199,13 @@ mod tests {
     }
 
     #[test]
+    fn capability_to_imports_uuid() {
+        let imports = capability_to_imports("generate_uuid");
+        assert!(imports.contains(&"host_uuid_generate"));
+        assert!(imports.contains(&"host_uuid_read_result"));
+    }
+
+    #[test]
     fn unknown_capability_returns_empty() {
         let imports = capability_to_imports("unknown");
         assert!(imports.is_empty());

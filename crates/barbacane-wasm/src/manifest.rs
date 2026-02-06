@@ -146,6 +146,7 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "kafka_publish",
     "nats_publish",
     "telemetry",
+    "generate_uuid",
 ];
 
 /// Check if a capability name is known.
@@ -171,6 +172,7 @@ pub fn capability_to_imports(capability: &str) -> &'static [&'static str] {
             "host_span_end",
             "host_span_set_attribute",
         ],
+        "generate_uuid" => &["host_uuid_generate", "host_uuid_read_result"],
         _ => &[],
     }
 }

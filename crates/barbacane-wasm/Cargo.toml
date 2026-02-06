@@ -44,6 +44,9 @@ jsonschema.workspace = true
 sha2.workspace = true
 hex.workspace = true
 
+# UUID generation (for host_uuid_generate)
+uuid.workspace = true
+
 # Workspace crates
 barbacane-plugin-sdk.workspace = true
 barbacane-telemetry.workspace = true

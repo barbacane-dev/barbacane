@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Correlation ID Middleware Configuration",
+  "type": "object",
+  "properties": {
+    "header_name": {
+      "type": "string",
+      "description": "Header name for the correlation ID",
+      "default": "x-correlation-id"
+    },
+    "generate_if_missing": {
+      "type": "boolean",
+      "description": "Generate a new correlation ID if none is provided in the request",
+      "default": true
+    },
+    "trust_incoming": {
+      "type": "boolean",
+      "description": "Trust and propagate correlation IDs from incoming requests",
+      "default": true
+    },
+    "include_in_response": {
+      "type": "boolean",
+      "description": "Include the correlation ID in the response headers",
+      "default": true
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

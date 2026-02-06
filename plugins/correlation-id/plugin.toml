@@ -1,0 +1,12 @@
+[plugin]
+name = "correlation-id"
+version = "0.1.0"
+type = "middleware"
+description = "Propagates or generates correlation IDs for distributed tracing"
+wasm = "correlation-id.wasm"
+
+[capabilities]
+log = true
+generate_uuid = true
+context_get = true
+context_set = true

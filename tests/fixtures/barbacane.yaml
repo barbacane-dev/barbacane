@@ -16,3 +16,5 @@ plugins:
     path: ../../plugins/rate-limit/rate-limit.wasm
   cache:
     path: ../../plugins/cache/cache.wasm
+  correlation-id:
+    path: ../../plugins/correlation-id/correlation-id.wasm
