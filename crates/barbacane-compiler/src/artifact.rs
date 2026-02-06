@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -16,22 +16,56 @@ use barbacane_spec_parser::{
     SpecFormat,
 };
 
-use crate::error::CompileError;
+use crate::error::{CompileError, CompileWarning};
 use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
 pub const ARTIFACT_VERSION: u32 = 1;
 
 /// Options for compilation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CompileOptions {
     /// Allow plaintext HTTP upstream URLs (development only).
     /// If false, compilation fails with E1031 for http:// URLs.
     pub allow_plaintext: bool,
+    /// Maximum JSON Schema nesting depth (default: 32).
+    pub max_schema_depth: usize,
+    /// Maximum total properties in a schema (default: 256).
+    pub max_schema_properties: usize,
+}
+
+impl Default for CompileOptions {
+    fn default() -> Self {
+        Self {
+            allow_plaintext: false,
+            max_schema_depth: 32,
+            max_schema_properties: 256,
+        }
+    }
 }
 
 /// Compiler version (from Cargo.toml).
 pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Known x-barbacane-* extensions (structural spec extensions).
+/// Extensions not in this list will trigger E1015 warning.
+///
+/// Note: Middleware functionality (rate-limit, cache, auth, etc.) is configured
+/// via `x-barbacane-middlewares` with the plugin name, not as separate extensions.
+/// Backend connections are configured in the `http-upstream` dispatcher config.
+const KNOWN_EXTENSIONS: &[&str] = &[
+    "x-barbacane-dispatch",    // Operation level - dispatcher config (required)
+    "x-barbacane-middlewares", // Root or operation level - middleware chain
+];
+
+/// Result of compilation including the manifest and any warnings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompileResult {
+    /// The compiled manifest.
+    pub manifest: Manifest,
+    /// Warnings produced during compilation (non-fatal issues).
+    pub warnings: Vec<CompileWarning>,
+}
 
 /// The manifest.json embedded in a .bca artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,7 +75,8 @@ pub struct Manifest {
     pub compiler_version: String,
     pub source_specs: Vec<SourceSpec>,
     pub routes_count: usize,
-    pub checksums: HashMap<String, String>,
+    /// Checksums use BTreeMap for deterministic JSON serialization order.
+    pub checksums: BTreeMap<String, String>,
     /// Bundled plugins (empty if no plugins bundled).
     #[serde(default)]
     pub plugins: Vec<BundledPlugin>,
@@ -114,7 +149,7 @@ pub struct CompiledOperation {
 /// Compile one or more spec files into a .bca artifact.
 ///
 /// Uses default options (plaintext http:// URLs are not allowed).
-pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileError> {
+pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<CompileResult, CompileError> {
     compile_with_options(spec_paths, output, &CompileOptions::default())
 }
 
@@ -122,13 +157,16 @@ pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<Manifest, CompileE
 ///
 /// Note: This function does NOT validate plugins against a manifest.
 /// Use `compile_with_manifest` for manifest-aware compilation.
+///
+/// Returns a `CompileResult` containing the manifest and any warnings.
 pub fn compile_with_options(
     spec_paths: &[&Path],
     output: &Path,
     options: &CompileOptions,
-) -> Result<Manifest, CompileError> {
+) -> Result<CompileResult, CompileError> {
     // Parse all specs
     let mut specs: Vec<(ApiSpec, String, String)> = Vec::new(); // (spec, content, sha256)
+    let mut warnings: Vec<CompileWarning> = Vec::new();
 
     for path in spec_paths {
         let content = std::fs::read_to_string(path)?;
@@ -140,12 +178,63 @@ pub fn compile_with_options(
     // Validate and collect operations
     let mut operations: Vec<CompiledOperation> = Vec::new();
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new(); // (path, method) -> spec file
+    let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new(); // normalized (path, method) -> (original_path, spec_file)
+    let mut seen_operation_ids: HashMap<String, String> = HashMap::new(); // operationId -> location
 
     for (spec, _, _) in &specs {
         let spec_file = spec.filename.as_deref().unwrap_or("unknown");
 
+        // Validate global middlewares (E1011)
+        for (idx, mw) in spec.global_middlewares.iter().enumerate() {
+            if mw.name.is_empty() {
+                return Err(CompileError::MissingMiddlewareName(format!(
+                    "global middleware #{} in '{}'",
+                    idx + 1,
+                    spec_file
+                )));
+            }
+        }
+
+        // Check for unknown extensions at spec level (E1015 - warning)
+        for key in spec.extensions.keys() {
+            if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
+                warnings.push(CompileWarning {
+                    code: "E1015".to_string(),
+                    message: format!("unknown extension: {}", key),
+                    location: Some(spec_file.to_string()),
+                });
+            }
+        }
+
         for op in &spec.operations {
-            // Check for routing conflicts
+            let location = format!("{} {} in '{}'", op.method, op.path, spec_file);
+
+            // Check for unknown extensions at operation level (E1015 - warning)
+            for key in op.extensions.keys() {
+                if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
+                    warnings.push(CompileWarning {
+                        code: "E1015".to_string(),
+                        message: format!("unknown extension: {}", key),
+                        location: Some(location.clone()),
+                    });
+                }
+            }
+
+            // Validate path template syntax (E1054)
+            validate_path_template(&op.path, &location)?;
+
+            // Check for duplicate operationId (E1055)
+            if let Some(ref op_id) = op.operation_id {
+                if let Some(first_location) = seen_operation_ids.get(op_id) {
+                    return Err(CompileError::DuplicateOperationId(
+                        op_id.clone(),
+                        format!("first at {}, duplicate at {}", first_location, location),
+                    ));
+                }
+                seen_operation_ids.insert(op_id.clone(), location.clone());
+            }
+
+            // Check for routing conflicts (E1010)
             let key = (op.path.clone(), op.method.clone());
             if let Some(other_spec) = seen_routes.get(&key) {
                 return Err(CompileError::RoutingConflict(format!(
@@ -155,7 +244,20 @@ pub fn compile_with_options(
             }
             seen_routes.insert(key, spec_file.to_string());
 
-            // Check for missing dispatcher
+            // Check for ambiguous routes (E1050) - same structure, different param names
+            let normalized = normalize_path_template(&op.path);
+            let structural_key = (normalized, op.method.clone());
+            if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
+                if other_path != &op.path {
+                    return Err(CompileError::AmbiguousRoute(format!(
+                        "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
+                        op.path, other_path, op.method, spec_file, other_spec
+                    )));
+                }
+            }
+            seen_structural.insert(structural_key, (op.path.clone(), spec_file.to_string()));
+
+            // Check for missing dispatcher (E1020)
             let dispatch = op.dispatch.clone().ok_or_else(|| {
                 CompileError::MissingDispatch(format!(
                     "{} {} in '{}'",
@@ -181,6 +283,51 @@ pub fn compile_with_options(
                 .clone()
                 .unwrap_or_else(|| spec.global_middlewares.clone());
 
+            // Validate middleware names (E1011)
+            for (idx, mw) in middlewares.iter().enumerate() {
+                if mw.name.is_empty() {
+                    return Err(CompileError::MissingMiddlewareName(format!(
+                        "middleware #{} in {}",
+                        idx + 1,
+                        location
+                    )));
+                }
+            }
+
+            // Validate schema complexity and circular refs for parameters (E1051, E1052, E1053)
+            for param in &op.parameters {
+                if let Some(schema) = &param.schema {
+                    let param_location = format!("{} parameter '{}'", location, param.name);
+                    validate_schema_complexity(
+                        schema,
+                        options.max_schema_depth,
+                        options.max_schema_properties,
+                        &param_location,
+                    )?;
+                    // Detect circular refs within the schema
+                    let mut visited = HashSet::new();
+                    detect_circular_refs(schema, schema, &mut visited, &param_location)?;
+                }
+            }
+
+            // Validate request body schema complexity and circular refs (E1051, E1052, E1053)
+            if let Some(ref body) = op.request_body {
+                for (content_type, content) in &body.content {
+                    if let Some(schema) = &content.schema {
+                        let body_location = format!("{} request body ({})", location, content_type);
+                        validate_schema_complexity(
+                            schema,
+                            options.max_schema_depth,
+                            options.max_schema_properties,
+                            &body_location,
+                        )?;
+                        // Detect circular refs within the schema
+                        let mut visited = HashSet::new();
+                        detect_circular_refs(schema, schema, &mut visited, &body_location)?;
+                    }
+                }
+            }
+
             operations.push(CompiledOperation {
                 index: operations.len(),
                 path: op.path.clone(),
@@ -196,6 +343,12 @@ pub fn compile_with_options(
                 bindings: op.bindings.clone(),
             });
         }
+    }
+
+    // Sort operations by (path, method) for deterministic output, then reassign indices
+    operations.sort_by(|a, b| (&a.path, &a.method).cmp(&(&b.path, &b.method)));
+    for (i, op) in operations.iter_mut().enumerate() {
+        op.index = i;
     }
 
     // Build routes.json
@@ -220,11 +373,15 @@ pub fn compile_with_options(
         })
         .collect();
 
-    let mut checksums = HashMap::new();
+    let mut checksums = BTreeMap::new();
     checksums.insert(
         "routes.json".to_string(),
         format!("sha256:{}", routes_sha256),
     );
+
+    // Sort source_specs by filename for deterministic output
+    let mut source_specs = source_specs;
+    source_specs.sort_by(|a, b| a.file.cmp(&b.file));
 
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
@@ -265,7 +422,7 @@ pub fn compile_with_options(
     let encoder = archive.into_inner()?;
     encoder.finish()?;
 
-    Ok(manifest)
+    Ok(CompileResult { manifest, warnings })
 }
 
 /// Compile specs with a project manifest into a .bca artifact.
@@ -286,9 +443,10 @@ pub fn compile_with_manifest(
     manifest_base_path: &Path,
     output: &Path,
     options: &CompileOptions,
-) -> Result<Manifest, CompileError> {
+) -> Result<CompileResult, CompileError> {
     // Parse all specs
     let mut specs: Vec<(ApiSpec, String, String)> = Vec::new();
+    let mut warnings: Vec<CompileWarning> = Vec::new();
 
     for path in spec_paths {
         let content = std::fs::read_to_string(path)?;
@@ -320,11 +478,63 @@ pub fn compile_with_manifest(
     // Validate and collect operations
     let mut operations: Vec<CompiledOperation> = Vec::new();
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
+    let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
+    let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
 
     for (spec, _, _) in &specs {
         let spec_file = spec.filename.as_deref().unwrap_or("unknown");
 
+        // Validate global middlewares (E1011)
+        for (idx, mw) in spec.global_middlewares.iter().enumerate() {
+            if mw.name.is_empty() {
+                return Err(CompileError::MissingMiddlewareName(format!(
+                    "global middleware #{} in '{}'",
+                    idx + 1,
+                    spec_file
+                )));
+            }
+        }
+
+        // Check for unknown extensions at spec level (E1015 - warning)
+        for key in spec.extensions.keys() {
+            if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
+                warnings.push(CompileWarning {
+                    code: "E1015".to_string(),
+                    message: format!("unknown extension: {}", key),
+                    location: Some(spec_file.to_string()),
+                });
+            }
+        }
+
         for op in &spec.operations {
+            let location = format!("{} {} in '{}'", op.method, op.path, spec_file);
+
+            // Check for unknown extensions at operation level (E1015 - warning)
+            for key in op.extensions.keys() {
+                if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
+                    warnings.push(CompileWarning {
+                        code: "E1015".to_string(),
+                        message: format!("unknown extension: {}", key),
+                        location: Some(location.clone()),
+                    });
+                }
+            }
+
+            // Validate path template syntax (E1054)
+            validate_path_template(&op.path, &location)?;
+
+            // Check for duplicate operationId (E1055)
+            if let Some(ref op_id) = op.operation_id {
+                if let Some(first_location) = seen_operation_ids.get(op_id) {
+                    return Err(CompileError::DuplicateOperationId(
+                        op_id.clone(),
+                        format!("first at {}, duplicate at {}", first_location, location),
+                    ));
+                }
+                seen_operation_ids.insert(op_id.clone(), location.clone());
+            }
+
+            // Check for routing conflicts (E1010)
             let key = (op.path.clone(), op.method.clone());
             if let Some(other_spec) = seen_routes.get(&key) {
                 return Err(CompileError::RoutingConflict(format!(
@@ -334,6 +544,20 @@ pub fn compile_with_manifest(
             }
             seen_routes.insert(key, spec_file.to_string());
 
+            // Check for ambiguous routes (E1050)
+            let normalized = normalize_path_template(&op.path);
+            let structural_key = (normalized, op.method.clone());
+            if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
+                if other_path != &op.path {
+                    return Err(CompileError::AmbiguousRoute(format!(
+                        "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
+                        op.path, other_path, op.method, spec_file, other_spec
+                    )));
+                }
+            }
+            seen_structural.insert(structural_key, (op.path.clone(), spec_file.to_string()));
+
+            // Check for missing dispatcher (E1020)
             let dispatch = op.dispatch.clone().ok_or_else(|| {
                 CompileError::MissingDispatch(format!(
                     "{} {} in '{}'",
@@ -358,6 +582,49 @@ pub fn compile_with_manifest(
                 .clone()
                 .unwrap_or_else(|| spec.global_middlewares.clone());
 
+            // Validate middleware names (E1011)
+            for (idx, mw) in middlewares.iter().enumerate() {
+                if mw.name.is_empty() {
+                    return Err(CompileError::MissingMiddlewareName(format!(
+                        "middleware #{} in {}",
+                        idx + 1,
+                        location
+                    )));
+                }
+            }
+
+            // Validate schema complexity and circular refs for parameters
+            for param in &op.parameters {
+                if let Some(schema) = &param.schema {
+                    let param_location = format!("{} parameter '{}'", location, param.name);
+                    validate_schema_complexity(
+                        schema,
+                        options.max_schema_depth,
+                        options.max_schema_properties,
+                        &param_location,
+                    )?;
+                    let mut visited = HashSet::new();
+                    detect_circular_refs(schema, schema, &mut visited, &param_location)?;
+                }
+            }
+
+            // Validate request body schema complexity and circular refs
+            if let Some(ref body) = op.request_body {
+                for (content_type, content) in &body.content {
+                    if let Some(schema) = &content.schema {
+                        let body_location = format!("{} request body ({})", location, content_type);
+                        validate_schema_complexity(
+                            schema,
+                            options.max_schema_depth,
+                            options.max_schema_properties,
+                            &body_location,
+                        )?;
+                        let mut visited = HashSet::new();
+                        detect_circular_refs(schema, schema, &mut visited, &body_location)?;
+                    }
+                }
+            }
+
             operations.push(CompiledOperation {
                 index: operations.len(),
                 path: op.path.clone(),
@@ -375,6 +642,12 @@ pub fn compile_with_manifest(
         }
     }
 
+    // Sort operations by (path, method) for deterministic output, then reassign indices
+    operations.sort_by(|a, b| (&a.path, &a.method).cmp(&(&b.path, &b.method)));
+    for (i, op) in operations.iter_mut().enumerate() {
+        op.index = i;
+    }
+
     // Build routes.json
     let routes = CompiledRoutes { operations };
     let routes_json = serde_json::to_string_pretty(&routes)?;
@@ -382,7 +655,7 @@ pub fn compile_with_manifest(
 
     // Build plugin metadata
     let mut bundled_plugins = Vec::new();
-    let mut checksums = HashMap::new();
+    let mut checksums = BTreeMap::new();
     checksums.insert(
         "routes.json".to_string(),
         format!("sha256:{}", routes_sha256),
@@ -403,8 +676,11 @@ pub fn compile_with_manifest(
         });
     }
 
+    // Sort bundled_plugins by name for deterministic output
+    bundled_plugins.sort_by(|a, b| a.name.cmp(&b.name));
+
     // Build manifest
-    let source_specs: Vec<SourceSpec> = specs
+    let mut source_specs: Vec<SourceSpec> = specs
         .iter()
         .map(|(spec, _, sha256)| SourceSpec {
             file: spec
@@ -419,6 +695,9 @@ pub fn compile_with_manifest(
             version: spec.version.clone(),
         })
         .collect();
+
+    // Sort source_specs by filename for deterministic output
+    source_specs.sort_by(|a, b| a.file.cmp(&b.file));
 
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
@@ -465,7 +744,7 @@ pub fn compile_with_manifest(
     let encoder = archive.into_inner()?;
     encoder.finish()?;
 
-    Ok(manifest)
+    Ok(CompileResult { manifest, warnings })
 }
 
 /// Load a manifest from a .bca artifact.
@@ -593,9 +872,10 @@ pub fn compile_with_plugins(
     spec_paths: &[&Path],
     plugins: &[PluginBundle],
     output: &Path,
-) -> Result<Manifest, CompileError> {
+) -> Result<CompileResult, CompileError> {
     // Parse all specs
     let mut specs: Vec<(ApiSpec, String, String)> = Vec::new();
+    let mut warnings: Vec<CompileWarning> = Vec::new();
 
     for path in spec_paths {
         let content = std::fs::read_to_string(path)?;
@@ -604,14 +884,69 @@ pub fn compile_with_plugins(
         specs.push((spec, content, sha256));
     }
 
+    // Use default compile options for schema validation
+    let options = CompileOptions::default();
+
     // Validate and collect operations
     let mut operations: Vec<CompiledOperation> = Vec::new();
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
+    let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
+    let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
 
     for (spec, _, _) in &specs {
         let spec_file = spec.filename.as_deref().unwrap_or("unknown");
 
+        // Validate global middlewares (E1011)
+        for (idx, mw) in spec.global_middlewares.iter().enumerate() {
+            if mw.name.is_empty() {
+                return Err(CompileError::MissingMiddlewareName(format!(
+                    "global middleware #{} in '{}'",
+                    idx + 1,
+                    spec_file
+                )));
+            }
+        }
+
+        // Check for unknown extensions at spec level (E1015 - warning)
+        for key in spec.extensions.keys() {
+            if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
+                warnings.push(CompileWarning {
+                    code: "E1015".to_string(),
+                    message: format!("unknown extension: {}", key),
+                    location: Some(spec_file.to_string()),
+                });
+            }
+        }
+
         for op in &spec.operations {
+            let location = format!("{} {} in '{}'", op.method, op.path, spec_file);
+
+            // Check for unknown extensions at operation level (E1015 - warning)
+            for key in op.extensions.keys() {
+                if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
+                    warnings.push(CompileWarning {
+                        code: "E1015".to_string(),
+                        message: format!("unknown extension: {}", key),
+                        location: Some(location.clone()),
+                    });
+                }
+            }
+
+            // Validate path template syntax (E1054)
+            validate_path_template(&op.path, &location)?;
+
+            // Check for duplicate operationId (E1055)
+            if let Some(ref op_id) = op.operation_id {
+                if let Some(first_location) = seen_operation_ids.get(op_id) {
+                    return Err(CompileError::DuplicateOperationId(
+                        op_id.clone(),
+                        format!("first at {}, duplicate at {}", first_location, location),
+                    ));
+                }
+                seen_operation_ids.insert(op_id.clone(), location.clone());
+            }
+
+            // Check for routing conflicts (E1010)
             let key = (op.path.clone(), op.method.clone());
             if let Some(other_spec) = seen_routes.get(&key) {
                 return Err(CompileError::RoutingConflict(format!(
@@ -621,6 +956,20 @@ pub fn compile_with_plugins(
             }
             seen_routes.insert(key, spec_file.to_string());
 
+            // Check for ambiguous routes (E1050)
+            let normalized = normalize_path_template(&op.path);
+            let structural_key = (normalized, op.method.clone());
+            if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
+                if other_path != &op.path {
+                    return Err(CompileError::AmbiguousRoute(format!(
+                        "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
+                        op.path, other_path, op.method, spec_file, other_spec
+                    )));
+                }
+            }
+            seen_structural.insert(structural_key, (op.path.clone(), spec_file.to_string()));
+
+            // Check for missing dispatcher (E1020)
             let dispatch = op.dispatch.clone().ok_or_else(|| {
                 CompileError::MissingDispatch(format!(
                     "{} {} in '{}'",
@@ -632,6 +981,49 @@ pub fn compile_with_plugins(
                 .middlewares
                 .clone()
                 .unwrap_or_else(|| spec.global_middlewares.clone());
+
+            // Validate middleware names (E1011)
+            for (idx, mw) in middlewares.iter().enumerate() {
+                if mw.name.is_empty() {
+                    return Err(CompileError::MissingMiddlewareName(format!(
+                        "middleware #{} in {}",
+                        idx + 1,
+                        location
+                    )));
+                }
+            }
+
+            // Validate schema complexity and circular refs for parameters
+            for param in &op.parameters {
+                if let Some(schema) = &param.schema {
+                    let param_location = format!("{} parameter '{}'", location, param.name);
+                    validate_schema_complexity(
+                        schema,
+                        options.max_schema_depth,
+                        options.max_schema_properties,
+                        &param_location,
+                    )?;
+                    let mut visited = HashSet::new();
+                    detect_circular_refs(schema, schema, &mut visited, &param_location)?;
+                }
+            }
+
+            // Validate request body schema complexity and circular refs
+            if let Some(ref body) = op.request_body {
+                for (content_type, content) in &body.content {
+                    if let Some(schema) = &content.schema {
+                        let body_location = format!("{} request body ({})", location, content_type);
+                        validate_schema_complexity(
+                            schema,
+                            options.max_schema_depth,
+                            options.max_schema_properties,
+                            &body_location,
+                        )?;
+                        let mut visited = HashSet::new();
+                        detect_circular_refs(schema, schema, &mut visited, &body_location)?;
+                    }
+                }
+            }
 
             operations.push(CompiledOperation {
                 index: operations.len(),
@@ -650,6 +1042,12 @@ pub fn compile_with_plugins(
         }
     }
 
+    // Sort operations by (path, method) for deterministic output, then reassign indices
+    operations.sort_by(|a, b| (&a.path, &a.method).cmp(&(&b.path, &b.method)));
+    for (i, op) in operations.iter_mut().enumerate() {
+        op.index = i;
+    }
+
     // Build routes.json
     let routes = CompiledRoutes { operations };
     let routes_json = serde_json::to_string_pretty(&routes)?;
@@ -657,7 +1055,7 @@ pub fn compile_with_plugins(
 
     // Build plugin metadata
     let mut bundled_plugins = Vec::new();
-    let mut checksums = HashMap::new();
+    let mut checksums = BTreeMap::new();
     checksums.insert(
         "routes.json".to_string(),
         format!("sha256:{}", routes_sha256),
@@ -678,8 +1076,11 @@ pub fn compile_with_plugins(
         });
     }
 
+    // Sort bundled_plugins by name for deterministic output
+    bundled_plugins.sort_by(|a, b| a.name.cmp(&b.name));
+
     // Build manifest
-    let source_specs: Vec<SourceSpec> = specs
+    let mut source_specs: Vec<SourceSpec> = specs
         .iter()
         .map(|(spec, _, sha256)| SourceSpec {
             file: spec
@@ -694,6 +1095,9 @@ pub fn compile_with_plugins(
             version: spec.version.clone(),
         })
         .collect();
+
+    // Sort source_specs by filename for deterministic output
+    source_specs.sort_by(|a, b| a.file.cmp(&b.file));
 
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
@@ -740,7 +1144,7 @@ pub fn compile_with_plugins(
     let encoder = archive.into_inner()?;
     encoder.finish()?;
 
-    Ok(manifest)
+    Ok(CompileResult { manifest, warnings })
 }
 
 /// Compute SHA-256 hash of a string.
@@ -852,6 +1256,267 @@ fn extract_upstream_url(config: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// Validate path template syntax (E1054).
+///
+/// Checks for:
+/// - Balanced braces
+/// - Non-empty parameter names
+/// - Valid characters in parameter names (alphanumeric + underscore)
+/// - No duplicate parameter names in the same path
+fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError> {
+    let mut seen_params: HashSet<String> = HashSet::new();
+    let mut brace_depth = 0;
+    let mut current_param = String::new();
+    let mut in_param = false;
+
+    for ch in path.chars() {
+        match ch {
+            '{' => {
+                if in_param {
+                    return Err(CompileError::InvalidPathTemplate(format!(
+                        "{} - nested braces not allowed",
+                        location
+                    )));
+                }
+                brace_depth += 1;
+                in_param = true;
+            }
+            '}' => {
+                if !in_param {
+                    return Err(CompileError::InvalidPathTemplate(format!(
+                        "{} - unmatched closing brace",
+                        location
+                    )));
+                }
+                brace_depth -= 1;
+                in_param = false;
+
+                if current_param.is_empty() {
+                    return Err(CompileError::InvalidPathTemplate(format!(
+                        "{} - empty parameter name",
+                        location
+                    )));
+                }
+                if !seen_params.insert(current_param.clone()) {
+                    return Err(CompileError::InvalidPathTemplate(format!(
+                        "{} - duplicate parameter '{}'",
+                        location, current_param
+                    )));
+                }
+                current_param.clear();
+            }
+            _ if in_param => {
+                if !ch.is_alphanumeric() && ch != '_' {
+                    return Err(CompileError::InvalidPathTemplate(format!(
+                        "{} - invalid character '{}' in parameter name",
+                        location, ch
+                    )));
+                }
+                current_param.push(ch);
+            }
+            _ => {}
+        }
+    }
+
+    if brace_depth != 0 {
+        return Err(CompileError::InvalidPathTemplate(format!(
+            "{} - unclosed brace",
+            location
+        )));
+    }
+
+    Ok(())
+}
+
+/// Normalize a path template for structural comparison (E1050).
+///
+/// Replaces parameter names with a placeholder: /users/{id} -> /users/{_}
+fn normalize_path_template(path: &str) -> String {
+    let mut result = String::with_capacity(path.len());
+    let mut in_param = false;
+
+    for ch in path.chars() {
+        match ch {
+            '{' => {
+                result.push('{');
+                result.push('_');
+                in_param = true;
+            }
+            '}' => {
+                result.push('}');
+                in_param = false;
+            }
+            _ if in_param => {
+                // Skip parameter name characters
+            }
+            _ => {
+                result.push(ch);
+            }
+        }
+    }
+
+    result
+}
+
+/// Validate schema complexity (E1051, E1052).
+fn validate_schema_complexity(
+    schema: &serde_json::Value,
+    max_depth: usize,
+    max_properties: usize,
+    location: &str,
+) -> Result<(), CompileError> {
+    let (depth, props) = measure_schema_complexity(schema, 0);
+
+    if depth > max_depth {
+        return Err(CompileError::SchemaTooDeep(format!(
+            "{} - depth {} exceeds limit {}",
+            location, depth, max_depth
+        )));
+    }
+    if props > max_properties {
+        return Err(CompileError::SchemaTooComplex(format!(
+            "{} - {} properties exceed limit {}",
+            location, props, max_properties
+        )));
+    }
+    Ok(())
+}
+
+/// Measure schema complexity: returns (max_depth, total_property_count).
+fn measure_schema_complexity(value: &serde_json::Value, current_depth: usize) -> (usize, usize) {
+    match value {
+        serde_json::Value::Object(obj) => {
+            let mut max_depth = current_depth;
+            let mut total_props = 0;
+
+            // Count properties in "properties" field
+            if let Some(serde_json::Value::Object(props)) = obj.get("properties") {
+                total_props += props.len();
+                for prop_value in props.values() {
+                    let (d, p) = measure_schema_complexity(prop_value, current_depth + 1);
+                    max_depth = max_depth.max(d);
+                    total_props += p;
+                }
+            }
+
+            // Handle items (for arrays)
+            if let Some(items) = obj.get("items") {
+                let (d, p) = measure_schema_complexity(items, current_depth + 1);
+                max_depth = max_depth.max(d);
+                total_props += p;
+            }
+
+            // Handle allOf, oneOf, anyOf
+            for key in ["allOf", "oneOf", "anyOf"] {
+                if let Some(serde_json::Value::Array(schemas)) = obj.get(key) {
+                    for schema in schemas {
+                        let (d, p) = measure_schema_complexity(schema, current_depth + 1);
+                        max_depth = max_depth.max(d);
+                        total_props += p;
+                    }
+                }
+            }
+
+            // Handle additionalProperties if it's a schema
+            if let Some(additional) = obj.get("additionalProperties") {
+                if additional.is_object() {
+                    let (d, p) = measure_schema_complexity(additional, current_depth + 1);
+                    max_depth = max_depth.max(d);
+                    total_props += p;
+                }
+            }
+
+            (max_depth, total_props)
+        }
+        serde_json::Value::Array(arr) => {
+            let mut max_depth = current_depth;
+            let mut total_props = 0;
+            for item in arr {
+                let (d, p) = measure_schema_complexity(item, current_depth + 1);
+                max_depth = max_depth.max(d);
+                total_props += p;
+            }
+            (max_depth, total_props)
+        }
+        _ => (current_depth, 0),
+    }
+}
+
+/// Detect circular $ref references in a schema (E1053).
+fn detect_circular_refs(
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+    visited: &mut HashSet<String>,
+    location: &str,
+) -> Result<(), CompileError> {
+    if let Some(obj) = schema.as_object() {
+        // Check for $ref
+        if let Some(ref_val) = obj.get("$ref").and_then(|v| v.as_str()) {
+            if !visited.insert(ref_val.to_string()) {
+                return Err(CompileError::CircularSchemaRef(format!(
+                    "{} - circular reference to '{}'",
+                    location, ref_val
+                )));
+            }
+
+            // Try to resolve and recurse
+            if let Some(resolved) = resolve_json_ref(root, ref_val) {
+                detect_circular_refs(resolved, root, visited, location)?;
+            }
+
+            visited.remove(ref_val);
+        }
+
+        // Recurse into nested schemas
+        if let Some(serde_json::Value::Object(props)) = obj.get("properties") {
+            for prop_value in props.values() {
+                detect_circular_refs(prop_value, root, visited, location)?;
+            }
+        }
+
+        if let Some(items) = obj.get("items") {
+            detect_circular_refs(items, root, visited, location)?;
+        }
+
+        for key in ["allOf", "oneOf", "anyOf"] {
+            if let Some(serde_json::Value::Array(schemas)) = obj.get(key) {
+                for s in schemas {
+                    detect_circular_refs(s, root, visited, location)?;
+                }
+            }
+        }
+
+        if let Some(additional) = obj.get("additionalProperties") {
+            if additional.is_object() {
+                detect_circular_refs(additional, root, visited, location)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve a JSON reference (e.g., "#/components/schemas/User").
+fn resolve_json_ref<'a>(
+    root: &'a serde_json::Value,
+    ref_path: &str,
+) -> Option<&'a serde_json::Value> {
+    if !ref_path.starts_with("#/") {
+        return None;
+    }
+
+    let path = &ref_path[2..]; // Skip "#/"
+    let mut current = root;
+
+    for segment in path.split('/') {
+        // Handle JSON Pointer escaping
+        let unescaped = segment.replace("~1", "/").replace("~0", "~");
+        current = current.get(&unescaped)?;
+    }
+
+    Some(current)
+}
+
 // Need to add hex encoding manually since we don't have the hex crate
 mod hex {
     const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
@@ -900,12 +1565,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let manifest = compile(&[spec_path.as_path()], &output_path).unwrap();
+        let result = compile(&[spec_path.as_path()], &output_path).unwrap();
 
-        assert_eq!(manifest.barbacane_artifact_version, ARTIFACT_VERSION);
-        assert_eq!(manifest.routes_count, 1);
-        assert_eq!(manifest.source_specs.len(), 1);
-        assert_eq!(manifest.source_specs[0].spec_type, "openapi");
+        assert_eq!(result.manifest.barbacane_artifact_version, ARTIFACT_VERSION);
+        assert_eq!(result.manifest.routes_count, 1);
+        assert_eq!(result.manifest.source_specs.len(), 1);
+        assert_eq!(result.manifest.source_specs[0].spec_type, "openapi");
 
         // Verify the artifact file was created
         assert!(output_path.exists());
@@ -1053,6 +1718,7 @@ paths:
             &output_path,
             &CompileOptions {
                 allow_plaintext: true,
+                ..Default::default()
             },
         );
         assert!(result.is_ok());
@@ -1114,14 +1780,16 @@ paths:
             wasm_bytes: fake_wasm.clone(),
         }];
 
-        let manifest =
-            compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
+        let result = compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
 
-        assert_eq!(manifest.plugins.len(), 1);
-        assert_eq!(manifest.plugins[0].name, "test-plugin");
-        assert_eq!(manifest.plugins[0].version, "1.0.0");
-        assert_eq!(manifest.plugins[0].plugin_type, "middleware");
-        assert_eq!(manifest.plugins[0].wasm_path, "plugins/test-plugin.wasm");
+        assert_eq!(result.manifest.plugins.len(), 1);
+        assert_eq!(result.manifest.plugins[0].name, "test-plugin");
+        assert_eq!(result.manifest.plugins[0].version, "1.0.0");
+        assert_eq!(result.manifest.plugins[0].plugin_type, "middleware");
+        assert_eq!(
+            result.manifest.plugins[0].wasm_path,
+            "plugins/test-plugin.wasm"
+        );
 
         // Load plugins back
         let loaded = load_plugins(&output_path).unwrap();
@@ -1171,12 +1839,12 @@ operations:
         let spec_path = create_test_spec(temp.path(), "events.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let manifest = compile(&[spec_path.as_path()], &output_path).unwrap();
+        let result = compile(&[spec_path.as_path()], &output_path).unwrap();
 
-        assert_eq!(manifest.barbacane_artifact_version, ARTIFACT_VERSION);
-        assert_eq!(manifest.routes_count, 1);
-        assert_eq!(manifest.source_specs.len(), 1);
-        assert_eq!(manifest.source_specs[0].spec_type, "asyncapi");
+        assert_eq!(result.manifest.barbacane_artifact_version, ARTIFACT_VERSION);
+        assert_eq!(result.manifest.routes_count, 1);
+        assert_eq!(result.manifest.source_specs.len(), 1);
+        assert_eq!(result.manifest.source_specs[0].spec_type, "asyncapi");
 
         // Load routes and verify AsyncAPI fields
         let routes = load_routes(&output_path).unwrap();
@@ -1243,9 +1911,9 @@ operations:
         let spec_path = create_test_spec(temp.path(), "notifications.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let manifest = compile(&[spec_path.as_path()], &output_path).unwrap();
+        let result = compile(&[spec_path.as_path()], &output_path).unwrap();
 
-        assert_eq!(manifest.routes_count, 1);
+        assert_eq!(result.manifest.routes_count, 1);
 
         let routes = load_routes(&output_path).unwrap();
         let op = &routes.operations[0];
@@ -1259,5 +1927,383 @@ operations:
 
         // SEND operations should have request_body from message payload
         assert!(op.request_body.is_some());
+    }
+
+    #[test]
+    fn compile_detects_invalid_path_template_unclosed_brace() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users/{id:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(result, Err(CompileError::InvalidPathTemplate(_))));
+    }
+
+    #[test]
+    fn compile_detects_invalid_path_template_empty_param() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users/{}:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(result, Err(CompileError::InvalidPathTemplate(_))));
+    }
+
+    #[test]
+    fn compile_detects_invalid_path_template_duplicate_param() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users/{id}/posts/{id}:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(result, Err(CompileError::InvalidPathTemplate(_))));
+    }
+
+    #[test]
+    fn compile_detects_duplicate_operation_ids() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users:
+    get:
+      operationId: getUsers
+      x-barbacane-dispatch:
+        name: mock
+  /customers:
+    get:
+      operationId: getUsers
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(
+            result,
+            Err(CompileError::DuplicateOperationId(_, _))
+        ));
+    }
+
+    #[test]
+    fn compile_detects_missing_middleware_name() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: ""
+          config: {}
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(
+            result,
+            Err(CompileError::MissingMiddlewareName(_))
+        ));
+    }
+
+    #[test]
+    fn compile_detects_missing_global_middleware_name() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: ""
+    config: {}
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(
+            result,
+            Err(CompileError::MissingMiddlewareName(_))
+        ));
+    }
+
+    #[test]
+    fn compile_detects_ambiguous_routes() {
+        let temp = TempDir::new().unwrap();
+
+        let spec1 = r#"
+openapi: "3.1.0"
+info:
+  title: API 1
+  version: "1.0.0"
+paths:
+  /users/{id}:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec2 = r#"
+openapi: "3.1.0"
+info:
+  title: API 2
+  version: "1.0.0"
+paths:
+  /users/{userId}:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let path1 = create_test_spec(temp.path(), "api1.yaml", spec1);
+        let path2 = create_test_spec(temp.path(), "api2.yaml", spec2);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[path1.as_path(), path2.as_path()], &output_path);
+
+        assert!(matches!(result, Err(CompileError::AmbiguousRoute(_))));
+    }
+
+    #[test]
+    fn compile_allows_same_structure_same_params() {
+        // Same path in different specs with same param names should work
+        // (it's a routing conflict, not ambiguous)
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users/{id}:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+  /posts/{id}:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        // This should succeed - different paths, same param name is fine
+        let result = compile(&[spec_path.as_path()], &output_path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn compile_detects_schema_too_deep() {
+        let temp = TempDir::new().unwrap();
+
+        // Create a deeply nested schema (40 levels, default limit is 32)
+        let mut nested = r#"{"type": "string"}"#.to_string();
+        for _ in 0..40 {
+            nested = format!(
+                r#"{{"type": "object", "properties": {{"nested": {}}}}}"#,
+                nested
+            );
+        }
+
+        let spec_content = format!(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /test:
+    post:
+      x-barbacane-dispatch:
+        name: mock
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+"#,
+            nested
+        );
+
+        let spec_path = create_test_spec(temp.path(), "test.yaml", &spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(result, Err(CompileError::SchemaTooDeep(_))));
+    }
+
+    #[test]
+    fn compile_detects_schema_too_complex() {
+        let temp = TempDir::new().unwrap();
+
+        // Create a schema with 300 properties (default limit is 256)
+        let mut properties = String::new();
+        for i in 0..300 {
+            if i > 0 {
+                properties.push_str(", ");
+            }
+            properties.push_str(&format!(r#""prop{}": {{"type": "string"}}"#, i));
+        }
+
+        let spec_content = format!(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /test:
+    post:
+      x-barbacane-dispatch:
+        name: mock
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                {{{}}}
+"#,
+            properties
+        );
+
+        let spec_path = create_test_spec(temp.path(), "test.yaml", &spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+
+        assert!(matches!(result, Err(CompileError::SchemaTooComplex(_))));
+    }
+
+    #[test]
+    fn compile_allows_schema_within_limits() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /test:
+    post:
+      x-barbacane-dispatch:
+        name: mock
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                age:
+                  type: integer
+                address:
+                  type: object
+                  properties:
+                    street:
+                      type: string
+                    city:
+                      type: string
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(&[spec_path.as_path()], &output_path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn normalize_path_template_works() {
+        assert_eq!(normalize_path_template("/users/{id}"), "/users/{_}");
+        assert_eq!(normalize_path_template("/users/{userId}"), "/users/{_}");
+        assert_eq!(
+            normalize_path_template("/users/{id}/posts/{postId}"),
+            "/users/{_}/posts/{_}"
+        );
+        assert_eq!(normalize_path_template("/static/path"), "/static/path");
+    }
+
+    #[test]
+    fn validate_path_template_valid_cases() {
+        assert!(validate_path_template("/users", "test").is_ok());
+        assert!(validate_path_template("/users/{id}", "test").is_ok());
+        assert!(validate_path_template("/users/{user_id}", "test").is_ok());
+        assert!(validate_path_template("/users/{id}/posts/{postId}", "test").is_ok());
+    }
+
+    #[test]
+    fn validate_path_template_invalid_cases() {
+        // Unclosed brace
+        assert!(validate_path_template("/users/{id", "test").is_err());
+        // Empty param
+        assert!(validate_path_template("/users/{}", "test").is_err());
+        // Duplicate param
+        assert!(validate_path_template("/users/{id}/posts/{id}", "test").is_err());
+        // Nested braces
+        assert!(validate_path_template("/users/{{id}}", "test").is_err());
+        // Invalid character in param name
+        assert!(validate_path_template("/users/{id-name}", "test").is_err());
     }
 }

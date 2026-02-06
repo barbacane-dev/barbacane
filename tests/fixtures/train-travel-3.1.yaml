@@ -23,15 +23,8 @@ info:
 servers:
   - url: https://api.trains.example.com/v2
     description: Production
-    x-barbacane-upstream:
-      name: trains-backend
-      timeout: 30s
-      retries: 3
   - url: https://staging-api.trains.example.com/v2
     description: Staging
-    x-barbacane-upstream:
-      name: trains-backend-staging
-      timeout: 60s
 
 # Global Barbacane middlewares
 x-barbacane-middlewares:

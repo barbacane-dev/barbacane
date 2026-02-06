@@ -89,7 +89,7 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
     let compile_result = barbacane_compiler::compile(&spec_path_refs, &output_path);
 
     match compile_result {
-        Ok(manifest) => {
+        Ok(result) => {
             // Read compiled artifact
             let artifact_data = tokio::fs::read(&output_path).await?;
 
@@ -99,10 +99,11 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
             let sha256 = hex::encode(hasher.finalize());
 
             // Store artifact (with project_id if available)
+            // Note: We store just the manifest, not the full result with warnings
             let artifact = artifacts_repo
                 .create(
                     compilation.project_id,
-                    serde_json::to_value(&manifest)?,
+                    serde_json::to_value(&result.manifest)?,
                     artifact_data,
                     &sha256,
                     barbacane_compiler::COMPILER_VERSION,

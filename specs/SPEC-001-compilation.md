@@ -68,42 +68,7 @@ x-barbacane-dispatch:
 
 An operation without `x-barbacane-dispatch` fails compilation with `E1020`.
 
-### 3.3 `x-barbacane-ratelimit`
-
-**Placement:** spec root (global) or operation level (override).
-
-Aligned with [draft-ietf-httpapi-ratelimit-headers](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/) for vocabulary and response header behavior.
-
-```yaml
-x-barbacane-ratelimit:
-  policy_name: <string>         # optional — policy identifier, appears in RateLimit-Policy header (default: "default")
-  quota: <integer>              # required — max quota units allowed in the window
-  window: <integer>             # required — time window in seconds
-  quota_unit: <string>          # optional — "requests" | "content-bytes" | "concurrent-requests" (default: "requests")
-  key: <string>                 # optional — partition key, default "client_ip"
-                                #   format: "client_ip" | "header:<name>" | "context:<key>"
-```
-
-Rate limiting is implemented as a built-in middleware. This extension is syntactic sugar — the compiler transforms it into a middleware entry in the chain.
-
-The rate-limit middleware emits `RateLimit-Policy` and `RateLimit` response headers on every response (not just 429s), following the IETF draft format:
-
-```
-RateLimit-Policy: "default";q=100;w=60
-RateLimit: "default";r=73;t=45
-```
-
-### 3.4 `x-barbacane-cache`
-
-**Placement:** operation level only.
-
-```yaml
-x-barbacane-cache:
-  ttl: <duration>               # required — cache duration (e.g. "60s", "5m")
-  vary: [<string>]              # optional — headers that vary the cache key
-```
-
-### 3.5 `x-sunset`
+### 3.3 `x-sunset`
 
 **Placement:** operation level, alongside `deprecated: true`.
 
@@ -114,17 +79,6 @@ x-sunset: "<HTTP-date>"   # e.g. "Sat, 31 Dec 2025 23:59:59 GMT"
 ```
 
 If `x-sunset` is present but `deprecated` is not `true`, compilation fails with `E1030`.
-
-### 3.6 `x-barbacane-observability`
-
-**Placement:** spec root (global) or operation level (override).
-
-```yaml
-x-barbacane-observability:
-  trace_sampling: <float>       # optional — 0.0 to 1.0, default 1.0
-  detailed_validation_logs: <boolean>  # optional — default false
-  latency_slo: <duration>       # optional — emit alert metric when exceeded
-```
 
 ---
 
@@ -147,9 +101,6 @@ The compiler performs validation in order. Compilation stops at the first catego
 |------|-----------|
 | `E1010` | Routing conflict: same path + method declared in multiple specs |
 | `E1011` | `x-barbacane-middlewares` entry missing `name` |
-| `E1012` | `x-barbacane-ratelimit` missing required field (`quota` or `window`) |
-| `E1013` | `x-barbacane-ratelimit.quota_unit` is not one of `requests`, `content-bytes`, `concurrent-requests` |
-| `E1014` | `x-barbacane-cache.ttl` is not a valid duration |
 | `E1015` | Unknown `x-barbacane-*` extension key (warning, not error) |
 
 ### 4.3 Plugin resolution

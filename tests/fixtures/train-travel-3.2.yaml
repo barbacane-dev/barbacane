@@ -28,13 +28,6 @@ jsonSchemaDialect: "https://json-schema.org/draft/2020-12/schema"
 servers:
   - url: https://api.trains.example.com/v3
     description: Production
-    x-barbacane-upstream:
-      name: trains-backend-v3
-      timeout: 30s
-      retries: 3
-      circuit_breaker:
-        threshold: 5
-        timeout: 60s
 
 # Global Barbacane configuration
 x-barbacane-middlewares:

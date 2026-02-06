@@ -23,6 +23,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 
 | Plugin | Type | Description | Source |
 |--------|------|-------------|--------|
+| `observability` | Middleware | Trace sampling, detailed validation logs, latency SLO monitoring | ADR-0010 |
 | `acl` | Middleware | Access control by consumer/group after auth | Competitive analysis |
 | `request-size-limit` | Middleware | Reject requests exceeding size (per-route) | Competitive analysis |
 | `bot-detection` | Middleware | Block known bots by User-Agent patterns | Competitive analysis |
@@ -86,6 +87,9 @@ Items are tagged with their source ADR or SPEC for traceability.
 | VS Code extension | Spec editing with validation and autocomplete | P2 | — |
 | OpenAPI diff | Show changes between spec versions | P2 | — |
 | Improved error messages | More actionable validation and compilation errors | P2 | ADR-0012 |
+| Compile-time error catalog | Document all E-codes with examples and remediation | P2 | Tech review |
+| Extension documentation | Complete `x-barbacane-*` extension reference (ratelimit, cache, sunset) | P1 | Tech review |
+| Middleware ordering guide | Best practices for middleware execution order | P2 | Tech review |
 
 ### Integrations
 
@@ -110,6 +114,33 @@ Items are tagged with their source ADR or SPEC for traceability.
 
 ## Technical Debt
 
+### Compile-Time Safety Gaps
+
+| Item | Description | Priority | Status |
+|------|-------------|----------|--------|
+| ~~Ambiguous route detection~~ | E1050: Detect overlapping path templates | P0 | **DONE** |
+| ~~Schema complexity limits~~ | E1051/E1052: Depth (32) and property (256) limits | P0 | **DONE** |
+| ~~Circular `$ref` detection~~ | E1053: Detect circular JSON Schema references | P0 | **DONE** |
+| ~~Move E1011 to compile~~ | E1011: Missing middleware name validation | P1 | **DONE** |
+| Move E1015 to compile | Move unknown extension warning from `validate` to `compile` | P1 | Tech review |
+| ~~Path template syntax validation~~ | E1054: Validate braces, param names, duplicates | P2 | **DONE** |
+| ~~Duplicate operationId detection~~ | E1055: Detect non-unique operationId | P2 | **DONE** |
+| Spec pointers in errors | Add JSON Pointer (e.g., `#/paths/~1users/get`) to all compile errors | P2 | Tech review |
+| Deterministic artifact builds | Sort plugin/spec/route collections before serialization | P2 | Tech review |
+
+**Test cases added:**
+- `compile_detects_ambiguous_routes` ✓
+- `compile_detects_invalid_path_template_*` (3 tests) ✓
+- `compile_detects_schema_too_deep` ✓
+- `compile_detects_schema_too_complex` ✓
+- `compile_detects_duplicate_operation_ids` ✓
+- `compile_detects_missing_middleware_name` ✓
+- `compile_detects_missing_global_middleware_name` ✓
+- `validate_path_template_*` (2 unit tests) ✓
+- `normalize_path_template_works` ✓
+
+### Other Technical Debt
+
 | Item | Description | Priority | Source |
 |------|-------------|----------|--------|
 | JWKS fetch | Load JWT public keys from `jwks_uri` | P1 | M6a deferred |
@@ -117,6 +148,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 | Auth plugin auditing | Security review process for auth plugins (security-critical WASM) | P1 | ADR-0009 |
 | Trace volume guidance | Documentation for managing trace volume at scale | P1 | ADR-0010 |
 | Integration tests | Full control plane API lifecycle tests with PostgreSQL | P2 | M9 deferred |
+| Compile safety CI | Add fitness functions: deterministic build verification, fuzz testing for compiler | P2 | Tech review |
 | CLI subcommands | `barbacane-control spec/artifact/plugin` REST-based commands | P2 | M9 deferred |
 | E1032 validation | Warn on OpenAPI security scheme without matching auth middleware | P2 | M6c deferred |
 | HTTP/2 stream config | Expose configuration for stream limits (currently fixed) | P3 | SPEC-002 |
