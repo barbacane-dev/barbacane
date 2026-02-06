@@ -3048,4 +3048,258 @@ paths:
             "Should preserve incoming correlation ID"
         );
     }
+
+    // =========================================================================
+    // CORS Middleware Tests (Automatic Preflight Handling)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_cors_preflight_any_origin() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Send preflight OPTIONS request (no OPTIONS defined in spec - auto-handled)
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/cors-any")
+            .header("Origin", "https://any-site.com")
+            .header("Access-Control-Request-Method", "POST")
+            .header("Access-Control-Request-Headers", "Content-Type")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 204, "Preflight should return 204 No Content");
+
+        // Check CORS headers
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("*"),
+            "Should allow any origin"
+        );
+        assert!(
+            resp.headers().get("access-control-allow-methods").is_some(),
+            "Should have allow-methods header"
+        );
+        assert!(
+            resp.headers().get("access-control-max-age").is_some(),
+            "Should have max-age header"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_preflight_specific_origin_allowed() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Send preflight from allowed origin
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/cors-specific")
+            .header("Origin", "https://example.com")
+            .header("Access-Control-Request-Method", "GET")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 204, "Preflight should return 204");
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("https://example.com"),
+            "Should echo back allowed origin"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_preflight_specific_origin_denied() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Send preflight from disallowed origin
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/cors-specific")
+            .header("Origin", "https://evil-site.com")
+            .header("Access-Control-Request-Method", "GET")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 403, "Should reject disallowed origin");
+    }
+
+    #[tokio::test]
+    async fn test_cors_preflight_method_not_allowed() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request DELETE method which is not allowed on cors-specific
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/cors-specific")
+            .header("Origin", "https://example.com")
+            .header("Access-Control-Request-Method", "DELETE")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 403, "Should reject disallowed method");
+    }
+
+    #[tokio::test]
+    async fn test_cors_simple_request_with_origin() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Simple GET request with Origin header
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/cors-any")
+            .header("Origin", "https://example.com")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("*"),
+            "Response should include CORS header"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_request_without_origin() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request without Origin header (same-origin or non-browser)
+        let resp = gateway.get("/cors-any").await.unwrap();
+
+        assert_eq!(resp.status(), 200, "Non-CORS request should pass through");
+    }
+
+    #[tokio::test]
+    async fn test_cors_credentials_header() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Preflight for credentials endpoint
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/cors-credentials")
+            .header("Origin", "https://trusted.example.com")
+            .header("Access-Control-Request-Method", "GET")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 204);
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-credentials")
+                .map(|v| v.to_str().unwrap()),
+            Some("true"),
+            "Should include credentials header"
+        );
+        // With credentials, origin should be echoed, not *
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("https://trusted.example.com"),
+            "With credentials, should echo origin not *"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_preflight_no_cors_middleware_returns_405() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Preflight for endpoint without CORS middleware should return 405
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/no-cors")
+            .header("Origin", "https://example.com")
+            .header("Access-Control-Request-Method", "GET")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            405,
+            "Should return 405 when no CORS middleware configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_global_middleware_applies_to_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // /global-cors endpoint inherits global CORS middleware config
+        // Preflight should work without operation-level middleware
+        let resp = gateway
+            .request_builder(reqwest::Method::OPTIONS, "/global-cors")
+            .header("Origin", "https://example.com")
+            .header("Access-Control-Request-Method", "GET")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            204,
+            "Preflight should succeed with global CORS middleware"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("*"),
+            "Should have wildcard origin from global config"
+        );
+        assert!(
+            resp.headers()
+                .get("access-control-allow-methods")
+                .map(|v| v.to_str().unwrap())
+                .unwrap_or("")
+                .contains("GET"),
+            "Should include GET in allowed methods from global config"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_global_middleware_simple_request() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cors.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Simple GET request with Origin header on endpoint using global config
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/global-cors")
+            .header("Origin", "https://example.com")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("access-control-allow-origin")
+                .map(|v| v.to_str().unwrap()),
+            Some("*"),
+            "Response should include CORS header from global middleware"
+        );
+    }
 }
