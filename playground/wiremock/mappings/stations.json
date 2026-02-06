@@ -160,14 +160,14 @@
         "headers": { "Content-Type": "application/json" },
         "jsonBody": {
           "station_id": "efdbb9d1-02c2-4bc3-afb7-6788d8782b1e",
-          "timestamp": "{{now format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
+          "timestamp": "2026-02-06T16:00:00Z",
           "departures": [
             {
               "trip_id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
               "train_number": "ICE 123",
               "destination": "Munich Hbf",
-              "scheduled_time": "{{now offset='+30 minutes' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
-              "expected_time": "{{now offset='+32 minutes' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
+              "scheduled_time": "2026-02-06T16:30:00Z",
+              "expected_time": "2026-02-06T16:32:00Z",
               "platform": "4",
               "status": "delayed",
               "delay_minutes": 2
@@ -176,7 +176,7 @@
               "trip_id": "a19e3d4f-9e7f-8f6f-3d2f-5f6a7b8c9d0e",
               "train_number": "TGV 456",
               "destination": "Paris Gare du Nord",
-              "scheduled_time": "{{now offset='+45 minutes' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
+              "scheduled_time": "2026-02-06T16:45:00Z",
               "platform": "2",
               "status": "on_time"
             },
@@ -184,13 +184,12 @@
               "trip_id": "b20f4e5f-0f8f-9f7f-4e3f-6a7b8c9d0e1f",
               "train_number": "IC 789",
               "destination": "Hamburg Hbf",
-              "scheduled_time": "{{now offset='+60 minutes' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
+              "scheduled_time": "2026-02-06T17:00:00Z",
               "platform": "1",
               "status": "on_time"
             }
           ]
-        },
-        "transformers": ["response-template"]
+        }
       }
     }
   ]

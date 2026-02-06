@@ -14,7 +14,7 @@
         "status": 200,
         "headers": { "Content-Type": "application/json" },
         "jsonBody": {
-          "search_id": "{{randomValue type='UUID'}}",
+          "search_id": "dbe566c5-1f92-4612-afe9-2ac35d3a98d8",
           "outbound": [
             {
               "id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
@@ -28,8 +28,8 @@
                 "name": "Paris Gare du Nord",
                 "code": "XPG"
               },
-              "departure_time": "{{now offset='+2 hours' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
-              "arrival_time": "{{now offset='+10 hours' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
+              "departure_time": "2025-03-15T10:00:00Z",
+              "arrival_time": "2025-03-15T18:00:00Z",
               "duration_minutes": 480,
               "train_number": "ICE 1234",
               "operator": { "code": "DB", "name": "Deutsche Bahn" },
@@ -54,8 +54,8 @@
                 "name": "Paris Gare du Nord",
                 "code": "XPG"
               },
-              "departure_time": "{{now offset='+5 hours' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
-              "arrival_time": "{{now offset='+13 hours' format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}",
+              "departure_time": "2025-03-15T13:00:00Z",
+              "arrival_time": "2025-03-15T21:00:00Z",
               "duration_minutes": 480,
               "train_number": "TGV 5678",
               "operator": { "code": "SNCF", "name": "SNCF Voyageurs" },
@@ -69,8 +69,7 @@
           ],
           "return": [],
           "meta": { "search_time_ms": 234, "cached": false }
-        },
-        "transformers": ["response-template"]
+        }
       }
     },
     {
@@ -152,9 +151,8 @@
             "name": "Cologne Hbf"
           },
           "delay_minutes": 5,
-          "updated_at": "{{now format='yyyy-MM-dd\\'T\\'HH:mm:ss\\'Z\\''}}"
-        },
-        "transformers": ["response-template"]
+          "updated_at": "2025-03-15T10:30:00Z"
+        }
       }
     },
     {
