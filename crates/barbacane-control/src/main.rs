@@ -132,10 +132,23 @@ fn main() -> ExitCode {
             let output_path = Path::new(&output);
 
             match compile(&spec_paths, output_path) {
-                Ok(manifest) => {
+                Ok(result) => {
+                    // Print warnings if any
+                    for warning in &result.warnings {
+                        eprintln!(
+                            "warning[{}]: {}{}",
+                            warning.code,
+                            warning.message,
+                            warning
+                                .location
+                                .as_ref()
+                                .map(|l| format!(" ({})", l))
+                                .unwrap_or_default()
+                        );
+                    }
                     if verbose {
-                        eprintln!("Compiled {} route(s)", manifest.routes_count);
-                        for spec in &manifest.source_specs {
+                        eprintln!("Compiled {} route(s)", result.manifest.routes_count);
+                        for spec in &result.manifest.source_specs {
                             eprintln!("  - {} ({} {})", spec.file, spec.spec_type, spec.version);
                         }
                     }
@@ -153,7 +166,14 @@ fn main() -> ExitCode {
                         | barbacane_compiler::CompileError::RoutingConflict(_)
                         | barbacane_compiler::CompileError::MissingDispatch(_)
                         | barbacane_compiler::CompileError::PlaintextUpstream(_)
-                        | barbacane_compiler::CompileError::UndeclaredPlugin(_) => {
+                        | barbacane_compiler::CompileError::UndeclaredPlugin(_)
+                        | barbacane_compiler::CompileError::MissingMiddlewareName(_)
+                        | barbacane_compiler::CompileError::AmbiguousRoute(_)
+                        | barbacane_compiler::CompileError::SchemaTooDeep(_)
+                        | barbacane_compiler::CompileError::SchemaTooComplex(_)
+                        | barbacane_compiler::CompileError::CircularSchemaRef(_)
+                        | barbacane_compiler::CompileError::InvalidPathTemplate(_)
+                        | barbacane_compiler::CompileError::DuplicateOperationId(_, _) => {
                             ExitCode::from(1)
                         }
                         barbacane_compiler::CompileError::ManifestError(_)

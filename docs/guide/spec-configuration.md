@@ -6,47 +6,8 @@ Barbacane extends OpenAPI and AsyncAPI specs with custom `x-barbacane-*` extensi
 
 | Extension | Location | Purpose |
 |-----------|----------|---------|
-| `x-barbacane-upstream` | Server object | Define named backend connections |
-| `x-barbacane-dispatch` | Operation | Route request to a dispatcher |
+| `x-barbacane-dispatch` | Operation | Route request to a dispatcher (required) |
 | `x-barbacane-middlewares` | Root or Operation | Apply middleware chain |
-
-## Upstreams
-
-Define backend connections on the `servers` array:
-
-```yaml
-servers:
-  - url: https://api.example.com
-    description: Production API
-    x-barbacane-upstream:
-      name: main-backend
-      timeout: 30s
-      retries: 3
-
-  - url: https://auth.example.com
-    description: Auth Service
-    x-barbacane-upstream:
-      name: auth-service
-      timeout: 10s
-```
-
-### Upstream Properties
-
-| Property | Type | Required | Description |
-|----------|------|----------|-------------|
-| `name` | string | Yes | Unique identifier for this upstream |
-| `timeout` | duration | No | Request timeout (default: 30s) |
-| `retries` | integer | No | Number of retry attempts (default: 0) |
-
-Upstreams are a design pattern for named backends. The `http-upstream` dispatcher uses the `url` config directly:
-
-```yaml
-x-barbacane-dispatch:
-  name: http-upstream
-  config:
-    url: "https://api.example.com"  # Direct URL to backend
-    path: /api/resource
-```
 
 ## Dispatchers
 
@@ -220,18 +181,6 @@ openapi: "3.1.0"
 info:
   title: E-Commerce API
   version: "2.0.0"
-
-servers:
-  - url: https://api.shop.example.com
-    x-barbacane-upstream:
-      name: shop-backend
-      timeout: 30s
-      retries: 2
-
-  - url: https://payments.example.com
-    x-barbacane-upstream:
-      name: payments
-      timeout: 60s
 
 # Global middlewares
 x-barbacane-middlewares:

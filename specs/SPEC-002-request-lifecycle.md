@@ -243,7 +243,7 @@ Upstream `Server` headers are stripped and replaced.
 
 #### Rate limit headers
 
-When `x-barbacane-ratelimit` is configured on an operation, the rate-limit middleware emits standardized headers on every response:
+When the `rate-limit` middleware is configured on an operation (via `x-barbacane-middlewares`), it emits standardized headers on every response:
 
 ```
 RateLimit-Policy: "default";q=100;w=60

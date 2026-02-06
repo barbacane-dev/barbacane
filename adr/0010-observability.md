@@ -110,17 +110,6 @@ Data planes push telemetry to an **OpenTelemetry Collector** via OTLP (gRPC or H
 - Data plane never talks directly to observability backends
 - If collector is unreachable, telemetry is dropped (never blocks request processing)
 
-### Spec Integration
-
-Observability can be tuned per-API via extensions:
-
-```yaml
-x-barbacane-observability:
-  trace_sampling: 0.1        # sample 10% of traces
-  detailed_validation_logs: true  # log every validation failure
-  latency_slo: 50ms          # emit alert metric when exceeded
-```
-
 ## Consequences
 
 - **Easier:** Unified observability format (OTel), correlation across traces/metrics/logs, plugins get telemetry "for free" via host functions

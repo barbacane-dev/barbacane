@@ -123,12 +123,6 @@ info:
   title: My API
   version: "1.0.0"
 
-servers:
-  - url: https://api.example.com
-    x-barbacane-upstream:
-      name: backend
-      timeout: 30s
-
 paths:
   /health:
     get:

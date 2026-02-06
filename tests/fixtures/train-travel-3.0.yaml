@@ -16,9 +16,6 @@ info:
 servers:
   - url: https://api.trains.example.com/v1
     description: Production
-    x-barbacane-upstream:
-      name: trains-backend
-      timeout: 30s
 
 # Global Barbacane middlewares
 x-barbacane-middlewares:

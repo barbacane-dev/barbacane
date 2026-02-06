@@ -1718,12 +1718,13 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
 
                 // Check for unknown x-barbacane-* extensions (E1015 - warning)
                 // Note: x-sunset is not a barbacane extension (RFC 8594), so not in this list
+                // Note: Middleware functionality (rate-limit, cache, etc.) is configured via
+                // x-barbacane-middlewares with the plugin name, not as separate extensions.
+                // Backend connections are configured in the http-upstream dispatcher config.
+                // Keep in sync with KNOWN_EXTENSIONS in barbacane-compiler/src/artifact.rs
                 let known_extensions = [
-                    "x-barbacane-dispatch",
-                    "x-barbacane-middlewares",
-                    "x-barbacane-ratelimit",
-                    "x-barbacane-cache",
-                    "x-barbacane-observability",
+                    "x-barbacane-dispatch",    // Operation level
+                    "x-barbacane-middlewares", // Root or operation level
                 ];
 
                 for key in spec.extensions.keys() {
@@ -2349,7 +2350,10 @@ fn run_compile(
         }
     }
 
-    let options = CompileOptions { allow_plaintext };
+    let options = CompileOptions {
+        allow_plaintext,
+        ..Default::default()
+    };
 
     let result = if let Some(manifest_file) = manifest_path {
         // Manifest-based compilation: validates plugins and bundles them
@@ -2384,7 +2388,22 @@ fn run_compile(
     };
 
     match result {
-        Ok(manifest) => {
+        Ok(compile_result) => {
+            // Print warnings if any
+            for warning in &compile_result.warnings {
+                eprintln!(
+                    "warning[{}]: {}{}",
+                    warning.code,
+                    warning.message,
+                    warning
+                        .location
+                        .as_ref()
+                        .map(|l| format!(" ({})", l))
+                        .unwrap_or_default()
+                );
+            }
+
+            let manifest = &compile_result.manifest;
             let plugin_info = if manifest.plugins.is_empty() {
                 String::new()
             } else {

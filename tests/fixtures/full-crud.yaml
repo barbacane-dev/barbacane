@@ -6,9 +6,6 @@ info:
 
 servers:
   - url: https://api.example.com
-    x-barbacane-upstream:
-      name: main-backend
-      timeout: 30s
 
 x-barbacane-middlewares:
   - name: rate-limit

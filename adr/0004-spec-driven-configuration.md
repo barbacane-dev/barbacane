@@ -61,34 +61,35 @@ AsyncAPI specs configure event-driven APIs with a **protocol-agnostic adapter la
 
 | Concern | OpenAPI | AsyncAPI |
 |---------|---------|----------|
-| Routing | `paths`, `servers` | `channels`, `servers` |
+| Routing | `paths` | `channels` |
 | Validation | `schemas`, `parameters` | `schemas`, `messages` |
 | Security | `securitySchemes` | `securitySchemes` |
-| Rate limiting | `x-barbacane-ratelimit` extension | `x-barbacane-ratelimit` extension |
-| Dispatch | `servers`, `x-barbacane-dispatch` | `servers`, bindings |
+| Middlewares | `x-barbacane-middlewares` (rate-limit, cache, auth, etc.) | `x-barbacane-middlewares` |
+| Dispatch | `x-barbacane-dispatch` | `x-barbacane-dispatch`, bindings |
 
 ### Gateway-Specific Extensions
 
 Where OpenAPI/AsyncAPI lack expressiveness, we use `x-barbacane-*` vendor extensions:
 
 ```yaml
-x-barbacane-ratelimit:
-  quota: 100
-  window: 60
-  key: header:x-api-key
+# Middleware chain (global or per-operation)
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 100
+      window: 60
+      partition_key: "header:x-api-key"
+  - name: cache
+    config:
+      ttl: 60
+      vary: [Accept, Authorization]
 
-x-barbacane-cache:
-  ttl: 60s
-  vary: [Accept, Authorization]
-
+# Dispatcher (required on each operation)
 x-barbacane-dispatch:
   name: http-upstream
   config:
-    timeout: 5s
-    retries: 2
-    circuit-breaker:
-      threshold: 5
-      window: 30s
+    url: "https://api.example.com"
+    timeout: 5.0
 ```
 
 ## Consequences
