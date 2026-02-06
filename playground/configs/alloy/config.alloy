@@ -71,31 +71,21 @@ loki.process "docker_logs" {
     source = "log"
   }
 
-  // Try to parse structured logs (JSON format)
+  // Try to parse structured logs (JSON format from Barbacane)
   stage.json {
     expressions = {
       level   = "level",
-      msg     = "msg",
+      msg     = "message",
       target  = "target",
     }
-    source = ""
+    source = "log"
+    drop_malformed = true
   }
 
   // Add level as a label if found
   stage.labels {
     values = {
-      level = "",
-    }
-  }
-
-  // Parse plain text logs with timestamp pattern
-  stage.regex {
-    expression = "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z)\\s+(?P<level>\\w+)\\s+(?P<message>.*)$"
-  }
-
-  stage.labels {
-    values = {
-      level = "",
+      level = "level",
     }
   }
 }
