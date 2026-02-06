@@ -3302,4 +3302,193 @@ paths:
             "Response should include CORS header from global middleware"
         );
     }
+
+    // ==================== Request Size Limit Tests ====================
+
+    #[tokio::test]
+    async fn test_request_size_limit_allows_small_body() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-size-limit.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Small body should be allowed (under 100 byte limit)
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/limited")
+            .header("Content-Type", "application/json")
+            .body(r#"{"msg":"hi"}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_request_size_limit_blocks_large_body() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-size-limit.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Large body should be rejected (over 100 byte limit)
+        let large_body = r#"{"data":"this is a very long message that exceeds the configured limit of 100 bytes for this endpoint"}"#;
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/limited")
+            .header("Content-Type", "application/json")
+            .body(large_body)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 413);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:payload-too-large");
+        assert_eq!(body["status"], 413);
+    }
+
+    #[tokio::test]
+    async fn test_request_size_limit_unlimited_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-size-limit.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Unlimited endpoint should accept large bodies
+        let large_body = r#"{"data":"this is a very long message that would be rejected on the limited endpoint but should pass here"}"#;
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/unlimited")
+            .header("Content-Type", "application/json")
+            .body(large_body)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "unlimited");
+    }
+
+    // ==================== IP Restriction Tests ====================
+
+    #[tokio::test]
+    async fn test_ip_restriction_allowlist_localhost() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/ip-restriction.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Localhost should be allowed
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/allowlist")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "allowed");
+    }
+
+    #[tokio::test]
+    async fn test_ip_restriction_allowlist_denied_via_xff() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/ip-restriction.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request with X-Forwarded-For from non-allowed IP should be denied
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/allowlist")
+            .header("X-Forwarded-For", "203.0.113.50")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 403);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:ip-restricted");
+    }
+
+    #[tokio::test]
+    async fn test_ip_restriction_denylist_allowed() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/ip-restriction.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request from localhost (not in denylist) should be allowed
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/denylist")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_ip_restriction_denylist_blocked() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/ip-restriction.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request from denied CIDR range should be blocked
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/denylist")
+            .header("X-Forwarded-For", "10.1.2.3")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_ip_restriction_cidr_allowlist() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/ip-restriction.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // 127.0.0.1 is in 127.0.0.0/8 CIDR range
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/cidr-allowlist")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_ip_restriction_custom_message() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/ip-restriction.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Request from non-allowed IP should get custom status and message
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/custom-message")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 401);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"].as_str().unwrap().contains("not authorized"));
+    }
+
+    #[tokio::test]
+    async fn test_ip_restriction_public_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/ip-restriction.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Public endpoint without IP restriction
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/public")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "public");
+    }
 }

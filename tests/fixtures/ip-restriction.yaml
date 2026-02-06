@@ -1,0 +1,102 @@
+openapi: "3.1.0"
+info:
+  title: IP Restriction Test API
+  version: "1.0.0"
+
+paths:
+  /allowlist:
+    get:
+      operationId: allowlistEndpoint
+      summary: Endpoint with IP allowlist (localhost only)
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config:
+            allow:
+              - "127.0.0.1"
+              - "::1"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /denylist:
+    get:
+      operationId: denylistEndpoint
+      summary: Endpoint with IP denylist
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config:
+            deny:
+              - "10.0.0.0/8"
+              - "192.168.0.0/16"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /cidr-allowlist:
+    get:
+      operationId: cidrAllowlistEndpoint
+      summary: Endpoint with CIDR allowlist
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config:
+            allow:
+              - "127.0.0.0/8"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /custom-message:
+    get:
+      operationId: customMessageEndpoint
+      summary: Endpoint with custom denial message
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config:
+            allow:
+              - "10.0.0.1"
+            message: "Your IP address is not authorized"
+            status: 401
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized
+
+  /public:
+    get:
+      operationId: publicEndpoint
+      summary: Endpoint without IP restriction
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"public"}'
+      responses:
+        "200":
+          description: Success

@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "barbacane-ip-restriction"
+version = "0.1.0"
+dependencies = [
+ "barbacane-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "barbacane-plugin-macros"
 version = "0.1.0"
 dependencies = [
@@ -16,15 +25,6 @@ version = "0.1.0"
 dependencies = [
  "barbacane-plugin-macros",
  "serde",
-]
-
-[[package]]
-name = "barbacane-rate-limit"
-version = "0.1.0"
-dependencies = [
- "barbacane-plugin-sdk",
- "serde",
- "serde_json",
 ]
 
 [[package]]

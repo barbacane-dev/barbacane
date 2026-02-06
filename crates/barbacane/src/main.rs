@@ -420,7 +420,8 @@ enum Commands {
 
     /// Validate OpenAPI spec(s) without compiling.
     ///
-    /// Checks for spec validity (E1001-E1004) and extension validity (E1010-E1015).
+    /// Checks for spec validity (E1001-E1004) and extension validity (E1010-E1014).
+    /// E1015 (unknown x-barbacane-* extension) is checked during compile.
     /// Does not resolve plugins or produce an artifact.
     Validate {
         /// Input spec file(s) (YAML or JSON).
@@ -1831,38 +1832,8 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     }
                 }
 
-                // Check for unknown x-barbacane-* extensions (E1015 - warning)
-                // Note: x-sunset is not a barbacane extension (RFC 8594), so not in this list
-                // Note: Middleware functionality (rate-limit, cache, etc.) is configured via
-                // x-barbacane-middlewares with the plugin name, not as separate extensions.
-                // Backend connections are configured in the http-upstream dispatcher config.
-                // Keep in sync with KNOWN_EXTENSIONS in barbacane-compiler/src/artifact.rs
-                let known_extensions = [
-                    "x-barbacane-dispatch",    // Operation level
-                    "x-barbacane-middlewares", // Root or operation level
-                ];
-
-                for key in spec.extensions.keys() {
-                    if !known_extensions.contains(&key.as_str()) {
-                        warnings.push(ValidationIssue {
-                            code: "E1015".to_string(),
-                            message: format!("unknown extension: {}", key),
-                            location: Some(spec_path.clone()),
-                        });
-                    }
-                }
-
-                for op in &spec.operations {
-                    for key in op.extensions.keys() {
-                        if !known_extensions.contains(&key.as_str()) {
-                            warnings.push(ValidationIssue {
-                                code: "E1015".to_string(),
-                                message: format!("unknown extension: {}", key),
-                                location: Some(format!("{}:{} {}", spec_path, op.path, op.method)),
-                            });
-                        }
-                    }
-                }
+                // Note: E1015 (unknown x-barbacane-* extension) checking is done during compile,
+                // not validate, to avoid false positives on non-barbacane extensions.
 
                 // Store for cross-spec validation
                 parsed_specs.push((spec_path.clone(), spec));

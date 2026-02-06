@@ -332,6 +332,118 @@ Returns `204 No Content` with:
 
 ---
 
+## Request Tracing
+
+### correlation-id
+
+Propagates or generates correlation IDs (UUID v7) for distributed tracing. The correlation ID is passed to upstream services and included in responses.
+
+```yaml
+x-barbacane-middlewares:
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generate_if_missing: true
+      trust_incoming: true
+      include_in_response: true
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `header_name` | string | `X-Correlation-ID` | Header name for the correlation ID |
+| `generate_if_missing` | boolean | `true` | Generate new UUID v7 if not provided |
+| `trust_incoming` | boolean | `true` | Trust and propagate incoming correlation IDs |
+| `include_in_response` | boolean | `true` | Include correlation ID in response headers |
+
+---
+
+## Request Protection
+
+### ip-restriction
+
+Allows or denies requests based on client IP address or CIDR ranges. Supports both allowlist and denylist modes.
+
+```yaml
+x-barbacane-middlewares:
+  - name: ip-restriction
+    config:
+      allow:
+        - 10.0.0.0/8
+        - 192.168.1.0/24
+      deny:
+        - 10.0.0.5
+      message: "Access denied from your IP address"
+      status: 403
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `allow` | array | `[]` | Allowed IPs or CIDR ranges (allowlist mode) |
+| `deny` | array | `[]` | Denied IPs or CIDR ranges (denylist mode) |
+| `message` | string | `Access denied` | Custom error message for denied requests |
+| `status` | integer | `403` | HTTP status code for denied requests |
+
+#### Behavior
+
+- If `deny` is configured, IPs in the list are blocked (denylist takes precedence)
+- If `allow` is configured, only IPs in the list are permitted (allowlist mode)
+- Client IP is extracted from `X-Forwarded-For`, `X-Real-IP`, or direct connection
+- Supports both single IPs (`10.0.0.1`) and CIDR notation (`10.0.0.0/8`)
+
+#### Error Response
+
+Returns Problem JSON (RFC 7807):
+
+```json
+{
+  "type": "urn:barbacane:error:ip-restricted",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "Access denied",
+  "client_ip": "203.0.113.50"
+}
+```
+
+---
+
+### request-size-limit
+
+Rejects requests that exceed a configurable body size limit. Checks both `Content-Length` header and actual body size.
+
+```yaml
+x-barbacane-middlewares:
+  - name: request-size-limit
+    config:
+      max_bytes: 1048576        # 1 MiB
+      check_content_length: true
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `max_bytes` | integer | `1048576` | Maximum allowed request body size in bytes (default: 1 MiB) |
+| `check_content_length` | boolean | `true` | Check `Content-Length` header for early rejection |
+
+#### Error Response
+
+Returns `413 Payload Too Large` with Problem JSON:
+
+```json
+{
+  "type": "urn:barbacane:error:payload-too-large",
+  "title": "Payload Too Large",
+  "status": 413,
+  "detail": "Request body size 2097152 bytes exceeds maximum allowed size of 1048576 bytes."
+}
+```
+
+---
+
 ## Caching
 
 ### cache
@@ -383,24 +495,33 @@ The middleware respects `Cache-Control` response headers:
 
 The following middlewares are planned for future milestones:
 
-### request-id
+### basic-auth
 
-Adds request ID for tracing.
+Username/password authentication using HTTP Basic Auth.
 
 ```yaml
 x-barbacane-middlewares:
-  - name: request-id
+  - name: basic-auth
     config:
-      header: X-Request-ID
-      generate_if_missing: true
+      realm: "My API"
+      users:
+        admin: "env://ADMIN_PASSWORD"
+        readonly: "env://READONLY_PASSWORD"
 ```
 
-#### Configuration
+### http-log
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `header` | string | `X-Request-ID` | Header name |
-| `generate_if_missing` | boolean | `true` | Generate UUID if not present |
+Sends request/response logs to an HTTP endpoint for centralized logging.
+
+```yaml
+x-barbacane-middlewares:
+  - name: http-log
+    config:
+      endpoint: https://logs.example.com/ingest
+      method: POST
+      batch_size: 100
+      flush_interval: 5
+```
 
 ### idempotency
 
@@ -482,10 +603,12 @@ Put middlewares in logical order:
 
 ```yaml
 x-barbacane-middlewares:
-  - name: request-id     # 1. Add tracing ID first
-  - name: cors           # 2. Handle CORS early
-  - name: rate-limit     # 3. Rate limit before auth (cheaper)
-  - name: auth-jwt       # 4. Authenticate
+  - name: correlation-id    # 1. Add tracing ID first
+  - name: cors              # 2. Handle CORS early
+  - name: ip-restriction    # 3. Block bad IPs immediately
+  - name: request-size-limit # 4. Reject oversized requests
+  - name: rate-limit        # 5. Rate limit before auth (cheaper)
+  - name: auth-jwt          # 6. Authenticate
 ```
 
 ### Fail Fast
@@ -494,8 +617,10 @@ Put restrictive middlewares early to reject bad requests quickly:
 
 ```yaml
 x-barbacane-middlewares:
-  - name: rate-limit     # Reject over-limit immediately
-  - name: auth-jwt       # Reject unauthorized before processing
+  - name: ip-restriction      # Block banned IPs immediately
+  - name: request-size-limit  # Reject large payloads early
+  - name: rate-limit          # Reject over-limit immediately
+  - name: auth-jwt            # Reject unauthorized before processing
 ```
 
 ### Use Global for Common Concerns
@@ -503,8 +628,11 @@ x-barbacane-middlewares:
 ```yaml
 # Global: apply to everything
 x-barbacane-middlewares:
-  - name: request-id
+  - name: correlation-id
   - name: cors
+  - name: request-size-limit
+    config:
+      max_bytes: 10485760  # 10 MiB global limit
   - name: rate-limit
 
 paths:
@@ -517,4 +645,12 @@ paths:
       # Only add what's different
       x-barbacane-middlewares:
         - name: auth-jwt
+
+  /upload:
+    post:
+      # Override size limit for uploads
+      x-barbacane-middlewares:
+        - name: request-size-limit
+          config:
+            max_bytes: 104857600  # 100 MiB for uploads
 ```

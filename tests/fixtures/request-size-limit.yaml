@@ -1,0 +1,47 @@
+openapi: "3.1.0"
+info:
+  title: Request Size Limit Test API
+  version: "1.0.0"
+
+paths:
+  /limited:
+    post:
+      operationId: limitedEndpoint
+      summary: Endpoint with 100 byte body limit
+      x-barbacane-middlewares:
+        - name: request-size-limit
+          config:
+            max_bytes: 100
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Success
+        "413":
+          description: Payload too large
+
+  /unlimited:
+    post:
+      operationId: unlimitedEndpoint
+      summary: Endpoint without size limit
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"unlimited"}'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Success

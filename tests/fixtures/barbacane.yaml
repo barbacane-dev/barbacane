@@ -20,3 +20,7 @@ plugins:
     path: ../../plugins/correlation-id/correlation-id.wasm
   cors:
     path: ../../plugins/cors/cors.wasm
+  request-size-limit:
+    path: ../../plugins/request-size-limit/request-size-limit.wasm
+  ip-restriction:
+    path: ../../plugins/ip-restriction/ip-restriction.wasm

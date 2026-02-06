@@ -14,7 +14,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 |--------|------|-------------|--------|
 | `request-transformer` | Middleware | Modify headers, query params, body before upstream | Competitive analysis |
 | `response-transformer` | Middleware | Modify response headers/body before client | Competitive analysis |
-| `ip-restriction` | Middleware | Allow/deny by IP or CIDR range | Competitive analysis |
+| ~~`ip-restriction`~~ | ~~Middleware~~ | ~~Allow/deny by IP or CIDR range~~ | **DONE** |
 | `basic-auth` | Middleware | Username/password authentication | Competitive analysis |
 | `http-log` | Middleware | Send request/response logs to HTTP endpoint | Competitive analysis |
 | ~~`correlation-id`~~ | ~~Middleware~~ | ~~Propagate/generate X-Correlation-ID header~~ | **DONE** |
@@ -25,10 +25,9 @@ Items are tagged with their source ADR or SPEC for traceability.
 |--------|------|-------------|--------|
 | `observability` | Middleware | Trace sampling, detailed validation logs, latency SLO monitoring | ADR-0010 |
 | `acl` | Middleware | Access control by consumer/group after auth | Competitive analysis |
-| `request-size-limit` | Middleware | Reject requests exceeding size (per-route) | Competitive analysis |
+| ~~`request-size-limit`~~ | ~~Middleware~~ | ~~Reject requests exceeding size (per-route)~~ | **DONE** |
 | `bot-detection` | Middleware | Block known bots by User-Agent patterns | Competitive analysis |
 | `redirect` | Middleware | URL redirections (301/302) | Competitive analysis |
-| `request-termination` | Middleware | Return static error without calling upstream | Competitive analysis |
 
 ### P2 — Nice to Have
 
@@ -122,11 +121,11 @@ Items are tagged with their source ADR or SPEC for traceability.
 | ~~Schema complexity limits~~ | E1051/E1052: Depth (32) and property (256) limits | P0 | **DONE** |
 | ~~Circular `$ref` detection~~ | E1053: Detect circular JSON Schema references | P0 | **DONE** |
 | ~~Move E1011 to compile~~ | E1011: Missing middleware name validation | P1 | **DONE** |
-| Move E1015 to compile | Move unknown extension warning from `validate` to `compile` | P1 | Tech review |
+| ~~Move E1015 to compile~~ | ~~Move unknown extension warning from `validate` to `compile`~~ | ~~P1~~ | **DONE** |
 | ~~Path template syntax validation~~ | E1054: Validate braces, param names, duplicates | P2 | **DONE** |
 | ~~Duplicate operationId detection~~ | E1055: Detect non-unique operationId | P2 | **DONE** |
 | Spec pointers in errors | Add JSON Pointer (e.g., `#/paths/~1users/get`) to all compile errors | P2 | Tech review |
-| Deterministic artifact builds | Sort plugin/spec/route collections before serialization | P2 | Tech review |
+| ~~Deterministic artifact builds~~ | ~~Sort plugin/spec/route collections before serialization~~ | ~~P2~~ | **DONE** |
 
 **Test cases added:**
 - `compile_detects_ambiguous_routes` ✓

@@ -422,6 +422,11 @@ pub fn compile_with_options(
     let encoder = archive.into_inner()?;
     encoder.finish()?;
 
+    // Sort warnings for deterministic output
+    warnings.sort_by(|a, b| {
+        (&a.location, &a.code, &a.message).cmp(&(&b.location, &b.code, &b.message))
+    });
+
     Ok(CompileResult { manifest, warnings })
 }
 
@@ -743,6 +748,11 @@ pub fn compile_with_manifest(
     // Finish the archive
     let encoder = archive.into_inner()?;
     encoder.finish()?;
+
+    // Sort warnings for deterministic output
+    warnings.sort_by(|a, b| {
+        (&a.location, &a.code, &a.message).cmp(&(&b.location, &b.code, &b.message))
+    });
 
     Ok(CompileResult { manifest, warnings })
 }
@@ -1143,6 +1153,11 @@ pub fn compile_with_plugins(
     // Finish the archive
     let encoder = archive.into_inner()?;
     encoder.finish()?;
+
+    // Sort warnings for deterministic output
+    warnings.sort_by(|a, b| {
+        (&a.location, &a.code, &a.message).cmp(&(&b.location, &b.code, &b.message))
+    });
 
     Ok(CompileResult { manifest, warnings })
 }

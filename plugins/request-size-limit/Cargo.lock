@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "barbacane-rate-limit"
+name = "barbacane-request-size-limit"
 version = "0.1.0"
 dependencies = [
  "barbacane-plugin-sdk",
