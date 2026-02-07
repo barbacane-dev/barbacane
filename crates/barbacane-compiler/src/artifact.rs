@@ -277,11 +277,28 @@ pub fn compile_with_options(
                 }
             }
 
-            // Resolve middleware chain: operation-level overrides global
-            let middlewares = op
-                .middlewares
-                .clone()
-                .unwrap_or_else(|| spec.global_middlewares.clone());
+            // Resolve middleware chain:
+            // - None: use global middlewares only
+            // - Some([]): explicit opt-out, no middlewares at all
+            // - Some([items]): global middlewares (excluding any overridden by name) + operation-level
+            let middlewares = match &op.middlewares {
+                None => spec.global_middlewares.clone(),
+                Some(op_mw) if op_mw.is_empty() => Vec::new(),
+                Some(op_mw) => {
+                    // Collect operation middleware names for deduplication
+                    let op_names: std::collections::HashSet<_> =
+                        op_mw.iter().map(|m| m.name.as_str()).collect();
+                    // Include global middlewares except those overridden by operation
+                    let mut merged: Vec<_> = spec
+                        .global_middlewares
+                        .iter()
+                        .filter(|m| !op_names.contains(m.name.as_str()))
+                        .cloned()
+                        .collect();
+                    merged.extend(op_mw.clone());
+                    merged
+                }
+            };
 
             // Validate middleware names (E1011)
             for (idx, mw) in middlewares.iter().enumerate() {
@@ -582,10 +599,28 @@ pub fn compile_with_manifest(
                 }
             }
 
-            let middlewares = op
-                .middlewares
-                .clone()
-                .unwrap_or_else(|| spec.global_middlewares.clone());
+            // Resolve middleware chain:
+            // - None: use global middlewares only
+            // - Some([]): explicit opt-out, no middlewares at all
+            // - Some([items]): global middlewares (excluding any overridden by name) + operation-level
+            let middlewares = match &op.middlewares {
+                None => spec.global_middlewares.clone(),
+                Some(op_mw) if op_mw.is_empty() => Vec::new(),
+                Some(op_mw) => {
+                    // Collect operation middleware names for deduplication
+                    let op_names: std::collections::HashSet<_> =
+                        op_mw.iter().map(|m| m.name.as_str()).collect();
+                    // Include global middlewares except those overridden by operation
+                    let mut merged: Vec<_> = spec
+                        .global_middlewares
+                        .iter()
+                        .filter(|m| !op_names.contains(m.name.as_str()))
+                        .cloned()
+                        .collect();
+                    merged.extend(op_mw.clone());
+                    merged
+                }
+            };
 
             // Validate middleware names (E1011)
             for (idx, mw) in middlewares.iter().enumerate() {
@@ -987,10 +1022,28 @@ pub fn compile_with_plugins(
                 ))
             })?;
 
-            let middlewares = op
-                .middlewares
-                .clone()
-                .unwrap_or_else(|| spec.global_middlewares.clone());
+            // Resolve middleware chain:
+            // - None: use global middlewares only
+            // - Some([]): explicit opt-out, no middlewares at all
+            // - Some([items]): global middlewares (excluding any overridden by name) + operation-level
+            let middlewares = match &op.middlewares {
+                None => spec.global_middlewares.clone(),
+                Some(op_mw) if op_mw.is_empty() => Vec::new(),
+                Some(op_mw) => {
+                    // Collect operation middleware names for deduplication
+                    let op_names: std::collections::HashSet<_> =
+                        op_mw.iter().map(|m| m.name.as_str()).collect();
+                    // Include global middlewares except those overridden by operation
+                    let mut merged: Vec<_> = spec
+                        .global_middlewares
+                        .iter()
+                        .filter(|m| !op_names.contains(m.name.as_str()))
+                        .cloned()
+                        .collect();
+                    merged.extend(op_mw.clone());
+                    merged
+                }
+            };
 
             // Validate middleware names (E1011)
             for (idx, mw) in middlewares.iter().enumerate() {
