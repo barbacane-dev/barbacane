@@ -1147,12 +1147,9 @@ impl Gateway {
         let request_json = match serde_json::to_vec(&plugin_request) {
             Ok(j) => j,
             Err(e) => {
-                let detail = if self.dev_mode {
-                    Some(format!("failed to serialize request: {}", e))
-                } else {
-                    None
-                };
-                return Ok(self.internal_error_response(detail.as_deref()));
+                return Ok(
+                    self.dev_error_response(format_args!("failed to serialize request: {}", e))
+                );
             }
         };
 
@@ -1173,15 +1170,10 @@ impl Gateway {
 
         // All dispatchers must be WASM plugins loaded from the artifact
         if !self.plugin_pool.has_plugin(&dispatch.name) {
-            let detail = if self.dev_mode {
-                Some(format!(
-                    "unknown dispatcher '{}' - not found in artifact plugins",
-                    dispatch.name
-                ))
-            } else {
-                None
-            };
-            return Ok(self.internal_error_response(detail.as_deref()));
+            return Ok(self.dev_error_response(format_args!(
+                "unknown dispatcher '{}' - not found in artifact plugins",
+                dispatch.name
+            )));
         }
 
         // Dispatch to the plugin (returns raw plugin response for middleware chain)
@@ -1231,15 +1223,10 @@ impl Gateway {
         for mw in middlewares {
             if !self.plugin_pool.has_plugin(&mw.name) {
                 tracing::error!(middleware = %mw.name, "middleware plugin not found in artifact");
-                let detail = if self.dev_mode {
-                    Some(format!(
-                        "middleware '{}' not found - ensure it's declared in barbacane.yaml",
-                        mw.name
-                    ))
-                } else {
-                    None
-                };
-                return Err(self.internal_error_response(detail.as_deref()));
+                return Err(self.dev_error_response(format_args!(
+                    "middleware '{}' not found - ensure it's declared in barbacane.yaml",
+                    mw.name
+                )));
             }
 
             let instance_key = barbacane_wasm::InstanceKey::new(&mw.name, &mw.config);
@@ -1251,12 +1238,10 @@ impl Gateway {
                 Ok(instance) => instances.push(instance),
                 Err(e) => {
                     tracing::error!(middleware = %mw.name, error = %e, "failed to get middleware instance");
-                    let detail = if self.dev_mode {
-                        Some(format!("failed to get middleware '{}': {}", mw.name, e))
-                    } else {
-                        None
-                    };
-                    return Err(self.internal_error_response(detail.as_deref()));
+                    return Err(self.dev_error_response(format_args!(
+                        "failed to get middleware '{}': {}",
+                        mw.name, e
+                    )));
                 }
             }
         }
@@ -1288,12 +1273,10 @@ impl Gateway {
                     Ok(plugin_response) => Err(self.build_response_from_plugin(&plugin_response)),
                     Err(e) => {
                         tracing::error!(error = %e, "failed to parse middleware response");
-                        let detail = if self.dev_mode {
-                            Some(format!("failed to parse middleware response: {}", e))
-                        } else {
-                            None
-                        };
-                        Err(self.internal_error_response(detail.as_deref()))
+                        Err(self.dev_error_response(format_args!(
+                            "failed to parse middleware response: {}",
+                            e
+                        )))
                     }
                 }
             }
@@ -1302,12 +1285,7 @@ impl Gateway {
                 trap_result: _,
             } => {
                 tracing::error!(error = %error, "middleware chain execution failed");
-                let detail = if self.dev_mode {
-                    Some(format!("middleware chain error: {}", error))
-                } else {
-                    None
-                };
-                Err(self.internal_error_response(detail.as_deref()))
+                Err(self.dev_error_response(format_args!("middleware chain error: {}", error)))
             }
         }
     }
@@ -1377,46 +1355,28 @@ impl Gateway {
         let mut instance = match self.plugin_pool.get_instance(&instance_key) {
             Ok(i) => i,
             Err(e) => {
-                let detail = if self.dev_mode {
-                    Some(format!("failed to get plugin instance: {}", e))
-                } else {
-                    None
-                };
-                return Err(self.internal_error_response(detail.as_deref()));
+                return Err(
+                    self.dev_error_response(format_args!("failed to get plugin instance: {}", e))
+                );
             }
         };
 
         // Call the dispatch function
         if let Err(e) = instance.dispatch(request_json) {
-            let detail = if self.dev_mode {
-                Some(format!("plugin dispatch failed: {}", e))
-            } else {
-                None
-            };
-            return Err(self.internal_error_response(detail.as_deref()));
+            return Err(self.dev_error_response(format_args!("plugin dispatch failed: {}", e)));
         }
 
         // Get the output
         let output = instance.take_output();
         if output.is_empty() {
-            let detail = if self.dev_mode {
-                Some("plugin returned empty output".to_string())
-            } else {
-                None
-            };
-            return Err(self.internal_error_response(detail.as_deref()));
+            return Err(self.dev_error_response("plugin returned empty output"));
         }
 
         // Parse the response
         match serde_json::from_slice(&output) {
             Ok(r) => Ok(r),
             Err(e) => {
-                let detail = if self.dev_mode {
-                    Some(format!("failed to parse plugin response: {}", e))
-                } else {
-                    None
-                };
-                Err(self.internal_error_response(detail.as_deref()))
+                Err(self.dev_error_response(format_args!("failed to parse plugin response: {}", e)))
             }
         }
     }
@@ -1749,6 +1709,16 @@ impl Gateway {
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(body.to_string())))
             .unwrap()
+    }
+
+    /// Build a 500 response with detail visible only in dev mode.
+    fn dev_error_response(&self, msg: impl std::fmt::Display) -> Response<Full<Bytes>> {
+        let detail = if self.dev_mode {
+            Some(msg.to_string())
+        } else {
+            None
+        };
+        self.internal_error_response(detail.as_deref())
     }
 }
 
