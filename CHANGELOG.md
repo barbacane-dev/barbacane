@@ -80,10 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved test fixtures with more comprehensive scenarios
 - Improved foreign key error handling in control plane API
 - Plugin deletion now returns "resource is in use" error when referenced by projects
+- Refactored compiler: extracted shared `compile_inner` core, eliminating ~380 lines of duplication across `compile_with_options`, `compile_with_manifest`, and `compile_with_plugins`
 
 ### Fixed
 - CORS plugin now includes JSON Schema (`config-schema.json`) for UI configuration
 - Plugin deletion errors now display user-friendly messages in the UI
+- Global middlewares are now merged with operation-level middlewares instead of being overridden; operation middlewares override globals by name while preserving non-overridden globals
+- `compile_with_plugins` now enforces the plaintext HTTP URL check (E1031), previously missing from this code path
 
 ### Removed
 - `x-barbacane-observability` extension (dead code - was parsed but never used at runtime)
