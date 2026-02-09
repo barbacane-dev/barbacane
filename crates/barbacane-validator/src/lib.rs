@@ -317,6 +317,50 @@ struct CompiledRequestBody {
     content: HashMap<String, Option<jsonschema::Validator>>,
 }
 
+/// Validate a set of compiled parameters against a value lookup.
+///
+/// Shared logic for path, query, and header parameter validation.
+fn validate_params(
+    params: &[CompiledParam],
+    lookup: impl Fn(&str) -> Option<String>,
+    location: &str,
+) -> Result<(), Vec<ValidationError2>> {
+    let mut errors = Vec::new();
+
+    for param in params {
+        match lookup(&param.name) {
+            Some(value) => {
+                if let Some(schema) = &param.schema {
+                    let json_value = Value::String(value);
+                    let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
+                    if !validation_errors.is_empty() {
+                        let reasons: Vec<String> =
+                            validation_errors.iter().map(|e| e.to_string()).collect();
+                        errors.push(ValidationError2::InvalidParameter {
+                            name: param.name.clone(),
+                            location: location.into(),
+                            reason: reasons.join("; "),
+                        });
+                    }
+                }
+            }
+            None if param.required => {
+                errors.push(ValidationError2::MissingRequiredParameter {
+                    name: param.name.clone(),
+                    location: location.into(),
+                });
+            }
+            None => {}
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 impl OperationValidator {
     /// Create a new validator from parsed operation metadata.
     pub fn new(parameters: &[Parameter], request_body: Option<&RequestBody>) -> Self {
@@ -367,44 +411,12 @@ impl OperationValidator {
         &self,
         params: &[(String, String)],
     ) -> Result<(), Vec<ValidationError2>> {
-        let mut errors = Vec::new();
         let param_map: HashMap<_, _> = params.iter().cloned().collect();
-
-        for param in &self.path_params {
-            match param_map.get(&param.name) {
-                Some(value) => {
-                    if let Some(schema) = &param.schema {
-                        // Path parameters are always strings from the URL.
-                        // Wrap in a JSON string value for schema validation.
-                        let json_value = Value::String(value.clone());
-
-                        let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
-                        if !validation_errors.is_empty() {
-                            let reasons: Vec<String> =
-                                validation_errors.iter().map(|e| e.to_string()).collect();
-                            errors.push(ValidationError2::InvalidParameter {
-                                name: param.name.clone(),
-                                location: "path".into(),
-                                reason: reasons.join("; "),
-                            });
-                        }
-                    }
-                }
-                None if param.required => {
-                    errors.push(ValidationError2::MissingRequiredParameter {
-                        name: param.name.clone(),
-                        location: "path".into(),
-                    });
-                }
-                None => {}
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        validate_params(
+            &self.path_params,
+            |name| param_map.get(name).cloned(),
+            "path",
+        )
     }
 
     /// Validate query parameters.
@@ -412,9 +424,6 @@ impl OperationValidator {
         &self,
         query_string: Option<&str>,
     ) -> Result<(), Vec<ValidationError2>> {
-        let mut errors = Vec::new();
-
-        // Parse query string into map
         let param_map: HashMap<String, String> = query_string
             .unwrap_or("")
             .split('&')
@@ -427,88 +436,28 @@ impl OperationValidator {
             })
             .collect();
 
-        for param in &self.query_params {
-            match param_map.get(&param.name) {
-                Some(value) => {
-                    if let Some(schema) = &param.schema {
-                        // Query parameters are always strings from the URL.
-                        // Wrap in a JSON string value for schema validation.
-                        let json_value = Value::String(value.clone());
-
-                        let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
-                        if !validation_errors.is_empty() {
-                            let reasons: Vec<String> =
-                                validation_errors.iter().map(|e| e.to_string()).collect();
-                            errors.push(ValidationError2::InvalidParameter {
-                                name: param.name.clone(),
-                                location: "query".into(),
-                                reason: reasons.join("; "),
-                            });
-                        }
-                    }
-                }
-                None if param.required => {
-                    errors.push(ValidationError2::MissingRequiredParameter {
-                        name: param.name.clone(),
-                        location: "query".into(),
-                    });
-                }
-                None => {}
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        validate_params(
+            &self.query_params,
+            |name| param_map.get(name).cloned(),
+            "query",
+        )
     }
 
-    /// Validate request headers.
+    /// Validate request headers (case-insensitive matching).
     pub fn validate_headers(
         &self,
         headers: &HashMap<String, String>,
     ) -> Result<(), Vec<ValidationError2>> {
-        let mut errors = Vec::new();
+        let headers_lower: HashMap<String, String> = headers
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), v.clone()))
+            .collect();
 
-        // Normalize header names to lowercase for comparison
-        let headers_lower: HashMap<String, &String> =
-            headers.iter().map(|(k, v)| (k.to_lowercase(), v)).collect();
-
-        for param in &self.header_params {
-            let header_name = param.name.to_lowercase();
-            match headers_lower.get(&header_name) {
-                Some(value) => {
-                    if let Some(schema) = &param.schema {
-                        let json_value = Value::String((*value).clone());
-
-                        let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
-                        if !validation_errors.is_empty() {
-                            let reasons: Vec<String> =
-                                validation_errors.iter().map(|e| e.to_string()).collect();
-                            errors.push(ValidationError2::InvalidParameter {
-                                name: param.name.clone(),
-                                location: "header".into(),
-                                reason: reasons.join("; "),
-                            });
-                        }
-                    }
-                }
-                None if param.required => {
-                    errors.push(ValidationError2::MissingRequiredParameter {
-                        name: param.name.clone(),
-                        location: "header".into(),
-                    });
-                }
-                None => {}
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        validate_params(
+            &self.header_params,
+            |name| headers_lower.get(&name.to_lowercase()).cloned(),
+            "header",
+        )
     }
 
     /// Validate request body.
@@ -1152,6 +1101,92 @@ mod tests {
         let result =
             validator.validate_body(Some("application/octet-stream"), br#"{"key": "value"}"#);
         assert!(result.is_err());
+    }
+
+    // ========================
+    // Header Validation Tests
+    // ========================
+
+    #[test]
+    fn validate_required_header_param() {
+        let params = vec![make_param("X-Request-Id", "header", true, None)];
+        let validator = OperationValidator::new(&params, None);
+
+        // Missing required header
+        let headers = HashMap::new();
+        let result = validator.validate_headers(&headers);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(matches!(
+            &errors[0],
+            ValidationError2::MissingRequiredParameter { name, location }
+            if name == "X-Request-Id" && location == "header"
+        ));
+
+        // Present header
+        let mut headers = HashMap::new();
+        headers.insert("X-Request-Id".to_string(), "abc-123".to_string());
+        let result = validator.validate_headers(&headers);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_optional_header_param() {
+        let params = vec![make_param("X-Trace-Id", "header", false, None)];
+        let validator = OperationValidator::new(&params, None);
+
+        // Missing optional header is OK
+        let headers = HashMap::new();
+        let result = validator.validate_headers(&headers);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_header_param_schema() {
+        let schema = serde_json::json!({
+            "type": "string",
+            "pattern": "^Bearer .+$"
+        });
+        let params = vec![make_param("Authorization", "header", true, Some(schema))];
+        let validator = OperationValidator::new(&params, None);
+
+        // Valid: matches pattern
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+        let result = validator.validate_headers(&headers);
+        assert!(result.is_ok());
+
+        // Invalid: doesn't match pattern
+        headers.insert(
+            "Authorization".to_string(),
+            "Basic dXNlcjpwYXNz".to_string(),
+        );
+        let result = validator.validate_headers(&headers);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(matches!(
+            &errors[0],
+            ValidationError2::InvalidParameter { name, location, .. }
+            if name == "Authorization" && location == "header"
+        ));
+    }
+
+    #[test]
+    fn validate_header_param_case_insensitive() {
+        let params = vec![make_param("X-Request-Id", "header", true, None)];
+        let validator = OperationValidator::new(&params, None);
+
+        // Header provided with different casing should match
+        let mut headers = HashMap::new();
+        headers.insert("x-request-id".to_string(), "abc-123".to_string());
+        let result = validator.validate_headers(&headers);
+        assert!(result.is_ok());
+
+        // Uppercase variant
+        let mut headers = HashMap::new();
+        headers.insert("X-REQUEST-ID".to_string(), "abc-123".to_string());
+        let result = validator.validate_headers(&headers);
+        assert!(result.is_ok());
     }
 
     #[test]
