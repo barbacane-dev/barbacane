@@ -54,3 +54,13 @@ barbacane-telemetry.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = "3"
+criterion = { workspace = true }
+wat = { workspace = true }
+
+[[bench]]
+name = "wasm"
+harness = false
+
+[[bench]]
+name = "serialization"
+harness = false
