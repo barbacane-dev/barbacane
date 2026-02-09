@@ -24,3 +24,7 @@ plugins:
     path: ../../plugins/request-size-limit/request-size-limit.wasm
   ip-restriction:
     path: ../../plugins/ip-restriction/ip-restriction.wasm
+  nats:
+    path: ../../plugins/nats/nats.wasm
+  kafka:
+    path: ../../plugins/kafka/kafka.wasm

@@ -11,6 +11,9 @@ use std::collections::BTreeMap;
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
 pub struct KafkaDispatcher {
+    /// Kafka broker addresses (comma-separated, e.g. "kafka:9092").
+    brokers: String,
+
     /// Kafka topic to publish messages to.
     topic: String,
 
@@ -41,6 +44,7 @@ struct AckResponse {
 /// Message to send to host_kafka_publish.
 #[derive(Serialize)]
 struct BrokerMessage {
+    url: String,
     topic: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<String>,
@@ -85,6 +89,7 @@ impl KafkaDispatcher {
 
         // Build the broker message
         let message = BrokerMessage {
+            url: self.brokers.clone(),
             topic: self.topic.clone(),
             key,
             payload: req.body.clone().unwrap_or_default(),
@@ -94,35 +99,48 @@ impl KafkaDispatcher {
         // Serialize and publish
         let message_json = match serde_json::to_vec(&message) {
             Ok(json) => json,
-            Err(e) => return self.error_response(500, "failed to serialize message", &e.to_string()),
+            Err(e) => {
+                return self.error_response(500, "failed to serialize message", &e.to_string())
+            }
         };
 
-        let result_len = unsafe {
-            host_kafka_publish(message_json.as_ptr() as i32, message_json.len() as i32)
-        };
+        let result_len =
+            unsafe { host_kafka_publish(message_json.as_ptr() as i32, message_json.len() as i32) };
 
         if result_len < 0 {
-            return self.error_response(502, "Kafka publish failed", "host_kafka_publish returned error");
+            return self.error_response(
+                502,
+                "Kafka publish failed",
+                "host_kafka_publish returned error",
+            );
         }
 
         // Read the publish result
         let mut result_buf = vec![0u8; result_len as usize];
-        let bytes_read = unsafe {
-            host_broker_read_result(result_buf.as_mut_ptr() as i32, result_len)
-        };
+        let bytes_read =
+            unsafe { host_broker_read_result(result_buf.as_mut_ptr() as i32, result_len) };
 
         if bytes_read <= 0 {
-            return self.error_response(502, "Kafka publish failed", "failed to read publish result");
+            return self.error_response(
+                502,
+                "Kafka publish failed",
+                "failed to read publish result",
+            );
         }
 
         // Parse the publish result
-        let publish_result: PublishResult = match serde_json::from_slice(&result_buf[..bytes_read as usize]) {
-            Ok(r) => r,
-            Err(e) => return self.error_response(502, "invalid publish result", &e.to_string()),
-        };
+        let publish_result: PublishResult =
+            match serde_json::from_slice(&result_buf[..bytes_read as usize]) {
+                Ok(r) => r,
+                Err(e) => {
+                    return self.error_response(502, "invalid publish result", &e.to_string())
+                }
+            };
 
         if !publish_result.success {
-            let detail = publish_result.error.unwrap_or_else(|| "unknown error".to_string());
+            let detail = publish_result
+                .error
+                .unwrap_or_else(|| "unknown error".to_string());
             return self.error_response(502, "Kafka publish failed", &detail);
         }
 
@@ -186,11 +204,13 @@ impl KafkaDispatcher {
                 "topic": result.topic,
                 "partition": result.partition,
                 "offset": result.offset
-            }).to_string()
+            })
+            .to_string()
         } else {
             serde_json::json!({
                 "status": "accepted"
-            }).to_string()
+            })
+            .to_string()
         }
     }
 
@@ -210,7 +230,10 @@ impl KafkaDispatcher {
         });
 
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/problem+json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "application/problem+json".to_string(),
+        );
 
         Response {
             status,

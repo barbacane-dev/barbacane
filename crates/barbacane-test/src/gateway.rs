@@ -3491,4 +3491,120 @@ paths:
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["message"], "public");
     }
+
+    // ========================
+    // NATS Dispatcher Tests
+    // ========================
+
+    #[tokio::test]
+    async fn test_nats_dispatcher_spec_compiles() {
+        // Test that an AsyncAPI spec with a real NATS dispatcher compiles and boots
+        let gateway = TestGateway::from_spec("../../tests/fixtures/nats-dispatch.yaml")
+            .await
+            .expect("failed to start gateway with NATS dispatch spec");
+
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_nats_dispatcher_broker_unavailable() {
+        // When NATS is not running, the dispatcher should return 502
+        let gateway = TestGateway::from_spec("../../tests/fixtures/nats-dispatch.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .post(
+                "/events/users",
+                r#"{"userId":"550e8400-e29b-41d4-a716-446655440000","email":"test@example.com"}"#,
+            )
+            .await
+            .unwrap();
+
+        // Should fail with 502 (NATS connection refused)
+        assert_eq!(resp.status(), 502);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:nats-publish-failed");
+    }
+
+    #[tokio::test]
+    async fn test_nats_dispatcher_validates_payload() {
+        // Message payload validation should still work with a real dispatcher
+        let gateway = TestGateway::from_spec("../../tests/fixtures/nats-dispatch.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Missing required 'email' field
+        let resp = gateway
+            .post(
+                "/events/users",
+                r#"{"userId":"550e8400-e29b-41d4-a716-446655440000"}"#,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:validation-failed");
+    }
+
+    // ========================
+    // Kafka Dispatcher Tests
+    // ========================
+
+    #[tokio::test]
+    async fn test_kafka_dispatcher_spec_compiles() {
+        // Test that an AsyncAPI spec with a real Kafka dispatcher compiles and boots
+        let gateway = TestGateway::from_spec("../../tests/fixtures/kafka-dispatch.yaml")
+            .await
+            .expect("failed to start gateway with Kafka dispatch spec");
+
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_kafka_dispatcher_broker_unavailable() {
+        // When Kafka is not running, the dispatcher should return 502
+        let gateway = TestGateway::from_spec("../../tests/fixtures/kafka-dispatch.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .post(
+                "/events/orders",
+                r#"{"orderId":"550e8400-e29b-41d4-a716-446655440000","total":99.99}"#,
+            )
+            .await
+            .unwrap();
+
+        // Should fail with 502 (Kafka connection refused)
+        assert_eq!(resp.status(), 502);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:kafka-publish-failed");
+    }
+
+    #[tokio::test]
+    async fn test_kafka_dispatcher_validates_payload() {
+        // Message payload validation should still work with a real dispatcher
+        let gateway = TestGateway::from_spec("../../tests/fixtures/kafka-dispatch.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Missing required 'total' field
+        let resp = gateway
+            .post(
+                "/events/orders",
+                r#"{"orderId":"550e8400-e29b-41d4-a716-446655440000"}"#,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 400);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:validation-failed");
+    }
 }

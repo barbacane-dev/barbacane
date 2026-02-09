@@ -318,6 +318,7 @@ operations:
     x-barbacane-dispatch:
       name: kafka
       config:
+        brokers: "kafka.internal:9092"
         topic: "user-events"
 ```
 
@@ -368,6 +369,7 @@ operations:
     x-barbacane-dispatch:
       name: kafka
       config:
+        brokers: "kafka.internal:9092"
         topic: "events"
 ```
 

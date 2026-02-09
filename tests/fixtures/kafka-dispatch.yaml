@@ -1,0 +1,35 @@
+asyncapi: "3.0.0"
+info:
+  title: Kafka Dispatch Test API
+  version: "1.0.0"
+  description: Tests real Kafka dispatcher publishing via sync-to-async bridge
+
+channels:
+  orderEvents:
+    address: /events/orders
+    messages:
+      OrderPlaced:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - orderId
+            - total
+          properties:
+            orderId:
+              type: string
+              format: uuid
+            total:
+              type: number
+
+operations:
+  publishOrderPlaced:
+    action: send
+    channel:
+      $ref: '#/channels/orderEvents'
+    x-barbacane-dispatch:
+      name: kafka
+      config:
+        brokers: "127.0.0.1:19092"
+        topic: "orders.placed"
+        include_metadata: true

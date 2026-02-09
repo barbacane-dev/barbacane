@@ -59,6 +59,30 @@ x-barbacane-dispatch:
     timeout: number   # Optional. Timeout in seconds (default: 30.0)
 ```
 
+### Dispatcher: `kafka`
+
+Publish messages to Apache Kafka topics.
+
+```yaml
+x-barbacane-dispatch:
+  name: kafka
+  config:
+    brokers: string   # Required. Comma-separated broker addresses
+    topic: string     # Required. Kafka topic
+```
+
+### Dispatcher: `nats`
+
+Publish messages to NATS subjects.
+
+```yaml
+x-barbacane-dispatch:
+  name: nats
+  config:
+    url: string       # Required. NATS server URL (e.g. "nats://localhost:4222")
+    subject: string   # Required. NATS subject
+```
+
 ### Examples
 
 **Mock response:**

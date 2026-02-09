@@ -262,11 +262,10 @@ operations:
       $ref: '#/channels/tripDelayEvents'
     summary: Publish train delay event
     x-barbacane-dispatch:
-      name: mock
+      name: nats
       config:
-        status: 202
-        body: '{"status":"accepted","event_type":"trip.delayed"}'
-        content_type: application/json
+        url: nats://nats:4222
+        subject: trains.trips.delayed
     x-barbacane-middlewares:
       - name: rate-limit
         config:
@@ -283,11 +282,10 @@ operations:
       $ref: '#/channels/tripCancelledEvents'
     summary: Publish train cancellation event
     x-barbacane-dispatch:
-      name: mock
+      name: nats
       config:
-        status: 202
-        body: '{"status":"accepted","event_type":"trip.cancelled"}'
-        content_type: application/json
+        url: nats://nats:4222
+        subject: trains.trips.cancelled
 
   publishPlatformChange:
     action: send
@@ -295,11 +293,10 @@ operations:
       $ref: '#/channels/platformChangeEvents'
     summary: Publish platform change event
     x-barbacane-dispatch:
-      name: mock
+      name: nats
       config:
-        status: 202
-        body: '{"status":"accepted","event_type":"platform.changed"}'
-        content_type: application/json
+        url: nats://nats:4222
+        subject: trains.stations.platform-changed
 
   publishBookingConfirmed:
     action: send
@@ -307,11 +304,10 @@ operations:
       $ref: '#/channels/bookingConfirmedEvents'
     summary: Publish booking confirmation event
     x-barbacane-dispatch:
-      name: mock
+      name: nats
       config:
-        status: 202
-        body: '{"status":"accepted","event_type":"booking.confirmed"}'
-        content_type: application/json
+        url: nats://nats:4222
+        subject: trains.bookings.confirmed
     x-barbacane-middlewares:
       - name: observability
         config:
@@ -323,11 +319,10 @@ operations:
       $ref: '#/channels/bookingCancelledEvents'
     summary: Publish booking cancellation event
     x-barbacane-dispatch:
-      name: mock
+      name: nats
       config:
-        status: 202
-        body: '{"status":"accepted","event_type":"booking.cancelled"}'
-        content_type: application/json
+        url: nats://nats:4222
+        subject: trains.bookings.cancelled
 
   publishPaymentSucceeded:
     action: send
@@ -335,11 +330,10 @@ operations:
       $ref: '#/channels/paymentSucceededEvents'
     summary: Publish payment success event
     x-barbacane-dispatch:
-      name: mock
+      name: nats
       config:
-        status: 202
-        body: '{"status":"accepted","event_type":"payment.succeeded"}'
-        content_type: application/json
+        url: nats://nats:4222
+        subject: trains.payments.succeeded
 
   publishPaymentFailed:
     action: send
@@ -347,8 +341,7 @@ operations:
       $ref: '#/channels/paymentFailedEvents'
     summary: Publish payment failure event
     x-barbacane-dispatch:
-      name: mock
+      name: nats
       config:
-        status: 202
-        body: '{"status":"accepted","event_type":"payment.failed"}'
-        content_type: application/json
+        url: nats://nats:4222
+        subject: trains.payments.failed

@@ -11,6 +11,9 @@ use std::collections::BTreeMap;
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
 pub struct NatsDispatcher {
+    /// NATS server URL (e.g., nats://localhost:4222).
+    url: String,
+
     /// NATS subject to publish messages to.
     subject: String,
 
@@ -33,6 +36,7 @@ struct AckResponse {
 /// Message to send to host_nats_publish.
 #[derive(Serialize)]
 struct BrokerMessage {
+    url: String,
     topic: String, // "topic" field is used for subject in NATS
     payload: String,
     headers: BTreeMap<String, String>,
@@ -68,6 +72,7 @@ impl NatsDispatcher {
 
         // Build the broker message
         let message = BrokerMessage {
+            url: self.url.clone(),
             topic: self.subject.clone(),
             payload: req.body.clone().unwrap_or_default(),
             headers: msg_headers,

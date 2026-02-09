@@ -370,12 +370,18 @@ Barbacane includes these official plugins in the `plugins/` directory:
 | `mock` | Dispatcher | Return static responses |
 | `http-upstream` | Dispatcher | Reverse proxy to HTTP backends |
 | `lambda` | Dispatcher | Invoke AWS Lambda functions |
+| `kafka` | Dispatcher | Publish messages to Kafka |
+| `nats` | Dispatcher | Publish messages to NATS |
 | `jwt-auth` | Middleware | JWT token validation |
 | `apikey-auth` | Middleware | API key authentication |
 | `oauth2-auth` | Middleware | OAuth2 token introspection |
 | `rate-limit` | Middleware | Sliding window rate limiting |
 | `cache` | Middleware | Response caching |
 | `cors` | Middleware | CORS header management |
+| `correlation-id` | Middleware | Request correlation ID propagation |
+| `request-size-limit` | Middleware | Request body size limits |
+| `ip-restriction` | Middleware | IP allowlist/blocklist |
+| `observability` | Middleware | SLO monitoring and detailed logging |
 
 Use these as references for your own plugins.
 

@@ -692,7 +692,13 @@ impl Gateway {
         // Create response cache for host_cache_get/set calls
         let response_cache = ResponseCache::new();
 
-        // Create pool with all options: HTTP client, secrets, rate limiter, and cache
+        // Create NATS publisher for host_nats_publish calls
+        let nats_publisher = barbacane_wasm::NatsPublisher::new();
+
+        // Create Kafka publisher for host_kafka_publish calls
+        let kafka_publisher = barbacane_wasm::KafkaPublisher::new();
+
+        // Create pool with all options: HTTP client, secrets, rate limiter, cache, NATS, and Kafka
         let plugin_pool = InstancePool::with_all_options(
             wasm_engine.clone(),
             plugin_limits.clone(),
@@ -700,6 +706,8 @@ impl Gateway {
             Some(secrets_store),
             Some(rate_limiter),
             Some(response_cache),
+            Some(Arc::new(nats_publisher)),
+            Some(Arc::new(kafka_publisher)),
         );
 
         // Register all compiled modules in the pool

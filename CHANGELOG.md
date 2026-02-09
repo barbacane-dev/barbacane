@@ -16,9 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protocol bindings extraction for Kafka, NATS, MQTT, AMQP, WebSocket
 - Message schema validation for AsyncAPI payloads
 - Host functions: `host_kafka_publish`, `host_nats_publish`
-- `kafka` dispatcher plugin with topic routing, key expressions, and header forwarding
-- `nats` dispatcher plugin with subject routing
+- `kafka` dispatcher plugin with `brokers` config, topic routing, key expressions, and header forwarding
+- `nats` dispatcher plugin with `url` config and subject routing
 - Sync-to-async bridge: HTTP request in, broker publish out, 202 ack response
+- `KafkaPublisher` — real Kafka publishing via `rskafka` (pure-Rust, no C deps) with connection caching and dedicated runtime
+- `NatsPublisher` — real NATS publishing via `async-nats` with connection caching and dedicated runtime
+- Integration tests for NATS and Kafka dispatchers (spec compilation, broker-unavailable 502, payload validation)
 
 #### Data Plane Connection (M12)
 - WebSocket-based connection between data planes and control plane
@@ -51,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New Web UI guide (`docs/guide/web-ui.md`)
 - Updated Control Plane guide with Projects, Data Planes, Deploy sections
 - Updated Development guide with Makefile targets and UI setup
-- Updated Dispatchers guide with AsyncAPI support
+- Updated Dispatchers guide with Kafka `brokers` and NATS `url` configuration
+- Updated Extensions reference with Kafka and NATS dispatcher schemas
 - Updated CLI Reference with `seed-plugins` command documentation
 - Added Interactive API Documentation section (Scalar at `/api/docs`)
 
@@ -89,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `compile_with_plugins` now enforces the plaintext HTTP URL check (E1031), previously missing from this code path
 
 ### Removed
+- `MessageBroker` trait, `BrokerRegistry`, and placeholder `KafkaBroker`/`NatsBroker` implementations — replaced by concrete `KafkaPublisher` and `NatsPublisher` with real broker connections
 - `x-barbacane-observability` extension (dead code - was parsed but never used at runtime)
   - Per-operation observability should be achieved via the middleware plugin system
   - Global trace sampling remains configurable via `--trace-sampling` CLI flag

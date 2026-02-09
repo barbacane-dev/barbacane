@@ -1,0 +1,35 @@
+asyncapi: "3.0.0"
+info:
+  title: NATS Dispatch Test API
+  version: "1.0.0"
+  description: Tests real NATS dispatcher publishing via sync-to-async bridge
+
+channels:
+  userEvents:
+    address: /events/users
+    messages:
+      UserCreated:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - userId
+            - email
+          properties:
+            userId:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+
+operations:
+  publishUserCreated:
+    action: send
+    channel:
+      $ref: '#/channels/userEvents'
+    x-barbacane-dispatch:
+      name: nats
+      config:
+        url: "nats://127.0.0.1:14222"
+        subject: "events.users"
