@@ -5,7 +5,7 @@
 //! A dedicated tokio runtime keeps Kafka background tasks alive between publishes.
 
 use crate::broker::{BrokerError, PublishResult};
-use rskafka::chrono::Utc;
+use chrono::Utc;
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
 use rskafka::client::{Client, ClientBuilder};
 use rskafka::record::Record;

@@ -40,6 +40,7 @@ bytes.workspace = true
 
 # Kafka client (for host_kafka_publish)
 rskafka.workspace = true
+chrono.workspace = true
 
 # Sync primitives (for circuit breaker)
 parking_lot.workspace = true

@@ -115,7 +115,7 @@ tower-http = { version = "0.6", features = ["trace", "cors", "set-header"] }
 
 # Database (control plane)
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
 base64 = "0.22"
 tempfile = "3"
 

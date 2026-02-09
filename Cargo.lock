@@ -542,6 +542,7 @@ dependencies = [
  "barbacane-plugin-sdk",
  "barbacane-telemetry",
  "bytes",
+ "chrono",
  "criterion",
  "dashmap",
  "hex",
