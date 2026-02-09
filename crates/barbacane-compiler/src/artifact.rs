@@ -164,287 +164,8 @@ pub fn compile_with_options(
     output: &Path,
     options: &CompileOptions,
 ) -> Result<CompileResult, CompileError> {
-    // Parse all specs
-    let mut specs: Vec<(ApiSpec, String, String)> = Vec::new(); // (spec, content, sha256)
-    let mut warnings: Vec<CompileWarning> = Vec::new();
-
-    for path in spec_paths {
-        let content = std::fs::read_to_string(path)?;
-        let sha256 = compute_sha256(&content);
-        let spec = parse_spec_file(path)?;
-        specs.push((spec, content, sha256));
-    }
-
-    // Validate and collect operations
-    let mut operations: Vec<CompiledOperation> = Vec::new();
-    let mut seen_routes: HashMap<(String, String), String> = HashMap::new(); // (path, method) -> spec file
-    let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new(); // normalized (path, method) -> (original_path, spec_file)
-    let mut seen_operation_ids: HashMap<String, String> = HashMap::new(); // operationId -> location
-
-    for (spec, _, _) in &specs {
-        let spec_file = spec.filename.as_deref().unwrap_or("unknown");
-
-        // Validate global middlewares (E1011)
-        for (idx, mw) in spec.global_middlewares.iter().enumerate() {
-            if mw.name.is_empty() {
-                return Err(CompileError::MissingMiddlewareName(format!(
-                    "global middleware #{} in '{}'",
-                    idx + 1,
-                    spec_file
-                )));
-            }
-        }
-
-        // Check for unknown extensions at spec level (E1015 - warning)
-        for key in spec.extensions.keys() {
-            if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
-                warnings.push(CompileWarning {
-                    code: "E1015".to_string(),
-                    message: format!("unknown extension: {}", key),
-                    location: Some(spec_file.to_string()),
-                });
-            }
-        }
-
-        for op in &spec.operations {
-            let location = format!("{} {} in '{}'", op.method, op.path, spec_file);
-
-            // Check for unknown extensions at operation level (E1015 - warning)
-            for key in op.extensions.keys() {
-                if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
-                    warnings.push(CompileWarning {
-                        code: "E1015".to_string(),
-                        message: format!("unknown extension: {}", key),
-                        location: Some(location.clone()),
-                    });
-                }
-            }
-
-            // Validate path template syntax (E1054)
-            validate_path_template(&op.path, &location)?;
-
-            // Check for duplicate operationId (E1055)
-            if let Some(ref op_id) = op.operation_id {
-                if let Some(first_location) = seen_operation_ids.get(op_id) {
-                    return Err(CompileError::DuplicateOperationId(
-                        op_id.clone(),
-                        format!("first at {}, duplicate at {}", first_location, location),
-                    ));
-                }
-                seen_operation_ids.insert(op_id.clone(), location.clone());
-            }
-
-            // Check for routing conflicts (E1010)
-            let key = (op.path.clone(), op.method.clone());
-            if let Some(other_spec) = seen_routes.get(&key) {
-                return Err(CompileError::RoutingConflict(format!(
-                    "{} {} declared in both '{}' and '{}'",
-                    op.method, op.path, other_spec, spec_file
-                )));
-            }
-            seen_routes.insert(key, spec_file.to_string());
-
-            // Check for ambiguous routes (E1050) - same structure, different param names
-            let normalized = normalize_path_template(&op.path);
-            let structural_key = (normalized, op.method.clone());
-            if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
-                if other_path != &op.path {
-                    return Err(CompileError::AmbiguousRoute(format!(
-                        "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
-                        op.path, other_path, op.method, spec_file, other_spec
-                    )));
-                }
-            }
-            seen_structural.insert(structural_key, (op.path.clone(), spec_file.to_string()));
-
-            // Check for missing dispatcher (E1020)
-            let dispatch = op.dispatch.clone().ok_or_else(|| {
-                CompileError::MissingDispatch(format!(
-                    "{} {} in '{}'",
-                    op.method, op.path, spec_file
-                ))
-            })?;
-
-            // Check for plaintext HTTP upstream URLs (E1031)
-            if !options.allow_plaintext {
-                if let Some(url) = extract_upstream_url(&dispatch.config) {
-                    if url.starts_with("http://") {
-                        return Err(CompileError::PlaintextUpstream(format!(
-                            "{} {} in '{}' - upstream URL: {}",
-                            op.method, op.path, spec_file, url
-                        )));
-                    }
-                }
-            }
-
-            // Resolve middleware chain:
-            // - None: use global middlewares only
-            // - Some([]): explicit opt-out, no middlewares at all
-            // - Some([items]): global middlewares (excluding any overridden by name) + operation-level
-            let middlewares = match &op.middlewares {
-                None => spec.global_middlewares.clone(),
-                Some(op_mw) if op_mw.is_empty() => Vec::new(),
-                Some(op_mw) => {
-                    // Collect operation middleware names for deduplication
-                    let op_names: std::collections::HashSet<_> =
-                        op_mw.iter().map(|m| m.name.as_str()).collect();
-                    // Include global middlewares except those overridden by operation
-                    let mut merged: Vec<_> = spec
-                        .global_middlewares
-                        .iter()
-                        .filter(|m| !op_names.contains(m.name.as_str()))
-                        .cloned()
-                        .collect();
-                    merged.extend(op_mw.clone());
-                    merged
-                }
-            };
-
-            // Validate middleware names (E1011)
-            for (idx, mw) in middlewares.iter().enumerate() {
-                if mw.name.is_empty() {
-                    return Err(CompileError::MissingMiddlewareName(format!(
-                        "middleware #{} in {}",
-                        idx + 1,
-                        location
-                    )));
-                }
-            }
-
-            // Validate schema complexity and circular refs for parameters (E1051, E1052, E1053)
-            for param in &op.parameters {
-                if let Some(schema) = &param.schema {
-                    let param_location = format!("{} parameter '{}'", location, param.name);
-                    validate_schema_complexity(
-                        schema,
-                        options.max_schema_depth,
-                        options.max_schema_properties,
-                        &param_location,
-                    )?;
-                    // Detect circular refs within the schema
-                    let mut visited = HashSet::new();
-                    detect_circular_refs(schema, schema, &mut visited, &param_location)?;
-                }
-            }
-
-            // Validate request body schema complexity and circular refs (E1051, E1052, E1053)
-            if let Some(ref body) = op.request_body {
-                for (content_type, content) in &body.content {
-                    if let Some(schema) = &content.schema {
-                        let body_location = format!("{} request body ({})", location, content_type);
-                        validate_schema_complexity(
-                            schema,
-                            options.max_schema_depth,
-                            options.max_schema_properties,
-                            &body_location,
-                        )?;
-                        // Detect circular refs within the schema
-                        let mut visited = HashSet::new();
-                        detect_circular_refs(schema, schema, &mut visited, &body_location)?;
-                    }
-                }
-            }
-
-            operations.push(CompiledOperation {
-                index: operations.len(),
-                path: op.path.clone(),
-                method: op.method.clone(),
-                operation_id: op.operation_id.clone(),
-                parameters: op.parameters.clone(),
-                request_body: op.request_body.clone(),
-                dispatch,
-                middlewares,
-                deprecated: op.deprecated,
-                sunset: op.sunset.clone(),
-                messages: op.messages.clone(),
-                bindings: op.bindings.clone(),
-            });
-        }
-    }
-
-    // Sort operations by (path, method) for deterministic output, then reassign indices
-    operations.sort_by(|a, b| (&a.path, &a.method).cmp(&(&b.path, &b.method)));
-    for (i, op) in operations.iter_mut().enumerate() {
-        op.index = i;
-    }
-
-    // Build routes.json
-    let routes = CompiledRoutes { operations };
-    let routes_json = serde_json::to_string_pretty(&routes)?;
-    let routes_sha256 = compute_sha256(&routes_json);
-
-    // Build manifest
-    let source_specs: Vec<SourceSpec> = specs
-        .iter()
-        .map(|(spec, _, sha256)| SourceSpec {
-            file: spec
-                .filename
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-            sha256: sha256.clone(),
-            spec_type: match spec.format {
-                SpecFormat::OpenApi => "openapi".to_string(),
-                SpecFormat::AsyncApi => "asyncapi".to_string(),
-            },
-            version: spec.version.clone(),
-        })
-        .collect();
-
-    let mut checksums = BTreeMap::new();
-    checksums.insert(
-        "routes.json".to_string(),
-        format!("sha256:{}", routes_sha256),
-    );
-
-    // Sort source_specs by filename for deterministic output
-    let mut source_specs = source_specs;
-    source_specs.sort_by(|a, b| a.file.cmp(&b.file));
-
-    let manifest = Manifest {
-        barbacane_artifact_version: ARTIFACT_VERSION,
-        compiled_at: chrono_lite_now(),
-        compiler_version: COMPILER_VERSION.to_string(),
-        source_specs,
-        routes_count: routes.operations.len(),
-        checksums,
-        plugins: Vec::new(), // No plugins bundled in basic compile
-    };
-
-    let manifest_json = serde_json::to_string_pretty(&manifest)?;
-
-    // Create the .bca archive (tar.gz)
-    let file = File::create(output)?;
-    let encoder = GzEncoder::new(file, Compression::default());
-    let mut archive = Builder::new(encoder);
-
-    // Add manifest.json
-    add_file_to_tar(&mut archive, "manifest.json", manifest_json.as_bytes())?;
-
-    // Add routes.json
-    add_file_to_tar(&mut archive, "routes.json", routes_json.as_bytes())?;
-
-    // Add source specs under specs/ directory
-    for (spec, content, _) in &specs {
-        let filename = spec
-            .filename
-            .as_deref()
-            .and_then(|p| Path::new(p).file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("spec.yaml");
-        let archive_path = format!("specs/{}", filename);
-        add_file_to_tar(&mut archive, &archive_path, content.as_bytes())?;
-    }
-
-    // Finish the archive
-    let encoder = archive.into_inner()?;
-    encoder.finish()?;
-
-    // Sort warnings for deterministic output
-    warnings.sort_by(|a, b| {
-        (&a.location, &a.code, &a.message).cmp(&(&b.location, &b.code, &b.message))
-    });
-
-    Ok(CompileResult { manifest, warnings })
+    let specs = parse_specs(spec_paths)?;
+    compile_inner(&specs, &[], output, options)
 }
 
 /// Compile specs with a project manifest into a .bca artifact.
@@ -466,16 +187,7 @@ pub fn compile_with_manifest(
     output: &Path,
     options: &CompileOptions,
 ) -> Result<CompileResult, CompileError> {
-    // Parse all specs
-    let mut specs: Vec<(ApiSpec, String, String)> = Vec::new();
-    let mut warnings: Vec<CompileWarning> = Vec::new();
-
-    for path in spec_paths {
-        let content = std::fs::read_to_string(path)?;
-        let sha256 = compute_sha256(&content);
-        let spec = parse_spec_file(path)?;
-        specs.push((spec, content, sha256));
-    }
+    let specs = parse_specs(spec_paths)?;
 
     // Extract just the ApiSpec for validation
     let api_specs: Vec<ApiSpec> = specs.iter().map(|(spec, _, _)| spec.clone()).collect();
@@ -497,299 +209,7 @@ pub fn compile_with_manifest(
         })
         .collect();
 
-    // Validate and collect operations
-    let mut operations: Vec<CompiledOperation> = Vec::new();
-    let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
-    let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
-    let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
-
-    for (spec, _, _) in &specs {
-        let spec_file = spec.filename.as_deref().unwrap_or("unknown");
-
-        // Validate global middlewares (E1011)
-        for (idx, mw) in spec.global_middlewares.iter().enumerate() {
-            if mw.name.is_empty() {
-                return Err(CompileError::MissingMiddlewareName(format!(
-                    "global middleware #{} in '{}'",
-                    idx + 1,
-                    spec_file
-                )));
-            }
-        }
-
-        // Check for unknown extensions at spec level (E1015 - warning)
-        for key in spec.extensions.keys() {
-            if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
-                warnings.push(CompileWarning {
-                    code: "E1015".to_string(),
-                    message: format!("unknown extension: {}", key),
-                    location: Some(spec_file.to_string()),
-                });
-            }
-        }
-
-        for op in &spec.operations {
-            let location = format!("{} {} in '{}'", op.method, op.path, spec_file);
-
-            // Check for unknown extensions at operation level (E1015 - warning)
-            for key in op.extensions.keys() {
-                if key.starts_with("x-barbacane-") && !KNOWN_EXTENSIONS.contains(&key.as_str()) {
-                    warnings.push(CompileWarning {
-                        code: "E1015".to_string(),
-                        message: format!("unknown extension: {}", key),
-                        location: Some(location.clone()),
-                    });
-                }
-            }
-
-            // Validate path template syntax (E1054)
-            validate_path_template(&op.path, &location)?;
-
-            // Check for duplicate operationId (E1055)
-            if let Some(ref op_id) = op.operation_id {
-                if let Some(first_location) = seen_operation_ids.get(op_id) {
-                    return Err(CompileError::DuplicateOperationId(
-                        op_id.clone(),
-                        format!("first at {}, duplicate at {}", first_location, location),
-                    ));
-                }
-                seen_operation_ids.insert(op_id.clone(), location.clone());
-            }
-
-            // Check for routing conflicts (E1010)
-            let key = (op.path.clone(), op.method.clone());
-            if let Some(other_spec) = seen_routes.get(&key) {
-                return Err(CompileError::RoutingConflict(format!(
-                    "{} {} declared in both '{}' and '{}'",
-                    op.method, op.path, other_spec, spec_file
-                )));
-            }
-            seen_routes.insert(key, spec_file.to_string());
-
-            // Check for ambiguous routes (E1050)
-            let normalized = normalize_path_template(&op.path);
-            let structural_key = (normalized, op.method.clone());
-            if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
-                if other_path != &op.path {
-                    return Err(CompileError::AmbiguousRoute(format!(
-                        "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
-                        op.path, other_path, op.method, spec_file, other_spec
-                    )));
-                }
-            }
-            seen_structural.insert(structural_key, (op.path.clone(), spec_file.to_string()));
-
-            // Check for missing dispatcher (E1020)
-            let dispatch = op.dispatch.clone().ok_or_else(|| {
-                CompileError::MissingDispatch(format!(
-                    "{} {} in '{}'",
-                    op.method, op.path, spec_file
-                ))
-            })?;
-
-            // Check for plaintext HTTP upstream URLs (E1031)
-            if !options.allow_plaintext {
-                if let Some(url) = extract_upstream_url(&dispatch.config) {
-                    if url.starts_with("http://") {
-                        return Err(CompileError::PlaintextUpstream(format!(
-                            "{} {} in '{}' - upstream URL: {}",
-                            op.method, op.path, spec_file, url
-                        )));
-                    }
-                }
-            }
-
-            // Resolve middleware chain:
-            // - None: use global middlewares only
-            // - Some([]): explicit opt-out, no middlewares at all
-            // - Some([items]): global middlewares (excluding any overridden by name) + operation-level
-            let middlewares = match &op.middlewares {
-                None => spec.global_middlewares.clone(),
-                Some(op_mw) if op_mw.is_empty() => Vec::new(),
-                Some(op_mw) => {
-                    // Collect operation middleware names for deduplication
-                    let op_names: std::collections::HashSet<_> =
-                        op_mw.iter().map(|m| m.name.as_str()).collect();
-                    // Include global middlewares except those overridden by operation
-                    let mut merged: Vec<_> = spec
-                        .global_middlewares
-                        .iter()
-                        .filter(|m| !op_names.contains(m.name.as_str()))
-                        .cloned()
-                        .collect();
-                    merged.extend(op_mw.clone());
-                    merged
-                }
-            };
-
-            // Validate middleware names (E1011)
-            for (idx, mw) in middlewares.iter().enumerate() {
-                if mw.name.is_empty() {
-                    return Err(CompileError::MissingMiddlewareName(format!(
-                        "middleware #{} in {}",
-                        idx + 1,
-                        location
-                    )));
-                }
-            }
-
-            // Validate schema complexity and circular refs for parameters
-            for param in &op.parameters {
-                if let Some(schema) = &param.schema {
-                    let param_location = format!("{} parameter '{}'", location, param.name);
-                    validate_schema_complexity(
-                        schema,
-                        options.max_schema_depth,
-                        options.max_schema_properties,
-                        &param_location,
-                    )?;
-                    let mut visited = HashSet::new();
-                    detect_circular_refs(schema, schema, &mut visited, &param_location)?;
-                }
-            }
-
-            // Validate request body schema complexity and circular refs
-            if let Some(ref body) = op.request_body {
-                for (content_type, content) in &body.content {
-                    if let Some(schema) = &content.schema {
-                        let body_location = format!("{} request body ({})", location, content_type);
-                        validate_schema_complexity(
-                            schema,
-                            options.max_schema_depth,
-                            options.max_schema_properties,
-                            &body_location,
-                        )?;
-                        let mut visited = HashSet::new();
-                        detect_circular_refs(schema, schema, &mut visited, &body_location)?;
-                    }
-                }
-            }
-
-            operations.push(CompiledOperation {
-                index: operations.len(),
-                path: op.path.clone(),
-                method: op.method.clone(),
-                operation_id: op.operation_id.clone(),
-                parameters: op.parameters.clone(),
-                request_body: op.request_body.clone(),
-                dispatch,
-                middlewares,
-                deprecated: op.deprecated,
-                sunset: op.sunset.clone(),
-                messages: op.messages.clone(),
-                bindings: op.bindings.clone(),
-            });
-        }
-    }
-
-    // Sort operations by (path, method) for deterministic output, then reassign indices
-    operations.sort_by(|a, b| (&a.path, &a.method).cmp(&(&b.path, &b.method)));
-    for (i, op) in operations.iter_mut().enumerate() {
-        op.index = i;
-    }
-
-    // Build routes.json
-    let routes = CompiledRoutes { operations };
-    let routes_json = serde_json::to_string_pretty(&routes)?;
-    let routes_sha256 = compute_sha256(&routes_json);
-
-    // Build plugin metadata
-    let mut bundled_plugins = Vec::new();
-    let mut checksums = BTreeMap::new();
-    checksums.insert(
-        "routes.json".to_string(),
-        format!("sha256:{}", routes_sha256),
-    );
-
-    for plugin in &plugin_bundles {
-        let wasm_path = format!("plugins/{}.wasm", plugin.name);
-        let sha256 = compute_sha256_bytes(&plugin.wasm_bytes);
-
-        checksums.insert(wasm_path.clone(), format!("sha256:{}", sha256));
-
-        bundled_plugins.push(BundledPlugin {
-            name: plugin.name.clone(),
-            version: plugin.version.clone(),
-            plugin_type: plugin.plugin_type.clone(),
-            wasm_path,
-            sha256,
-        });
-    }
-
-    // Sort bundled_plugins by name for deterministic output
-    bundled_plugins.sort_by(|a, b| a.name.cmp(&b.name));
-
-    // Build manifest
-    let mut source_specs: Vec<SourceSpec> = specs
-        .iter()
-        .map(|(spec, _, sha256)| SourceSpec {
-            file: spec
-                .filename
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string()),
-            sha256: sha256.clone(),
-            spec_type: match spec.format {
-                SpecFormat::OpenApi => "openapi".to_string(),
-                SpecFormat::AsyncApi => "asyncapi".to_string(),
-            },
-            version: spec.version.clone(),
-        })
-        .collect();
-
-    // Sort source_specs by filename for deterministic output
-    source_specs.sort_by(|a, b| a.file.cmp(&b.file));
-
-    let manifest = Manifest {
-        barbacane_artifact_version: ARTIFACT_VERSION,
-        compiled_at: chrono_lite_now(),
-        compiler_version: COMPILER_VERSION.to_string(),
-        source_specs,
-        routes_count: routes.operations.len(),
-        checksums,
-        plugins: bundled_plugins,
-    };
-
-    let manifest_json = serde_json::to_string_pretty(&manifest)?;
-
-    // Create the .bca archive
-    let file = File::create(output)?;
-    let encoder = GzEncoder::new(file, Compression::default());
-    let mut archive = Builder::new(encoder);
-
-    // Add manifest.json
-    add_file_to_tar(&mut archive, "manifest.json", manifest_json.as_bytes())?;
-
-    // Add routes.json
-    add_file_to_tar(&mut archive, "routes.json", routes_json.as_bytes())?;
-
-    // Add source specs
-    for (spec, content, _) in &specs {
-        let filename = spec
-            .filename
-            .as_deref()
-            .and_then(|p| Path::new(p).file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("spec.yaml");
-        let archive_path = format!("specs/{}", filename);
-        add_file_to_tar(&mut archive, &archive_path, content.as_bytes())?;
-    }
-
-    // Add plugins
-    for plugin in &plugin_bundles {
-        let wasm_path = format!("plugins/{}.wasm", plugin.name);
-        add_file_to_tar(&mut archive, &wasm_path, &plugin.wasm_bytes)?;
-    }
-
-    // Finish the archive
-    let encoder = archive.into_inner()?;
-    encoder.finish()?;
-
-    // Sort warnings for deterministic output
-    warnings.sort_by(|a, b| {
-        (&a.location, &a.code, &a.message).cmp(&(&b.location, &b.code, &b.message))
-    });
-
-    Ok(CompileResult { manifest, warnings })
+    compile_inner(&specs, &plugin_bundles, output, options)
 }
 
 /// Load a manifest from a .bca artifact.
@@ -918,27 +338,60 @@ pub fn compile_with_plugins(
     plugins: &[PluginBundle],
     output: &Path,
 ) -> Result<CompileResult, CompileError> {
-    // Parse all specs
-    let mut specs: Vec<(ApiSpec, String, String)> = Vec::new();
-    let mut warnings: Vec<CompileWarning> = Vec::new();
+    let specs = parse_specs(spec_paths)?;
+    compile_inner(&specs, plugins, output, &CompileOptions::default())
+}
 
+/// Parse spec files into (ApiSpec, content, sha256) tuples.
+fn parse_specs(spec_paths: &[&Path]) -> Result<Vec<(ApiSpec, String, String)>, CompileError> {
+    let mut specs = Vec::new();
     for path in spec_paths {
         let content = std::fs::read_to_string(path)?;
         let sha256 = compute_sha256(&content);
         let spec = parse_spec_file(path)?;
         specs.push((spec, content, sha256));
     }
+    Ok(specs)
+}
 
-    // Use default compile options for schema validation
-    let options = CompileOptions::default();
+/// Resolve middleware chain for an operation:
+/// - None: use global middlewares only
+/// - Some([]): explicit opt-out, no middlewares at all
+/// - Some([items]): global middlewares (excluding any overridden by name) + operation-level
+fn resolve_middlewares(
+    global: &[MiddlewareConfig],
+    operation: &Option<Vec<MiddlewareConfig>>,
+) -> Vec<MiddlewareConfig> {
+    match operation {
+        None => global.to_vec(),
+        Some(op_mw) if op_mw.is_empty() => Vec::new(),
+        Some(op_mw) => {
+            let op_names: HashSet<_> = op_mw.iter().map(|m| m.name.as_str()).collect();
+            let mut merged: Vec<_> = global
+                .iter()
+                .filter(|m| !op_names.contains(m.name.as_str()))
+                .cloned()
+                .collect();
+            merged.extend(op_mw.clone());
+            merged
+        }
+    }
+}
 
-    // Validate and collect operations
+/// Shared compilation core: validates specs, builds operations, and writes the .bca archive.
+fn compile_inner(
+    specs: &[(ApiSpec, String, String)],
+    plugins: &[PluginBundle],
+    output: &Path,
+    options: &CompileOptions,
+) -> Result<CompileResult, CompileError> {
+    let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut operations: Vec<CompiledOperation> = Vec::new();
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
     let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
     let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
 
-    for (spec, _, _) in &specs {
+    for (spec, _, _) in specs {
         let spec_file = spec.filename.as_deref().unwrap_or("unknown");
 
         // Validate global middlewares (E1011)
@@ -1001,7 +454,7 @@ pub fn compile_with_plugins(
             }
             seen_routes.insert(key, spec_file.to_string());
 
-            // Check for ambiguous routes (E1050)
+            // Check for ambiguous routes (E1050) - same structure, different param names
             let normalized = normalize_path_template(&op.path);
             let structural_key = (normalized, op.method.clone());
             if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
@@ -1022,28 +475,19 @@ pub fn compile_with_plugins(
                 ))
             })?;
 
-            // Resolve middleware chain:
-            // - None: use global middlewares only
-            // - Some([]): explicit opt-out, no middlewares at all
-            // - Some([items]): global middlewares (excluding any overridden by name) + operation-level
-            let middlewares = match &op.middlewares {
-                None => spec.global_middlewares.clone(),
-                Some(op_mw) if op_mw.is_empty() => Vec::new(),
-                Some(op_mw) => {
-                    // Collect operation middleware names for deduplication
-                    let op_names: std::collections::HashSet<_> =
-                        op_mw.iter().map(|m| m.name.as_str()).collect();
-                    // Include global middlewares except those overridden by operation
-                    let mut merged: Vec<_> = spec
-                        .global_middlewares
-                        .iter()
-                        .filter(|m| !op_names.contains(m.name.as_str()))
-                        .cloned()
-                        .collect();
-                    merged.extend(op_mw.clone());
-                    merged
+            // Check for plaintext HTTP upstream URLs (E1031)
+            if !options.allow_plaintext {
+                if let Some(url) = extract_upstream_url(&dispatch.config) {
+                    if url.starts_with("http://") {
+                        return Err(CompileError::PlaintextUpstream(format!(
+                            "{} {} in '{}' - upstream URL: {}",
+                            op.method, op.path, spec_file, url
+                        )));
+                    }
                 }
-            };
+            }
+
+            let middlewares = resolve_middlewares(&spec.global_middlewares, &op.middlewares);
 
             // Validate middleware names (E1011)
             for (idx, mw) in middlewares.iter().enumerate() {
@@ -1056,7 +500,7 @@ pub fn compile_with_plugins(
                 }
             }
 
-            // Validate schema complexity and circular refs for parameters
+            // Validate schema complexity and circular refs for parameters (E1051, E1052, E1053)
             for param in &op.parameters {
                 if let Some(schema) = &param.schema {
                     let param_location = format!("{} parameter '{}'", location, param.name);
@@ -1071,7 +515,7 @@ pub fn compile_with_plugins(
                 }
             }
 
-            // Validate request body schema complexity and circular refs
+            // Validate request body schema complexity and circular refs (E1051, E1052, E1053)
             if let Some(ref body) = op.request_body {
                 for (content_type, content) in &body.content {
                     if let Some(schema) = &content.schema {
@@ -1174,19 +618,17 @@ pub fn compile_with_plugins(
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
 
-    // Create the .bca archive
+    // Create the .bca archive (tar.gz)
     let file = File::create(output)?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut archive = Builder::new(encoder);
 
-    // Add manifest.json
+    // Add manifest.json and routes.json
     add_file_to_tar(&mut archive, "manifest.json", manifest_json.as_bytes())?;
-
-    // Add routes.json
     add_file_to_tar(&mut archive, "routes.json", routes_json.as_bytes())?;
 
-    // Add source specs
-    for (spec, content, _) in &specs {
+    // Add source specs under specs/ directory
+    for (spec, content, _) in specs {
         let filename = spec
             .filename
             .as_deref()
@@ -2373,5 +1815,183 @@ paths:
         assert!(validate_path_template("/users/{{id}}", "test").is_err());
         // Invalid character in param name
         assert!(validate_path_template("/users/{id-name}", "test").is_err());
+    }
+
+    #[test]
+    fn compile_inherits_global_middlewares_when_none() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 60
+  - name: cors
+    config:
+      allow_origin: "*"
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        compile(&[spec_path.as_path()], &output_path).unwrap();
+
+        let routes = load_routes(&output_path).unwrap();
+        assert_eq!(routes.operations.len(), 1);
+        let op = &routes.operations[0];
+        assert_eq!(op.middlewares.len(), 2);
+        assert_eq!(op.middlewares[0].name, "rate-limit");
+        assert_eq!(op.middlewares[1].name, "cors");
+    }
+
+    #[test]
+    fn compile_empty_middlewares_opts_out_of_globals() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 60
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares: []
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        compile(&[spec_path.as_path()], &output_path).unwrap();
+
+        let routes = load_routes(&output_path).unwrap();
+        let op = &routes.operations[0];
+        assert_eq!(op.middlewares.len(), 0);
+    }
+
+    #[test]
+    fn compile_merges_global_and_operation_middlewares() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 60
+  - name: cors
+    config:
+      allow_origin: "*"
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: auth
+          config:
+            type: bearer
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        compile(&[spec_path.as_path()], &output_path).unwrap();
+
+        let routes = load_routes(&output_path).unwrap();
+        let op = &routes.operations[0];
+        // Global middlewares first, then operation-level
+        assert_eq!(op.middlewares.len(), 3);
+        assert_eq!(op.middlewares[0].name, "rate-limit");
+        assert_eq!(op.middlewares[1].name, "cors");
+        assert_eq!(op.middlewares[2].name, "auth");
+    }
+
+    #[test]
+    fn compile_operation_middleware_overrides_global_by_name() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 60
+  - name: cors
+    config:
+      allow_origin: "*"
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 1000
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        compile(&[spec_path.as_path()], &output_path).unwrap();
+
+        let routes = load_routes(&output_path).unwrap();
+        let op = &routes.operations[0];
+        // cors from global + rate-limit from operation (overrides global rate-limit)
+        assert_eq!(op.middlewares.len(), 2);
+        assert_eq!(op.middlewares[0].name, "cors");
+        assert_eq!(op.middlewares[1].name, "rate-limit");
+        // The operation-level config should be used
+        assert_eq!(op.middlewares[1].config.get("quota").unwrap(), 1000);
+    }
+
+    #[test]
+    fn compile_with_plugins_inherits_global_middlewares() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 60
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let plugins = vec![];
+        let result = compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
+
+        let routes = load_routes(&output_path).unwrap();
+        let op = &routes.operations[0];
+        assert_eq!(op.middlewares.len(), 1);
+        assert_eq!(op.middlewares[0].name, "rate-limit");
+        assert_eq!(result.manifest.plugins.len(), 0);
     }
 }
