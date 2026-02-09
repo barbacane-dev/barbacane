@@ -146,25 +146,35 @@ paths:
           url: "https://api.example.com"
 ```
 
-### Middleware Override
+### Middleware Merging
 
-Operation middlewares can override global ones by name:
+Operation middlewares are **merged** with global ones. If an operation middleware has the same name as a global one, the operation config overrides it. Non-overridden globals are preserved.
 
 ```yaml
-# Global: rate limit 100/min
+# Global: rate limit 100/min + cors
 x-barbacane-middlewares:
   - name: rate-limit
     config:
       requests_per_minute: 100
+  - name: cors
+    config:
+      allow_origin: "*"
 
 paths:
   /public/stats:
     get:
-      # Override: higher limit for this endpoint
+      # Override rate-limit; cors still applies from globals
       x-barbacane-middlewares:
         - name: rate-limit
           config:
             requests_per_minute: 1000
+      # Resolved chain: cors (global) → rate-limit (operation override)
+```
+
+Use an empty array to explicitly disable all middlewares for an operation:
+
+```yaml
+x-barbacane-middlewares: []  # No middlewares at all
 ```
 
 ### Middleware Chain Order

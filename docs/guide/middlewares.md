@@ -73,25 +73,42 @@ paths:
           upstream: backend
 ```
 
-### Override Global Middleware
+### Merging with Global Middlewares
 
-Operation middlewares can override global config by name:
+When an operation declares its own middlewares, they are **merged** with the global chain:
+
+- Global middlewares run first, in order
+- If an operation middleware has the same name as a global one, the operation config **overrides** that global entry
+- Non-overridden global middlewares are preserved
 
 ```yaml
-# Global: 100 requests/minute
+# Global: rate-limit at 100/min + cors
 x-barbacane-middlewares:
   - name: rate-limit
     config:
       requests_per_minute: 100
+  - name: cors
+    config:
+      allow_origin: "*"
 
 paths:
   /public/feed:
     get:
-      # Override: 1000 requests/minute for this endpoint
+      # Override rate-limit, cors is still applied from globals
       x-barbacane-middlewares:
         - name: rate-limit
           config:
             requests_per_minute: 1000
+      # Resolved chain: cors (global) → rate-limit (operation override)
+```
+
+To explicitly disable all middlewares for an operation, use an empty array:
+
+```yaml
+paths:
+  /internal/health:
+    get:
+      x-barbacane-middlewares: []  # No middlewares at all
 ```
 
 ---

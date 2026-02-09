@@ -53,8 +53,9 @@ x-barbacane-middlewares:
 
 **Behavior:**
 - Global middlewares apply to all operations in order.
-- Per-operation `x-barbacane-middlewares` **replaces** the global chain entirely for that operation. There is no merge. If an operation declares its own chain, only that chain runs.
+- Per-operation `x-barbacane-middlewares` is **merged** with the global chain. Global middlewares not overridden by name are preserved; operation middlewares with the same name replace the global entry's config.
 - An empty array (`x-barbacane-middlewares: []`) explicitly disables all middlewares for that operation.
+- An operation with no `x-barbacane-middlewares` inherits the full global chain.
 
 ### 3.2 `x-barbacane-dispatch`
 

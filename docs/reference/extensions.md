@@ -153,9 +153,9 @@ x-barbacane-middlewares:
 | `name` | string | Yes | Name of the middleware plugin |
 | `config` | object | No | Configuration passed to the middleware |
 
-### Middleware Override
+### Middleware Merging
 
-When an operation defines a middleware with the same name as a global one, the operation config overrides the global config for that middleware.
+Operation middlewares are merged with the global chain. Global middlewares not overridden by name are preserved. When an operation defines a middleware with the same name as a global one, the operation config overrides the global config for that entry. An empty array (`x-barbacane-middlewares: []`) disables all middlewares for that operation.
 
 ### Examples
 
