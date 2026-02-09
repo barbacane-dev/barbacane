@@ -61,6 +61,12 @@ tar = "0.4"
 # HTTP client
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "stream"] }
 
+# NATS client
+async-nats = "0.38"
+
+# Kafka client
+rskafka = "0.6"
+
 # TLS
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tokio-rustls = "0.26"

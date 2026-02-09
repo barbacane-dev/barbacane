@@ -19,5 +19,7 @@ plugins:
     path: /plugins/correlation-id/correlation-id.wasm
   request-size-limit:
     path: /plugins/request-size-limit/request-size-limit.wasm
+  nats:
+    path: /plugins/nats/nats.wasm
   observability:
     path: /plugins/observability/observability.wasm

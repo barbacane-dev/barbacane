@@ -11,7 +11,7 @@ use wasmtime::{Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-use crate::broker::{BrokerMessage, BrokerRegistry};
+use crate::broker::BrokerMessage;
 use crate::engine::CompiledModule;
 use crate::error::WasmError;
 use crate::http_client::{
@@ -102,8 +102,11 @@ pub struct PluginState {
     /// Metrics registry for plugin telemetry (shared).
     pub metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
 
-    /// Broker registry for Kafka/NATS publishing (shared).
-    pub brokers: Option<Arc<BrokerRegistry>>,
+    /// Kafka publisher for host_kafka_publish (shared).
+    pub kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
+
+    /// NATS publisher for host_nats_publish (shared).
+    pub nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
 
     /// Result buffer for host_kafka_publish / host_nats_publish.
     pub last_broker_result: Option<Vec<u8>>,
@@ -129,7 +132,8 @@ impl PluginState {
             response_cache: None,
             last_cache_result: None,
             metrics: None,
-            brokers: None,
+            kafka_publisher: None,
+            nats_publisher: None,
             last_broker_result: None,
             last_uuid_result: None,
         }
@@ -155,7 +159,8 @@ impl PluginState {
             response_cache: None,
             last_cache_result: None,
             metrics: None,
-            brokers: None,
+            kafka_publisher: None,
+            nats_publisher: None,
             last_broker_result: None,
             last_uuid_result: None,
         }
@@ -182,13 +187,15 @@ impl PluginState {
             response_cache: None,
             last_cache_result: None,
             metrics: None,
-            brokers: None,
+            kafka_publisher: None,
+            nats_publisher: None,
             last_broker_result: None,
             last_uuid_result: None,
         }
     }
 
     /// Create new plugin state with all options.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_all_options(
         plugin_name: String,
         limits: &PluginLimits,
@@ -196,6 +203,8 @@ impl PluginState {
         secrets: crate::secrets::SecretsStore,
         rate_limiter: Option<crate::rate_limiter::RateLimiter>,
         response_cache: Option<crate::cache::ResponseCache>,
+        nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
+        kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
     ) -> Self {
         Self {
             plugin_name,
@@ -211,13 +220,15 @@ impl PluginState {
             response_cache,
             last_cache_result: None,
             metrics: None,
-            brokers: None,
+            kafka_publisher,
+            nats_publisher,
             last_broker_result: None,
             last_uuid_result: None,
         }
     }
 
     /// Create new plugin state with all options including metrics.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_all_options_and_metrics(
         plugin_name: String,
         limits: &PluginLimits,
@@ -225,6 +236,8 @@ impl PluginState {
         secrets: crate::secrets::SecretsStore,
         rate_limiter: Option<crate::rate_limiter::RateLimiter>,
         response_cache: Option<crate::cache::ResponseCache>,
+        nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
+        kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
         metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
     ) -> Self {
         Self {
@@ -241,7 +254,8 @@ impl PluginState {
             response_cache,
             last_cache_result: None,
             metrics,
-            brokers: None,
+            kafka_publisher,
+            nats_publisher,
             last_broker_result: None,
             last_uuid_result: None,
         }
@@ -322,10 +336,21 @@ impl PluginInstance {
         http_client: Option<Arc<HttpClient>>,
         secrets: Option<crate::secrets::SecretsStore>,
     ) -> Result<Self, WasmError> {
-        Self::new_with_all_options(engine, module, limits, http_client, secrets, None, None)
+        Self::new_with_all_options(
+            engine,
+            module,
+            limits,
+            http_client,
+            secrets,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Create a new plugin instance with all options including rate limiter and cache.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_all_options(
         engine: &Engine,
         module: &CompiledModule,
@@ -334,6 +359,8 @@ impl PluginInstance {
         secrets: Option<crate::secrets::SecretsStore>,
         rate_limiter: Option<crate::rate_limiter::RateLimiter>,
         response_cache: Option<crate::cache::ResponseCache>,
+        nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
+        kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
     ) -> Result<Self, WasmError> {
         let state = PluginState::with_all_options(
             module.name.clone(),
@@ -342,6 +369,8 @@ impl PluginInstance {
             secrets.unwrap_or_default(),
             rate_limiter,
             response_cache,
+            nats_publisher,
+            kafka_publisher,
         );
         let mut store = Store::new(engine, state);
 
@@ -1343,25 +1372,57 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 };
 
-                // Get the broker registry
-                let brokers = match &caller.data().brokers {
-                    Some(b) => b.clone(),
+                // Extract URL (broker addresses) from the message
+                let brokers = match &message.url {
+                    Some(u) => u.clone(),
                     None => {
-                        tracing::error!("broker registry not available");
+                        tracing::error!("Kafka publish: missing url in broker message");
                         return -1;
                     }
                 };
 
-                // Publish to Kafka
-                let result = brokers.publish_kafka(message);
+                // Get the Kafka publisher
+                let publisher = match caller.data().kafka_publisher.clone() {
+                    Some(p) => p,
+                    None => {
+                        tracing::error!("Kafka publisher not available");
+                        return -1;
+                    }
+                };
+
+                let topic = message.topic.clone();
+                let key = message.key.clone();
+                let payload = message.payload.clone();
+                let headers = message.headers.clone();
+
+                // Use thread::scope to escape the main tokio runtime context,
+                // then call publish_blocking which uses the publisher's own runtime.
+                let result = std::thread::scope(|s| {
+                    let handle = s.spawn(|| {
+                        publisher.publish_blocking(&brokers, &topic, key, &payload, headers)
+                    });
+
+                    match handle.join() {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            tracing::error!("Kafka publish thread panicked: {:?}", e);
+                            None
+                        }
+                    }
+                });
 
                 // Serialize the result
                 let result_json = match result {
-                    Ok(r) => serde_json::to_vec(&r),
-                    Err(e) => {
+                    Some(Ok(r)) => serde_json::to_vec(&r),
+                    Some(Err(e)) => {
+                        let error_result =
+                            crate::broker::PublishResult::failure(message.topic, e.to_string());
+                        serde_json::to_vec(&error_result)
+                    }
+                    None => {
                         let error_result = crate::broker::PublishResult::failure(
-                            "unknown".to_string(),
-                            e.to_string(),
+                            message.topic,
+                            "Kafka publish failed".to_string(),
                         );
                         serde_json::to_vec(&error_result)
                     }
@@ -1412,25 +1473,55 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 };
 
-                // Get the broker registry
-                let brokers = match &caller.data().brokers {
-                    Some(b) => b.clone(),
+                // Extract URL from the message
+                let url = match &message.url {
+                    Some(u) => u.clone(),
                     None => {
-                        tracing::error!("broker registry not available");
+                        tracing::error!("NATS publish: missing url in broker message");
                         return -1;
                     }
                 };
 
-                // Publish to NATS
-                let result = brokers.publish_nats(message);
+                // Get the NATS publisher
+                let publisher = match caller.data().nats_publisher.clone() {
+                    Some(p) => p,
+                    None => {
+                        tracing::error!("NATS publisher not available");
+                        return -1;
+                    }
+                };
+
+                let subject = message.topic.clone();
+                let payload = bytes::Bytes::from(message.payload.clone());
+                let headers = message.headers.clone();
+
+                // Use thread::scope to escape the main tokio runtime context,
+                // then call publish_blocking which uses the publisher's own runtime.
+                let result = std::thread::scope(|s| {
+                    let handle =
+                        s.spawn(|| publisher.publish_blocking(&url, &subject, payload, headers));
+
+                    match handle.join() {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            tracing::error!("NATS publish thread panicked: {:?}", e);
+                            None
+                        }
+                    }
+                });
 
                 // Serialize the result
                 let result_json = match result {
-                    Ok(r) => serde_json::to_vec(&r),
-                    Err(e) => {
+                    Some(Ok(r)) => serde_json::to_vec(&r),
+                    Some(Err(e)) => {
+                        let error_result =
+                            crate::broker::PublishResult::failure(message.topic, e.to_string());
+                        serde_json::to_vec(&error_result)
+                    }
+                    None => {
                         let error_result = crate::broker::PublishResult::failure(
-                            "unknown".to_string(),
-                            e.to_string(),
+                            message.topic,
+                            "NATS publish failed".to_string(),
                         );
                         serde_json::to_vec(&error_result)
                     }
@@ -1495,5 +1586,45 @@ mod tests {
         let uuid = uuid::Uuid::now_v7().to_string();
         assert_eq!(uuid.len(), 36); // UUID string format: 8-4-4-4-12
         assert!(uuid.chars().nth(14) == Some('7')); // Version 7 marker
+    }
+
+    #[test]
+    fn plugin_state_nats_publisher_default() {
+        let limits = PluginLimits::default();
+        let state = PluginState::new("test".into(), &limits);
+        assert!(state.nats_publisher.is_none());
+    }
+
+    #[test]
+    fn plugin_state_broker_result_default() {
+        let limits = PluginLimits::default();
+        let state = PluginState::new("test".into(), &limits);
+        assert!(state.last_broker_result.is_none());
+    }
+
+    #[test]
+    fn plugin_state_kafka_publisher_default() {
+        let limits = PluginLimits::default();
+        let state = PluginState::new("test".into(), &limits);
+        assert!(state.kafka_publisher.is_none());
+    }
+
+    #[test]
+    fn plugin_state_with_all_options_sets_publishers() {
+        let limits = PluginLimits::default();
+        let nats = Arc::new(crate::nats_client::NatsPublisher::new());
+        let kafka = Arc::new(crate::kafka_client::KafkaPublisher::new());
+        let state = PluginState::with_all_options(
+            "test".into(),
+            &limits,
+            None,
+            crate::secrets::SecretsStore::new(),
+            None,
+            None,
+            Some(nats),
+            Some(kafka),
+        );
+        assert!(state.nats_publisher.is_some());
+        assert!(state.kafka_publisher.is_some());
     }
 }

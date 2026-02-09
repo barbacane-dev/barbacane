@@ -27,6 +27,7 @@ That's it! The API specs are compiled automatically before the gateway starts.
 | **Control Plane** | http://localhost:3001 | Web UI for managing APIs |
 | **Grafana** | http://localhost:3000 | Dashboards (admin/admin) |
 | **Prometheus** | http://localhost:9090 | Metrics |
+| **NATS** | nats://localhost:4222 | Message broker ([monitoring](http://localhost:8222)) |
 | **WireMock** | http://localhost:8081/__admin | Mock backend admin |
 
 ## API Endpoints
@@ -82,6 +83,54 @@ curl -X POST http://localhost:8080/bookings \
     "passengers": [{"name": "John Doe", "email": "john@example.com"}]
   }'
 ```
+
+### Events (NATS Dispatch)
+
+Event endpoints publish messages to NATS subjects and return `202 Accepted`. The gateway validates the request payload against the AsyncAPI schema before publishing.
+
+```bash
+# Publish a train delay event
+curl -X POST http://localhost:8080/events/trips/delayed \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_type": "trip.delayed",
+    "trip_id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
+    "delay_minutes": 15,
+    "reason": "weather",
+    "timestamp": "2025-03-15T10:30:00Z"
+  }'
+# Returns: {"status":"accepted","subject":"trains.trips.delayed"}
+
+# Publish a booking confirmation event
+curl -X POST http://localhost:8080/events/bookings/confirmed \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_type": "booking.confirmed",
+    "booking_id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+    "reference": "BOOK-123",
+    "passenger_count": 2,
+    "trip_id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
+    "timestamp": "2025-03-15T10:30:00Z"
+  }'
+
+# Publish a payment succeeded event
+curl -X POST http://localhost:8080/events/payments/succeeded \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_type": "payment.succeeded",
+    "payment_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "booking_id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
+    "amount": 49.99,
+    "currency": "EUR",
+    "method": "card",
+    "timestamp": "2025-03-15T10:30:00Z"
+  }'
+
+# Check NATS server stats
+curl http://localhost:8222/varz
+```
+
+Available event subjects: `trains.trips.delayed`, `trains.trips.cancelled`, `trains.stations.platform-changed`, `trains.bookings.confirmed`, `trains.bookings.cancelled`, `trains.payments.succeeded`, `trains.payments.failed`.
 
 ## Feature Demonstrations
 
@@ -252,15 +301,21 @@ docker compose down -v
 ┌──────────┐        │  ┌───────────┐      ┌───────────┐      ┌───────────┐         │
 │  Client  │───────────│ Barbacane │──────│  WireMock │      │ Prometheus│         │
 └──────────┘        │  │  :8080    │      │   :8081   │      │   :9090   │         │
-                    │  └─────┬─────┘      └───────────┘      └─────┬─────┘         │
-                    │        │                                      │               │
-                    │        │ logs                         scrape  │               │
-                    │        ▼                                      │               │
-                    │  ┌───────────┐      ┌───────────┐             │               │
-                    │  │   Alloy   │──────│   Loki    │             │               │
-                    │  └───────────┘      │   :3100   │             │               │
-                    │                     └─────┬─────┘             │               │
-                    │        ┌──────────────────┼───────────────────┘               │
+                    │  └──┬────┬───┘      └───────────┘      └─────┬─────┘         │
+                    │     │    │                                    │               │
+                    │     │    │ publish                    scrape  │               │
+                    │     │    ▼                                    │               │
+                    │     │ ┌───────────┐                          │               │
+                    │     │ │   NATS    │                          │               │
+                    │     │ │  :4222    │                          │               │
+                    │     │ └───────────┘                          │               │
+                    │     │ logs                                   │               │
+                    │     ▼                                        │               │
+                    │  ┌───────────┐      ┌───────────┐            │               │
+                    │  │   Alloy   │──────│   Loki    │            │               │
+                    │  └───────────┘      │   :3100   │            │               │
+                    │                     └─────┬─────┘            │               │
+                    │        ┌──────────────────┼──────────────────┘               │
                     │        │                  │                                   │
                     │        ▼                  ▼                                   │
                     │  ┌─────────────────────────────┐      ┌───────────┐          │

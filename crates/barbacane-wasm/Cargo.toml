@@ -34,6 +34,13 @@ tracing.workspace = true
 # HTTP client (for host_http_call)
 reqwest.workspace = true
 
+# NATS client (for host_nats_publish)
+async-nats.workspace = true
+bytes.workspace = true
+
+# Kafka client (for host_kafka_publish)
+rskafka.workspace = true
+
 # Sync primitives (for circuit breaker)
 parking_lot.workspace = true
 

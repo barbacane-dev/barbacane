@@ -300,12 +300,13 @@ Lambda response format:
 
 ### kafka
 
-Publishes messages to Apache Kafka topics. Designed for AsyncAPI specs using the sync-to-async bridge pattern: HTTP POST requests publish messages and return 202 Accepted.
+Publishes messages to Apache Kafka topics. Designed for AsyncAPI specs using the sync-to-async bridge pattern: HTTP POST requests publish messages and return 202 Accepted. Uses a pure-Rust Kafka client with connection caching and a dedicated runtime.
 
 ```yaml
 x-barbacane-dispatch:
   name: kafka
   config:
+    brokers: "kafka.internal:9092"
     topic: "user-events"
 ```
 
@@ -313,6 +314,7 @@ x-barbacane-dispatch:
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
+| `brokers` | string | Yes | - | Comma-separated Kafka broker addresses (e.g. `"kafka:9092"` or `"broker1:9092, broker2:9092"`) |
 | `topic` | string | Yes | - | Kafka topic to publish to |
 | `key` | string | No | - | Message key expression (see below) |
 | `ack_response` | object | No | - | Custom acknowledgment response |
@@ -337,6 +339,7 @@ Override the default 202 Accepted response:
 x-barbacane-dispatch:
   name: kafka
   config:
+    brokers: "kafka.internal:9092"
     topic: "orders"
     ack_response:
       body: {"queued": true, "estimatedDelivery": "5s"}
@@ -371,6 +374,7 @@ operations:
     x-barbacane-dispatch:
       name: kafka
       config:
+        brokers: "kafka.internal:9092"
         topic: "order-events"
         key: "$request.header.X-Order-Id"
         include_metadata: true
@@ -381,6 +385,7 @@ operations:
 x-barbacane-dispatch:
   name: kafka
   config:
+    brokers: "kafka.internal:9092"
     topic: "audit-events"
     headers_from_request:
       - "x-correlation-id"
@@ -410,12 +415,13 @@ On successful publish, returns 202 Accepted:
 
 ### nats
 
-Publishes messages to NATS subjects. Designed for AsyncAPI specs using the sync-to-async bridge pattern.
+Publishes messages to NATS subjects. Designed for AsyncAPI specs using the sync-to-async bridge pattern. Uses a pure-Rust NATS client with connection caching and a dedicated runtime.
 
 ```yaml
 x-barbacane-dispatch:
   name: nats
   config:
+    url: "nats://nats.internal:4222"
     subject: "notifications.user"
 ```
 
@@ -423,6 +429,7 @@ x-barbacane-dispatch:
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
+| `url` | string | Yes | - | NATS server URL (e.g. `"nats://localhost:4222"`) |
 | `subject` | string | Yes | - | NATS subject to publish to (supports wildcards) |
 | `ack_response` | object | No | - | Custom acknowledgment response |
 | `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
@@ -461,6 +468,7 @@ operations:
     x-barbacane-dispatch:
       name: nats
       config:
+        url: "nats://nats.internal:4222"
         subject: "notifications"
         headers_from_request:
           - "x-request-id"
@@ -471,6 +479,7 @@ operations:
 x-barbacane-dispatch:
   name: nats
   config:
+    url: "nats://nats.internal:4222"
     subject: "events.user.signup"
     ack_response:
       body: {"accepted": true}
@@ -504,28 +513,6 @@ Custom dispatchers can be implemented as WASM plugins using the Plugin SDK. The 
 ### Planned Dispatchers
 
 The following dispatchers are planned for future releases:
-
-#### AsyncAPI Dispatchers (Kafka, NATS)
-
-Barbacane supports parsing AsyncAPI 3.x specifications. Message broker dispatchers are planned:
-
-```yaml
-# Planned Kafka dispatcher
-x-barbacane-dispatch:
-  name: kafka
-  config:
-    broker: "kafka.internal:9092"
-    topic: "orders"
-```
-
-```yaml
-# Planned NATS dispatcher
-x-barbacane-dispatch:
-  name: nats
-  config:
-    url: "nats://nats.internal:4222"
-    subject: "events.orders"
-```
 
 #### gRPC Dispatcher
 

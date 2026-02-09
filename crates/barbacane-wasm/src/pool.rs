@@ -84,6 +84,12 @@ pub struct InstancePool {
     /// Response cache (shared across all instances).
     response_cache: Option<ResponseCache>,
 
+    /// NATS publisher (shared across all instances).
+    nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
+
+    /// Kafka publisher (shared across all instances).
+    kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
+
     /// Cache of compiled modules by plugin name.
     modules: DashMap<String, CompiledModule>,
 
@@ -106,6 +112,8 @@ impl InstancePool {
             secrets: None,
             rate_limiter: None,
             response_cache: None,
+            nats_publisher: None,
+            kafka_publisher: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -125,6 +133,8 @@ impl InstancePool {
             secrets: None,
             rate_limiter: None,
             response_cache: None,
+            nats_publisher: None,
+            kafka_publisher: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -145,6 +155,8 @@ impl InstancePool {
             secrets: Some(secrets),
             rate_limiter: None,
             response_cache: None,
+            nats_publisher: None,
+            kafka_publisher: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -152,6 +164,7 @@ impl InstancePool {
     }
 
     /// Create a new instance pool with all options.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_all_options(
         engine: Arc<WasmEngine>,
         limits: PluginLimits,
@@ -159,6 +172,8 @@ impl InstancePool {
         secrets: Option<SecretsStore>,
         rate_limiter: Option<RateLimiter>,
         response_cache: Option<ResponseCache>,
+        nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
+        kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
     ) -> Self {
         Self {
             engine,
@@ -167,6 +182,8 @@ impl InstancePool {
             secrets,
             rate_limiter,
             response_cache,
+            nats_publisher,
+            kafka_publisher,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -207,6 +224,8 @@ impl InstancePool {
             self.secrets.clone(),
             self.rate_limiter.clone(),
             self.response_cache.clone(),
+            self.nats_publisher.clone(),
+            self.kafka_publisher.clone(),
         )?;
 
         // Initialize with config

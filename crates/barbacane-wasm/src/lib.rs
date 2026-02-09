@@ -15,8 +15,10 @@ mod error;
 mod host;
 mod http_client;
 mod instance;
+pub mod kafka_client;
 mod limits;
 mod manifest;
+pub mod nats_client;
 mod pool;
 pub mod rate_limiter;
 mod schema;
@@ -57,11 +59,14 @@ pub use http_client::{
     TlsConfigError,
 };
 
-// Message brokers for event dispatch (M10)
-pub use broker::{
-    BrokerError, BrokerMessage, BrokerRegistry, KafkaBroker, MessageBroker, MockBroker, NatsBroker,
-    PublishResult,
-};
+// Message broker types for event dispatch
+pub use broker::{BrokerError, BrokerMessage, PublishResult};
+
+// Kafka publisher for host_kafka_publish
+pub use kafka_client::KafkaPublisher;
+
+// NATS publisher for host_nats_publish
+pub use nats_client::NatsPublisher;
 
 /// Re-export plugin SDK types for convenience.
 pub use barbacane_plugin_sdk::prelude::{Action, Request, Response};

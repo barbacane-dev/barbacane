@@ -93,7 +93,7 @@ Parses OpenAPI and AsyncAPI specifications and extracts Barbacane extensions.
 - OpenAPI 3.0.x
 - OpenAPI 3.1.x
 - OpenAPI 3.2.x (draft)
-- AsyncAPI 3.x (parsing supported, dispatchers planned)
+- AsyncAPI 3.x (with Kafka and NATS dispatchers)
 
 ### barbacane-router
 
@@ -183,6 +183,12 @@ WASM plugin runtime built on wasmtime.
 - `host_http_read_result` - Read HTTP response data
 - `host_get_secret` - Get a resolved secret by reference
 - `host_secret_read_result` - Read secret value into plugin memory
+- `host_kafka_publish` - Publish messages to Kafka topics
+- `host_nats_publish` - Publish messages to NATS subjects
+- `host_rate_limit_check` - Check rate limits
+- `host_cache_read/write` - Read/write response cache
+- `host_metric_counter_inc` - Increment Prometheus counter
+- `host_metric_histogram_observe` - Record histogram observation
 
 **Resource limits:**
 - 16 MB linear memory
@@ -372,4 +378,3 @@ cargo test --workspace
 - **gRPC passthrough**: Transparent proxying for gRPC services
 - **Hot reload**: Reload artifacts without restart via control plane notifications
 - **Cluster mode**: Distributed configuration across multiple nodes
-- **AsyncAPI dispatchers**: Event-driven APIs with Kafka/NATS dispatch (parsing already supported)

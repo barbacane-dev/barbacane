@@ -10,6 +10,7 @@
 #   - Control Plane UI: http://localhost:3001
 #   - Grafana: http://localhost:3000 (admin/admin)
 #   - Prometheus: http://localhost:9090
+#   - NATS: nats://localhost:4222
 #   - WireMock: http://localhost:8081/__admin
 
 services:
@@ -50,6 +51,8 @@ services:
       compiler:
         condition: service_completed_successfully
       wiremock:
+        condition: service_healthy
+      nats:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/__barbacane/health"]
@@ -95,6 +98,20 @@ services:
       test: ["CMD-SHELL", "pg_isready -U barbacane"]
       interval: 5s
       timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Message Broker (NATS)
+  # ==========================================================================
+  nats:
+    image: nats:2-alpine
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
       retries: 5
 
   # ==========================================================================

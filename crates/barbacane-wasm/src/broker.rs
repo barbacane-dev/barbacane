@@ -1,12 +1,10 @@
-//! Message broker abstractions for event dispatch.
+//! Shared types for message broker dispatch (Kafka, NATS).
 //!
-//! Provides a unified interface for publishing messages to Kafka and NATS.
-//! The actual broker implementations can be swapped out (mock for testing,
-//! real clients for production).
+//! Defines the common message, result, and error types used by both
+//! `KafkaPublisher` and `NatsPublisher` host functions.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 /// Errors from broker operations.
@@ -31,6 +29,11 @@ pub enum BrokerError {
 /// A message to publish to a broker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerMessage {
+    /// Broker URL (e.g., nats://localhost:4222 or kafka:9092).
+    /// Provided per-message by the plugin from its dispatcher config.
+    #[serde(default)]
+    pub url: Option<String>,
+
     /// Topic (Kafka) or subject (NATS).
     pub topic: String,
 
@@ -92,276 +95,144 @@ impl PublishResult {
     }
 }
 
-/// Trait for message brokers (Kafka, NATS).
-pub trait MessageBroker: Send + Sync {
-    /// Publish a message to the broker.
-    fn publish(&self, message: BrokerMessage) -> Result<PublishResult, BrokerError>;
-
-    /// Get the broker type name.
-    fn broker_type(&self) -> &'static str;
-}
-
-/// Mock broker for testing.
-/// Records published messages for verification.
-#[derive(Clone, Default)]
-pub struct MockBroker {
-    messages: Arc<RwLock<Vec<BrokerMessage>>>,
-    fail_on_topic: Arc<RwLock<Option<String>>>,
-}
-
-impl MockBroker {
-    /// Create a new mock broker.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Get all published messages.
-    pub fn messages(&self) -> Vec<BrokerMessage> {
-        self.messages.read().unwrap().clone()
-    }
-
-    /// Clear recorded messages.
-    pub fn clear(&self) {
-        self.messages.write().unwrap().clear();
-    }
-
-    /// Set a topic that should fail on publish.
-    pub fn fail_on(&self, topic: &str) {
-        *self.fail_on_topic.write().unwrap() = Some(topic.to_string());
-    }
-}
-
-impl MessageBroker for MockBroker {
-    fn publish(&self, message: BrokerMessage) -> Result<PublishResult, BrokerError> {
-        // Check if we should fail
-        if let Some(fail_topic) = self.fail_on_topic.read().unwrap().as_ref() {
-            if &message.topic == fail_topic {
-                return Ok(PublishResult::failure(
-                    message.topic,
-                    "simulated failure".to_string(),
-                ));
-            }
-        }
-
-        let topic = message.topic.clone();
-        self.messages.write().unwrap().push(message);
-
-        Ok(PublishResult::success(topic))
-    }
-
-    fn broker_type(&self) -> &'static str {
-        "mock"
-    }
-}
-
-/// Kafka broker client.
-///
-/// Note: Actual Kafka implementation requires the `rdkafka` crate.
-/// This is a placeholder that can be implemented when broker support is needed.
-pub struct KafkaBroker {
-    /// Broker addresses (comma-separated).
-    _brokers: String,
-}
-
-impl KafkaBroker {
-    /// Create a new Kafka broker client.
-    ///
-    /// # Arguments
-    /// * `brokers` - Comma-separated list of broker addresses (e.g., "localhost:9092")
-    pub fn new(brokers: &str) -> Self {
-        Self {
-            _brokers: brokers.to_string(),
-        }
-    }
-}
-
-impl MessageBroker for KafkaBroker {
-    fn publish(&self, message: BrokerMessage) -> Result<PublishResult, BrokerError> {
-        // Placeholder - actual Kafka implementation would use rdkafka
-        tracing::warn!(
-            topic = %message.topic,
-            "Kafka publish not yet implemented, message dropped"
-        );
-        Ok(PublishResult::failure(
-            message.topic,
-            "Kafka client not yet implemented".to_string(),
-        ))
-    }
-
-    fn broker_type(&self) -> &'static str {
-        "kafka"
-    }
-}
-
-/// NATS broker client.
-///
-/// Note: Actual NATS implementation requires the `async-nats` crate.
-/// This is a placeholder that can be implemented when broker support is needed.
-pub struct NatsBroker {
-    /// Server addresses (comma-separated).
-    _servers: String,
-}
-
-impl NatsBroker {
-    /// Create a new NATS broker client.
-    ///
-    /// # Arguments
-    /// * `servers` - Comma-separated list of server addresses (e.g., "localhost:4222")
-    pub fn new(servers: &str) -> Self {
-        Self {
-            _servers: servers.to_string(),
-        }
-    }
-}
-
-impl MessageBroker for NatsBroker {
-    fn publish(&self, message: BrokerMessage) -> Result<PublishResult, BrokerError> {
-        // Placeholder - actual NATS implementation would use async-nats
-        tracing::warn!(
-            subject = %message.topic,
-            "NATS publish not yet implemented, message dropped"
-        );
-        Ok(PublishResult::failure(
-            message.topic,
-            "NATS client not yet implemented".to_string(),
-        ))
-    }
-
-    fn broker_type(&self) -> &'static str {
-        "nats"
-    }
-}
-
-/// Broker registry for managing multiple broker connections.
-#[derive(Default)]
-pub struct BrokerRegistry {
-    kafka: Option<Arc<dyn MessageBroker>>,
-    nats: Option<Arc<dyn MessageBroker>>,
-}
-
-impl BrokerRegistry {
-    /// Create a new empty broker registry.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Create a broker registry with mock brokers for testing.
-    pub fn with_mocks() -> Self {
-        Self {
-            kafka: Some(Arc::new(MockBroker::new())),
-            nats: Some(Arc::new(MockBroker::new())),
-        }
-    }
-
-    /// Set the Kafka broker.
-    pub fn set_kafka(&mut self, broker: Arc<dyn MessageBroker>) {
-        self.kafka = Some(broker);
-    }
-
-    /// Set the NATS broker.
-    pub fn set_nats(&mut self, broker: Arc<dyn MessageBroker>) {
-        self.nats = Some(broker);
-    }
-
-    /// Get the Kafka broker.
-    pub fn kafka(&self) -> Option<&Arc<dyn MessageBroker>> {
-        self.kafka.as_ref()
-    }
-
-    /// Get the NATS broker.
-    pub fn nats(&self) -> Option<&Arc<dyn MessageBroker>> {
-        self.nats.as_ref()
-    }
-
-    /// Publish to Kafka.
-    pub fn publish_kafka(&self, message: BrokerMessage) -> Result<PublishResult, BrokerError> {
-        match &self.kafka {
-            Some(broker) => broker.publish(message),
-            None => Err(BrokerError::NotConfigured),
-        }
-    }
-
-    /// Publish to NATS.
-    pub fn publish_nats(&self, message: BrokerMessage) -> Result<PublishResult, BrokerError> {
-        match &self.nats {
-            Some(broker) => broker.publish(message),
-            None => Err(BrokerError::NotConfigured),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn mock_broker_records_messages() {
-        let broker = MockBroker::new();
-
+    fn broker_message_url_roundtrip() {
         let message = BrokerMessage {
-            topic: "test-topic".to_string(),
-            key: Some("key-1".to_string()),
-            payload: r#"{"event":"test"}"#.to_string(),
+            url: Some("nats://localhost:4222".to_string()),
+            topic: "test.subject".to_string(),
+            key: None,
+            payload: r#"{"data":"hello"}"#.to_string(),
             headers: BTreeMap::new(),
         };
 
-        let result = broker.publish(message).unwrap();
-        assert!(result.success);
-        assert_eq!(result.topic, "test-topic");
+        let json = serde_json::to_string(&message).unwrap();
+        let deserialized: BrokerMessage = serde_json::from_str(&json).unwrap();
 
-        let messages = broker.messages();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].topic, "test-topic");
-        assert_eq!(messages[0].key, Some("key-1".to_string()));
+        assert_eq!(deserialized.url, Some("nats://localhost:4222".to_string()));
+        assert_eq!(deserialized.topic, "test.subject");
+        assert_eq!(deserialized.payload, r#"{"data":"hello"}"#);
     }
 
     #[test]
-    fn mock_broker_simulates_failure() {
-        let broker = MockBroker::new();
-        broker.fail_on("fail-topic");
+    fn broker_message_url_absent() {
+        let json = r#"{"topic":"events","payload":"{}"}"#;
+        let message: BrokerMessage = serde_json::from_str(json).unwrap();
+        assert!(message.url.is_none());
+        assert_eq!(message.topic, "events");
+    }
+
+    #[test]
+    fn broker_message_with_key_and_headers() {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-request-id".to_string(), "req-123".to_string());
+        headers.insert("x-trace-id".to_string(), "trace-456".to_string());
 
         let message = BrokerMessage {
-            topic: "fail-topic".to_string(),
-            key: None,
-            payload: "{}".to_string(),
-            headers: BTreeMap::new(),
+            url: Some("kafka:9092".to_string()),
+            topic: "orders.placed".to_string(),
+            key: Some("order-789".to_string()),
+            payload: r#"{"orderId":"789"}"#.to_string(),
+            headers,
         };
 
-        let result = broker.publish(message).unwrap();
+        let json = serde_json::to_string(&message).unwrap();
+        let deserialized: BrokerMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.key, Some("order-789".to_string()));
+        assert_eq!(deserialized.headers.len(), 2);
+        assert_eq!(deserialized.headers["x-request-id"], "req-123");
+        assert_eq!(deserialized.headers["x-trace-id"], "trace-456");
+    }
+
+    #[test]
+    fn broker_message_key_defaults_to_none() {
+        let json = r#"{"topic":"events","payload":"{}"}"#;
+        let message: BrokerMessage = serde_json::from_str(json).unwrap();
+        assert!(message.key.is_none());
+        assert!(message.headers.is_empty());
+    }
+
+    #[test]
+    fn publish_result_success_constructor() {
+        let result = PublishResult::success("orders.placed".to_string());
+        assert!(result.success);
+        assert!(result.error.is_none());
+        assert_eq!(result.topic, "orders.placed");
+        assert!(result.partition.is_none());
+        assert!(result.offset.is_none());
+    }
+
+    #[test]
+    fn publish_result_failure_constructor() {
+        let result = PublishResult::failure(
+            "orders.placed".to_string(),
+            "connection refused".to_string(),
+        );
         assert!(!result.success);
-        assert!(result.error.is_some());
+        assert_eq!(result.error, Some("connection refused".to_string()));
+        assert_eq!(result.topic, "orders.placed");
     }
 
     #[test]
-    fn broker_registry_with_mocks() {
-        let registry = BrokerRegistry::with_mocks();
+    fn publish_result_success_serialization_skips_optional() {
+        let result = PublishResult::success("events".to_string());
+        let json = serde_json::to_string(&result).unwrap();
 
-        let message = BrokerMessage {
-            topic: "events".to_string(),
-            key: None,
-            payload: "{}".to_string(),
-            headers: BTreeMap::new(),
-        };
-
-        let result = registry.publish_kafka(message.clone()).unwrap();
-        assert!(result.success);
-
-        let result = registry.publish_nats(message).unwrap();
-        assert!(result.success);
+        // skip_serializing_if should omit error, partition, and offset
+        assert!(!json.contains("error"));
+        assert!(!json.contains("partition"));
+        assert!(!json.contains("offset"));
+        assert!(json.contains(r#""success":true"#));
     }
 
     #[test]
-    fn broker_registry_not_configured() {
-        let registry = BrokerRegistry::new();
+    fn publish_result_failure_serialization_includes_error() {
+        let result = PublishResult::failure("events".to_string(), "timeout".to_string());
+        let json = serde_json::to_string(&result).unwrap();
 
-        let message = BrokerMessage {
-            topic: "events".to_string(),
-            key: None,
-            payload: "{}".to_string(),
-            headers: BTreeMap::new(),
+        assert!(json.contains(r#""error":"timeout""#));
+        assert!(json.contains(r#""success":false"#));
+    }
+
+    #[test]
+    fn publish_result_with_kafka_metadata_roundtrip() {
+        let result = PublishResult {
+            success: true,
+            error: None,
+            topic: "orders".to_string(),
+            partition: Some(3),
+            offset: Some(42),
         };
 
-        let result = registry.publish_kafka(message);
-        assert!(matches!(result, Err(BrokerError::NotConfigured)));
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: PublishResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.partition, Some(3));
+        assert_eq!(deserialized.offset, Some(42));
+    }
+
+    #[test]
+    fn broker_error_display() {
+        assert_eq!(
+            BrokerError::NotConfigured.to_string(),
+            "broker not configured"
+        );
+        assert_eq!(BrokerError::Timeout.to_string(), "timeout");
+        assert_eq!(
+            BrokerError::ConnectionFailed("refused".to_string()).to_string(),
+            "connection failed: refused"
+        );
+        assert_eq!(
+            BrokerError::PublishFailed("full".to_string()).to_string(),
+            "publish failed: full"
+        );
+        assert_eq!(
+            BrokerError::InvalidMessage("bad json".to_string()).to_string(),
+            "invalid message: bad json"
+        );
     }
 }
