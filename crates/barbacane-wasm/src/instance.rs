@@ -518,6 +518,41 @@ impl PluginInstance {
     }
 }
 
+/// Register a `host_*_read_result` function that copies data from plugin state to WASM memory.
+///
+/// All read_result host functions follow the same pattern: take a result buffer from state,
+/// get the WASM memory export, copy bytes into the provided buffer, return bytes written.
+fn add_read_result_fn(
+    linker: &mut Linker<PluginState>,
+    name: &str,
+    extract: impl Fn(&mut PluginState) -> Option<Vec<u8>> + Send + Sync + 'static,
+) -> Result<(), WasmError> {
+    linker
+        .func_wrap(
+            "barbacane",
+            name,
+            move |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let result = extract(caller.data_mut());
+                if let Some(data) = result {
+                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                        Some(m) => m,
+                        None => return 0,
+                    };
+                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
+                    if memory
+                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
+                        .is_ok()
+                    {
+                        return copy_len as i32;
+                    }
+                }
+                0
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add {}: {}", name, e)))?;
+    Ok(())
+}
+
 /// Add host functions to the linker.
 fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError> {
     // host_set_output - always available
@@ -610,34 +645,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_context_get: {}", e)))?;
 
     // host_context_read_result
-    linker
-        .func_wrap(
-            "barbacane",
-            "host_context_read_result",
-            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                let result = caller.data_mut().context.last_get_result.take();
-                if let Some(value) = result {
-                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                        Some(m) => m,
-                        None => return 0,
-                    };
-
-                    let bytes = value.as_bytes();
-                    let copy_len = std::cmp::min(bytes.len(), buf_len as usize);
-
-                    if memory
-                        .write(&mut caller, buf_ptr as usize, &bytes[..copy_len])
-                        .is_ok()
-                    {
-                        return copy_len as i32;
-                    }
-                }
-                0
-            },
-        )
-        .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_context_read_result: {}", e))
-        })?;
+    add_read_result_fn(linker, "host_context_read_result", |state| {
+        state.context.last_get_result.take().map(String::into_bytes)
+    })?;
 
     // host_context_set
     linker
@@ -742,33 +752,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         })?;
 
     // host_uuid_read_result - copies generated UUID to WASM memory
-    linker
-        .func_wrap(
-            "barbacane",
-            "host_uuid_read_result",
-            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                let result = caller.data_mut().last_uuid_result.take();
-                if let Some(data) = result {
-                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                        Some(m) => m,
-                        None => return 0,
-                    };
-
-                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
-
-                    if memory
-                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
-                        .is_ok()
-                    {
-                        return copy_len as i32;
-                    }
-                }
-                0
-            },
-        )
-        .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_uuid_read_result: {}", e))
-        })?;
+    add_read_result_fn(linker, "host_uuid_read_result", |state| {
+        state.last_uuid_result.take()
+    })?;
 
     // host_http_call - make outbound HTTP request
     linker
@@ -903,33 +889,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_http_call: {}", e)))?;
 
     // host_http_read_result - read HTTP response
-    linker
-        .func_wrap(
-            "barbacane",
-            "host_http_read_result",
-            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                let result = caller.data_mut().last_http_result.take();
-                if let Some(data) = result {
-                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                        Some(m) => m,
-                        None => return 0,
-                    };
-
-                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
-
-                    if memory
-                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
-                        .is_ok()
-                    {
-                        return copy_len as i32;
-                    }
-                }
-                0
-            },
-        )
-        .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_http_read_result: {}", e))
-        })?;
+    add_read_result_fn(linker, "host_http_read_result", |state| {
+        state.last_http_result.take()
+    })?;
 
     // host_get_secret - get a secret by reference
     linker
@@ -978,33 +940,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_get_secret: {}", e)))?;
 
     // host_secret_read_result - read secret value into plugin memory
-    linker
-        .func_wrap(
-            "barbacane",
-            "host_secret_read_result",
-            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                let result = caller.data_mut().last_secret_result.take();
-                if let Some(data) = result {
-                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                        Some(m) => m,
-                        None => return 0,
-                    };
-
-                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
-
-                    if memory
-                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
-                        .is_ok()
-                    {
-                        return copy_len as i32;
-                    }
-                }
-                0
-            },
-        )
-        .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_secret_read_result: {}", e))
-        })?;
+    add_read_result_fn(linker, "host_secret_read_result", |state| {
+        state.last_secret_result.take()
+    })?;
 
     // host_rate_limit_check - check rate limit for a key
     linker
@@ -1067,33 +1005,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         })?;
 
     // host_rate_limit_read_result - read rate limit result into plugin memory
-    linker
-        .func_wrap(
-            "barbacane",
-            "host_rate_limit_read_result",
-            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                let result = caller.data_mut().last_rate_limit_result.take();
-                if let Some(data) = result {
-                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                        Some(m) => m,
-                        None => return 0,
-                    };
-
-                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
-
-                    if memory
-                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
-                        .is_ok()
-                    {
-                        return copy_len as i32;
-                    }
-                }
-                0
-            },
-        )
-        .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_rate_limit_read_result: {}", e))
-        })?;
+    add_read_result_fn(linker, "host_rate_limit_read_result", |state| {
+        state.last_rate_limit_result.take()
+    })?;
 
     // host_cache_get - look up a cached response
     linker
@@ -1208,33 +1122,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_cache_set: {}", e)))?;
 
     // host_cache_read_result - read cache lookup result into plugin memory
-    linker
-        .func_wrap(
-            "barbacane",
-            "host_cache_read_result",
-            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                let result = caller.data_mut().last_cache_result.take();
-                if let Some(data) = result {
-                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                        Some(m) => m,
-                        None => return 0,
-                    };
-
-                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
-
-                    if memory
-                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
-                        .is_ok()
-                    {
-                        return copy_len as i32;
-                    }
-                }
-                0
-            },
-        )
-        .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_cache_read_result: {}", e))
-        })?;
+    add_read_result_fn(linker, "host_cache_read_result", |state| {
+        state.last_cache_result.take()
+    })?;
 
     // === Telemetry Host Functions ===
 
@@ -1562,33 +1452,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_nats_publish: {}", e)))?;
 
     // host_broker_read_result - read broker publish result into plugin memory
-    linker
-        .func_wrap(
-            "barbacane",
-            "host_broker_read_result",
-            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
-                let result = caller.data_mut().last_broker_result.take();
-                if let Some(data) = result {
-                    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                        Some(m) => m,
-                        None => return 0,
-                    };
-
-                    let copy_len = std::cmp::min(data.len(), buf_len as usize);
-
-                    if memory
-                        .write(&mut caller, buf_ptr as usize, &data[..copy_len])
-                        .is_ok()
-                    {
-                        return copy_len as i32;
-                    }
-                }
-                0
-            },
-        )
-        .map_err(|e| {
-            WasmError::Instantiation(format!("failed to add host_broker_read_result: {}", e))
-        })?;
+    add_read_result_fn(linker, "host_broker_read_result", |state| {
+        state.last_broker_result.take()
+    })?;
 
     Ok(())
 }
