@@ -380,6 +380,7 @@ name = "barbacane-compiler"
 version = "0.1.0"
 dependencies = [
  "barbacane-spec-parser",
+ "criterion",
  "flate2",
  "serde",
  "serde_json",
@@ -503,6 +504,7 @@ dependencies = [
  "anyhow",
  "barbacane-plugin-sdk",
  "barbacane-telemetry",
+ "criterion",
  "dashmap",
  "hex",
  "jsonschema",
@@ -520,6 +522,7 @@ dependencies = [
  "tracing",
  "uuid",
  "wasmtime",
+ "wat",
 ]
 
 [[package]]

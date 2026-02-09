@@ -93,12 +93,42 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 
 Benchmark results on Apple M4 (MacBook Air 16GB):
 
+**Routing & Validation**
+
 | Operation | Latency |
 |-----------|---------|
 | Route lookup (1000 routes) | ~83 ns |
 | Request validation (full) | ~1.2 µs |
 | Body validation (JSON) | ~458 ns |
 | Router build (500 routes) | ~130 µs |
+
+**WASM Plugin Runtime**
+
+| Operation | Latency |
+|-----------|---------|
+| Module compilation | ~210 µs |
+| Instance creation | ~17 µs |
+| Middleware chain (1 plugin) | ~261 µs |
+| Middleware chain (3 plugins) | ~941 µs |
+| Middleware chain (5 plugins) | ~1.32 ms |
+| Memory write (1 KB) | ~14 ns |
+| Memory write (100 KB) | ~1.4 µs |
+
+**Serialization**
+
+| Operation | Latency |
+|-----------|---------|
+| Request (minimal) | ~118 ns |
+| Request (full, 1 KB body) | ~921 ns |
+| Response (1 KB body) | ~417 ns |
+
+**Spec Compilation**
+
+| Operation | Latency |
+|-----------|---------|
+| Compile 10 operations | ~550 µs |
+| Compile 50 operations | ~2.17 ms |
+| Compile 100 operations | ~3.72 ms |
 
 Run your own benchmarks:
 
