@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "barbacane-compiler",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-compiler"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barbacane-spec-parser",
  "criterion",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-control"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum 0.8.8",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "quote",
  "syn",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barbacane-plugin-macros",
  "serde",
@@ -475,14 +475,14 @@ dependencies = [
 
 [[package]]
 name = "barbacane-router"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
 ]
 
 [[package]]
 name = "barbacane-spec-parser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-telemetry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-test"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barbacane-compiler",
  "base64 0.22.1",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-validator"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barbacane-spec-parser",
  "criterion",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-nats",
