@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Barbacane Data Plane - Multi-stage build
 # Produces a minimal, rootless container image
 
@@ -17,8 +18,14 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
-# Build the data plane binary
-RUN cargo build --release --package barbacane
+# Limit parallel jobs to avoid OOM in memory-constrained Docker environments
+ENV CARGO_BUILD_JOBS=2
+
+# Build the data plane binary (cache cargo registry + target dir across builds)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --package barbacane && \
+    cp target/release/barbacane /usr/local/bin/barbacane
 
 # Runtime stage - distroless for minimal attack surface
 FROM gcr.io/distroless/cc-debian12:nonroot
@@ -29,7 +36,7 @@ LABEL org.opencontainers.image.description="Barbacane API Gateway - Data Plane"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Copy the binary from builder
-COPY --from=builder /build/target/release/barbacane /barbacane
+COPY --from=builder /usr/local/bin/barbacane /barbacane
 
 # Run as non-root user (UID 65532)
 USER nonroot:nonroot

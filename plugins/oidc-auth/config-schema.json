@@ -19,6 +19,11 @@
       "type": "string",
       "description": "Space-separated required scopes. If set, token must have all of them."
     },
+    "issuer_override": {
+      "type": "string",
+      "description": "Override the expected issuer (iss) claim. Useful when the provider's internal URL differs from its external URL (e.g., Docker networking).",
+      "format": "uri"
+    },
     "clock_skew_seconds": {
       "type": "integer",
       "description": "Clock skew tolerance in seconds for exp/nbf validation",

@@ -32,6 +32,12 @@ pub struct OidcAuth {
     #[serde(default = "default_jwks_refresh")]
     jwks_refresh_seconds: u64,
 
+    /// Override the expected issuer claim. Useful when the provider's
+    /// internal URL differs from its external URL (e.g., Docker networking).
+    /// If not set, the issuer from the discovery document is used.
+    #[serde(default)]
+    issuer_override: Option<String>,
+
     /// HTTP timeout for discovery/JWKS calls (seconds).
     #[serde(default = "default_timeout")]
     timeout: f64,
@@ -567,10 +573,14 @@ impl OidcAuth {
             }
         }
 
-        // Validate issuer against discovery document
-        if let Some(discovery) = &self.discovery {
+        // Validate issuer — use explicit override if set, otherwise discovery doc
+        let expected_issuer = self
+            .issuer_override
+            .as_ref()
+            .or(self.discovery.as_ref().map(|d| &d.issuer));
+        if let Some(expected) = expected_issuer {
             match &claims.iss {
-                Some(iss) if iss == &discovery.issuer => {}
+                Some(iss) if iss == expected => {}
                 Some(_) => return Err(OidcError::InvalidIssuer),
                 None => return Err(OidcError::InvalidIssuer),
             }
@@ -751,6 +761,7 @@ mod tests {
             required_scopes: None,
             clock_skew_seconds: 60,
             jwks_refresh_seconds: 300,
+            issuer_override: None,
             timeout: 5.0,
             discovery: None,
             jwks_cache: None,
@@ -1006,6 +1017,30 @@ mod tests {
             config.validate_claims(&claims),
             Err(OidcError::TokenNotYetValid)
         ));
+    }
+
+    #[test]
+    fn validate_claims_issuer_override() {
+        mock_time::set_mock_timestamp(1000);
+        let mut config = create_test_config();
+        // Discovery says internal URL, but override matches external URL
+        config.discovery = Some(DiscoveryDoc {
+            issuer: "http://mock-oauth:8080/barbacane".to_string(),
+            jwks_uri: "http://mock-oauth:8080/barbacane/jwks".to_string(),
+        });
+        config.issuer_override = Some("http://localhost:9099/barbacane".to_string());
+
+        let claims = JwtClaims {
+            sub: Some("user123".to_string()),
+            iss: Some("http://localhost:9099/barbacane".to_string()),
+            aud: None,
+            exp: Some(2000),
+            nbf: None,
+            iat: None,
+            jti: None,
+            scope: None,
+        };
+        assert!(config.validate_claims(&claims).is_ok());
     }
 
     #[test]

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Lightweight compiler image for Barbacane specs
 # Uses debian-slim for shell support (distroless doesn't have sh)
 
@@ -14,8 +15,14 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
-# Build only the CLI binary
-RUN cargo build --release --package barbacane
+# Limit parallel jobs to avoid OOM in memory-constrained Docker environments
+ENV CARGO_BUILD_JOBS=2
+
+# Build only the CLI binary (cache cargo registry + target dir across builds)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --package barbacane && \
+    cp target/release/barbacane /usr/local/bin/barbacane
 
 # Runtime - minimal debian with just the binary
 FROM debian:bookworm-slim
@@ -24,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/barbacane /usr/local/bin/barbacane
+COPY --from=builder /usr/local/bin/barbacane /usr/local/bin/barbacane
 
 WORKDIR /workspace
 ENTRYPOINT ["barbacane"]

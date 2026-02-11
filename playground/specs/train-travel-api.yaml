@@ -333,6 +333,7 @@ paths:
         - name: oidc-auth
           config:
             issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
             audience: "train-travel-api"
       parameters:
         - name: status
@@ -376,6 +377,7 @@ paths:
         - name: oidc-auth
           config:
             issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
             audience: "train-travel-api"
         - name: request-size-limit
           config:
@@ -422,6 +424,7 @@ paths:
         - name: oidc-auth
           config:
             issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
             audience: "train-travel-api"
       parameters:
         - name: bookingId
@@ -454,6 +457,7 @@ paths:
         - name: oidc-auth
           config:
             issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
             audience: "train-travel-api"
       parameters:
         - name: bookingId
@@ -483,6 +487,7 @@ paths:
         - name: oidc-auth
           config:
             issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
             audience: "train-travel-api"
       parameters:
         - name: bookingId
@@ -517,6 +522,7 @@ paths:
         - name: oidc-auth
           config:
             issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
             audience: "train-travel-api"
       parameters:
         - name: bookingId
@@ -547,6 +553,7 @@ paths:
         - name: oidc-auth
           config:
             issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
             audience: "train-travel-api"
         - name: observability
           config:

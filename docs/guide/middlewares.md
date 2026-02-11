@@ -251,6 +251,7 @@ x-barbacane-middlewares:
       issuer_url: https://accounts.google.com
       audience: my-api-client-id
       required_scopes: "openid profile email"
+      issuer_override: https://external.example.com  # optional
       clock_skew_seconds: 60
       jwks_refresh_seconds: 300
       timeout: 5.0
@@ -263,6 +264,7 @@ x-barbacane-middlewares:
 | `issuer_url` | string | **required** | OIDC issuer URL (e.g., `https://accounts.google.com`) |
 | `audience` | string | - | Expected `aud` claim. If set, tokens must match |
 | `required_scopes` | string | - | Space-separated required scopes |
+| `issuer_override` | string | - | Override expected `iss` claim (for split-network setups like Docker) |
 | `clock_skew_seconds` | integer | `60` | Clock skew tolerance for `exp`/`nbf` validation |
 | `jwks_refresh_seconds` | integer | `300` | How often to refresh JWKS keys (seconds) |
 | `timeout` | float | `5.0` | HTTP timeout for discovery and JWKS calls (seconds) |

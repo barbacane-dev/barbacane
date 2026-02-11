@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Key lookup by `kid` with fallback to `kty`/`use` matching
   - RFC 6750 `WWW-Authenticate` error responses
   - Auth context headers: `x-auth-sub`, `x-auth-scope`, `x-auth-claims`
+  - `issuer_override` config option for split-network environments (e.g., Docker)
 
 #### Host Functions
 - `host_verify_signature` — cryptographic signature verification using `ring`

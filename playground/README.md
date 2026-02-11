@@ -66,7 +66,7 @@ The booking endpoints are protected by OpenID Connect authentication. A mock OAu
 ```bash
 # Get an access token from the mock OIDC provider
 TOKEN=$(curl -s -X POST http://localhost:9099/barbacane/token \
-  -d "grant_type=client_credentials&scope=openid" \
+  -d "grant_type=client_credentials&scope=openid&client_id=playground&client_secret=secret" \
   | jq -r '.access_token')
 
 # List bookings
