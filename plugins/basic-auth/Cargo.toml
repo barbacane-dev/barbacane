@@ -1,8 +1,8 @@
 [package]
-name = "barbacane-http-upstream-dispatcher"
+name = "barbacane-basic-auth"
 version = "0.1.0"
 edition = "2021"
-description = "HTTP upstream reverse proxy dispatcher plugin for Barbacane API gateway"
+description = "HTTP Basic authentication middleware plugin for Barbacane API gateway"
 license = "MIT"
 
 # Mark as standalone crate (not part of any workspace)
@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 barbacane-plugin-sdk = { path = "../../crates/barbacane-plugin-sdk" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 
 [profile.release]
 opt-level = "s"

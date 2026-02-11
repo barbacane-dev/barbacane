@@ -14,20 +14,18 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
- "proc-macro2",
  "quote",
  "syn",
 ]
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barbacane-plugin-macros",
  "serde",
- "serde_json",
 ]
 
 [[package]]

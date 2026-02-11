@@ -71,18 +71,19 @@ impl Cors {
         if req.method.eq_ignore_ascii_case("OPTIONS") {
             if let Some(requested_method) = req.headers.get("access-control-request-method") {
                 // This is a preflight request
-                return Action::ShortCircuit(
-                    self.preflight_response(&origin, requested_method, &req)
-                );
+                return Action::ShortCircuit(self.preflight_response(
+                    &origin,
+                    requested_method,
+                    &req,
+                ));
             }
         }
 
         // Regular CORS request - add origin to context for response handling
         let mut modified_req = req;
-        modified_req.headers.insert(
-            "x-cors-origin".to_string(),
-            origin,
-        );
+        modified_req
+            .headers
+            .insert("x-cors-origin".to_string(), origin);
         Action::Continue(modified_req)
     }
 
@@ -94,10 +95,8 @@ impl Cors {
 
         // The origin was validated in on_request, add CORS headers
         if self.allowed_origins.contains(&"*".to_string()) && !self.allow_credentials {
-            resp.headers.insert(
-                "access-control-allow-origin".to_string(),
-                "*".to_string(),
-            );
+            resp.headers
+                .insert("access-control-allow-origin".to_string(), "*".to_string());
         }
 
         // Expose headers if configured
@@ -131,9 +130,9 @@ impl Cors {
         }
 
         // Check exact match
-        self.allowed_origins.iter().any(|allowed| {
-            allowed == origin || self.matches_wildcard_origin(allowed, origin)
-        })
+        self.allowed_origins
+            .iter()
+            .any(|allowed| allowed == origin || self.matches_wildcard_origin(allowed, origin))
     }
 
     /// Check if origin matches a wildcard pattern like "*.example.com".
@@ -152,7 +151,9 @@ impl Cors {
 
     /// Check if the requested method is allowed.
     fn is_method_allowed(&self, method: &str) -> bool {
-        self.allowed_methods.iter().any(|m| m.eq_ignore_ascii_case(method))
+        self.allowed_methods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(method))
     }
 
     /// Check if all requested headers are allowed.
@@ -175,9 +176,10 @@ impl Cors {
             }
 
             // Check against allowed headers
-            let allowed = self.allowed_headers.iter().any(|h| {
-                h.eq_ignore_ascii_case(&header) || h == "*"
-            });
+            let allowed = self
+                .allowed_headers
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case(&header) || h == "*");
 
             if !allowed {
                 return false;
@@ -192,7 +194,10 @@ impl Cors {
 
         // Check if the requested method is allowed
         if !self.is_method_allowed(requested_method) {
-            log_message(2, &format!("CORS: method not allowed: {}", requested_method));
+            log_message(
+                2,
+                &format!("CORS: method not allowed: {}", requested_method),
+            );
             return self.forbidden_response(origin);
         }
 
@@ -204,7 +209,10 @@ impl Cors {
             .unwrap_or("");
 
         if !self.are_headers_allowed(requested_headers) {
-            log_message(2, &format!("CORS: headers not allowed: {}", requested_headers));
+            log_message(
+                2,
+                &format!("CORS: headers not allowed: {}", requested_headers),
+            );
             return self.forbidden_response(origin);
         }
 
@@ -212,7 +220,10 @@ impl Cors {
         if self.allowed_origins.contains(&"*".to_string()) && !self.allow_credentials {
             headers.insert("access-control-allow-origin".to_string(), "*".to_string());
         } else {
-            headers.insert("access-control-allow-origin".to_string(), origin.to_string());
+            headers.insert(
+                "access-control-allow-origin".to_string(),
+                origin.to_string(),
+            );
         }
 
         // Allow methods
@@ -259,7 +270,10 @@ impl Cors {
     /// Generate forbidden response for invalid CORS request.
     fn forbidden_response(&self, origin: &str) -> Response {
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/problem+json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            "application/problem+json".to_string(),
+        );
         headers.insert("vary".to_string(), "Origin".to_string());
 
         let body = serde_json::json!({
@@ -285,7 +299,8 @@ fn is_simple_header(header: &str) -> bool {
     )
 }
 
-/// Log a message via host_log.
+/// Log a message via host_log (WASM only).
+#[cfg(target_arch = "wasm32")]
 fn log_message(level: i32, msg: &str) {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -293,5 +308,490 @@ fn log_message(level: i32, msg: &str) {
     }
     unsafe {
         host_log(level, msg.as_ptr() as i32, msg.len() as i32);
+    }
+}
+
+/// No-op log function for non-WASM targets.
+#[cfg(not(target_arch = "wasm32"))]
+fn log_message(_level: i32, _msg: &str) {
+    // No-op for tests
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_cors(allowed_origins: Vec<String>) -> Cors {
+        Cors {
+            allowed_origins,
+            allowed_methods: vec!["GET".to_string(), "POST".to_string()],
+            allowed_headers: vec![],
+            expose_headers: vec![],
+            max_age: 3600,
+            allow_credentials: false,
+        }
+    }
+
+    fn create_request(method: &str, origin: Option<&str>) -> Request {
+        let mut headers = BTreeMap::new();
+        if let Some(o) = origin {
+            headers.insert("origin".to_string(), o.to_string());
+        }
+
+        Request {
+            method: method.to_string(),
+            path: "/test".to_string(),
+            headers,
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_is_origin_allowed_exact_match() {
+        let cors = create_test_cors(vec!["https://example.com".to_string()]);
+        assert!(cors.is_origin_allowed("https://example.com"));
+        assert!(!cors.is_origin_allowed("https://other.com"));
+    }
+
+    #[test]
+    fn test_is_origin_allowed_wildcard() {
+        let cors = create_test_cors(vec!["*".to_string()]);
+        assert!(cors.is_origin_allowed("https://example.com"));
+        assert!(cors.is_origin_allowed("https://any-domain.com"));
+        assert!(cors.is_origin_allowed("http://localhost:3000"));
+    }
+
+    #[test]
+    fn test_is_origin_allowed_multiple_origins() {
+        let cors = create_test_cors(vec![
+            "https://example.com".to_string(),
+            "https://test.com".to_string(),
+        ]);
+        assert!(cors.is_origin_allowed("https://example.com"));
+        assert!(cors.is_origin_allowed("https://test.com"));
+        assert!(!cors.is_origin_allowed("https://other.com"));
+    }
+
+    #[test]
+    fn test_is_origin_allowed_empty_list() {
+        let cors = create_test_cors(vec![]);
+        assert!(!cors.is_origin_allowed("https://example.com"));
+        assert!(!cors.is_origin_allowed("*"));
+    }
+
+    #[test]
+    fn test_matches_wildcard_origin_https() {
+        let cors = create_test_cors(vec!["*.example.com".to_string()]);
+        assert!(cors.matches_wildcard_origin("*.example.com", "https://sub.example.com"));
+        assert!(cors.matches_wildcard_origin("*.example.com", "https://api.example.com"));
+        assert!(!cors.matches_wildcard_origin("*.example.com", "https://example.com"));
+        assert!(!cors.matches_wildcard_origin("*.example.com", "https://other.com"));
+    }
+
+    #[test]
+    fn test_matches_wildcard_origin_http() {
+        let cors = create_test_cors(vec!["*.example.com".to_string()]);
+        assert!(cors.matches_wildcard_origin("*.example.com", "http://sub.example.com"));
+        assert!(cors.matches_wildcard_origin("*.example.com", "http://api.example.com"));
+        assert!(!cors.matches_wildcard_origin("*.example.com", "http://example.com"));
+    }
+
+    #[test]
+    fn test_matches_wildcard_origin_no_wildcard() {
+        let cors = create_test_cors(vec!["https://example.com".to_string()]);
+        assert!(!cors.matches_wildcard_origin("https://example.com", "https://sub.example.com"));
+    }
+
+    #[test]
+    fn test_is_origin_allowed_with_wildcard_pattern() {
+        let cors = create_test_cors(vec!["*.example.com".to_string()]);
+        assert!(cors.is_origin_allowed("https://sub.example.com"));
+        assert!(cors.is_origin_allowed("http://api.example.com"));
+        assert!(!cors.is_origin_allowed("https://example.com"));
+        assert!(!cors.is_origin_allowed("https://other.com"));
+    }
+
+    #[test]
+    fn test_is_method_allowed_case_insensitive() {
+        let cors = create_test_cors(vec!["*".to_string()]);
+        assert!(cors.is_method_allowed("GET"));
+        assert!(cors.is_method_allowed("get"));
+        assert!(cors.is_method_allowed("Get"));
+        assert!(cors.is_method_allowed("POST"));
+        assert!(cors.is_method_allowed("post"));
+        assert!(!cors.is_method_allowed("DELETE"));
+    }
+
+    #[test]
+    fn test_is_method_allowed_custom_methods() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.allowed_methods = vec!["GET".to_string(), "POST".to_string(), "PUT".to_string()];
+        assert!(cors.is_method_allowed("PUT"));
+        assert!(cors.is_method_allowed("put"));
+        assert!(!cors.is_method_allowed("DELETE"));
+    }
+
+    #[test]
+    fn test_are_headers_allowed_empty_config() {
+        let cors = create_test_cors(vec!["*".to_string()]);
+        assert!(cors.are_headers_allowed(""));
+        assert!(!cors.are_headers_allowed("x-custom-header"));
+    }
+
+    #[test]
+    fn test_are_headers_allowed_simple_headers() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.allowed_headers = vec!["x-custom".to_string()];
+        assert!(cors.are_headers_allowed("accept"));
+        assert!(cors.are_headers_allowed("content-type"));
+        assert!(cors.are_headers_allowed("accept-language"));
+        assert!(cors.are_headers_allowed("content-language"));
+    }
+
+    #[test]
+    fn test_are_headers_allowed_custom_headers() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.allowed_headers = vec!["x-custom".to_string(), "authorization".to_string()];
+        assert!(cors.are_headers_allowed("x-custom"));
+        assert!(cors.are_headers_allowed("X-Custom"));
+        assert!(cors.are_headers_allowed("authorization"));
+        assert!(!cors.are_headers_allowed("x-other"));
+    }
+
+    #[test]
+    fn test_are_headers_allowed_wildcard() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.allowed_headers = vec!["*".to_string()];
+        assert!(cors.are_headers_allowed("x-custom-header"));
+        assert!(cors.are_headers_allowed("authorization"));
+        assert!(cors.are_headers_allowed("any-header"));
+    }
+
+    #[test]
+    fn test_are_headers_allowed_multiple_requested() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.allowed_headers = vec!["x-custom".to_string(), "authorization".to_string()];
+        assert!(cors.are_headers_allowed("x-custom, authorization"));
+        assert!(cors.are_headers_allowed("x-custom, accept"));
+        assert!(!cors.are_headers_allowed("x-custom, x-other"));
+    }
+
+    #[test]
+    fn test_is_simple_header() {
+        assert!(is_simple_header("accept"));
+        assert!(is_simple_header("accept-language"));
+        assert!(is_simple_header("content-language"));
+        assert!(is_simple_header("content-type"));
+        assert!(!is_simple_header("authorization"));
+        assert!(!is_simple_header("x-custom"));
+    }
+
+    #[test]
+    fn test_forbidden_response_format() {
+        let cors = create_test_cors(vec!["https://allowed.com".to_string()]);
+        let response = cors.forbidden_response("https://not-allowed.com");
+
+        assert_eq!(response.status, 403);
+        assert_eq!(
+            response.headers.get("content-type"),
+            Some(&"application/problem+json".to_string())
+        );
+        assert_eq!(response.headers.get("vary"), Some(&"Origin".to_string()));
+
+        let body = response.body.expect("Response should have a body");
+        assert!(body.contains("urn:barbacane:error:cors-not-allowed"));
+        assert!(body.contains("CORS Not Allowed"));
+        assert!(body.contains("403"));
+        assert!(body.contains("https://not-allowed.com"));
+    }
+
+    #[test]
+    fn test_on_request_no_origin_passthrough() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        let req = create_request("GET", None);
+
+        match cors.on_request(req) {
+            Action::Continue(returned_req) => {
+                assert_eq!(returned_req.method, "GET");
+                assert_eq!(returned_req.path, "/test");
+            }
+            Action::ShortCircuit(_) => panic!("Expected Continue, got ShortCircuit"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_allowed_origin() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        let req = create_request("GET", Some("https://example.com"));
+
+        match cors.on_request(req) {
+            Action::Continue(returned_req) => {
+                assert_eq!(returned_req.method, "GET");
+                assert_eq!(
+                    returned_req.headers.get("x-cors-origin"),
+                    Some(&"https://example.com".to_string())
+                );
+            }
+            Action::ShortCircuit(_) => panic!("Expected Continue, got ShortCircuit"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_disallowed_origin() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        let req = create_request("GET", Some("https://evil.com"));
+
+        match cors.on_request(req) {
+            Action::ShortCircuit(response) => {
+                assert_eq!(response.status, 403);
+                let body = response.body.expect("Response should have a body");
+                assert!(body.contains("https://evil.com"));
+            }
+            Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_preflight_valid_method() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        let mut req = create_request("OPTIONS", Some("https://example.com"));
+        req.headers.insert(
+            "access-control-request-method".to_string(),
+            "POST".to_string(),
+        );
+
+        match cors.on_request(req) {
+            Action::ShortCircuit(response) => {
+                assert_eq!(response.status, 204);
+                assert_eq!(
+                    response.headers.get("access-control-allow-origin"),
+                    Some(&"https://example.com".to_string())
+                );
+                assert!(response
+                    .headers
+                    .contains_key("access-control-allow-methods"));
+            }
+            Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_preflight_invalid_method() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        let mut req = create_request("OPTIONS", Some("https://example.com"));
+        req.headers.insert(
+            "access-control-request-method".to_string(),
+            "DELETE".to_string(),
+        );
+
+        match cors.on_request(req) {
+            Action::ShortCircuit(response) => {
+                assert_eq!(response.status, 403);
+            }
+            Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_preflight_with_headers() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        cors.allowed_headers = vec!["authorization".to_string()];
+        let mut req = create_request("OPTIONS", Some("https://example.com"));
+        req.headers.insert(
+            "access-control-request-method".to_string(),
+            "POST".to_string(),
+        );
+        req.headers.insert(
+            "access-control-request-headers".to_string(),
+            "authorization".to_string(),
+        );
+
+        match cors.on_request(req) {
+            Action::ShortCircuit(response) => {
+                assert_eq!(response.status, 204);
+                assert_eq!(
+                    response.headers.get("access-control-allow-headers"),
+                    Some(&"authorization".to_string())
+                );
+            }
+            Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+        }
+    }
+
+    #[test]
+    fn test_on_response_wildcard_origin() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some("test".to_string()),
+        };
+
+        let modified = cors.on_response(response);
+        assert_eq!(
+            modified.headers.get("access-control-allow-origin"),
+            Some(&"*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_on_response_with_expose_headers() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.expose_headers = vec!["x-custom".to_string(), "x-other".to_string()];
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some("test".to_string()),
+        };
+
+        let modified = cors.on_response(response);
+        assert_eq!(
+            modified.headers.get("access-control-expose-headers"),
+            Some(&"x-custom, x-other".to_string())
+        );
+    }
+
+    #[test]
+    fn test_on_response_with_credentials() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        cors.allow_credentials = true;
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some("test".to_string()),
+        };
+
+        let modified = cors.on_response(response);
+        assert_eq!(
+            modified.headers.get("access-control-allow-credentials"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_on_response_wildcard_with_credentials_no_wildcard_header() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.allow_credentials = true;
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some("test".to_string()),
+        };
+
+        let modified = cors.on_response(response);
+        // Should not add wildcard ACAO when credentials are enabled
+        assert!(!modified.headers.contains_key("access-control-allow-origin"));
+        assert_eq!(
+            modified.headers.get("access-control-allow-credentials"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_preflight_response_format() {
+        let cors = create_test_cors(vec!["https://example.com".to_string()]);
+        let req = create_request("OPTIONS", Some("https://example.com"));
+        let response = cors.preflight_response("https://example.com", "GET", &req);
+
+        assert_eq!(response.status, 204);
+        assert_eq!(response.body, None);
+        assert_eq!(
+            response.headers.get("access-control-allow-origin"),
+            Some(&"https://example.com".to_string())
+        );
+        assert_eq!(
+            response.headers.get("access-control-allow-methods"),
+            Some(&"GET, POST".to_string())
+        );
+        assert_eq!(
+            response.headers.get("access-control-max-age"),
+            Some(&"3600".to_string())
+        );
+        assert_eq!(
+            response.headers.get("vary"),
+            Some(
+                &"Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_preflight_response_with_wildcard() {
+        let cors = create_test_cors(vec!["*".to_string()]);
+        let req = create_request("OPTIONS", Some("https://example.com"));
+        let response = cors.preflight_response("https://example.com", "GET", &req);
+
+        assert_eq!(
+            response.headers.get("access-control-allow-origin"),
+            Some(&"*".to_string())
+        );
+    }
+
+    #[test]
+    fn test_preflight_response_with_credentials() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        cors.allow_credentials = true;
+        let req = create_request("OPTIONS", Some("https://example.com"));
+        let response = cors.preflight_response("https://example.com", "GET", &req);
+
+        assert_eq!(
+            response.headers.get("access-control-allow-credentials"),
+            Some(&"true".to_string())
+        );
+        // Should use specific origin, not wildcard
+        assert_eq!(
+            response.headers.get("access-control-allow-origin"),
+            Some(&"https://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_deserialization_defaults() {
+        let json = r#"{"allowed_origins": ["https://example.com"]}"#;
+        let cors: Cors = serde_json::from_str(json).expect("Failed to deserialize");
+
+        assert_eq!(cors.allowed_origins, vec!["https://example.com"]);
+        assert_eq!(cors.allowed_methods, vec!["GET", "POST"]);
+        assert_eq!(cors.allowed_headers, Vec::<String>::new());
+        assert_eq!(cors.expose_headers, Vec::<String>::new());
+        assert_eq!(cors.max_age, 3600);
+        assert!(!cors.allow_credentials);
+    }
+
+    #[test]
+    fn test_config_deserialization_full() {
+        let json = r#"{
+            "allowed_origins": ["https://example.com", "https://test.com"],
+            "allowed_methods": ["GET", "POST", "PUT"],
+            "allowed_headers": ["authorization", "x-custom"],
+            "expose_headers": ["x-response-time"],
+            "max_age": 7200,
+            "allow_credentials": true
+        }"#;
+        let cors: Cors = serde_json::from_str(json).expect("Failed to deserialize");
+
+        assert_eq!(
+            cors.allowed_origins,
+            vec!["https://example.com", "https://test.com"]
+        );
+        assert_eq!(cors.allowed_methods, vec!["GET", "POST", "PUT"]);
+        assert_eq!(cors.allowed_headers, vec!["authorization", "x-custom"]);
+        assert_eq!(cors.expose_headers, vec!["x-response-time"]);
+        assert_eq!(cors.max_age, 7200);
+        assert!(cors.allow_credentials);
+    }
+
+    #[test]
+    fn test_config_deserialization_minimal() {
+        let json = r#"{"allowed_origins": []}"#;
+        let cors: Cors = serde_json::from_str(json).expect("Failed to deserialize");
+
+        assert_eq!(cors.allowed_origins, Vec::<String>::new());
+        assert_eq!(cors.allowed_methods, vec!["GET", "POST"]);
+        assert_eq!(cors.max_age, 3600);
     }
 }

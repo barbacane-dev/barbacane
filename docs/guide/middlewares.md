@@ -240,6 +240,61 @@ Includes RFC 6750 `WWW-Authenticate` header with error details.
 
 ---
 
+### basic-auth
+
+Validates credentials from the `Authorization: Basic` header per RFC 7617. Useful for internal APIs, admin endpoints, or simple services that don't need a full identity provider.
+
+```yaml
+x-barbacane-middlewares:
+  - name: basic-auth
+    config:
+      realm: "My API"
+      strip_credentials: true
+      credentials:
+        admin:
+          password: "env://ADMIN_PASSWORD"
+          roles: ["admin", "editor"]
+        readonly:
+          password: "env://READONLY_PASSWORD"
+          roles: ["viewer"]
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `realm` | string | `api` | Authentication realm shown in `WWW-Authenticate` challenge |
+| `strip_credentials` | boolean | `true` | Remove `Authorization` header before forwarding to upstream |
+| `credentials` | object | `{}` | Map of username to credential entry |
+
+Each credential entry:
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `password` | string | **required** | Password for this user (supports secret references) |
+| `roles` | array | `[]` | Optional roles for authorization |
+
+#### Context Headers
+
+Sets headers for downstream:
+- `x-auth-user` - Authenticated username
+- `x-auth-roles` - Comma-separated roles (only set if the user has roles)
+
+#### Error Responses
+
+Returns `401 Unauthorized` with `WWW-Authenticate: Basic realm="<realm>"` and Problem JSON:
+
+```json
+{
+  "type": "urn:barbacane:error:authentication-failed",
+  "title": "Authentication failed",
+  "status": 401,
+  "detail": "Invalid username or password"
+}
+```
+
+---
+
 ## Rate Limiting
 
 ### rate-limit
@@ -508,27 +563,11 @@ The middleware respects `Cache-Control` response headers:
 
 ---
 
-## Planned Middlewares
-
-The following middlewares are planned for future milestones:
-
-### basic-auth
-
-Username/password authentication using HTTP Basic Auth.
-
-```yaml
-x-barbacane-middlewares:
-  - name: basic-auth
-    config:
-      realm: "My API"
-      users:
-        admin: "env://ADMIN_PASSWORD"
-        readonly: "env://READONLY_PASSWORD"
-```
+## Logging
 
 ### http-log
 
-Sends request/response logs to an HTTP endpoint for centralized logging.
+Sends structured JSON log entries to an HTTP endpoint for centralized logging. Captures request metadata, response status, timing, and optional headers/body sizes. Compatible with Datadog, Splunk, ELK, or any HTTP log ingestion endpoint.
 
 ```yaml
 x-barbacane-middlewares:
@@ -536,9 +575,67 @@ x-barbacane-middlewares:
     config:
       endpoint: https://logs.example.com/ingest
       method: POST
-      batch_size: 100
-      flush_interval: 5
+      timeout_ms: 2000
+      include_headers: false
+      include_body: true
+      custom_fields:
+        service: my-api
+        environment: production
 ```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `endpoint` | string | **required** | URL to send log entries to |
+| `method` | string | `POST` | HTTP method (`POST` or `PUT`) |
+| `timeout_ms` | integer | `2000` | Timeout for the log HTTP call (100-10000 ms) |
+| `content_type` | string | `application/json` | Content-Type header for the log request |
+| `include_headers` | boolean | `false` | Include request and response headers in log entries |
+| `include_body` | boolean | `false` | Include request and response body sizes in log entries |
+| `custom_fields` | object | `{}` | Static key-value fields included in every log entry |
+
+#### Log Entry Format
+
+Each log entry is a JSON object:
+
+```json
+{
+  "timestamp_ms": 1706500000000,
+  "duration_ms": 42,
+  "correlation_id": "abc-123",
+  "request": {
+    "method": "POST",
+    "path": "/users",
+    "query": "page=1",
+    "client_ip": "10.0.0.1",
+    "headers": { "content-type": "application/json" },
+    "body_size": 256
+  },
+  "response": {
+    "status": 201,
+    "headers": { "content-type": "application/json" },
+    "body_size": 64
+  },
+  "service": "my-api",
+  "environment": "production"
+}
+```
+
+Optional fields (`correlation_id`, `headers`, `body_size`, `query`) are omitted when not available or not enabled.
+
+#### Behavior
+
+- Runs in the **response phase** (after dispatch) to capture both request and response data
+- Log delivery is **best-effort** — failures never affect the upstream response
+- The `correlation_id` field is automatically populated if the `correlation-id` middleware runs earlier in the chain
+- Custom fields are flattened into the top-level JSON object
+
+---
+
+## Planned Middlewares
+
+The following middlewares are planned for future milestones:
 
 ### idempotency
 
@@ -621,11 +718,12 @@ Put middlewares in logical order:
 ```yaml
 x-barbacane-middlewares:
   - name: correlation-id    # 1. Add tracing ID first
-  - name: cors              # 2. Handle CORS early
-  - name: ip-restriction    # 3. Block bad IPs immediately
-  - name: request-size-limit # 4. Reject oversized requests
-  - name: rate-limit        # 5. Rate limit before auth (cheaper)
-  - name: auth-jwt          # 6. Authenticate
+  - name: http-log          # 2. Log all requests (captures full lifecycle)
+  - name: cors              # 3. Handle CORS early
+  - name: ip-restriction    # 4. Block bad IPs immediately
+  - name: request-size-limit # 5. Reject oversized requests
+  - name: rate-limit        # 6. Rate limit before auth (cheaper)
+  - name: basic-auth        # 7. Authenticate
 ```
 
 ### Fail Fast

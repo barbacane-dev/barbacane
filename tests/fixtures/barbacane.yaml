@@ -28,3 +28,7 @@ plugins:
     path: ../../plugins/nats/nats.wasm
   kafka:
     path: ../../plugins/kafka/kafka.wasm
+  basic-auth:
+    path: ../../plugins/basic-auth/basic-auth.wasm
+  http-log:
+    path: ../../plugins/http-log/http-log.wasm

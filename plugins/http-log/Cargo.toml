@@ -1,8 +1,8 @@
 [package]
-name = "barbacane-http-upstream-dispatcher"
+name = "barbacane-http-log"
 version = "0.1.0"
 edition = "2021"
-description = "HTTP upstream reverse proxy dispatcher plugin for Barbacane API gateway"
+description = "HTTP logging middleware plugin for Barbacane API gateway"
 license = "MIT"
 
 # Mark as standalone crate (not part of any workspace)

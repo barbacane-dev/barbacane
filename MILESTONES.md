@@ -63,14 +63,14 @@ See [BACKLOG.md](BACKLOG.md) for the full prioritized backlog.
 ### Sprint 16 — Security Plugins
 **Goal:** Additional authentication and authorization plugins.
 
-- [ ] `basic-auth` plugin — username/password authentication
+- [x] `basic-auth` plugin — username/password authentication
 - [ ] `acl` plugin — access control lists after authentication
 - [ ] Security plugins documentation
 
 ### Sprint 17 — Observability & Logging
 **Goal:** External log shipping for observability integrations.
 
-- [ ] `http-log` plugin — send logs to HTTP endpoint
+- [x] `http-log` plugin — send logs to HTTP endpoint
 - [ ] `tcp-log` plugin — send logs to TCP endpoint
 - [ ] Structured log format documentation
 - [ ] Integration guides (Datadog, Splunk, ELK)

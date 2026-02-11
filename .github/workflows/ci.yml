@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      plugins: ${{ steps.filter.outputs.plugins }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -29,6 +30,10 @@ jobs:
               - '**/Cargo.lock'
               - 'plugins/**'
               - '.github/workflows/ci.yml'
+            plugins:
+              - 'plugins/**'
+              - 'crates/barbacane-plugin-sdk/**'
+              - 'crates/barbacane-plugin-macros/**'
 
   # Fast checks first (format, clippy) for quick feedback
   fmt:
@@ -166,6 +171,42 @@ jobs:
       - name: Run unit tests
         # Exclude barbacane-test as it contains integration tests requiring gateway binary
         run: cargo test --workspace --lib --exclude barbacane-test -- --test-threads=4
+
+  # Plugin unit tests (only when plugin or SDK code changes)
+  plugin-tests:
+    name: Plugin Tests
+    runs-on: ubuntu-latest
+    needs: [changes, fmt]
+    if: needs.changes.outputs.plugins == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-plugins-${{ hashFiles('plugins/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-plugins-
+
+      - name: Run plugin tests
+        run: |
+          failed=0
+          for p in plugins/*/; do
+            name=$(basename "$p")
+            echo "::group::$name"
+            if ! (cd "$p" && cargo test 2>&1); then
+              echo "::error::Plugin $name tests failed"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $failed
 
   # Integration tests (slower, requires gateway binary and plugins)
   integration-tests:

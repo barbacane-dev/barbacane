@@ -1170,6 +1170,142 @@ mod tests {
         assert!(body["detail"].as_str().unwrap_or("").contains("required"));
     }
 
+    // ==================== Basic Auth Tests ====================
+
+    /// Encode username:password as base64 for Basic auth header.
+    fn basic_auth_header(username: &str, password: &str) -> String {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let encoded = STANDARD.encode(format!("{}:{}", username, password));
+        format!("Basic {}", encoded)
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_valid_credentials() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/basic-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", basic_auth_header("admin", "secret123"))
+            .send()
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        if status != 200 {
+            let body = resp.text().await.unwrap_or_default();
+            panic!("Expected 200 but got {}. Body: {}", status, body);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_valid_credentials_reader() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/basic-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", basic_auth_header("reader", "readonly456"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_missing_header() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/basic-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/protected").await.unwrap();
+        assert_eq!(resp.status(), 401);
+
+        // Verify WWW-Authenticate header
+        let www_auth = resp
+            .headers()
+            .get("www-authenticate")
+            .expect("missing WWW-Authenticate");
+        let www_auth_str = www_auth.to_str().unwrap();
+        assert!(www_auth_str.starts_with("Basic realm=\"test-api\""));
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:authentication-failed");
+        assert!(body["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("credentials required"));
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_invalid_credentials() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/basic-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", basic_auth_header("admin", "wrongpassword"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Invalid username or password"));
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_unknown_user() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/basic-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header(
+                "Authorization",
+                basic_auth_header("nonexistent", "anything"),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_malformed_header() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/basic-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // Wrong auth scheme
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", "Bearer some-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_public_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/basic-auth.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/public").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "Public access");
+    }
+
     // ==================== OAuth2 Auth Tests ====================
 
     /// Create a temporary spec file for OAuth2 auth testing with dynamic introspection URL.
@@ -3606,5 +3742,184 @@ paths:
         assert_eq!(resp.status(), 400);
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:validation-failed");
+    }
+
+    // ==================== HTTP Log Tests ====================
+
+    /// Create a temporary spec file for http-log testing with dynamic log endpoint URL.
+    fn create_http_log_spec(log_endpoint: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        let spec_path = temp_dir.path().join("http-log.yaml");
+
+        // Get absolute paths to plugins
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let plugins_dir = manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("plugins");
+        let mock_path = plugins_dir.join("mock/mock.wasm");
+        let http_log_path = plugins_dir.join("http-log/http-log.wasm");
+
+        // Create barbacane.yaml manifest in temp dir
+        let manifest_path = temp_dir.path().join("barbacane.yaml");
+        let manifest_content = format!(
+            r#"# Test manifest for HTTP log tests
+
+plugins:
+  mock:
+    path: {}
+  http-log:
+    path: {}
+"#,
+            mock_path.display(),
+            http_log_path.display()
+        );
+        std::fs::write(&manifest_path, manifest_content).expect("failed to write manifest file");
+
+        let spec_content = format!(
+            r#"openapi: "3.0.3"
+info:
+  title: HTTP Log Test API
+  version: "1.0.0"
+  description: API for testing HTTP logging middleware
+
+paths:
+  /logged:
+    get:
+      summary: Endpoint with HTTP logging
+      operationId: getLogged
+      x-barbacane-middlewares:
+        - name: http-log
+          config:
+            endpoint: "{}"
+            timeout_ms: 2000
+            include_headers: true
+            include_body: true
+            custom_fields:
+              env: "test"
+              service: "test-api"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "OK"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+"#,
+            log_endpoint
+        );
+
+        std::fs::write(&spec_path, spec_content).expect("failed to write spec file");
+        (temp_dir, spec_path)
+    }
+
+    #[tokio::test]
+    async fn test_http_log_sends_entry() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Accept log entries
+        Mock::given(method("POST"))
+            .and(path("/logs"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let log_endpoint = format!("{}/logs", mock_server.uri());
+        let (_temp_dir, spec_path) = create_http_log_spec(&log_endpoint);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/logged").await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "OK");
+
+        // Verify the mock received exactly 1 log entry
+        // (wiremock expect(1) will panic on drop if not satisfied)
+    }
+
+    #[tokio::test]
+    async fn test_http_log_includes_duration() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/logs"))
+            .and(body_string_contains("duration_ms"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let log_endpoint = format!("{}/logs", mock_server.uri());
+        let (_temp_dir, spec_path) = create_http_log_spec(&log_endpoint);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/logged").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_http_log_includes_headers() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Verify the log entry contains request headers
+        Mock::given(method("POST"))
+            .and(path("/logs"))
+            .and(body_string_contains("headers"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let log_endpoint = format!("{}/logs", mock_server.uri());
+        let (_temp_dir, spec_path) = create_http_log_spec(&log_endpoint);
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/logged").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_http_log_failure_does_not_break_response() {
+        // Use an unreachable endpoint — the response should still be 200
+        let (_temp_dir, spec_path) =
+            create_http_log_spec("http://127.0.0.1:1/unreachable-log-endpoint");
+
+        let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/logged").await.unwrap();
+        assert_eq!(
+            resp.status(),
+            200,
+            "Response should not be affected by log delivery failure"
+        );
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["message"], "OK");
     }
 }

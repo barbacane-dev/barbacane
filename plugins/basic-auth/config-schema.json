@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:basic-auth-config",
+  "title": "HTTP Basic Authentication Middleware Config",
+  "description": "Configuration for the HTTP Basic authentication middleware plugin (RFC 7617)",
+  "type": "object",
+  "properties": {
+    "realm": {
+      "type": "string",
+      "description": "The authentication realm shown in the WWW-Authenticate challenge",
+      "default": "api"
+    },
+    "strip_credentials": {
+      "type": "boolean",
+      "description": "Remove the Authorization header before forwarding to upstream",
+      "default": true
+    },
+    "credentials": {
+      "type": "object",
+      "description": "Map of username to credential entry",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["password"],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "Password for this user"
+          },
+          "roles": {
+            "type": "array",
+            "description": "Optional roles for this user",
+            "items": { "type": "string" },
+            "default": []
+          }
+        },
+        "additionalProperties": false
+      },
+      "default": {}
+    }
+  },
+  "additionalProperties": false
+}
