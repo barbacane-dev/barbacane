@@ -244,6 +244,7 @@ impl KafkaDispatcher {
 }
 
 // Host function declarations
+#[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "barbacane")]
 extern "C" {
     /// Publish a message to Kafka. Returns the result length, or -1 on error.
@@ -251,4 +252,400 @@ extern "C" {
 
     /// Read the broker publish result into the provided buffer. Returns bytes read.
     fn host_broker_read_result(buf_ptr: i32, buf_len: i32) -> i32;
+}
+
+// Native stubs for testing
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn host_kafka_publish(_msg_ptr: i32, _msg_len: i32) -> i32 {
+    -1
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn host_broker_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_request() -> Request {
+        let mut headers = BTreeMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert("x-request-id".to_string(), "req-123".to_string());
+        headers.insert("x-trace-id".to_string(), "trace-456".to_string());
+        headers.insert("x-custom-header".to_string(), "custom-value".to_string());
+
+        let mut path_params = BTreeMap::new();
+        path_params.insert("id".to_string(), "user-789".to_string());
+
+        Request {
+            method: "POST".to_string(),
+            path: "/api/users".to_string(),
+            headers,
+            body: Some(r#"{"name":"test"}"#.to_string()),
+            query: None,
+            path_params,
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    fn create_publish_result(success: bool) -> PublishResult {
+        PublishResult {
+            success,
+            error: if success {
+                None
+            } else {
+                Some("publish error".to_string())
+            },
+            topic: "test-topic".to_string(),
+            partition: Some(0),
+            offset: Some(12345),
+        }
+    }
+
+    #[test]
+    fn test_resolve_key_from_header() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "key": "$request.header.x-custom-header"
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        let key = dispatcher.resolve_key(&req);
+        assert_eq!(key, Some("custom-value".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_key_from_path_param() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "key": "$request.path.id"
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        let key = dispatcher.resolve_key(&req);
+        assert_eq!(key, Some("user-789".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_key_literal_value() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "key": "static-key"
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        let key = dispatcher.resolve_key(&req);
+        assert_eq!(key, Some("static-key".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_key_none_when_no_key_configured() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic"
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        let key = dispatcher.resolve_key(&req);
+        assert_eq!(key, None);
+    }
+
+    #[test]
+    fn test_resolve_key_none_when_header_not_found() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "key": "$request.header.nonexistent"
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        let key = dispatcher.resolve_key(&req);
+        assert_eq!(key, None);
+    }
+
+    #[test]
+    fn test_accepted_response_without_metadata() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "include_metadata": false
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let result = create_publish_result(true);
+
+        let response = dispatcher.accepted_response(&result);
+        assert_eq!(response.status, 202);
+        assert_eq!(
+            response.headers.get("content-type"),
+            Some(&"application/json".to_string())
+        );
+
+        let body: serde_json::Value =
+            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["status"], "accepted");
+        assert!(body.get("topic").is_none());
+        assert!(body.get("partition").is_none());
+        assert!(body.get("offset").is_none());
+    }
+
+    #[test]
+    fn test_accepted_response_with_metadata() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "include_metadata": true
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let result = create_publish_result(true);
+
+        let response = dispatcher.accepted_response(&result);
+        assert_eq!(response.status, 202);
+
+        let body: serde_json::Value =
+            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["topic"], "test-topic");
+        assert_eq!(body["partition"], 0);
+        assert_eq!(body["offset"], 12345);
+    }
+
+    #[test]
+    fn test_default_ack_body_without_metadata() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "include_metadata": false
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let result = create_publish_result(true);
+
+        let body_str = dispatcher.default_ack_body(&result);
+        let body: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+
+        assert_eq!(body["status"], "accepted");
+        assert!(body.get("topic").is_none());
+    }
+
+    #[test]
+    fn test_default_ack_body_with_metadata() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "include_metadata": true
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let result = create_publish_result(true);
+
+        let body_str = dispatcher.default_ack_body(&result);
+        let body: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+
+        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["topic"], "test-topic");
+        assert_eq!(body["partition"], 0);
+        assert_eq!(body["offset"], 12345);
+    }
+
+    #[test]
+    fn test_error_response_502() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic"
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+
+        let response = dispatcher.error_response(502, "Kafka publish failed", "connection timeout");
+        assert_eq!(response.status, 502);
+        assert_eq!(
+            response.headers.get("content-type"),
+            Some(&"application/problem+json".to_string())
+        );
+
+        let body: serde_json::Value =
+            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:kafka-publish-failed");
+        assert_eq!(body["title"], "Kafka publish failed");
+        assert_eq!(body["status"], 502);
+        assert_eq!(body["detail"], "connection timeout");
+    }
+
+    #[test]
+    fn test_custom_ack_response_body() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "ack_response": {
+                "body": {"message": "queued", "id": 123}
+            }
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let result = create_publish_result(true);
+
+        let response = dispatcher.accepted_response(&result);
+        assert_eq!(response.status, 202);
+
+        let body: serde_json::Value =
+            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["message"], "queued");
+        assert_eq!(body["id"], 123);
+    }
+
+    #[test]
+    fn test_custom_ack_response_headers() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "ack_response": {
+                "headers": {
+                    "x-custom-response": "custom-value",
+                    "x-tracking-id": "track-123"
+                }
+            }
+        });
+        let dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let result = create_publish_result(true);
+
+        let response = dispatcher.accepted_response(&result);
+        assert_eq!(
+            response.headers.get("x-custom-response"),
+            Some(&"custom-value".to_string())
+        );
+        assert_eq!(
+            response.headers.get("x-tracking-id"),
+            Some(&"track-123".to_string())
+        );
+        assert_eq!(
+            response.headers.get("content-type"),
+            Some(&"application/json".to_string())
+        );
+    }
+
+    #[test]
+    fn test_config_deserialization_minimal() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic"
+        });
+        let dispatcher: Result<KafkaDispatcher, _> = serde_json::from_value(config);
+        assert!(dispatcher.is_ok());
+
+        let dispatcher = dispatcher.unwrap();
+        assert_eq!(dispatcher.brokers, "kafka:9092");
+        assert_eq!(dispatcher.topic, "test-topic");
+        assert_eq!(dispatcher.key, None);
+        assert!(!dispatcher.include_metadata);
+        assert!(dispatcher.headers_from_request.is_empty());
+    }
+
+    #[test]
+    fn test_config_deserialization_full() {
+        let config = serde_json::json!({
+            "brokers": "kafka1:9092,kafka2:9092",
+            "topic": "events",
+            "key": "$request.header.x-key",
+            "include_metadata": true,
+            "headers_from_request": ["x-correlation-id", "x-tenant-id"],
+            "ack_response": {
+                "body": {"status": "ok"},
+                "headers": {"x-custom": "value"}
+            }
+        });
+        let dispatcher: Result<KafkaDispatcher, _> = serde_json::from_value(config);
+        assert!(dispatcher.is_ok());
+
+        let dispatcher = dispatcher.unwrap();
+        assert_eq!(dispatcher.brokers, "kafka1:9092,kafka2:9092");
+        assert_eq!(dispatcher.topic, "events");
+        assert_eq!(dispatcher.key, Some("$request.header.x-key".to_string()));
+        assert!(dispatcher.include_metadata);
+        assert_eq!(
+            dispatcher.headers_from_request,
+            vec!["x-correlation-id", "x-tenant-id"]
+        );
+    }
+
+    #[test]
+    fn test_dispatch_with_native_stub_returns_502() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic"
+        });
+        let mut dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        // Native stub returns -1, so dispatch should return 502
+        let response = dispatcher.dispatch(req);
+        assert_eq!(response.status, 502);
+        assert_eq!(
+            response.headers.get("content-type"),
+            Some(&"application/problem+json".to_string())
+        );
+
+        let body: serde_json::Value =
+            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:kafka-publish-failed");
+        assert_eq!(body["title"], "Kafka publish failed");
+    }
+
+    #[test]
+    fn test_message_header_propagation_specified_headers() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "headers_from_request": ["x-custom-header"]
+        });
+        let mut dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        // We can't easily test the actual message content without mocking the host function,
+        // but we can verify the dispatch logic runs without panicking
+        let response = dispatcher.dispatch(req);
+        // Should be 502 because native stub returns -1
+        assert_eq!(response.status, 502);
+    }
+
+    #[test]
+    fn test_message_header_propagation_auto_includes_request_id_and_trace_id() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "headers_from_request": []
+        });
+        let mut dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+
+        let mut req = create_test_request();
+        req.headers
+            .insert("x-request-id".to_string(), "req-abc".to_string());
+        req.headers
+            .insert("x-trace-id".to_string(), "trace-xyz".to_string());
+
+        // The dispatch method should include x-request-id and x-trace-id automatically
+        let response = dispatcher.dispatch(req);
+        // Should be 502 because native stub returns -1
+        assert_eq!(response.status, 502);
+    }
+
+    #[test]
+    fn test_message_header_propagation_missing_header() {
+        let config = serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "test-topic",
+            "headers_from_request": ["x-nonexistent-header"]
+        });
+        let mut dispatcher: KafkaDispatcher = serde_json::from_value(config).unwrap();
+        let req = create_test_request();
+
+        // Should handle missing headers gracefully
+        let response = dispatcher.dispatch(req);
+        assert_eq!(response.status, 502);
+    }
 }

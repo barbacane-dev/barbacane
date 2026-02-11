@@ -174,3 +174,264 @@ fn ip_in_cidr(ip: u32, network: u32, prefix_len: u8) -> bool {
     let mask = !0u32 << (32 - prefix_len);
     (ip & mask) == (network & mask)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_plugin() -> IpRestriction {
+        serde_json::from_value(serde_json::json!({
+            "allow": ["10.0.0.0/8", "192.168.1.100"],
+            "deny": ["10.0.0.5"]
+        }))
+        .unwrap()
+    }
+
+    fn request_with_ip(ip: &str) -> Request {
+        Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: ip.to_string(),
+        }
+    }
+
+    fn request_with_forwarded(xff: &str) -> Request {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-forwarded-for".to_string(), xff.to_string());
+        Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers,
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "0.0.0.0".to_string(),
+        }
+    }
+
+    // --- parse_ip ---
+
+    #[test]
+    fn test_parse_ip_valid() {
+        assert_eq!(parse_ip("192.168.1.1"), Some(0xC0A80101));
+        assert_eq!(parse_ip("10.0.0.1"), Some(0x0A000001));
+        assert_eq!(parse_ip("0.0.0.0"), Some(0));
+        assert_eq!(parse_ip("255.255.255.255"), Some(0xFFFFFFFF));
+    }
+
+    #[test]
+    fn test_parse_ip_invalid() {
+        assert_eq!(parse_ip("not-an-ip"), None);
+        assert_eq!(parse_ip("256.0.0.1"), None);
+        assert_eq!(parse_ip("1.2.3"), None);
+        assert_eq!(parse_ip(""), None);
+    }
+
+    // --- parse_cidr ---
+
+    #[test]
+    fn test_parse_cidr_valid() {
+        let (network, prefix) = parse_cidr("10.0.0.0/8").unwrap();
+        assert_eq!(network, 0x0A000000);
+        assert_eq!(prefix, 8);
+    }
+
+    #[test]
+    fn test_parse_cidr_host() {
+        let (_, prefix) = parse_cidr("192.168.1.1/32").unwrap();
+        assert_eq!(prefix, 32);
+    }
+
+    #[test]
+    fn test_parse_cidr_invalid_prefix() {
+        assert!(parse_cidr("10.0.0.0/33").is_none());
+    }
+
+    #[test]
+    fn test_parse_cidr_invalid_format() {
+        assert!(parse_cidr("10.0.0.0").is_none());
+    }
+
+    // --- ip_in_cidr ---
+
+    #[test]
+    fn test_ip_in_cidr_matches() {
+        let ip = parse_ip("10.1.2.3").unwrap();
+        let net = parse_ip("10.0.0.0").unwrap();
+        assert!(ip_in_cidr(ip, net, 8));
+    }
+
+    #[test]
+    fn test_ip_in_cidr_no_match() {
+        let ip = parse_ip("11.0.0.1").unwrap();
+        let net = parse_ip("10.0.0.0").unwrap();
+        assert!(!ip_in_cidr(ip, net, 8));
+    }
+
+    #[test]
+    fn test_ip_in_cidr_prefix_zero_matches_all() {
+        let ip = parse_ip("1.2.3.4").unwrap();
+        assert!(ip_in_cidr(ip, 0, 0));
+    }
+
+    #[test]
+    fn test_ip_in_cidr_slash_24() {
+        let ip = parse_ip("192.168.1.50").unwrap();
+        let net = parse_ip("192.168.1.0").unwrap();
+        assert!(ip_in_cidr(ip, net, 24));
+
+        let outside = parse_ip("192.168.2.50").unwrap();
+        assert!(!ip_in_cidr(outside, net, 24));
+    }
+
+    // --- extract_client_ip ---
+
+    #[test]
+    fn test_extract_client_ip_from_xff() {
+        let plugin = test_plugin();
+        let req = request_with_forwarded("10.0.0.1, 172.16.0.1");
+        assert_eq!(plugin.extract_client_ip(&req), "10.0.0.1");
+    }
+
+    #[test]
+    fn test_extract_client_ip_from_real_ip() {
+        let plugin = test_plugin();
+        let mut headers = BTreeMap::new();
+        headers.insert("x-real-ip".to_string(), "10.0.0.2".to_string());
+        let req = Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers,
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "0.0.0.0".to_string(),
+        };
+        assert_eq!(plugin.extract_client_ip(&req), "10.0.0.2");
+    }
+
+    #[test]
+    fn test_extract_client_ip_direct() {
+        let plugin = test_plugin();
+        let req = request_with_ip("172.16.0.5");
+        assert_eq!(plugin.extract_client_ip(&req), "172.16.0.5");
+    }
+
+    // --- is_ip_in_list ---
+
+    #[test]
+    fn test_is_ip_in_list_cidr_match() {
+        let plugin = test_plugin();
+        assert!(plugin.is_ip_in_list("10.1.2.3", &plugin.allow));
+    }
+
+    #[test]
+    fn test_is_ip_in_list_exact_match() {
+        let plugin = test_plugin();
+        assert!(plugin.is_ip_in_list("192.168.1.100", &plugin.allow));
+    }
+
+    #[test]
+    fn test_is_ip_in_list_no_match() {
+        let plugin = test_plugin();
+        assert!(!plugin.is_ip_in_list("172.16.0.1", &plugin.allow));
+    }
+
+    // --- on_request ---
+
+    #[test]
+    fn test_on_request_allowed_ip() {
+        let mut plugin = test_plugin();
+        let req = request_with_ip("10.0.0.1");
+        assert!(matches!(plugin.on_request(req), Action::Continue(_)));
+    }
+
+    #[test]
+    fn test_on_request_denied_ip_takes_precedence() {
+        let mut plugin = test_plugin();
+        let req = request_with_ip("10.0.0.5");
+        match plugin.on_request(req) {
+            Action::ShortCircuit(r) => assert_eq!(r.status, 403),
+            _ => panic!("expected ShortCircuit"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_not_in_allowlist() {
+        let mut plugin = test_plugin();
+        let req = request_with_ip("172.16.0.1");
+        match plugin.on_request(req) {
+            Action::ShortCircuit(r) => assert_eq!(r.status, 403),
+            _ => panic!("expected ShortCircuit"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_empty_allow_deny() {
+        let mut plugin: IpRestriction =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        let req = request_with_ip("1.2.3.4");
+        assert!(matches!(plugin.on_request(req), Action::Continue(_)));
+    }
+
+    // --- forbidden_response ---
+
+    #[test]
+    fn test_forbidden_response_format() {
+        let plugin = test_plugin();
+        let resp = plugin.forbidden_response("10.0.0.5");
+        assert_eq!(resp.status, 403);
+        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:ip-restricted");
+        assert_eq!(body["client_ip"], "10.0.0.5");
+    }
+
+    #[test]
+    fn test_custom_status_code() {
+        let mut plugin: IpRestriction = serde_json::from_value(serde_json::json!({
+            "deny": ["1.2.3.4"],
+            "status": 451,
+            "message": "Blocked by policy"
+        }))
+        .unwrap();
+        let req = request_with_ip("1.2.3.4");
+        match plugin.on_request(req) {
+            Action::ShortCircuit(r) => {
+                assert_eq!(r.status, 451);
+                let body: serde_json::Value =
+                    serde_json::from_str(r.body.as_ref().unwrap()).unwrap();
+                assert_eq!(body["detail"], "Blocked by policy");
+            }
+            _ => panic!("expected ShortCircuit"),
+        }
+    }
+
+    // --- config deserialization ---
+
+    #[test]
+    fn test_config_defaults() {
+        let plugin: IpRestriction = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(plugin.allow.is_empty());
+        assert!(plugin.deny.is_empty());
+        assert_eq!(plugin.message, "Access denied");
+        assert_eq!(plugin.status, 403);
+    }
+
+    // --- on_response passthrough ---
+
+    #[test]
+    fn test_on_response_passthrough() {
+        let mut plugin = test_plugin();
+        let resp = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: None,
+        };
+        let result = plugin.on_response(resp);
+        assert_eq!(result.status, 200);
+    }
+}

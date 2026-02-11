@@ -1,0 +1,68 @@
+openapi: "3.0.3"
+info:
+  title: Basic Auth Test API
+  version: "1.0.0"
+  description: API for testing HTTP Basic authentication middleware
+
+# Global middleware - requires Basic auth for all endpoints
+x-barbacane-middlewares:
+  - name: basic-auth
+    config:
+      realm: "test-api"
+      credentials:
+        admin:
+          password: "secret123"
+          roles:
+            - admin
+            - read
+            - write
+        reader:
+          password: "readonly456"
+          roles:
+            - read
+
+paths:
+  /protected:
+    get:
+      summary: Protected endpoint requiring Basic auth
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "401":
+          description: Unauthorized
+
+  /public:
+    get:
+      summary: Public endpoint (overrides global middleware)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Public access"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string

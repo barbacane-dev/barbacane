@@ -50,105 +50,113 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
     let expanded = quote! {
         #input
 
-        // Global state for the plugin instance
-        static mut PLUGIN_INSTANCE: Option<#struct_name> = None;
+        // WASM ABI glue — only compiled when targeting wasm32.
+        // On native targets (e.g. cargo test), only the struct and its
+        // impl blocks are compiled, enabling unit testing of plugin logic.
+        #[cfg(target_arch = "wasm32")]
+        mod __barbacane_wasm_abi {
+            use super::*;
 
-        /// Initialize the plugin with JSON config.
-        #[no_mangle]
-        pub extern "C" fn init(ptr: i32, len: i32) -> i32 {
-            let config_bytes = unsafe {
-                core::slice::from_raw_parts(ptr as *const u8, len as usize)
-            };
+            // Global state for the plugin instance
+            static mut PLUGIN_INSTANCE: Option<#struct_name> = None;
 
-            match serde_json::from_slice::<#struct_name>(config_bytes) {
-                Ok(instance) => {
-                    unsafe { PLUGIN_INSTANCE = Some(instance); }
-                    0 // Success
-                }
-                Err(_) => 1 // Failed to parse config
-            }
-        }
+            /// Initialize the plugin with JSON config.
+            #[no_mangle]
+            pub extern "C" fn init(ptr: i32, len: i32) -> i32 {
+                let config_bytes = unsafe {
+                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                };
 
-        /// Process an incoming request.
-        /// Returns 0 to continue, 1 to short-circuit with response.
-        #[no_mangle]
-        pub extern "C" fn on_request(ptr: i32, len: i32) -> i32 {
-            let request_bytes = unsafe {
-                core::slice::from_raw_parts(ptr as *const u8, len as usize)
-            };
-
-            let request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
-                Ok(r) => r,
-                Err(_) => return 1, // Parse error, short-circuit
-            };
-
-            let instance = unsafe {
-                match PLUGIN_INSTANCE.as_mut() {
-                    Some(i) => i,
-                    None => return 1, // Not initialized
-                }
-            };
-
-            match instance.on_request(request) {
-                barbacane_plugin_sdk::prelude::Action::Continue(req) => {
-                    // Serialize the request and set output
-                    if let Ok(output) = serde_json::to_vec(&serde_json::json!({
-                        "action": 0,
-                        "data": req
-                    })) {
-                        set_output(&output);
+                match serde_json::from_slice::<#struct_name>(config_bytes) {
+                    Ok(instance) => {
+                        unsafe { PLUGIN_INSTANCE = Some(instance); }
+                        0 // Success
                     }
-                    0 // Continue
+                    Err(_) => 1 // Failed to parse config
                 }
-                barbacane_plugin_sdk::prelude::Action::ShortCircuit(resp) => {
-                    // Serialize the response and set output
-                    if let Ok(output) = serde_json::to_vec(&serde_json::json!({
-                        "action": 1,
-                        "data": resp
-                    })) {
-                        set_output(&output);
+            }
+
+            /// Process an incoming request.
+            /// Returns 0 to continue, 1 to short-circuit with response.
+            #[no_mangle]
+            pub extern "C" fn on_request(ptr: i32, len: i32) -> i32 {
+                let request_bytes = unsafe {
+                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                };
+
+                let request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
+                    Ok(r) => r,
+                    Err(_) => return 1, // Parse error, short-circuit
+                };
+
+                let instance = unsafe {
+                    match PLUGIN_INSTANCE.as_mut() {
+                        Some(i) => i,
+                        None => return 1, // Not initialized
                     }
-                    1 // Short-circuit
+                };
+
+                match instance.on_request(request) {
+                    barbacane_plugin_sdk::prelude::Action::Continue(req) => {
+                        // Serialize the request and set output
+                        if let Ok(output) = serde_json::to_vec(&serde_json::json!({
+                            "action": 0,
+                            "data": req
+                        })) {
+                            set_output(&output);
+                        }
+                        0 // Continue
+                    }
+                    barbacane_plugin_sdk::prelude::Action::ShortCircuit(resp) => {
+                        // Serialize the response and set output
+                        if let Ok(output) = serde_json::to_vec(&serde_json::json!({
+                            "action": 1,
+                            "data": resp
+                        })) {
+                            set_output(&output);
+                        }
+                        1 // Short-circuit
+                    }
                 }
             }
-        }
 
-        /// Process an outgoing response.
-        #[no_mangle]
-        pub extern "C" fn on_response(ptr: i32, len: i32) -> i32 {
-            let response_bytes = unsafe {
-                core::slice::from_raw_parts(ptr as *const u8, len as usize)
-            };
+            /// Process an outgoing response.
+            #[no_mangle]
+            pub extern "C" fn on_response(ptr: i32, len: i32) -> i32 {
+                let response_bytes = unsafe {
+                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                };
 
-            let response: barbacane_plugin_sdk::prelude::Response = match serde_json::from_slice(response_bytes) {
-                Ok(r) => r,
-                Err(_) => return 1,
-            };
+                let response: barbacane_plugin_sdk::prelude::Response = match serde_json::from_slice(response_bytes) {
+                    Ok(r) => r,
+                    Err(_) => return 1,
+                };
 
-            let instance = unsafe {
-                match PLUGIN_INSTANCE.as_mut() {
-                    Some(i) => i,
-                    None => return 1,
+                let instance = unsafe {
+                    match PLUGIN_INSTANCE.as_mut() {
+                        Some(i) => i,
+                        None => return 1,
+                    }
+                };
+
+                let result = instance.on_response(response);
+
+                if let Ok(output) = serde_json::to_vec(&result) {
+                    set_output(&output);
                 }
-            };
 
-            let result = instance.on_response(response);
-
-            if let Ok(output) = serde_json::to_vec(&result) {
-                set_output(&output);
+                0
             }
 
-            0
-        }
-
-        /// Helper to set output via host function.
-        fn set_output(data: &[u8]) {
-            #[link(wasm_import_module = "barbacane")]
-            extern "C" {
-                fn host_set_output(ptr: i32, len: i32);
-            }
-            unsafe {
-                host_set_output(data.as_ptr() as i32, data.len() as i32);
+            /// Helper to set output via host function.
+            fn set_output(data: &[u8]) {
+                #[link(wasm_import_module = "barbacane")]
+                extern "C" {
+                    fn host_set_output(ptr: i32, len: i32);
+                }
+                unsafe {
+                    host_set_output(data.as_ptr() as i32, data.len() as i32);
+                }
             }
         }
     };
@@ -174,82 +182,88 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
     let expanded = quote! {
         #input
 
-        // Global state for the plugin instance
-        static mut PLUGIN_INSTANCE: Option<#struct_name> = None;
+        // WASM ABI glue — only compiled when targeting wasm32.
+        #[cfg(target_arch = "wasm32")]
+        mod __barbacane_wasm_abi {
+            use super::*;
 
-        /// Initialize the plugin with JSON config.
-        #[no_mangle]
-        pub extern "C" fn init(ptr: i32, len: i32) -> i32 {
-            let config_bytes = unsafe {
-                core::slice::from_raw_parts(ptr as *const u8, len as usize)
-            };
+            // Global state for the plugin instance
+            static mut PLUGIN_INSTANCE: Option<#struct_name> = None;
 
-            match serde_json::from_slice::<#struct_name>(config_bytes) {
-                Ok(instance) => {
-                    unsafe { PLUGIN_INSTANCE = Some(instance); }
-                    0 // Success
-                }
-                Err(_) => 1 // Failed to parse config
-            }
-        }
+            /// Initialize the plugin with JSON config.
+            #[no_mangle]
+            pub extern "C" fn init(ptr: i32, len: i32) -> i32 {
+                let config_bytes = unsafe {
+                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                };
 
-        /// Dispatch a request and return a response.
-        #[no_mangle]
-        pub extern "C" fn dispatch(ptr: i32, len: i32) -> i32 {
-            let request_bytes = unsafe {
-                core::slice::from_raw_parts(ptr as *const u8, len as usize)
-            };
-
-            let request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
-                Ok(r) => r,
-                Err(_) => {
-                    // Return error response
-                    let error_resp = barbacane_plugin_sdk::prelude::Response {
-                        status: 500,
-                        headers: std::collections::BTreeMap::new(),
-                        body: Some(r#"{"error":"failed to parse request"}"#.to_string()),
-                    };
-                    if let Ok(output) = serde_json::to_vec(&error_resp) {
-                        set_output(&output);
+                match serde_json::from_slice::<#struct_name>(config_bytes) {
+                    Ok(instance) => {
+                        unsafe { PLUGIN_INSTANCE = Some(instance); }
+                        0 // Success
                     }
-                    return 1;
+                    Err(_) => 1 // Failed to parse config
                 }
-            };
+            }
 
-            let instance = unsafe {
-                match PLUGIN_INSTANCE.as_mut() {
-                    Some(i) => i,
-                    None => {
+            /// Dispatch a request and return a response.
+            #[no_mangle]
+            pub extern "C" fn dispatch(ptr: i32, len: i32) -> i32 {
+                let request_bytes = unsafe {
+                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                };
+
+                let request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        // Return error response
                         let error_resp = barbacane_plugin_sdk::prelude::Response {
                             status: 500,
                             headers: std::collections::BTreeMap::new(),
-                            body: Some(r#"{"error":"plugin not initialized"}"#.to_string()),
+                            body: Some(r#"{"error":"failed to parse request"}"#.to_string()),
                         };
                         if let Ok(output) = serde_json::to_vec(&error_resp) {
                             set_output(&output);
                         }
                         return 1;
                     }
+                };
+
+                let instance = unsafe {
+                    match PLUGIN_INSTANCE.as_mut() {
+                        Some(i) => i,
+                        None => {
+                            let error_resp = barbacane_plugin_sdk::prelude::Response {
+                                status: 500,
+                                headers: std::collections::BTreeMap::new(),
+                                body: Some(r#"{"error":"plugin not initialized"}"#.to_string()),
+                            };
+                            if let Ok(output) = serde_json::to_vec(&error_resp) {
+                                set_output(&output);
+                            }
+                            return 1;
+                        }
+                    }
+                };
+
+                let response = instance.dispatch(request);
+
+                if let Ok(output) = serde_json::to_vec(&response) {
+                    set_output(&output);
                 }
-            };
 
-            let response = instance.dispatch(request);
-
-            if let Ok(output) = serde_json::to_vec(&response) {
-                set_output(&output);
+                0
             }
 
-            0
-        }
-
-        /// Helper to set output via host function.
-        fn set_output(data: &[u8]) {
-            #[link(wasm_import_module = "barbacane")]
-            extern "C" {
-                fn host_set_output(ptr: i32, len: i32);
-            }
-            unsafe {
-                host_set_output(data.as_ptr() as i32, data.len() as i32);
+            /// Helper to set output via host function.
+            fn set_output(data: &[u8]) {
+                #[link(wasm_import_module = "barbacane")]
+                extern "C" {
+                    fn host_set_output(ptr: i32, len: i32);
+                }
+                unsafe {
+                    host_set_output(data.as_ptr() as i32, data.len() as i32);
+                }
             }
         }
     };

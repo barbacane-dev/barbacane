@@ -255,11 +255,13 @@ impl OAuth2Auth {
         };
 
         // Serialize request
-        let request_json = serde_json::to_vec(&http_request)
-            .map_err(|e| OAuth2Error::IntrospectionFailed(format!("request serialization: {}", e)))?;
+        let request_json = serde_json::to_vec(&http_request).map_err(|e| {
+            OAuth2Error::IntrospectionFailed(format!("request serialization: {}", e))
+        })?;
 
         // Call introspection endpoint
-        let result_len = unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
+        let result_len =
+            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
 
         if result_len < 0 {
             return Err(OAuth2Error::IntrospectionFailed(
@@ -404,7 +406,8 @@ fn url_encode(s: &str) -> String {
     result
 }
 
-// Host function declarations
+// Host function declarations (WASM only)
+#[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "barbacane")]
 extern "C" {
     /// Make an HTTP request. Returns the response length, or -1 on error.
@@ -412,4 +415,450 @@ extern "C" {
 
     /// Read the HTTP response into the provided buffer. Returns bytes read.
     fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
+}
+
+// Mock host functions for native tests (not called in pure logic tests)
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
+    -1
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_config() -> OAuth2Auth {
+        OAuth2Auth {
+            introspection_endpoint: "https://auth.example.com/introspect".to_string(),
+            client_id: "test_client".to_string(),
+            client_secret: "test_secret".to_string(),
+            required_scopes: None,
+            timeout: 5.0,
+        }
+    }
+
+    fn create_request_with_auth(auth_value: &str) -> Request {
+        let mut headers = BTreeMap::new();
+        headers.insert("authorization".to_string(), auth_value.to_string());
+
+        Request {
+            method: "GET".to_string(),
+            path: "/api/resource".to_string(),
+            headers,
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_extract_token_valid_bearer() {
+        let config = create_test_config();
+        let req = create_request_with_auth("Bearer test_token_12345");
+
+        let result = config.extract_token(&req);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "test_token_12345");
+    }
+
+    #[test]
+    fn test_extract_token_lowercase_bearer() {
+        let config = create_test_config();
+        let req = create_request_with_auth("bearer lowercase_token");
+
+        let result = config.extract_token(&req);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "lowercase_token");
+    }
+
+    #[test]
+    fn test_extract_token_with_extra_spaces() {
+        let config = create_test_config();
+        let req = create_request_with_auth("Bearer   spaced_token   ");
+
+        let result = config.extract_token(&req);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "spaced_token");
+    }
+
+    #[test]
+    fn test_extract_token_missing_header() {
+        let config = create_test_config();
+        let req = Request {
+            method: "GET".to_string(),
+            path: "/api/resource".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        };
+
+        let result = config.extract_token(&req);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), OAuth2Error::MissingToken));
+    }
+
+    #[test]
+    fn test_extract_token_non_bearer_scheme() {
+        let config = create_test_config();
+        let req = create_request_with_auth("Basic dXNlcjpwYXNz");
+
+        let result = config.extract_token(&req);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OAuth2Error::InvalidAuthHeader
+        ));
+    }
+
+    #[test]
+    fn test_extract_token_case_insensitive_header() {
+        let config = create_test_config();
+        let mut req = Request {
+            method: "GET".to_string(),
+            path: "/api/resource".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        };
+        req.headers
+            .insert("Authorization".to_string(), "Bearer cap_token".to_string());
+
+        let result = config.extract_token(&req);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "cap_token");
+    }
+
+    #[test]
+    fn test_check_scopes_all_present() {
+        let config = create_test_config();
+        let introspection = IntrospectionResponse {
+            active: true,
+            scope: Some("read write admin".to_string()),
+            client_id: None,
+            username: None,
+            token_type: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            sub: None,
+            aud: None,
+            iss: None,
+            jti: None,
+        };
+
+        let result = config.check_scopes(&introspection, "read write");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_scopes_missing_scope() {
+        let config = create_test_config();
+        let introspection = IntrospectionResponse {
+            active: true,
+            scope: Some("read".to_string()),
+            client_id: None,
+            username: None,
+            token_type: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            sub: None,
+            aud: None,
+            iss: None,
+            jti: None,
+        };
+
+        let result = config.check_scopes(&introspection, "read write");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OAuth2Error::InsufficientScope
+        ));
+    }
+
+    #[test]
+    fn test_check_scopes_no_scopes_on_token() {
+        let config = create_test_config();
+        let introspection = IntrospectionResponse {
+            active: true,
+            scope: None,
+            client_id: None,
+            username: None,
+            token_type: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            sub: None,
+            aud: None,
+            iss: None,
+            jti: None,
+        };
+
+        let result = config.check_scopes(&introspection, "read");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            OAuth2Error::InsufficientScope
+        ));
+    }
+
+    #[test]
+    fn test_check_scopes_empty_required() {
+        let config = create_test_config();
+        let introspection = IntrospectionResponse {
+            active: true,
+            scope: Some("read write".to_string()),
+            client_id: None,
+            username: None,
+            token_type: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            sub: None,
+            aud: None,
+            iss: None,
+            jti: None,
+        };
+
+        let result = config.check_scopes(&introspection, "");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_error_response_401() {
+        let config = create_test_config();
+        let error = OAuth2Error::TokenInactive;
+
+        let response = config.error_response(&error);
+        assert_eq!(response.status, 401);
+        assert_eq!(
+            response.headers.get("content-type").unwrap(),
+            "application/json"
+        );
+        assert!(response.headers.contains_key("www-authenticate"));
+
+        let body = response.body.unwrap();
+        assert!(body.contains("\"status\":401"));
+        assert!(body.contains("Authentication failed"));
+        assert!(body.contains("urn:barbacane:error:authentication-failed"));
+    }
+
+    #[test]
+    fn test_error_response_403() {
+        let config = create_test_config();
+        let error = OAuth2Error::InsufficientScope;
+
+        let response = config.error_response(&error);
+        assert_eq!(response.status, 403);
+        assert_eq!(
+            response.headers.get("content-type").unwrap(),
+            "application/json"
+        );
+
+        let body = response.body.unwrap();
+        assert!(body.contains("\"status\":403"));
+        assert!(body.contains("Authorization failed"));
+        assert!(body.contains("urn:barbacane:error:authorization-failed"));
+    }
+
+    #[test]
+    fn test_error_response_www_authenticate_header() {
+        let config = create_test_config();
+        let error = OAuth2Error::MissingToken;
+
+        let response = config.error_response(&error);
+        let www_auth = response.headers.get("www-authenticate").unwrap();
+        assert!(www_auth.contains("Bearer realm=\"api\""));
+        assert!(www_auth.contains("error=\"missing_token\""));
+        assert!(www_auth.contains("Bearer token required"));
+    }
+
+    #[test]
+    fn test_base64_encode_empty() {
+        let result = base64_encode(b"");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_base64_encode_single_byte() {
+        let result = base64_encode(b"A");
+        assert_eq!(result, "QQ==");
+    }
+
+    #[test]
+    fn test_base64_encode_two_bytes() {
+        let result = base64_encode(b"AB");
+        assert_eq!(result, "QUI=");
+    }
+
+    #[test]
+    fn test_base64_encode_three_bytes() {
+        let result = base64_encode(b"ABC");
+        assert_eq!(result, "QUJD");
+    }
+
+    #[test]
+    fn test_base64_encode_credentials() {
+        let result = base64_encode(b"client_id:client_secret");
+        assert_eq!(result, "Y2xpZW50X2lkOmNsaWVudF9zZWNyZXQ=");
+    }
+
+    #[test]
+    fn test_base64_encode_long_string() {
+        let result = base64_encode(b"Hello, World! This is a test.");
+        assert_eq!(result, "SGVsbG8sIFdvcmxkISBUaGlzIGlzIGEgdGVzdC4=");
+    }
+
+    #[test]
+    fn test_url_encode_safe_characters() {
+        let result = url_encode("ABCabc123-_.~");
+        assert_eq!(result, "ABCabc123-_.~");
+    }
+
+    #[test]
+    fn test_url_encode_space() {
+        let result = url_encode("hello world");
+        assert_eq!(result, "hello%20world");
+    }
+
+    #[test]
+    fn test_url_encode_special_characters() {
+        let result = url_encode("hello@world.com");
+        assert_eq!(result, "hello%40world.com");
+    }
+
+    #[test]
+    fn test_url_encode_plus_equals() {
+        let result = url_encode("a+b=c");
+        assert_eq!(result, "a%2Bb%3Dc");
+    }
+
+    #[test]
+    fn test_url_encode_slash() {
+        let result = url_encode("path/to/resource");
+        assert_eq!(result, "path%2Fto%2Fresource");
+    }
+
+    #[test]
+    fn test_url_encode_percent() {
+        let result = url_encode("100%");
+        assert_eq!(result, "100%25");
+    }
+
+    #[test]
+    fn test_url_encode_unicode() {
+        let result = url_encode("hello🌍");
+        assert_eq!(result, "hello%F0%9F%8C%8D");
+    }
+
+    #[test]
+    fn test_config_deserialization_minimal() {
+        let json = r#"{
+            "introspection_endpoint": "https://auth.example.com/introspect",
+            "client_id": "my_client",
+            "client_secret": "my_secret"
+        }"#;
+
+        let config: OAuth2Auth = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.introspection_endpoint,
+            "https://auth.example.com/introspect"
+        );
+        assert_eq!(config.client_id, "my_client");
+        assert_eq!(config.client_secret, "my_secret");
+        assert!(config.required_scopes.is_none());
+        assert_eq!(config.timeout, 5.0);
+    }
+
+    #[test]
+    fn test_config_deserialization_with_scopes() {
+        let json = r#"{
+            "introspection_endpoint": "https://auth.example.com/introspect",
+            "client_id": "my_client",
+            "client_secret": "my_secret",
+            "required_scopes": "read write"
+        }"#;
+
+        let config: OAuth2Auth = serde_json::from_str(json).unwrap();
+        assert_eq!(config.required_scopes.unwrap(), "read write");
+    }
+
+    #[test]
+    fn test_config_deserialization_with_timeout() {
+        let json = r#"{
+            "introspection_endpoint": "https://auth.example.com/introspect",
+            "client_id": "my_client",
+            "client_secret": "my_secret",
+            "timeout": 10.5
+        }"#;
+
+        let config: OAuth2Auth = serde_json::from_str(json).unwrap();
+        assert_eq!(config.timeout, 10.5);
+    }
+
+    #[test]
+    fn test_config_deserialization_missing_required_fields() {
+        let json = r#"{
+            "introspection_endpoint": "https://auth.example.com/introspect"
+        }"#;
+
+        let result: Result<OAuth2Auth, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_on_response_passthrough() {
+        let mut config = create_test_config();
+        let response = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some("test body".to_string()),
+        };
+
+        let result = config.on_response(response.clone());
+        assert_eq!(result.status, response.status);
+        assert_eq!(result.body, response.body);
+    }
+
+    #[test]
+    fn test_oauth2_error_as_str() {
+        assert_eq!(OAuth2Error::MissingToken.as_str(), "missing_token");
+        assert_eq!(OAuth2Error::InvalidAuthHeader.as_str(), "invalid_request");
+        assert_eq!(
+            OAuth2Error::IntrospectionFailed("test".to_string()).as_str(),
+            "server_error"
+        );
+        assert_eq!(OAuth2Error::TokenInactive.as_str(), "invalid_token");
+        assert_eq!(
+            OAuth2Error::InsufficientScope.as_str(),
+            "insufficient_scope"
+        );
+    }
+
+    #[test]
+    fn test_oauth2_error_status_code() {
+        assert_eq!(OAuth2Error::MissingToken.status_code(), 401);
+        assert_eq!(OAuth2Error::InvalidAuthHeader.status_code(), 401);
+        assert_eq!(
+            OAuth2Error::IntrospectionFailed("test".to_string()).status_code(),
+            401
+        );
+        assert_eq!(OAuth2Error::TokenInactive.status_code(), 401);
+        assert_eq!(OAuth2Error::InsufficientScope.status_code(), 403);
+    }
+
+    #[test]
+    fn test_default_timeout() {
+        assert_eq!(default_timeout(), 5.0);
+    }
 }

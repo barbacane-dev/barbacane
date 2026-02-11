@@ -110,7 +110,42 @@ impl CorrelationId {
     }
 }
 
+// Native mock implementations for testing
+#[cfg(not(target_arch = "wasm32"))]
+mod mock_host {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+        static UUID_COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    }
+
+    pub fn context_set(key: &str, value: &str) {
+        CONTEXT.with(|c| c.borrow_mut().insert(key.to_string(), value.to_string()));
+    }
+
+    pub fn context_get(key: &str) -> Option<String> {
+        CONTEXT.with(|c| c.borrow().get(key).cloned())
+    }
+
+    pub fn generate_uuid() -> Option<String> {
+        UUID_COUNTER.with(|c| {
+            let n = c.get();
+            c.set(n + 1);
+            Some(format!("00000000-0000-7000-8000-{:012}", n))
+        })
+    }
+
+    #[cfg(test)]
+    pub fn reset() {
+        CONTEXT.with(|c| c.borrow_mut().clear());
+        UUID_COUNTER.with(|c| c.set(1));
+    }
+}
+
 /// Generate a UUID v7 using the host function.
+#[cfg(target_arch = "wasm32")]
 fn generate_uuid() -> Option<String> {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -134,7 +169,13 @@ fn generate_uuid() -> Option<String> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn generate_uuid() -> Option<String> {
+    mock_host::generate_uuid()
+}
+
 /// Log a message via host_log.
+#[cfg(target_arch = "wasm32")]
 fn log_message(level: i32, msg: &str) {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -145,7 +186,13 @@ fn log_message(level: i32, msg: &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn log_message(_level: i32, _msg: &str) {
+    // No-op on native
+}
+
 /// Store a value in the request context.
+#[cfg(target_arch = "wasm32")]
 fn context_set(key: &str, value: &str) {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -161,7 +208,13 @@ fn context_set(key: &str, value: &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn context_set(key: &str, value: &str) {
+    mock_host::context_set(key, value)
+}
+
 /// Get a value from the request context.
+#[cfg(target_arch = "wasm32")]
 fn context_get(key: &str) -> Option<String> {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -182,5 +235,274 @@ fn context_get(key: &str) -> Option<String> {
         }
 
         String::from_utf8(buf).ok()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn context_get(key: &str) -> Option<String> {
+    mock_host::context_get(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn create_test_request() -> Request {
+        Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    fn create_test_response() -> Response {
+        Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: None,
+        }
+    }
+
+    #[test]
+    fn test_config_deserialization_defaults() {
+        mock_host::reset();
+
+        let config: CorrelationId = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.header_name, "x-correlation-id");
+        assert!(config.generate_if_missing);
+        assert!(config.trust_incoming);
+        assert!(config.include_in_response);
+    }
+
+    #[test]
+    fn test_config_deserialization_custom() {
+        mock_host::reset();
+
+        let config: CorrelationId = serde_json::from_str(
+            r#"{
+                "header_name": "x-custom-id",
+                "generate_if_missing": false,
+                "trust_incoming": false,
+                "include_in_response": false
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(config.header_name, "x-custom-id");
+        assert!(!config.generate_if_missing);
+        assert!(!config.trust_incoming);
+        assert!(!config.include_in_response);
+    }
+
+    #[test]
+    fn test_on_request_with_existing_correlation_id() {
+        mock_host::reset();
+
+        let mut middleware = CorrelationId {
+            header_name: "x-correlation-id".to_string(),
+            generate_if_missing: true,
+            trust_incoming: true,
+            include_in_response: true,
+        };
+
+        let mut req = create_test_request();
+        req.headers.insert(
+            "x-correlation-id".to_string(),
+            "existing-id-123".to_string(),
+        );
+
+        let result = middleware.on_request(req);
+        if let Action::Continue(modified_req) = result {
+            assert_eq!(
+                modified_req.headers.get("x-correlation-id"),
+                Some(&"existing-id-123".to_string())
+            );
+            assert_eq!(
+                context_get("correlation-id"),
+                Some("existing-id-123".to_string())
+            );
+        } else {
+            panic!("Expected Action::Continue");
+        }
+    }
+
+    #[test]
+    fn test_on_request_without_correlation_id_generates_one() {
+        mock_host::reset();
+
+        let mut middleware = CorrelationId {
+            header_name: "x-correlation-id".to_string(),
+            generate_if_missing: true,
+            trust_incoming: true,
+            include_in_response: true,
+        };
+
+        let req = create_test_request();
+        let result = middleware.on_request(req);
+
+        if let Action::Continue(modified_req) = result {
+            let correlation_id = modified_req.headers.get("x-correlation-id");
+            assert!(correlation_id.is_some());
+            assert_eq!(
+                correlation_id.unwrap(),
+                "00000000-0000-7000-8000-000000000001"
+            );
+            assert_eq!(
+                context_get("correlation-id"),
+                Some("00000000-0000-7000-8000-000000000001".to_string())
+            );
+        } else {
+            panic!("Expected Action::Continue");
+        }
+    }
+
+    #[test]
+    fn test_on_request_trust_incoming_false_ignores_existing() {
+        mock_host::reset();
+
+        let mut middleware = CorrelationId {
+            header_name: "x-correlation-id".to_string(),
+            generate_if_missing: true,
+            trust_incoming: false,
+            include_in_response: true,
+        };
+
+        let mut req = create_test_request();
+        req.headers
+            .insert("x-correlation-id".to_string(), "untrusted-id".to_string());
+
+        let result = middleware.on_request(req);
+
+        if let Action::Continue(modified_req) = result {
+            let correlation_id = modified_req.headers.get("x-correlation-id").unwrap();
+            assert_ne!(correlation_id, "untrusted-id");
+            assert_eq!(correlation_id, "00000000-0000-7000-8000-000000000001");
+            assert_eq!(
+                context_get("correlation-id"),
+                Some("00000000-0000-7000-8000-000000000001".to_string())
+            );
+        } else {
+            panic!("Expected Action::Continue");
+        }
+    }
+
+    #[test]
+    fn test_on_request_generate_if_missing_false_passes_through() {
+        mock_host::reset();
+
+        let mut middleware = CorrelationId {
+            header_name: "x-correlation-id".to_string(),
+            generate_if_missing: false,
+            trust_incoming: true,
+            include_in_response: true,
+        };
+
+        let req = create_test_request();
+        let result = middleware.on_request(req);
+
+        if let Action::Continue(modified_req) = result {
+            assert!(!modified_req.headers.contains_key("x-correlation-id"));
+            assert!(context_get("correlation-id").is_none());
+        } else {
+            panic!("Expected Action::Continue");
+        }
+    }
+
+    #[test]
+    fn test_on_response_includes_correlation_id() {
+        mock_host::reset();
+
+        context_set("correlation-id", "test-id-456");
+
+        let mut middleware = CorrelationId {
+            header_name: "x-correlation-id".to_string(),
+            generate_if_missing: true,
+            trust_incoming: true,
+            include_in_response: true,
+        };
+
+        let resp = create_test_response();
+        let modified_resp = middleware.on_response(resp);
+
+        assert_eq!(
+            modified_resp.headers.get("x-correlation-id"),
+            Some(&"test-id-456".to_string())
+        );
+    }
+
+    #[test]
+    fn test_on_response_include_in_response_false() {
+        mock_host::reset();
+
+        context_set("correlation-id", "test-id-789");
+
+        let mut middleware = CorrelationId {
+            header_name: "x-correlation-id".to_string(),
+            generate_if_missing: true,
+            trust_incoming: true,
+            include_in_response: false,
+        };
+
+        let resp = create_test_response();
+        let modified_resp = middleware.on_response(resp);
+
+        assert!(!modified_resp.headers.contains_key("x-correlation-id"));
+    }
+
+    #[test]
+    fn test_custom_header_name() {
+        mock_host::reset();
+
+        let mut middleware = CorrelationId {
+            header_name: "x-request-id".to_string(),
+            generate_if_missing: true,
+            trust_incoming: true,
+            include_in_response: true,
+        };
+
+        // Test on_request with custom header
+        let mut req = create_test_request();
+        req.headers
+            .insert("x-request-id".to_string(), "custom-id-abc".to_string());
+
+        let result = middleware.on_request(req);
+        if let Action::Continue(modified_req) = result {
+            assert_eq!(
+                modified_req.headers.get("x-request-id"),
+                Some(&"custom-id-abc".to_string())
+            );
+        } else {
+            panic!("Expected Action::Continue");
+        }
+
+        // Test on_response with custom header
+        let resp = create_test_response();
+        let modified_resp = middleware.on_response(resp);
+
+        assert_eq!(
+            modified_resp.headers.get("x-request-id"),
+            Some(&"custom-id-abc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_on_response_without_context_value() {
+        mock_host::reset();
+
+        let mut middleware = CorrelationId {
+            header_name: "x-correlation-id".to_string(),
+            generate_if_missing: true,
+            trust_incoming: true,
+            include_in_response: true,
+        };
+
+        let resp = create_test_response();
+        let modified_resp = middleware.on_response(resp);
+
+        assert!(!modified_resp.headers.contains_key("x-correlation-id"));
     }
 }

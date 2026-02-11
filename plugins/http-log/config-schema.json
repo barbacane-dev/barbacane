@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:http-log-config",
+  "title": "HTTP Log Middleware Config",
+  "description": "Configuration for the HTTP logging middleware plugin",
+  "type": "object",
+  "required": ["endpoint"],
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "description": "URL to send log entries to (e.g., https://logs.example.com/ingest)",
+      "format": "uri"
+    },
+    "method": {
+      "type": "string",
+      "description": "HTTP method for sending logs",
+      "enum": ["POST", "PUT"],
+      "default": "POST"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "description": "Timeout in milliseconds for the log HTTP call",
+      "default": 2000,
+      "minimum": 100,
+      "maximum": 10000
+    },
+    "content_type": {
+      "type": "string",
+      "description": "Content-Type header for the log request",
+      "default": "application/json"
+    },
+    "include_headers": {
+      "type": "boolean",
+      "description": "Include request and response headers in the log entry",
+      "default": false
+    },
+    "include_body": {
+      "type": "boolean",
+      "description": "Include request and response body size in the log entry",
+      "default": false
+    },
+    "custom_fields": {
+      "type": "object",
+      "description": "Static custom fields to include in every log entry",
+      "additionalProperties": { "type": "string" },
+      "default": {}
+    }
+  },
+  "additionalProperties": false
+}

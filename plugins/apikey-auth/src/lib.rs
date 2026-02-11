@@ -227,3 +227,300 @@ fn url_decode(s: &str) -> String {
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_plugin() -> ApiKeyAuth {
+        serde_json::from_value(serde_json::json!({
+            "keys": {
+                "sk-test-123": { "id": "key1", "name": "Test Key", "scopes": ["read", "write"] },
+                "sk-readonly": { "id": "key2", "scopes": ["read"] },
+                "sk-noname": { "id": "key3" }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn request_with_headers(headers: Vec<(&str, &str)>) -> Request {
+        let mut h = BTreeMap::new();
+        for (k, v) in headers {
+            h.insert(k.to_string(), v.to_string());
+        }
+        Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers: h,
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    fn request_with_query(query: &str) -> Request {
+        Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: Some(query.to_string()),
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    // --- extract_from_header ---
+
+    #[test]
+    fn test_extract_from_header_exact_match() {
+        let plugin = test_plugin();
+        let req = request_with_headers(vec![("X-API-Key", "sk-test-123")]);
+        assert_eq!(plugin.extract_from_header(&req).unwrap(), "sk-test-123");
+    }
+
+    #[test]
+    fn test_extract_from_header_lowercase() {
+        let plugin = test_plugin();
+        let req = request_with_headers(vec![("x-api-key", "sk-test-123")]);
+        assert_eq!(plugin.extract_from_header(&req).unwrap(), "sk-test-123");
+    }
+
+    #[test]
+    fn test_extract_from_header_trims_whitespace() {
+        let plugin = test_plugin();
+        let req = request_with_headers(vec![("X-API-Key", "  sk-test-123  ")]);
+        assert_eq!(plugin.extract_from_header(&req).unwrap(), "sk-test-123");
+    }
+
+    #[test]
+    fn test_extract_from_header_missing() {
+        let plugin = test_plugin();
+        let req = request_with_headers(vec![]);
+        assert!(matches!(
+            plugin.extract_from_header(&req),
+            Err(ApiKeyError::MissingKey)
+        ));
+    }
+
+    #[test]
+    fn test_extract_from_header_empty_value() {
+        let plugin = test_plugin();
+        let req = request_with_headers(vec![("X-API-Key", "  ")]);
+        assert!(matches!(
+            plugin.extract_from_header(&req),
+            Err(ApiKeyError::MissingKey)
+        ));
+    }
+
+    // --- extract_from_query ---
+
+    #[test]
+    fn test_extract_from_query_found() {
+        let plugin = test_plugin();
+        let req = request_with_query("api_key=sk-test-123&other=val");
+        assert_eq!(plugin.extract_from_query(&req).unwrap(), "sk-test-123");
+    }
+
+    #[test]
+    fn test_extract_from_query_url_encoded() {
+        let plugin = test_plugin();
+        let req = request_with_query("api_key=sk%2Dtest%2D123");
+        assert_eq!(plugin.extract_from_query(&req).unwrap(), "sk-test-123");
+    }
+
+    #[test]
+    fn test_extract_from_query_missing_param() {
+        let plugin = test_plugin();
+        let req = request_with_query("other=val");
+        assert!(matches!(
+            plugin.extract_from_query(&req),
+            Err(ApiKeyError::MissingKey)
+        ));
+    }
+
+    #[test]
+    fn test_extract_from_query_no_query_string() {
+        let plugin = test_plugin();
+        let req = request_with_headers(vec![]);
+        assert!(matches!(
+            plugin.extract_from_query(&req),
+            Err(ApiKeyError::MissingKey)
+        ));
+    }
+
+    #[test]
+    fn test_extract_from_query_empty_value() {
+        let plugin = test_plugin();
+        let req = request_with_query("api_key=");
+        assert!(matches!(
+            plugin.extract_from_query(&req),
+            Err(ApiKeyError::MissingKey)
+        ));
+    }
+
+    // --- lookup_key ---
+
+    #[test]
+    fn test_lookup_key_valid() {
+        let plugin = test_plugin();
+        let entry = plugin.lookup_key("sk-test-123").unwrap();
+        assert_eq!(entry.id, "key1");
+        assert_eq!(entry.name.as_deref(), Some("Test Key"));
+    }
+
+    #[test]
+    fn test_lookup_key_invalid() {
+        let plugin = test_plugin();
+        assert!(matches!(
+            plugin.lookup_key("sk-nonexistent"),
+            Err(ApiKeyError::InvalidKey)
+        ));
+    }
+
+    // --- on_request ---
+
+    #[test]
+    fn test_on_request_valid_key_injects_headers() {
+        let mut plugin = test_plugin();
+        let req = request_with_headers(vec![("X-API-Key", "sk-test-123")]);
+        match plugin.on_request(req) {
+            Action::Continue(r) => {
+                assert_eq!(r.headers.get("x-auth-key-id").unwrap(), "key1");
+                assert_eq!(r.headers.get("x-auth-key-name").unwrap(), "Test Key");
+                assert_eq!(r.headers.get("x-auth-key-scopes").unwrap(), "read,write");
+            }
+            _ => panic!("expected Continue"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_key_without_name_or_scopes() {
+        let mut plugin = test_plugin();
+        let req = request_with_headers(vec![("X-API-Key", "sk-noname")]);
+        match plugin.on_request(req) {
+            Action::Continue(r) => {
+                assert_eq!(r.headers.get("x-auth-key-id").unwrap(), "key3");
+                assert!(r.headers.get("x-auth-key-name").is_none());
+                assert!(r.headers.get("x-auth-key-scopes").is_none());
+            }
+            _ => panic!("expected Continue"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_missing_key_returns_401() {
+        let mut plugin = test_plugin();
+        let req = request_with_headers(vec![]);
+        match plugin.on_request(req) {
+            Action::ShortCircuit(r) => {
+                assert_eq!(r.status, 401);
+                assert!(r.headers.get("www-authenticate").unwrap().contains("missing_key"));
+            }
+            _ => panic!("expected ShortCircuit"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_invalid_key_returns_401() {
+        let mut plugin = test_plugin();
+        let req = request_with_headers(vec![("X-API-Key", "wrong-key")]);
+        match plugin.on_request(req) {
+            Action::ShortCircuit(r) => {
+                assert_eq!(r.status, 401);
+                assert!(r.headers.get("www-authenticate").unwrap().contains("invalid_key"));
+            }
+            _ => panic!("expected ShortCircuit"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_query_location() {
+        let mut plugin: ApiKeyAuth = serde_json::from_value(serde_json::json!({
+            "key_location": "query",
+            "keys": { "mykey": { "id": "q1" } }
+        }))
+        .unwrap();
+        let req = request_with_query("api_key=mykey");
+        match plugin.on_request(req) {
+            Action::Continue(r) => assert_eq!(r.headers.get("x-auth-key-id").unwrap(), "q1"),
+            _ => panic!("expected Continue"),
+        }
+    }
+
+    // --- unauthorized_response ---
+
+    #[test]
+    fn test_unauthorized_response_format() {
+        let plugin = test_plugin();
+        let resp = plugin.unauthorized_response(&ApiKeyError::MissingKey);
+        assert_eq!(resp.status, 401);
+        assert_eq!(
+            resp.headers.get("content-type").unwrap(),
+            "application/json"
+        );
+        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:authentication-failed");
+        assert_eq!(body["status"], 401);
+    }
+
+    // --- url_decode ---
+
+    #[test]
+    fn test_url_decode_percent_encoding() {
+        assert_eq!(url_decode("hello%20world"), "hello world");
+        assert_eq!(url_decode("a%2Fb"), "a/b");
+    }
+
+    #[test]
+    fn test_url_decode_plus_as_space() {
+        assert_eq!(url_decode("hello+world"), "hello world");
+    }
+
+    #[test]
+    fn test_url_decode_no_encoding() {
+        assert_eq!(url_decode("plain-text"), "plain-text");
+    }
+
+    #[test]
+    fn test_url_decode_invalid_escape() {
+        assert_eq!(url_decode("a%ZZb"), "a%ZZb");
+    }
+
+    // --- config deserialization ---
+
+    #[test]
+    fn test_config_defaults() {
+        let plugin: ApiKeyAuth = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(plugin.key_location, "header");
+        assert_eq!(plugin.header_name, "X-API-Key");
+        assert_eq!(plugin.query_param, "api_key");
+        assert!(plugin.keys.is_empty());
+    }
+
+    #[test]
+    fn test_config_custom_header() {
+        let plugin: ApiKeyAuth = serde_json::from_value(serde_json::json!({
+            "header_name": "Authorization",
+            "keys": { "Bearer tok": { "id": "t1" } }
+        }))
+        .unwrap();
+        assert_eq!(plugin.header_name, "Authorization");
+    }
+
+    // --- on_response passthrough ---
+
+    #[test]
+    fn test_on_response_passthrough() {
+        let mut plugin = test_plugin();
+        let resp = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some("ok".to_string()),
+        };
+        let result = plugin.on_response(resp);
+        assert_eq!(result.status, 200);
+        assert_eq!(result.body.as_deref(), Some("ok"));
+    }
+}

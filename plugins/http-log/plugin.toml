@@ -1,0 +1,13 @@
+[plugin]
+name = "http-log"
+version = "0.1.0"
+type = "middleware"
+description = "HTTP logging middleware that sends request/response logs to an HTTP endpoint"
+wasm = "http-log.wasm"
+
+[capabilities]
+log = true
+time = true
+context_get = true
+context_set = true
+host_functions = ["host_http_call"]

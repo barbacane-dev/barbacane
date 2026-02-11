@@ -15,8 +15,8 @@ Items are tagged with their source ADR or SPEC for traceability.
 | `request-transformer` | Middleware | Modify headers, query params, body before upstream | Competitive analysis |
 | `response-transformer` | Middleware | Modify response headers/body before client | Competitive analysis |
 | ~~`ip-restriction`~~ | ~~Middleware~~ | ~~Allow/deny by IP or CIDR range~~ | **DONE** |
-| `basic-auth` | Middleware | Username/password authentication | Competitive analysis |
-| `http-log` | Middleware | Send request/response logs to HTTP endpoint | Competitive analysis |
+| ~~`basic-auth`~~ | ~~Middleware~~ | ~~Username/password authentication~~ | **DONE** |
+| ~~`http-log`~~ | ~~Middleware~~ | ~~Send request/response logs to HTTP endpoint~~ | **DONE** |
 | ~~`correlation-id`~~ | ~~Middleware~~ | ~~Propagate/generate X-Correlation-ID header~~ | **DONE** |
 
 ### P1 — Important for Production
