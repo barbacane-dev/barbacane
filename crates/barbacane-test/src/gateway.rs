@@ -3922,4 +3922,75 @@ paths:
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["message"], "OK");
     }
+
+    // =========================================================================
+    // Fixture compilation tests
+    //
+    // Verify that every plugin fixture spec compiles and the gateway starts.
+    // These don't test runtime behavior — just that the plugin config schemas
+    // are valid and the artifact builds successfully.
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_fixture_compiles_mock() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/mock.yaml")
+            .await
+            .expect("mock fixture failed to compile");
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_fixture_compiles_lambda() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/lambda.yaml")
+            .await
+            .expect("lambda fixture failed to compile");
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_fixture_compiles_oauth2_auth() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/oauth2-auth.yaml")
+            .await
+            .expect("oauth2-auth fixture failed to compile");
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_fixture_compiles_oidc_auth() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/oidc-auth.yaml")
+            .await
+            .expect("oidc-auth fixture failed to compile");
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_fixture_compiles_http_log() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/http-log.yaml")
+            .await
+            .expect("http-log fixture failed to compile");
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_fixture_compiles_observability() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/observability.yaml")
+            .await
+            .expect("observability fixture failed to compile");
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_fixture_compiles_correlation_id() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/correlation-id.yaml")
+            .await
+            .expect("correlation-id fixture failed to compile");
+        let resp = gateway.get("/__barbacane/health").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
 }

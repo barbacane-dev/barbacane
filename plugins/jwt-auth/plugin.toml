@@ -6,4 +6,4 @@ description = "JWT authentication middleware for validating Bearer tokens"
 wasm = "jwt-auth.wasm"
 
 [capabilities]
-host_functions = ["host_verify_signature"]
+host_functions = ["verify_signature"]

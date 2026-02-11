@@ -240,6 +240,60 @@ Includes RFC 6750 `WWW-Authenticate` header with error details.
 
 ---
 
+### oidc-auth
+
+OpenID Connect authentication via OIDC Discovery and JWKS. Automatically fetches the provider's signing keys and validates JWT tokens with full cryptographic verification.
+
+```yaml
+x-barbacane-middlewares:
+  - name: oidc-auth
+    config:
+      issuer_url: https://accounts.google.com
+      audience: my-api-client-id
+      required_scopes: "openid profile email"
+      clock_skew_seconds: 60
+      jwks_refresh_seconds: 300
+      timeout: 5.0
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `issuer_url` | string | **required** | OIDC issuer URL (e.g., `https://accounts.google.com`) |
+| `audience` | string | - | Expected `aud` claim. If set, tokens must match |
+| `required_scopes` | string | - | Space-separated required scopes |
+| `clock_skew_seconds` | integer | `60` | Clock skew tolerance for `exp`/`nbf` validation |
+| `jwks_refresh_seconds` | integer | `300` | How often to refresh JWKS keys (seconds) |
+| `timeout` | float | `5.0` | HTTP timeout for discovery and JWKS calls (seconds) |
+
+#### How It Works
+
+1. Extracts the Bearer token from the `Authorization` header
+2. Parses the JWT header to determine the signing algorithm and key ID (`kid`)
+3. Fetches `{issuer_url}/.well-known/openid-configuration` (cached)
+4. Fetches the JWKS endpoint from the discovery document (cached with TTL)
+5. Finds the matching public key by `kid` (or `kty`/`use` fallback)
+6. Verifies the signature using `host_verify_signature` (RS256/RS384/RS512, ES256/ES384)
+7. Validates claims: `iss`, `aud`, `exp`, `nbf`
+8. Checks required scopes (if configured)
+
+#### Context Headers
+
+Sets headers for downstream:
+- `x-auth-sub` - Subject (user ID)
+- `x-auth-scope` - Token scopes
+- `x-auth-claims` - Full JWT payload as JSON
+
+#### Error Responses
+
+- `401 Unauthorized` - Missing token, invalid token, expired token, bad signature, unknown issuer
+- `403 Forbidden` - Token lacks required scopes
+
+Includes RFC 6750 `WWW-Authenticate` header with error details.
+
+---
+
 ### basic-auth
 
 Validates credentials from the `Authorization: Basic` header per RFC 7617. Useful for internal APIs, admin endpoints, or simple services that don't need a full identity provider.
@@ -723,7 +777,8 @@ x-barbacane-middlewares:
   - name: ip-restriction    # 4. Block bad IPs immediately
   - name: request-size-limit # 5. Reject oversized requests
   - name: rate-limit        # 6. Rate limit before auth (cheaper)
-  - name: basic-auth        # 7. Authenticate
+  - name: oidc-auth          # 7. Authenticate (OIDC/JWT)
+  - name: basic-auth        # 8. Authenticate (fallback)
 ```
 
 ### Fail Fast

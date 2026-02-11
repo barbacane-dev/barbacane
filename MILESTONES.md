@@ -64,6 +64,8 @@ See [BACKLOG.md](BACKLOG.md) for the full prioritized backlog.
 **Goal:** Additional authentication and authorization plugins.
 
 - [x] `basic-auth` plugin — username/password authentication
+- [x] `oidc-auth` plugin — OpenID Connect discovery + JWKS validation
+- [x] `host_verify_signature` host function — RSA/ECDSA signature verification via `ring`
 - [ ] `acl` plugin — access control lists after authentication
 - [ ] Security plugins documentation
 
@@ -80,7 +82,7 @@ See [BACKLOG.md](BACKLOG.md) for the full prioritized backlog.
 
 - [ ] `barbacane dev` — local dev server with file watching
 - [ ] `barbacane plugin init` — scaffold new plugin projects
-- [ ] JWKS fetch for jwt-auth (deferred from M6a)
+- [x] JWKS fetch for jwt-auth (deferred from M6a) — implemented via `host_verify_signature` + `oidc-auth`
 - [ ] Improved error messages
 
 ---

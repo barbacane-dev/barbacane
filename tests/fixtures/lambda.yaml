@@ -1,0 +1,54 @@
+openapi: "3.0.3"
+info:
+  title: Lambda Dispatch Test API
+  version: "1.0.0"
+  description: API for testing AWS Lambda dispatcher
+
+paths:
+  /lambda:
+    get:
+      summary: Endpoint dispatched to Lambda
+      operationId: getLambda
+      x-barbacane-dispatch:
+        name: lambda
+        config:
+          url: "https://abc123.lambda-url.us-east-1.on.aws/"
+          timeout: 30.0
+          pass_through_headers: true
+      responses:
+        "200":
+          description: Lambda response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+    post:
+      summary: POST endpoint dispatched to Lambda
+      operationId: postLambda
+      x-barbacane-dispatch:
+        name: lambda
+        config:
+          url: "https://abc123.lambda-url.us-east-1.on.aws/"
+          timeout: 60.0
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                payload:
+                  type: object
+      responses:
+        "200":
+          description: Lambda response
+          content:
+            application/json:
+              schema:
+                type: object

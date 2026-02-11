@@ -147,6 +147,7 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "nats_publish",
     "telemetry",
     "generate_uuid",
+    "verify_signature",
 ];
 
 /// Check if a capability name is known.
@@ -173,6 +174,7 @@ pub fn capability_to_imports(capability: &str) -> &'static [&'static str] {
             "host_span_set_attribute",
         ],
         "generate_uuid" => &["host_uuid_generate", "host_uuid_read_result"],
+        "verify_signature" => &["host_verify_signature"],
         _ => &[],
     }
 }

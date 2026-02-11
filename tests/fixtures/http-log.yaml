@@ -1,0 +1,67 @@
+openapi: "3.0.3"
+info:
+  title: HTTP Log Test API
+  version: "1.0.0"
+  description: API for testing HTTP logging middleware
+
+# Global middleware - log all requests to an HTTP endpoint
+x-barbacane-middlewares:
+  - name: http-log
+    config:
+      endpoint: "http://log-collector:8080/ingest"
+      method: POST
+      timeout_ms: 2000
+      include_headers: true
+      include_body: true
+      custom_fields:
+        service: test-api
+        environment: test
+
+paths:
+  /logged:
+    get:
+      summary: Endpoint with HTTP logging
+      operationId: getLogged
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Request logged"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /logged-minimal:
+    get:
+      summary: Endpoint with minimal logging (no headers/body)
+      operationId: getLoggedMinimal
+      x-barbacane-middlewares:
+        - name: http-log
+          config:
+            endpoint: "http://log-collector:8080/ingest"
+            include_headers: false
+            include_body: false
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Minimal log"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string

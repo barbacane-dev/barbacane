@@ -32,3 +32,9 @@ plugins:
     path: ../../plugins/basic-auth/basic-auth.wasm
   http-log:
     path: ../../plugins/http-log/http-log.wasm
+  oidc-auth:
+    path: ../../plugins/oidc-auth/oidc-auth.wasm
+  observability:
+    path: ../../plugins/observability/observability.wasm
+  lambda:
+    path: ../../plugins/lambda/lambda.wasm

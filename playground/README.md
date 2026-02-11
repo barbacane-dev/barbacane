@@ -28,6 +28,7 @@ That's it! The API specs are compiled automatically before the gateway starts.
 | **Grafana** | http://localhost:3000 | Dashboards (admin/admin) |
 | **Prometheus** | http://localhost:9090 | Metrics |
 | **NATS** | nats://localhost:4222 | Message broker ([monitoring](http://localhost:8222)) |
+| **Mock OAuth** | http://localhost:9099 | OIDC Provider ([discovery](http://localhost:9099/barbacane/.well-known/openid-configuration)) |
 | **WireMock** | http://localhost:8081/__admin | Mock backend admin |
 
 ## API Endpoints
@@ -58,15 +59,15 @@ curl http://localhost:8080/trips/f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d
 curl http://localhost:8080/trips/f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d/realtime
 ```
 
-### Bookings (Requires JWT)
+### Bookings (Requires OIDC Auth)
 
-The booking endpoints require JWT authentication. For demo purposes, signature validation is disabled.
+The booking endpoints are protected by OpenID Connect authentication. A mock OAuth2 server issues signed JWT tokens that the gateway validates with full cryptographic verification (OIDC Discovery + JWKS).
 
 ```bash
-# Create a demo JWT (paste this into jwt.io to customize)
-# Header: {"alg":"RS256","typ":"JWT"}
-# Payload: {"sub":"user123","iss":"demo","aud":"trains","exp":1893456000}
-TOKEN="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwiaXNzIjoiZGVtbyIsImF1ZCI6InRyYWlucyIsImV4cCI6MTg5MzQ1NjAwMH0.demo"
+# Get an access token from the mock OIDC provider
+TOKEN=$(curl -s -X POST http://localhost:9099/barbacane/token \
+  -d "grant_type=client_credentials&scope=openid" \
+  | jq -r '.access_token')
 
 # List bookings
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/bookings
@@ -82,7 +83,16 @@ curl -X POST http://localhost:8080/bookings \
     "trip_id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
     "passengers": [{"name": "John Doe", "email": "john@example.com"}]
   }'
+
+# Without a token → 401 Unauthorized
+curl http://localhost:8080/bookings
 ```
+
+The OIDC flow:
+1. Gateway fetches `http://mock-oauth:8080/barbacane/.well-known/openid-configuration`
+2. Discovers the JWKS endpoint and fetches signing keys
+3. Validates the JWT signature (RS256) against the provider's public key
+4. Checks `iss`, `aud`, `exp` claims
 
 ### Events (NATS Dispatch)
 
@@ -301,10 +311,13 @@ docker compose down -v
 ┌──────────┐        │  ┌───────────┐      ┌───────────┐      ┌───────────┐         │
 │  Client  │───────────│ Barbacane │──────│  WireMock │      │ Prometheus│         │
 └──────────┘        │  │  :8080    │      │   :8081   │      │   :9090   │         │
-                    │  └──┬────┬───┘      └───────────┘      └─────┬─────┘         │
-                    │     │    │                                    │               │
-                    │     │    │ publish                    scrape  │               │
-                    │     │    ▼                                    │               │
+                    │  └──┬──┬──┬──┘      └───────────┘      └─────┬─────┘         │
+                    │     │  │  │                                   │               │
+                    │     │  │  │ OIDC/JWKS      ┌───────────┐     │               │
+                    │     │  │  └────────────────▶│Mock OAuth │     │               │
+                    │     │  │                    │   :9099   │     │               │
+                    │     │  │ publish            └───────────┘     │               │
+                    │     │  ▼                                scrape│               │
                     │     │ ┌───────────┐                          │               │
                     │     │ │   NATS    │                          │               │
                     │     │ │  :4222    │                          │               │

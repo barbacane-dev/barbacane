@@ -550,6 +550,7 @@ dependencies = [
  "parking_lot",
  "regex-lite",
  "reqwest",
+ "ring",
  "rskafka",
  "semver",
  "serde",

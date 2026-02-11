@@ -922,6 +922,56 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         state.last_http_result.take()
     })?;
 
+    // host_verify_signature - verify a cryptographic signature using a JWK
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_verify_signature",
+            |mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = req_ptr as usize;
+                let end = start + req_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                // Parse the verification request
+                let request: crate::crypto::VerifySignatureRequest =
+                    match serde_json::from_slice(&data[start..end]) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!(
+                                plugin = %caller.data_mut().plugin_name,
+                                "failed to parse verify_signature request: {}", e
+                            );
+                            return -1;
+                        }
+                    };
+
+                // Perform verification
+                match crate::crypto::verify_signature(&request) {
+                    Ok(true) => 1,
+                    Ok(false) => 0,
+                    Err(e) => {
+                        tracing::error!(
+                            plugin = %caller.data_mut().plugin_name,
+                            "signature verification error: {}", e
+                        );
+                        -1
+                    }
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_verify_signature: {}", e))
+        })?;
+
     // host_get_secret - get a secret by reference
     linker
         .func_wrap(

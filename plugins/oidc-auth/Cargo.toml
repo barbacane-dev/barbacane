@@ -1,0 +1,22 @@
+[package]
+name = "barbacane-oidc-auth"
+version = "0.1.0"
+edition = "2021"
+description = "OIDC authentication middleware plugin for Barbacane API gateway"
+license = "MIT"
+
+# Mark as standalone crate (not part of any workspace)
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+barbacane-plugin-sdk = { path = "../../crates/barbacane-plugin-sdk" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[profile.release]
+opt-level = "s"
+lto = true

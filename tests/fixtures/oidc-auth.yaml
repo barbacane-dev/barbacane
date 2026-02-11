@@ -1,0 +1,89 @@
+openapi: "3.0.3"
+info:
+  title: OIDC Auth Test API
+  version: "1.0.0"
+  description: API for testing OpenID Connect authentication middleware
+
+# Global middleware - requires OIDC auth for all endpoints
+x-barbacane-middlewares:
+  - name: oidc-auth
+    config:
+      issuer_url: "https://accounts.example.com"
+      audience: "test-audience"
+      clock_skew_seconds: 60
+      jwks_refresh_seconds: 300
+
+paths:
+  /protected:
+    get:
+      summary: Protected endpoint requiring OIDC auth
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "401":
+          description: Unauthorized
+
+  /public:
+    get:
+      summary: Public endpoint (overrides global middleware)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Public access"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /protected-with-scopes:
+    get:
+      summary: Protected endpoint requiring specific scopes
+      operationId: getProtectedWithScopes
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          config:
+            issuer_url: "https://accounts.example.com"
+            audience: "test-audience"
+            required_scopes: "read write"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Scoped access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "403":
+          description: Forbidden - insufficient scopes

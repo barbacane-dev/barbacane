@@ -1,0 +1,90 @@
+openapi: "3.0.3"
+info:
+  title: OAuth2 Auth Test API
+  version: "1.0.0"
+  description: API for testing OAuth2 token introspection middleware (RFC 7662)
+
+# Global middleware - requires OAuth2 token for all endpoints
+x-barbacane-middlewares:
+  - name: oauth2-auth
+    config:
+      introspection_endpoint: "https://auth.example.com/oauth2/introspect"
+      client_id: "test-client"
+      client_secret: "test-secret"
+      timeout: 5.0
+
+paths:
+  /protected:
+    get:
+      summary: Protected endpoint requiring OAuth2 auth
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "401":
+          description: Unauthorized
+
+  /public:
+    get:
+      summary: Public endpoint (overrides global middleware)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Public access"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+
+  /scoped:
+    get:
+      summary: Endpoint requiring specific scopes
+      operationId: getScoped
+      x-barbacane-middlewares:
+        - name: oauth2-auth
+          config:
+            introspection_endpoint: "https://auth.example.com/oauth2/introspect"
+            client_id: "test-client"
+            client_secret: "test-secret"
+            required_scopes: "read write"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Scoped access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "403":
+          description: Forbidden - insufficient scopes

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### OIDC Authentication
+- `oidc-auth` middleware plugin — OpenID Connect authentication with automatic JWKS discovery
+  - OIDC Discovery (`/.well-known/openid-configuration`) and JWKS endpoint fetching via `host_http_call`
+  - JWT parsing with base64url-encoded header, payload, and signature
+  - Algorithm validation (RS256/RS384/RS512, ES256/ES384; rejects `none` and HMAC)
+  - Claims validation: `iss`, `aud`, `exp`, `nbf` with configurable clock skew
+  - Scope enforcement via `required_scopes` config
+  - JWKS key caching with configurable refresh interval
+  - Key lookup by `kid` with fallback to `kty`/`use` matching
+  - RFC 6750 `WWW-Authenticate` error responses
+  - Auth context headers: `x-auth-sub`, `x-auth-scope`, `x-auth-claims`
+
+#### Host Functions
+- `host_verify_signature` — cryptographic signature verification using `ring`
+  - Supports RSA (RS256, RS384, RS512) and ECDSA (ES256, ES384)
+  - JWK-based public key input with DER/uncompressed point construction
+  - Returns 1 (valid), 0 (invalid), -1 (error)
+  - Registered as `verify_signature` capability
+
 ## [0.1.1] - 2026-02-10
 
 ### Added
