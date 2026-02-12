@@ -1,26 +1,30 @@
-### Barbacane API Test Scenarios (M2-M11)
-### Usage: Start gateway first with:
-###   cargo build
-###   ./target/debug/barbacane compile --spec tests/fixtures/validation.yaml --output /tmp/test.bca
-###   ./target/debug/barbacane serve --artifact /tmp/test.bca --dev
-###
-### Note: Mock dispatcher now runs as a WASM plugin (M4)
+### Barbacane API Test Scenarios
+### Each section has its own startup command.
+### Tip: You can run individual requests from VS Code with the REST Client extension.
 
 @baseUrl = http://localhost:8080
 
+### ================================================================
+### Validation & CRUD (validation.yaml)
+### ================================================================
+### Setup:
+###   cargo build
+###   ./target/debug/barbacane compile --spec tests/fixtures/validation.yaml -m tests/fixtures/barbacane.yaml -o /tmp/test.bca
+###   ./target/debug/barbacane serve --artifact /tmp/test.bca --dev
+
 ### ================================
-### Health & Basic Routes
+### Health & Internal Endpoints
 ### ================================
 
-### Health check (should return 200)
-GET {{baseUrl}}/health
-
-### Internal health endpoint
+### Health check (200)
 GET {{baseUrl}}/__barbacane/health
 
+###
 
-### Internal spec endpoint
+### OpenAPI specs index
 GET {{baseUrl}}/__barbacane/openapi
+
+###
 
 ### ================================
 ### Request Body Validation
@@ -30,11 +34,15 @@ GET {{baseUrl}}/__barbacane/openapi
 POST {{baseUrl}}/users
 Content-Type: application/json
 
+###
+
 ### Missing required field 'name' (400)
 POST {{baseUrl}}/users
 Content-Type: application/json
 
 {"email": "test@example.com"}
+
+###
 
 ### Valid request body (201)
 POST {{baseUrl}}/users
@@ -42,15 +50,15 @@ Content-Type: application/json
 
 {"name": "Test User", "email": "test@example.com"}
 
+###
+
 ### Valid request with all fields (201)
 POST {{baseUrl}}/users
 Content-Type: application/json
 
 {"name": "Test User", "email": "test@example.com", "age": 25}
 
-### ================================
-### Content-Type Validation
-### ================================
+###
 
 ### Wrong content type (400)
 POST {{baseUrl}}/users
@@ -58,14 +66,26 @@ Content-Type: text/plain
 
 name=Test
 
-### Wrong content type - XML (400)
-POST {{baseUrl}}/users
-Content-Type: application/xml
+###
 
-<user><name>Test</name></user>
+### Invalid JSON syntax (400)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{invalid json}
+
+###
+
+### Wrong type for field (400)
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{"name": 123, "email": "test@example.com"}
+
+###
 
 ### ================================
-### Header Validation
+### Header & Query Validation
 ### ================================
 
 ### Missing required X-Request-ID header (400)
@@ -74,6 +94,8 @@ Content-Type: application/json
 
 {"name": "Updated"}
 
+###
+
 ### With required X-Request-ID header (200)
 PUT {{baseUrl}}/users/123
 Content-Type: application/json
@@ -81,40 +103,17 @@ X-Request-ID: abc-123
 
 {"name": "Updated"}
 
-### ================================
-### Query Parameter Validation
-### ================================
-
-### No query params (200)
-GET {{baseUrl}}/users
+###
 
 ### Valid query params (200)
 GET {{baseUrl}}/users?page=1&limit=10
 
-### Valid page only (200)
-GET {{baseUrl}}/users?page=5
-
-### Valid limit only (200)
-GET {{baseUrl}}/users?limit=50
-
-### Invalid page format - zero (400)
-GET {{baseUrl}}/users?page=0
-
-### Invalid page format - negative (400)
-GET {{baseUrl}}/users?page=-1
-
-### Invalid page format - letters (400)
-GET {{baseUrl}}/users?page=abc
+###
 
 ### Invalid limit - over 100 (400)
 GET {{baseUrl}}/users?limit=101
 
-### ================================
-### Path Parameter Validation
-### ================================
-
-### Valid path param (200)
-GET {{baseUrl}}/users/123
+###
 
 ### ================================
 ### 404 & 405 Errors
@@ -123,104 +122,22 @@ GET {{baseUrl}}/users/123
 ### Non-existent route (404)
 GET {{baseUrl}}/nonexistent
 
+###
+
 ### Method not allowed (405)
 DELETE {{baseUrl}}/health
 
-### ================================
-### JSON Schema Validation
-### ================================
-
-### Invalid JSON syntax (400)
-POST {{baseUrl}}/users
-Content-Type: application/json
-
-{invalid json}
-
-### Wrong type for field (400)
-POST {{baseUrl}}/users
-Content-Type: application/json
-
-{"name": 123, "email": "test@example.com"}
-
-### Name too short - minLength violation (400 - if minLength is enforced)
-POST {{baseUrl}}/users
-Content-Type: application/json
-
-{"name": "", "email": "test@example.com"}
-
 ### ================================================================
-### M4: Mock Dispatcher (WASM Plugin)
+### HTTP Upstream Proxy (proxy.yaml)
 ### ================================================================
-### The mock dispatcher is now a WASM plugin that returns static responses
-### configured in the OpenAPI spec. Features:
-### - Custom status codes (status)
-### - Custom response bodies (body)
-### - Custom headers (headers)
-### - Content-Type configuration (content_type)
-
-### Mock health check - returns {"status":"ok"} (WASM plugin)
-# Expected: 200 OK
-GET {{baseUrl}}/health
-
-###
-
-### Mock user list - returns {"users":[]}
-# Expected: 200 OK
-GET {{baseUrl}}/users
-
-###
-
-### Mock create user - returns {"id":"123"} with 201
-# Expected: 201 Created
-POST {{baseUrl}}/users
-Content-Type: application/json
-
-{"name": "Test User", "email": "test@example.com"}
-
-###
-
-### Mock get user - UUID format required
-# Expected: 200 OK
-GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
-
-###
-
-### Mock update user - returns {"updated":true}
-# Expected: 200 OK
-PUT {{baseUrl}}/users/123
-Content-Type: application/json
-X-Request-ID: req-abc-123
-
-{"name": "Updated User"}
-
-###
-
-### ================================================================
-### M4: HTTP Upstream Proxy Tests
-### ================================================================
-### Usage: Start gateway with proxy.yaml:
-###   cargo build
-###   ./target/debug/barbacane compile --spec tests/fixtures/proxy.yaml --output /tmp/proxy.bca
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/proxy.yaml -m tests/fixtures/barbacane.yaml -o /tmp/proxy.bca
 ###   ./target/debug/barbacane serve --artifact /tmp/proxy.bca --dev --allow-plaintext-upstream
-
-### Local health check (mock dispatcher via WASM)
-GET {{baseUrl}}/health
-
-### ================================
-### Proxy to httpbin.org
-### ================================
 
 ### Proxy GET - returns request info
 GET {{baseUrl}}/proxy/get
 
-### Proxy GET - returns request headers
-GET {{baseUrl}}/proxy/headers
-
-### Proxy GET - returns client IP
-GET {{baseUrl}}/proxy/ip
-
-### Proxy GET - returns user agent
-GET {{baseUrl}}/proxy/user-agent
+###
 
 ### Proxy POST - echo JSON body
 POST {{baseUrl}}/proxy/post
@@ -228,110 +145,44 @@ Content-Type: application/json
 
 {"message": "Hello from Barbacane!", "timestamp": "2024-01-01T00:00:00Z"}
 
-### Proxy POST - complex JSON
-POST {{baseUrl}}/proxy/post
-Content-Type: application/json
-
-{
-  "user": {
-    "name": "Alice",
-    "email": "alice@example.com"
-  },
-  "items": ["apple", "banana", "cherry"],
-  "count": 3
-}
-
-### ================================
-### Status Code Passthrough
-### ================================
-
-### Upstream returns 200
-GET {{baseUrl}}/status/200
-
-### Upstream returns 201
-GET {{baseUrl}}/status/201
-
-### Upstream returns 400
-GET {{baseUrl}}/status/400
-
-### Upstream returns 404
-GET {{baseUrl}}/status/404
+###
 
 ### Upstream returns 500
 GET {{baseUrl}}/status/500
 
-### ================================
-### Timeout Testing
-### ================================
+###
 
-### Fast response (2 seconds, within 5s timeout)
+### Fast response (2s, within 5s timeout)
 GET {{baseUrl}}/delay/2
 
-### Slow response (6 seconds, exceeds 5s timeout -> 504)
+###
+
+### Slow response (6s, exceeds 5s timeout -> 504)
 GET {{baseUrl}}/delay/6
 
 ### ================================================================
-### M11: API Lifecycle / Deprecation Tests
+### Full CRUD (full-crud.yaml)
 ### ================================================================
-### Usage: Start gateway with deprecated.yaml:
-###   ./target/debug/barbacane compile --spec tests/fixtures/deprecated.yaml -m tests/fixtures/barbacane.yaml -o /tmp/deprecated.bca
-###   ./target/debug/barbacane serve --artifact /tmp/deprecated.bca --dev
-
-### Current endpoint - no deprecation headers
-# Expected: 200 OK, no Deprecation/Sunset headers
-GET {{baseUrl}}/v2/users
-
-###
-
-### Deprecated endpoint (no sunset date)
-# Expected: 200 OK with Deprecation: true header
-GET {{baseUrl}}/v1/users
-
-###
-
-### Deprecated endpoint with sunset date
-# Expected: 200 OK with Deprecation: true AND Sunset headers
-GET {{baseUrl}}/v1/users/123
-
-###
-
-### Legacy endpoint with far-future sunset (2030)
-# Expected: 200 OK with Deprecation: true AND Sunset: 2030 headers
-GET {{baseUrl}}/legacy/status
-
-### ================================================================
-### M11: Full CRUD API Tests
-### ================================================================
-### Usage: Start gateway with full-crud.yaml:
+### Setup:
 ###   ./target/debug/barbacane compile --spec tests/fixtures/full-crud.yaml -m tests/fixtures/barbacane.yaml -o /tmp/full-crud.bca
 ###   ./target/debug/barbacane serve --artifact /tmp/full-crud.bca --dev
 
-### ================================
-### List Users
-### ================================
-
-### List users - no params
-# Expected: 200 OK
+### List users (200)
 GET {{baseUrl}}/users
 
 ###
 
-### List users - with pagination
-# Expected: 200 OK
+### List users with pagination (200)
 GET {{baseUrl}}/users?limit=10&offset=0
 
 ###
 
-### List users - invalid limit (exceeds 100)
-# Expected: 400 Bad Request
+### List users - invalid limit (400)
 GET {{baseUrl}}/users?limit=200
 
-### ================================
-### Create User
-### ================================
+###
 
-### Create user - valid
-# Expected: 201 Created
+### Create user - valid (201)
 POST {{baseUrl}}/users
 Content-Type: application/json
 
@@ -339,17 +190,7 @@ Content-Type: application/json
 
 ###
 
-### Create user - with optional age
-# Expected: 201 Created
-POST {{baseUrl}}/users
-Content-Type: application/json
-
-{"email": "test@example.com", "name": "Test User", "age": 30}
-
-###
-
-### Create user - missing required name
-# Expected: 400 Bad Request
+### Create user - missing required name (400)
 POST {{baseUrl}}/users
 Content-Type: application/json
 
@@ -357,33 +198,25 @@ Content-Type: application/json
 
 ###
 
-### Create user - invalid email format
-# Expected: 400 Bad Request
+### Create user - invalid email format (400)
 POST {{baseUrl}}/users
 Content-Type: application/json
 
 {"email": "not-an-email", "name": "Test User"}
 
-### ================================
-### Get User
-### ================================
+###
 
-### Get user - valid UUID
-# Expected: 200 OK
+### Get user - valid UUID (200)
 GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
 
 ###
 
-### Get user - invalid UUID format
-# Expected: 400 Bad Request
+### Get user - invalid UUID format (400)
 GET {{baseUrl}}/users/not-a-uuid
 
-### ================================
-### Update User
-### ================================
+###
 
-### Update user - valid
-# Expected: 200 OK
+### Update user (200)
 PUT {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
 Content-Type: application/json
 
@@ -391,60 +224,551 @@ Content-Type: application/json
 
 ###
 
-### Update user - partial update
-# Expected: 200 OK
-PUT {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
-Content-Type: application/json
-
-{"name": "Just Name"}
-
-### ================================
-### Delete User
-### ================================
-
-### Delete user
-# Expected: 204 No Content
+### Delete user (204)
 DELETE {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000
-
-### ================================
-### Nested Resources (User Orders)
-### ================================
-
-### Get user orders
-# Expected: 200 OK
-GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000/orders
 
 ###
 
-### Get user orders - with status filter
-# Expected: 200 OK
+### Get user orders with status filter (200)
 GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000/orders?status=pending
 
 ###
 
-### Get user orders - invalid status enum
-# Expected: 400 Bad Request
+### Get user orders - invalid status enum (400)
 GET {{baseUrl}}/users/550e8400-e29b-41d4-a716-446655440000/orders?status=invalid
 
 ### ================================================================
-### M11: Multi-Spec API Tests
+### Basic Auth (basic-auth.yaml)
 ### ================================================================
-### Usage: Start gateway with combined specs:
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/basic-auth.yaml -m tests/fixtures/barbacane.yaml -o /tmp/basic-auth.bca
+###   ./target/debug/barbacane serve --artifact /tmp/basic-auth.bca --dev
+###
+### Credentials: admin/secret123 (roles: admin,read,write), reader/readonly456 (roles: read)
+
+### Valid admin credentials (200)
+# Check response headers: x-auth-consumer, x-auth-consumer-groups, x-auth-user, x-auth-roles
+GET {{baseUrl}}/protected
+Authorization: Basic YWRtaW46c2VjcmV0MTIz
+
+###
+
+### Valid reader credentials (200)
+# Reader has no roles, so x-auth-consumer-groups should be absent
+GET {{baseUrl}}/protected
+Authorization: Basic cmVhZGVyOnJlYWRvbmx5NDU2
+
+###
+
+### Missing Authorization header (401)
+# Check: WWW-Authenticate header with realm="test-api"
+GET {{baseUrl}}/protected
+
+###
+
+### Invalid password (401)
+GET {{baseUrl}}/protected
+Authorization: Basic YWRtaW46d3JvbmdwYXNz
+
+###
+
+### Unknown user (401)
+GET {{baseUrl}}/protected
+Authorization: Basic dW5rbm93bjphbnl0aGluZw==
+
+###
+
+### Malformed Authorization header (401)
+GET {{baseUrl}}/protected
+Authorization: Basic !!!invalid-base64!!!
+
+###
+
+### Public endpoint - no auth required (200)
+GET {{baseUrl}}/public
+
+### ================================================================
+### JWT Auth (jwt-auth.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/jwt-auth.yaml -m tests/fixtures/barbacane.yaml -o /tmp/jwt-auth.bca
+###   ./target/debug/barbacane serve --artifact /tmp/jwt-auth.bca --dev
+###
+### Uses skip_signature_validation for testing with unsigned tokens.
+### Token format: base64url(header).base64url(claims).sig
+
+### Valid JWT with sub and iss (200)
+# Header: {"alg":"RS256","typ":"JWT"}
+# Claims: {"sub":"user123","iss":"test-issuer","aud":"test-audience","exp":4102444800}
+# Check response headers: x-auth-consumer=user123, x-auth-sub=user123, x-auth-claims
+GET {{baseUrl}}/protected
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwiaXNzIjoidGVzdC1pc3N1ZXIiLCJhdWQiOiJ0ZXN0LWF1ZGllbmNlIiwiZXhwIjo0MTAyNDQ0ODAwfQ.sig
+
+###
+
+### Missing Authorization header (401)
+GET {{baseUrl}}/protected
+
+###
+
+### Expired JWT token (401)
+# Header: {"alg":"RS256","typ":"JWT"}
+# Claims: {"sub":"user123","iss":"test-issuer","exp":1000000000}
+GET {{baseUrl}}/protected
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwiaXNzIjoidGVzdC1pc3N1ZXIiLCJleHAiOjEwMDAwMDAwMDB9.sig
+
+###
+
+### Wrong issuer (401)
+# Claims: {"sub":"user123","iss":"wrong-issuer","exp":4102444800}
+GET {{baseUrl}}/protected
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwiaXNzIjoid3JvbmctaXNzdWVyIiwiZXhwIjo0MTAyNDQ0ODAwfQ.sig
+
+###
+
+### Malformed token - only 2 parts (401)
+GET {{baseUrl}}/protected
+Authorization: Bearer header.payload
+
+###
+
+### Non-Bearer scheme (401)
+GET {{baseUrl}}/protected
+Authorization: Basic dXNlcjpwYXNz
+
+###
+
+### Public endpoint - no auth required (200)
+GET {{baseUrl}}/public
+
+### ================================================================
+### API Key Auth (apikey-auth.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/apikey-auth.yaml -m tests/fixtures/barbacane.yaml -o /tmp/apikey-auth.bca
+###   ./target/debug/barbacane serve --artifact /tmp/apikey-auth.bca --dev
+###
+### Keys: test-key-123 (read,write), readonly-key-456 (read), query-key-789 (query param)
+
+### Valid API key in header (200)
+# Check response headers: x-auth-consumer=key1, x-auth-consumer-groups=read,write
+GET {{baseUrl}}/protected
+X-API-Key: test-key-123
+
+###
+
+### Read-only API key (200)
+# Check: x-auth-consumer-groups=read
+GET {{baseUrl}}/protected
+X-API-Key: readonly-key-456
+
+###
+
+### Missing API key (401)
+GET {{baseUrl}}/protected
+
+###
+
+### Invalid API key (401)
+GET {{baseUrl}}/protected
+X-API-Key: nonexistent-key
+
+###
+
+### API key via query param (200)
+GET {{baseUrl}}/query-auth?api_key=query-key-789
+
+###
+
+### Query param - missing key (401)
+GET {{baseUrl}}/query-auth
+
+###
+
+### Public endpoint - no auth required (200)
+GET {{baseUrl}}/public
+
+### ================================================================
+### ACL - Access Control Lists (acl.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/acl.yaml -m tests/fixtures/barbacane.yaml -o /tmp/acl.bca
+###   ./target/debug/barbacane serve --artifact /tmp/acl.bca --dev
+###
+### Users (basic-auth credentials):
+###   admin/admin123    -> roles: admin, editor
+###   editor/editor123  -> roles: editor
+###   viewer/viewer123  -> roles: viewer
+###   banned_user/banned123 -> roles: viewer, banned
+
+### ================================
+### /admin-only (allow: [admin])
+### ================================
+
+### Admin allowed (200)
+GET {{baseUrl}}/admin-only
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+###
+
+### Editor denied (403) - not in admin group
+GET {{baseUrl}}/admin-only
+Authorization: Basic ZWRpdG9yOmVkaXRvcjEyMw==
+
+###
+
+### Viewer denied (403)
+GET {{baseUrl}}/admin-only
+Authorization: Basic dmlld2VyOnZpZXdlcjEyMw==
+
+###
+
+### No auth (401) - basic-auth rejects before ACL
+GET {{baseUrl}}/admin-only
+
+###
+
+### ================================
+### /editors (allow: [admin, editor])
+### ================================
+
+### Admin allowed (200)
+GET {{baseUrl}}/editors
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+###
+
+### Editor allowed (200)
+GET {{baseUrl}}/editors
+Authorization: Basic ZWRpdG9yOmVkaXRvcjEyMw==
+
+###
+
+### Viewer denied (403)
+GET {{baseUrl}}/editors
+Authorization: Basic dmlld2VyOnZpZXdlcjEyMw==
+
+###
+
+### ================================
+### /deny-banned (deny: [banned])
+### ================================
+
+### Banned user denied (403) - has "banned" group
+GET {{baseUrl}}/deny-banned
+Authorization: Basic YmFubmVkX3VzZXI6YmFubmVkMTIz
+
+###
+
+### Editor allowed (200) - not in banned group
+GET {{baseUrl}}/deny-banned
+Authorization: Basic ZWRpdG9yOmVkaXRvcjEyMw==
+
+###
+
+### Admin allowed (200)
+GET {{baseUrl}}/deny-banned
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+###
+
+### ================================
+### /consumer-allow (allow_consumers: [admin], allow: [_restricted])
+### ================================
+
+### Admin consumer allowed (200) - bypass via allow_consumers
+GET {{baseUrl}}/consumer-allow
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+###
+
+### Editor consumer denied (403) - not in allow_consumers, no matching group
+GET {{baseUrl}}/consumer-allow
+Authorization: Basic ZWRpdG9yOmVkaXRvcjEyMw==
+
+###
+
+### ================================
+### /premium (allow: [premium], consumer_groups: {viewer: [premium]})
+### ================================
+
+### Viewer gets premium via static mapping (200)
+GET {{baseUrl}}/premium
+Authorization: Basic dmlld2VyOnZpZXdlcjEyMw==
+
+###
+
+### Admin denied (403) - no premium group
+GET {{baseUrl}}/premium
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+###
+
+### ================================
+### /public (no auth, no ACL)
+### ================================
+
+### Public access (200)
+GET {{baseUrl}}/public
+
+### ================================================================
+### Rate Limiting (rate-limit.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/rate-limit.yaml -m tests/fixtures/barbacane.yaml -o /tmp/rate-limit.bca
+###   ./target/debug/barbacane serve --artifact /tmp/rate-limit.bca --dev
+###
+### Quota: 3 requests / 60 seconds, keyed by X-Client-Id header
+
+### Request 1 of 3 (200)
+# Check headers: X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset
+GET {{baseUrl}}/limited
+X-Client-Id: tester-1
+
+###
+
+### Request 2 of 3 (200)
+GET {{baseUrl}}/limited
+X-Client-Id: tester-1
+
+###
+
+### Request 3 of 3 (200)
+GET {{baseUrl}}/limited
+X-Client-Id: tester-1
+
+###
+
+### Request 4 - over quota (429)
+# Check: Retry-After header
+GET {{baseUrl}}/limited
+X-Client-Id: tester-1
+
+###
+
+### Different client - separate quota (200)
+GET {{baseUrl}}/limited
+X-Client-Id: tester-2
+
+###
+
+### Unlimited endpoint (200)
+GET {{baseUrl}}/unlimited
+
+### ================================================================
+### IP Restriction (ip-restriction.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/ip-restriction.yaml -m tests/fixtures/barbacane.yaml -o /tmp/ip-restriction.bca
+###   ./target/debug/barbacane serve --artifact /tmp/ip-restriction.bca --dev
+
+### Localhost allowed by allowlist (200)
+GET {{baseUrl}}/allowlist
+
+###
+
+### Denied via X-Forwarded-For spoofing (403)
+# Simulates request from a non-allowed IP
+GET {{baseUrl}}/allowlist
+X-Forwarded-For: 203.0.113.50
+
+###
+
+### Public endpoint - no restriction (200)
+GET {{baseUrl}}/public
+
+### ================================================================
+### CORS (cors.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/cors.yaml -m tests/fixtures/barbacane.yaml -o /tmp/cors.bca
+###   ./target/debug/barbacane serve --artifact /tmp/cors.bca --dev
+
+### ================================
+### Preflight Requests (OPTIONS)
+### ================================
+
+### Preflight - any origin allowed (200)
+# Check: Access-Control-Allow-Origin: *, Access-Control-Allow-Methods, Access-Control-Max-Age
+OPTIONS {{baseUrl}}/any-origin
+Origin: https://any-site.com
+Access-Control-Request-Method: GET
+
+###
+
+### Preflight - specific origin allowed (200)
+# Check: Access-Control-Allow-Origin: https://example.com
+OPTIONS {{baseUrl}}/specific-origin
+Origin: https://example.com
+Access-Control-Request-Method: GET
+
+###
+
+### Preflight - specific origin denied (403 or missing CORS headers)
+OPTIONS {{baseUrl}}/specific-origin
+Origin: https://evil.com
+Access-Control-Request-Method: GET
+
+###
+
+### Preflight - with credentials (200)
+# Check: Access-Control-Allow-Credentials: true
+OPTIONS {{baseUrl}}/with-credentials
+Origin: https://trusted.example.com
+Access-Control-Request-Method: POST
+
+###
+
+### ================================
+### Simple Requests
+### ================================
+
+### Simple GET with Origin (200)
+# Check: Access-Control-Allow-Origin in response
+GET {{baseUrl}}/any-origin
+Origin: https://any-site.com
+
+###
+
+### GET without Origin - no CORS headers
+GET {{baseUrl}}/any-origin
+
+###
+
+### No-CORS endpoint
+GET {{baseUrl}}/no-cors
+
+### ================================================================
+### Correlation ID (correlation-id.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/correlation-id.yaml -m tests/fixtures/barbacane.yaml -o /tmp/correlation-id.bca
+###   ./target/debug/barbacane serve --artifact /tmp/correlation-id.bca --dev
+
+### Auto-generated correlation ID (200)
+# Check response header: x-correlation-id (should be a UUID)
+GET {{baseUrl}}/tracked
+
+###
+
+### Incoming correlation ID preserved (200)
+# Check: response x-correlation-id matches the sent value
+GET {{baseUrl}}/tracked
+X-Correlation-Id: my-trace-abc-123
+
+### ================================================================
+### Request Size Limit (request-size-limit.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/request-size-limit.yaml -m tests/fixtures/barbacane.yaml -o /tmp/request-size-limit.bca
+###   ./target/debug/barbacane serve --artifact /tmp/request-size-limit.bca --dev
+
+### Small body within 100 byte limit (200)
+POST {{baseUrl}}/limited
+Content-Type: application/json
+
+{"ok": true}
+
+###
+
+### Large body exceeding 100 byte limit (413)
+POST {{baseUrl}}/limited
+Content-Type: application/json
+
+{"data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+
+###
+
+### Unlimited endpoint - large body accepted (200)
+POST {{baseUrl}}/unlimited
+Content-Type: application/json
+
+{"data": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+
+### ================================================================
+### Cache (cache.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/cache.yaml -m tests/fixtures/barbacane.yaml -o /tmp/cache.bca
+###   ./target/debug/barbacane serve --artifact /tmp/cache.bca --dev
+
+### First request - cache miss (200)
+# Check response headers: X-Cache: MISS
+GET {{baseUrl}}/cached
+
+###
+
+### Second request - cache hit (200)
+# Check response headers: X-Cache: HIT
+GET {{baseUrl}}/cached
+
+###
+
+### Vary by Accept-Language - English (200)
+GET {{baseUrl}}/cached-with-vary
+Accept-Language: en
+
+###
+
+### Vary by Accept-Language - French (200, different cache entry)
+GET {{baseUrl}}/cached-with-vary
+Accept-Language: fr
+
+###
+
+### POST not cached (200)
+# POST requests bypass cache by default
+POST {{baseUrl}}/post-not-cached
+Content-Type: application/json
+
+{"data": "test"}
+
+###
+
+### Uncached endpoint (200)
+GET {{baseUrl}}/uncached
+
+### ================================================================
+### API Lifecycle / Deprecation (deprecated.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/deprecated.yaml -m tests/fixtures/barbacane.yaml -o /tmp/deprecated.bca
+###   ./target/debug/barbacane serve --artifact /tmp/deprecated.bca --dev
+
+### Current endpoint - no deprecation headers (200)
+GET {{baseUrl}}/v2/users
+
+###
+
+### Deprecated endpoint (200)
+# Check: Deprecation: true header
+GET {{baseUrl}}/v1/users
+
+###
+
+### Deprecated with sunset date (200)
+# Check: Deprecation: true AND Sunset headers
+GET {{baseUrl}}/v1/users/123
+
+###
+
+### Legacy endpoint with far-future sunset (200)
+# Check: Sunset: 2030-... header
+GET {{baseUrl}}/legacy/status
+
+### ================================================================
+### Multi-Spec (multi-spec/)
+### ================================================================
+### Setup:
 ###   ./target/debug/barbacane compile --spec tests/fixtures/multi-spec/users.yaml --spec tests/fixtures/multi-spec/orders.yaml -m tests/fixtures/multi-spec/barbacane.yaml -o /tmp/multi.bca
 ###   ./target/debug/barbacane serve --artifact /tmp/multi.bca --dev
 
-### ================================
-### Users Service (from users.yaml)
-### ================================
-
-### List users
-# Expected: 200 OK
+### Users service - list users (200)
 GET {{baseUrl}}/users
 
 ###
 
-### Create user
-# Expected: 201 Created
+### Users service - create user (201)
 POST {{baseUrl}}/users
 Content-Type: application/json
 
@@ -452,28 +776,12 @@ Content-Type: application/json
 
 ###
 
-### Get user by ID
-# Expected: 200 OK
-GET {{baseUrl}}/users/user-123
-
-### ================================
-### Orders Service (from orders.yaml)
-### ================================
-
-### List orders
-# Expected: 200 OK
+### Orders service - list orders (200)
 GET {{baseUrl}}/orders
 
 ###
 
-### List orders - with status filter
-# Expected: 200 OK
-GET {{baseUrl}}/orders?status=pending
-
-###
-
-### Create order
-# Expected: 201 Created
+### Orders service - create order (201)
 POST {{baseUrl}}/orders
 Content-Type: application/json
 
@@ -487,29 +795,5 @@ Content-Type: application/json
 
 ###
 
-### Get order by ID
-# Expected: 200 OK
-GET {{baseUrl}}/orders/order-123
-
-###
-
-### Update order status
-# Expected: 200 OK
-PUT {{baseUrl}}/orders/order-123/status
-Content-Type: application/json
-
-{"status": "shipped"}
-
-### ================================
-### Combined Health Check
-### ================================
-
-### Gateway health (should show combined routes count)
-# Expected: 200 OK with routes from both specs
+### Combined health check
 GET {{baseUrl}}/__barbacane/health
-
-###
-
-### OpenAPI specs list
-# Expected: 200 OK with list of both specs
-GET {{baseUrl}}/__barbacane/openapi

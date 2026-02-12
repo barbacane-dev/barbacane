@@ -113,6 +113,27 @@ paths:
 
 ---
 
+## Consumer Identity Headers
+
+All authentication middlewares set two standard headers on successful authentication, in addition to their plugin-specific headers:
+
+| Header | Description | Example |
+|--------|-------------|---------|
+| `x-auth-consumer` | Canonical consumer identifier | `"alice"`, `"user-123"` |
+| `x-auth-consumer-groups` | Comma-separated group/role memberships | `"admin,editor"`, `"read"` |
+
+These standard headers enable downstream middlewares (like [acl](#acl)) to enforce authorization without coupling to a specific auth plugin.
+
+| Plugin | `x-auth-consumer` source | `x-auth-consumer-groups` source |
+|--------|--------------------------|----------------------------------|
+| `basic-auth` | username | `roles` array |
+| `jwt-auth` | `sub` claim | configurable via `groups_claim` |
+| `oidc-auth` | `sub` claim | `scope` claim (space→comma) |
+| `oauth2-auth` | `sub` claim (fallback: `username`) | `scope` claim (space→comma) |
+| `apikey-auth` | `id` field | `scopes` array |
+
+---
+
 ## Authentication Middlewares
 
 ### jwt-auth
@@ -146,10 +167,13 @@ x-barbacane-middlewares:
 | `audience` | string | - | Expected `aud` claim |
 | `required_claims` | array | `[]` | Claims that must be present |
 | `leeway` | integer | `0` | Seconds of clock skew tolerance |
+| `groups_claim` | string | - | Claim name to extract groups from (e.g., `"roles"`, `"groups"`). Value is set as `x-auth-consumer-groups` |
 
 #### Context Headers
 
 Sets headers for downstream:
+- `x-auth-consumer` - Consumer identifier (from `sub` claim)
+- `x-auth-consumer-groups` - Comma-separated groups (from `groups_claim`, if configured)
 - `x-auth-sub` - Subject (user ID)
 - `x-auth-claims` - Full JWT claims as JSON
 
@@ -189,6 +213,8 @@ x-barbacane-middlewares:
 #### Context Headers
 
 Sets headers for downstream:
+- `x-auth-consumer` - Consumer identifier (from key `id`)
+- `x-auth-consumer-groups` - Comma-separated groups (from key `scopes`)
 - `x-auth-key-id` - Key identifier
 - `x-auth-key-name` - Key human-readable name
 - `x-auth-key-scopes` - Comma-separated scopes
@@ -225,6 +251,8 @@ The `client_secret` uses a secret reference (`env://`) which is resolved at gate
 #### Context Headers
 
 Sets headers for downstream:
+- `x-auth-consumer` - Consumer identifier (from `sub`, fallback to `username`)
+- `x-auth-consumer-groups` - Comma-separated groups (from `scope`)
 - `x-auth-sub` - Subject
 - `x-auth-scope` - Token scopes
 - `x-auth-client-id` - Client ID
@@ -283,6 +311,8 @@ x-barbacane-middlewares:
 #### Context Headers
 
 Sets headers for downstream:
+- `x-auth-consumer` - Consumer identifier (from `sub` claim)
+- `x-auth-consumer-groups` - Comma-separated groups (from `scope`, space→comma)
 - `x-auth-sub` - Subject (user ID)
 - `x-auth-scope` - Token scopes
 - `x-auth-claims` - Full JWT payload as JSON
@@ -333,6 +363,8 @@ Each credential entry:
 #### Context Headers
 
 Sets headers for downstream:
+- `x-auth-consumer` - Consumer identifier (username)
+- `x-auth-consumer-groups` - Comma-separated groups (from `roles`)
 - `x-auth-user` - Authenticated username
 - `x-auth-roles` - Comma-separated roles (only set if the user has roles)
 
@@ -348,6 +380,89 @@ Returns `401 Unauthorized` with `WWW-Authenticate: Basic realm="<realm>"` and Pr
   "detail": "Invalid username or password"
 }
 ```
+
+---
+
+## Authorization Middlewares
+
+### acl
+
+Enforces access control based on consumer identity and group membership. Reads the standard `x-auth-consumer` and `x-auth-consumer-groups` headers set by upstream auth plugins.
+
+```yaml
+x-barbacane-middlewares:
+  - name: basic-auth
+    config:
+      realm: "my-api"
+      credentials:
+        admin:
+          password: "env://ADMIN_PASSWORD"
+          roles: ["admin", "editor"]
+        viewer:
+          password: "env://VIEWER_PASSWORD"
+          roles: ["viewer"]
+  - name: acl
+    config:
+      allow:
+        - admin
+      deny:
+        - banned
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `allow` | array | `[]` | Group names allowed access. If non-empty, consumer must belong to at least one |
+| `deny` | array | `[]` | Group names denied access (takes precedence over `allow`) |
+| `allow_consumers` | array | `[]` | Specific consumer IDs allowed (bypasses group checks) |
+| `deny_consumers` | array | `[]` | Specific consumer IDs denied (highest precedence) |
+| `consumer_groups` | object | `{}` | Static consumer-to-groups mapping, merged with `x-auth-consumer-groups` header |
+| `message` | string | `Access denied by ACL policy` | Custom 403 error message |
+| `hide_consumer_in_errors` | boolean | `false` | Suppress consumer identity in 403 error body |
+
+#### Evaluation Order
+
+1. Missing/empty `x-auth-consumer` header → **403**
+2. `deny_consumers` match → **403**
+3. `allow_consumers` match → **200** (bypasses group checks)
+4. Resolve groups (merge `x-auth-consumer-groups` header + static `consumer_groups` config)
+5. `deny` group match → **403** (takes precedence over allow)
+6. `allow` non-empty + group match → **200**
+7. `allow` non-empty + no group match → **403**
+8. `allow` empty → **200** (only deny rules active)
+
+#### Static Consumer Groups
+
+You can supplement the groups from the auth plugin with static mappings:
+
+```yaml
+- name: acl
+  config:
+    allow:
+      - premium
+    consumer_groups:
+      free_user:
+        - premium    # Grant premium access to specific consumers
+```
+
+Groups from the `consumer_groups` config are merged with the `x-auth-consumer-groups` header (deduplicated).
+
+#### Error Response
+
+Returns `403 Forbidden` with Problem JSON (RFC 9457):
+
+```json
+{
+  "type": "urn:barbacane:error:acl-denied",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "Access denied by ACL policy",
+  "consumer": "alice"
+}
+```
+
+Set `hide_consumer_in_errors: true` to omit the `consumer` field.
 
 ---
 
@@ -779,8 +894,9 @@ x-barbacane-middlewares:
   - name: ip-restriction    # 4. Block bad IPs immediately
   - name: request-size-limit # 5. Reject oversized requests
   - name: rate-limit        # 6. Rate limit before auth (cheaper)
-  - name: oidc-auth          # 7. Authenticate (OIDC/JWT)
+  - name: oidc-auth         # 7. Authenticate (OIDC/JWT)
   - name: basic-auth        # 8. Authenticate (fallback)
+  - name: acl               # 9. Authorize (after auth sets consumer headers)
 ```
 
 ### Fail Fast

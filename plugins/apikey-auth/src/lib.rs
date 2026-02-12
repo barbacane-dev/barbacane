@@ -99,10 +99,20 @@ impl ApiKeyAuth {
                         .insert("x-auth-key-name".to_string(), name.clone());
                 }
                 if !key_entry.scopes.is_empty() {
+                    let scopes_csv = key_entry.scopes.join(",");
                     modified_req
                         .headers
-                        .insert("x-auth-key-scopes".to_string(), key_entry.scopes.join(","));
+                        .insert("x-auth-key-scopes".to_string(), scopes_csv.clone());
+                    modified_req
+                        .headers
+                        .insert("x-auth-consumer-groups".to_string(), scopes_csv);
                 }
+
+                // Standard consumer header for ACL and downstream middlewares
+                modified_req
+                    .headers
+                    .insert("x-auth-consumer".to_string(), key_entry.id.clone());
+
                 Action::Continue(modified_req)
             }
             Err(e) => Action::ShortCircuit(self.unauthorized_response(&e)),
@@ -390,6 +400,11 @@ mod tests {
                 assert_eq!(r.headers.get("x-auth-key-id").unwrap(), "key1");
                 assert_eq!(r.headers.get("x-auth-key-name").unwrap(), "Test Key");
                 assert_eq!(r.headers.get("x-auth-key-scopes").unwrap(), "read,write");
+                assert_eq!(r.headers.get("x-auth-consumer").unwrap(), "key1");
+                assert_eq!(
+                    r.headers.get("x-auth-consumer-groups").unwrap(),
+                    "read,write"
+                );
             }
             _ => panic!("expected Continue"),
         }
@@ -404,6 +419,8 @@ mod tests {
                 assert_eq!(r.headers.get("x-auth-key-id").unwrap(), "key3");
                 assert!(r.headers.get("x-auth-key-name").is_none());
                 assert!(r.headers.get("x-auth-key-scopes").is_none());
+                assert_eq!(r.headers.get("x-auth-consumer").unwrap(), "key3");
+                assert!(!r.headers.contains_key("x-auth-consumer-groups"));
             }
             _ => panic!("expected Continue"),
         }

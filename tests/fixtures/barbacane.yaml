@@ -38,3 +38,5 @@ plugins:
     path: ../../plugins/observability/observability.wasm
   lambda:
     path: ../../plugins/lambda/lambda.wasm
+  acl:
+    path: ../../plugins/acl/acl.wasm

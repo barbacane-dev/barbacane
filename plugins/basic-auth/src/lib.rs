@@ -94,12 +94,21 @@ impl BasicAuth {
                 // Inject auth context headers for downstream use
                 modified_req
                     .headers
-                    .insert("x-auth-user".to_string(), username);
+                    .insert("x-auth-user".to_string(), username.clone());
                 if !entry.roles.is_empty() {
+                    let roles_csv = entry.roles.join(",");
                     modified_req
                         .headers
-                        .insert("x-auth-roles".to_string(), entry.roles.join(","));
+                        .insert("x-auth-roles".to_string(), roles_csv.clone());
+                    modified_req
+                        .headers
+                        .insert("x-auth-consumer-groups".to_string(), roles_csv);
                 }
+
+                // Standard consumer header for ACL and downstream middlewares
+                modified_req
+                    .headers
+                    .insert("x-auth-consumer".to_string(), username);
 
                 Action::Continue(modified_req)
             }
@@ -409,6 +418,11 @@ mod tests {
                     modified.headers.get("x-auth-roles").unwrap(),
                     "admin,editor"
                 );
+                assert_eq!(modified.headers.get("x-auth-consumer").unwrap(), "admin");
+                assert_eq!(
+                    modified.headers.get("x-auth-consumer-groups").unwrap(),
+                    "admin,editor"
+                );
             }
             Action::ShortCircuit(_) => panic!("expected Continue"),
         }
@@ -428,6 +442,8 @@ mod tests {
             Action::Continue(modified) => {
                 assert_eq!(modified.headers.get("x-auth-user").unwrap(), "reader");
                 assert!(!modified.headers.contains_key("x-auth-roles"));
+                assert_eq!(modified.headers.get("x-auth-consumer").unwrap(), "reader");
+                assert!(!modified.headers.contains_key("x-auth-consumer-groups"));
             }
             Action::ShortCircuit(_) => panic!("expected Continue"),
         }

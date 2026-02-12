@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:acl-config",
+  "title": "Access Control List Middleware Config",
+  "description": "Configuration for the ACL middleware plugin. Reads x-auth-consumer and x-auth-consumer-groups headers set by upstream auth plugins.",
+  "type": "object",
+  "properties": {
+    "allow": {
+      "type": "array",
+      "description": "Group names that are allowed access. If non-empty, consumer must belong to at least one.",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "deny": {
+      "type": "array",
+      "description": "Group names that are denied access (takes precedence over allow).",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "allow_consumers": {
+      "type": "array",
+      "description": "Specific consumer IDs allowed (bypasses group checks).",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "deny_consumers": {
+      "type": "array",
+      "description": "Specific consumer IDs denied (highest precedence).",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "consumer_groups": {
+      "type": "object",
+      "description": "Optional static consumer-to-groups mapping. Merged with x-auth-consumer-groups header.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "default": {}
+    },
+    "message": {
+      "type": "string",
+      "description": "Custom 403 error message.",
+      "default": "Access denied by ACL policy"
+    },
+    "hide_consumer_in_errors": {
+      "type": "boolean",
+      "description": "Suppress consumer identity in 403 error body.",
+      "default": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,6 @@
+[plugin]
+name = "acl"
+version = "0.1.0"
+type = "middleware"
+description = "Access control list middleware — allow/deny by consumer and group"
+wasm = "acl.wasm"

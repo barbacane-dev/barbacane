@@ -1,0 +1,226 @@
+openapi: "3.0.3"
+info:
+  title: ACL Test API
+  version: "1.0.0"
+  description: API for testing access control list middleware
+
+# Global middleware chain: basic-auth first, then ACL
+# ACL reads x-auth-consumer and x-auth-consumer-groups set by basic-auth
+x-barbacane-middlewares:
+  - name: basic-auth
+    config:
+      realm: "acl-test"
+      credentials:
+        admin:
+          password: "admin123"
+          roles:
+            - admin
+            - editor
+        editor:
+          password: "editor123"
+          roles:
+            - editor
+        viewer:
+          password: "viewer123"
+          roles:
+            - viewer
+        banned_user:
+          password: "banned123"
+          roles:
+            - viewer
+            - banned
+
+paths:
+  /admin-only:
+    get:
+      summary: Only admin group allowed
+      operationId: getAdminOnly
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "acl-test"
+            credentials:
+              admin:
+                password: "admin123"
+                roles: [admin, editor]
+              editor:
+                password: "editor123"
+                roles: [editor]
+              viewer:
+                password: "viewer123"
+                roles: [viewer]
+              banned_user:
+                password: "banned123"
+                roles: [viewer, banned]
+        - name: acl
+          config:
+            allow:
+              - admin
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "admin"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Admin access granted
+        "403":
+          description: Forbidden
+
+  /editors:
+    get:
+      summary: Admin and editor groups allowed
+      operationId: getEditors
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "acl-test"
+            credentials:
+              admin:
+                password: "admin123"
+                roles: [admin, editor]
+              editor:
+                password: "editor123"
+                roles: [editor]
+              viewer:
+                password: "viewer123"
+                roles: [viewer]
+              banned_user:
+                password: "banned123"
+                roles: [viewer, banned]
+        - name: acl
+          config:
+            allow:
+              - admin
+              - editor
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "editors"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Editor access granted
+        "403":
+          description: Forbidden
+
+  /deny-banned:
+    get:
+      summary: Banned group denied, all others allowed
+      operationId: getDenyBanned
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "acl-test"
+            credentials:
+              admin:
+                password: "admin123"
+                roles: [admin, editor]
+              editor:
+                password: "editor123"
+                roles: [editor]
+              viewer:
+                password: "viewer123"
+                roles: [viewer]
+              banned_user:
+                password: "banned123"
+                roles: [viewer, banned]
+        - name: acl
+          config:
+            deny:
+              - banned
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "deny-banned"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Access granted
+        "403":
+          description: Forbidden
+
+  /consumer-allow:
+    get:
+      summary: Only specific consumer allowed
+      operationId: getConsumerAllow
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "acl-test"
+            credentials:
+              admin:
+                password: "admin123"
+                roles: [admin, editor]
+              editor:
+                password: "editor123"
+                roles: [editor]
+        - name: acl
+          config:
+            allow_consumers:
+              - admin
+            allow:
+              - _restricted
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "consumer-allow"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Access granted
+        "403":
+          description: Forbidden
+
+  /premium:
+    get:
+      summary: Premium access via static consumer_groups mapping
+      operationId: getPremium
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "acl-test"
+            credentials:
+              admin:
+                password: "admin123"
+                roles: [admin]
+              viewer:
+                password: "viewer123"
+                roles: [viewer]
+        - name: acl
+          config:
+            allow:
+              - premium
+            consumer_groups:
+              viewer:
+                - premium
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "premium"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Premium access granted
+        "403":
+          description: Forbidden
+
+  /public:
+    get:
+      summary: Public endpoint (no auth or ACL)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "public"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Public access

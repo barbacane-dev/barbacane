@@ -286,12 +286,23 @@ impl OidcAuth {
                     modified_req
                         .headers
                         .insert("x-auth-sub".to_string(), sub.clone());
+                    // Standard consumer header for ACL and downstream middlewares
+                    modified_req
+                        .headers
+                        .insert("x-auth-consumer".to_string(), sub.clone());
                 }
 
                 if let Some(scope) = &claims.scope {
                     modified_req
                         .headers
                         .insert("x-auth-scope".to_string(), scope.clone());
+                    // Convert space-separated scopes to comma-separated groups
+                    let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
+                    if !groups.is_empty() {
+                        modified_req
+                            .headers
+                            .insert("x-auth-consumer-groups".to_string(), groups);
+                    }
                 }
 
                 if let Ok(claims_json) = serde_json::to_string(&claims) {
@@ -1368,6 +1379,70 @@ mod tests {
         assert_eq!(
             OidcError::DiscoveryFailed("test".to_string()).as_str(),
             "server_error"
+        );
+    }
+
+    // --- Consumer header mapping tests ---
+    // These test the header insertion logic by simulating what on_request does
+    // after successful validation (we can't call on_request directly because
+    // it requires host functions for discovery/JWKS/signature verification).
+
+    #[test]
+    fn consumer_header_from_sub() {
+        let claims = JwtClaims {
+            sub: Some("alice".to_string()),
+            iss: None,
+            aud: None,
+            exp: None,
+            nbf: None,
+            iat: None,
+            jti: None,
+            scope: None,
+        };
+
+        let mut headers = BTreeMap::new();
+        if let Some(sub) = &claims.sub {
+            headers.insert("x-auth-sub".to_string(), sub.clone());
+            headers.insert("x-auth-consumer".to_string(), sub.clone());
+        }
+
+        assert_eq!(headers.get("x-auth-consumer").unwrap(), "alice");
+        assert_eq!(headers.get("x-auth-sub").unwrap(), "alice");
+    }
+
+    #[test]
+    fn consumer_groups_from_scope() {
+        let claims = JwtClaims {
+            sub: Some("bob".to_string()),
+            iss: None,
+            aud: None,
+            exp: None,
+            nbf: None,
+            iat: None,
+            jti: None,
+            scope: Some("read write admin".to_string()),
+        };
+
+        let mut headers = BTreeMap::new();
+        if let Some(sub) = &claims.sub {
+            headers.insert("x-auth-consumer".to_string(), sub.clone());
+        }
+        if let Some(scope) = &claims.scope {
+            headers.insert("x-auth-scope".to_string(), scope.clone());
+            let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
+            if !groups.is_empty() {
+                headers.insert("x-auth-consumer-groups".to_string(), groups);
+            }
+        }
+
+        assert_eq!(headers.get("x-auth-consumer").unwrap(), "bob");
+        assert_eq!(
+            headers.get("x-auth-consumer-groups").unwrap(),
+            "read,write,admin"
+        );
+        assert_eq!(
+            headers.get("x-auth-scope").unwrap(),
+            "read write admin"
         );
     }
 }
