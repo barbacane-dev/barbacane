@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:request-transformer:config",
+  "title": "Request Transformer Configuration",
+  "type": "object",
+  "properties": {
+    "headers": {
+      "type": "object",
+      "description": "Header transformations",
+      "properties": {
+        "add": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Add or overwrite headers. Supports variable interpolation."
+        },
+        "set": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Add headers only if not already present. Supports variable interpolation."
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Remove headers by name (case-insensitive)"
+        },
+        "rename": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Rename headers (old-name → new-name)"
+        }
+      }
+    },
+    "querystring": {
+      "type": "object",
+      "description": "Query parameter transformations",
+      "properties": {
+        "add": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Add or overwrite query parameters. Supports variable interpolation."
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Remove query parameters by name"
+        },
+        "rename": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Rename query parameters (old-name → new-name)"
+        }
+      }
+    },
+    "path": {
+      "type": "object",
+      "description": "Path rewriting operations",
+      "properties": {
+        "strip_prefix": {
+          "type": "string",
+          "description": "Remove prefix from path (e.g., /api/v2)"
+        },
+        "add_prefix": {
+          "type": "string",
+          "description": "Add prefix to path (e.g., /internal)"
+        },
+        "replace": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Regex pattern to match in path"
+            },
+            "replacement": {
+              "type": "string",
+              "description": "Replacement string (supports regex capture groups)"
+            }
+          },
+          "required": ["pattern", "replacement"],
+          "description": "Replace path segments using regex"
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "description": "JSON body transformations using JSON Pointer (RFC 6901)",
+      "properties": {
+        "add": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Add or overwrite JSON fields using JSON Pointer paths (e.g., /metadata/gateway). Supports variable interpolation. Only works on JSON bodies."
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Remove JSON fields using JSON Pointer paths (e.g., /internal_flags). Only works on JSON bodies."
+        },
+        "rename": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Rename JSON fields (old-pointer → new-pointer). Only works on JSON bodies."
+        }
+      }
+    }
+  }
+}
