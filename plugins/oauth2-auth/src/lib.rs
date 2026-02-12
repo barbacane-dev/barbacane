@@ -160,6 +160,13 @@ impl OAuth2Auth {
                     modified_req
                         .headers
                         .insert("x-auth-scope".to_string(), scope.clone());
+                    // Convert space-separated scopes to comma-separated groups
+                    let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
+                    if !groups.is_empty() {
+                        modified_req
+                            .headers
+                            .insert("x-auth-consumer-groups".to_string(), groups);
+                    }
                 }
 
                 if let Some(client_id) = &introspection.client_id {
@@ -172,6 +179,17 @@ impl OAuth2Auth {
                     modified_req
                         .headers
                         .insert("x-auth-username".to_string(), username.clone());
+                }
+
+                // Standard consumer header: sub takes precedence, then username
+                let consumer = introspection
+                    .sub
+                    .as_ref()
+                    .or(introspection.username.as_ref());
+                if let Some(consumer_id) = consumer {
+                    modified_req
+                        .headers
+                        .insert("x-auth-consumer".to_string(), consumer_id.clone());
                 }
 
                 // Serialize full introspection response for downstream
@@ -860,5 +878,57 @@ mod tests {
     #[test]
     fn test_default_timeout() {
         assert_eq!(default_timeout(), 5.0);
+    }
+
+    // --- Consumer header mapping tests ---
+
+    #[test]
+    fn consumer_header_from_sub() {
+        let introspection = IntrospectionResponse {
+            active: true,
+            scope: Some("read write".to_string()),
+            client_id: Some("app1".to_string()),
+            username: Some("alice".to_string()),
+            token_type: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            sub: Some("user-123".to_string()),
+            aud: None,
+            iss: None,
+            jti: None,
+        };
+
+        // Simulate on_request header logic: sub takes precedence over username
+        let consumer = introspection.sub.as_ref().or(introspection.username.as_ref());
+        assert_eq!(consumer.unwrap(), "user-123");
+    }
+
+    #[test]
+    fn consumer_header_fallback_to_username() {
+        let introspection = IntrospectionResponse {
+            active: true,
+            scope: None,
+            client_id: Some("app1".to_string()),
+            username: Some("alice".to_string()),
+            token_type: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            sub: None,
+            aud: None,
+            iss: None,
+            jti: None,
+        };
+
+        let consumer = introspection.sub.as_ref().or(introspection.username.as_ref());
+        assert_eq!(consumer.unwrap(), "alice");
+    }
+
+    #[test]
+    fn consumer_groups_from_scope() {
+        let scope = "read write admin";
+        let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
+        assert_eq!(groups, "read,write,admin");
     }
 }

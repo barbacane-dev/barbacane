@@ -29,6 +29,10 @@
       "description": "JWKS URL for fetching public keys (not yet implemented)",
       "format": "uri"
     },
+    "groups_claim": {
+      "type": "string",
+      "description": "Claim name to extract consumer groups from (e.g. 'roles', 'groups'). Value is set as x-auth-consumer-groups (comma-separated)."
+    },
     "public_key_pem": {
       "type": "string",
       "description": "Inline public key in PEM format for signature validation (not yet implemented)"

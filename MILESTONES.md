@@ -66,7 +66,7 @@ See [BACKLOG.md](BACKLOG.md) for the full prioritized backlog.
 - [x] `basic-auth` plugin — username/password authentication
 - [x] `oidc-auth` plugin — OpenID Connect discovery + JWKS validation
 - [x] `host_verify_signature` host function — RSA/ECDSA signature verification via `ring`
-- [ ] `acl` plugin — access control lists after authentication
+- [x] `acl` plugin — access control lists after authentication
 - [ ] Security plugins documentation
 
 ### Sprint 17 — Observability & Logging

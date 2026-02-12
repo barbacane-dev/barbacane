@@ -24,6 +24,13 @@ pub struct JwtAuth {
     #[serde(default = "default_clock_skew")]
     clock_skew_seconds: u64,
 
+    /// Optional claim name to extract consumer groups from.
+    /// When set, the value of this claim is read from the JWT payload and set
+    /// as `x-auth-consumer-groups` (comma-separated). Common values: "roles",
+    /// "groups", "permissions".
+    #[serde(default)]
+    groups_claim: Option<String>,
+
     /// Whether to skip signature validation (for testing only).
     #[serde(default)]
     skip_signature_validation: bool,
@@ -55,7 +62,7 @@ struct JwtHeader {
     kid: Option<String>,
 }
 
-/// JWT claims (registered claims).
+/// JWT claims (registered claims + extra for custom claims like groups).
 #[derive(Debug, Deserialize, Serialize)]
 struct JwtClaims {
     /// Subject
@@ -79,6 +86,9 @@ struct JwtClaims {
     /// JWT ID
     #[serde(default)]
     jti: Option<String>,
+    /// All other claims (roles, groups, permissions, etc.)
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// Audience can be a single string or array of strings.
@@ -169,12 +179,44 @@ impl JwtAuth {
                     modified_req
                         .headers
                         .insert("x-auth-sub".to_string(), sub.clone());
+                    // Standard consumer header for ACL and downstream middlewares
+                    modified_req
+                        .headers
+                        .insert("x-auth-consumer".to_string(), sub.clone());
                 }
                 if let Ok(claims_json) = serde_json::to_string(&claims) {
                     modified_req
                         .headers
                         .insert("x-auth-claims".to_string(), claims_json);
                 }
+
+                // Extract consumer groups from configured claim
+                if let Some(ref groups_claim) = self.groups_claim {
+                    if let Some(groups_val) = claims.extra.get(groups_claim) {
+                        let groups_csv = match groups_val {
+                            serde_json::Value::Array(arr) => arr
+                                .iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join(","),
+                            serde_json::Value::String(s) => {
+                                // Support space-separated or already comma-separated
+                                if s.contains(',') {
+                                    s.clone()
+                                } else {
+                                    s.split_whitespace().collect::<Vec<_>>().join(",")
+                                }
+                            }
+                            _ => String::new(),
+                        };
+                        if !groups_csv.is_empty() {
+                            modified_req
+                                .headers
+                                .insert("x-auth-consumer-groups".to_string(), groups_csv);
+                        }
+                    }
+                }
+
                 Action::Continue(modified_req)
             }
             Err(e) => Action::ShortCircuit(self.unauthorized_response(&e)),
@@ -415,6 +457,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -430,6 +473,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -445,6 +489,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -460,6 +505,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -475,6 +521,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -490,6 +537,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -510,6 +558,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -524,6 +573,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -538,6 +588,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -555,6 +606,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -573,6 +625,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -591,6 +644,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -610,6 +664,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -630,6 +685,7 @@ mod tests {
             issuer: Some("test-issuer".to_string()),
             audience: Some("test-audience".to_string()),
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -642,6 +698,7 @@ mod tests {
             nbf: Some(500),
             iat: Some(500),
             jti: None,
+            extra: BTreeMap::new(),
         };
         assert!(config.validate_claims(&claims).is_ok());
     }
@@ -653,6 +710,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -665,6 +723,7 @@ mod tests {
             nbf: None,
             iat: None,
             jti: None,
+            extra: BTreeMap::new(),
         };
         let result = config.validate_claims(&claims);
         assert!(matches!(result, Err(JwtError::TokenExpired)));
@@ -677,6 +736,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -689,6 +749,7 @@ mod tests {
             nbf: Some(500),
             iat: None,
             jti: None,
+            extra: BTreeMap::new(),
         };
         let result = config.validate_claims(&claims);
         assert!(matches!(result, Err(JwtError::TokenNotYetValid)));
@@ -701,6 +762,7 @@ mod tests {
             issuer: Some("expected-issuer".to_string()),
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -713,6 +775,7 @@ mod tests {
             nbf: None,
             iat: None,
             jti: None,
+            extra: BTreeMap::new(),
         };
         let result = config.validate_claims(&claims);
         assert!(matches!(result, Err(JwtError::InvalidIssuer)));
@@ -725,6 +788,7 @@ mod tests {
             issuer: None,
             audience: Some("expected-audience".to_string()),
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -737,6 +801,7 @@ mod tests {
             nbf: None,
             iat: None,
             jti: None,
+            extra: BTreeMap::new(),
         };
         let result = config.validate_claims(&claims);
         assert!(matches!(result, Err(JwtError::InvalidAudience)));
@@ -750,6 +815,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -762,6 +828,7 @@ mod tests {
             nbf: None,
             iat: None,
             jti: None,
+            extra: BTreeMap::new(),
         };
         // Should still be valid due to clock skew
         assert!(config.validate_claims(&claims).is_ok());
@@ -791,6 +858,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -850,6 +918,7 @@ mod tests {
             issuer: Some("test-issuer".to_string()),
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -867,7 +936,13 @@ mod tests {
                     modified_req.headers.get("x-auth-sub"),
                     Some(&"user123".to_string())
                 );
+                assert_eq!(
+                    modified_req.headers.get("x-auth-consumer"),
+                    Some(&"user123".to_string())
+                );
                 assert!(modified_req.headers.contains_key("x-auth-claims"));
+                // No groups_claim configured, so no consumer-groups header
+                assert!(!modified_req.headers.contains_key("x-auth-consumer-groups"));
             }
             Action::ShortCircuit(_) => panic!("Expected request to be allowed"),
         }
@@ -879,6 +954,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -901,6 +977,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -928,6 +1005,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -950,6 +1028,7 @@ mod tests {
             issuer: None,
             audience: None,
             clock_skew_seconds: 60,
+            groups_claim: None,
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
@@ -970,5 +1049,134 @@ mod tests {
         };
         let token = config.extract_token(&req).unwrap();
         assert_eq!(token, "my.jwt.token");
+    }
+
+    #[test]
+    fn test_on_request_sets_consumer_from_sub() {
+        mock_time::set_mock_timestamp(1000);
+        let mut config = JwtAuth {
+            issuer: None,
+            audience: None,
+            clock_skew_seconds: 60,
+            groups_claim: None,
+            skip_signature_validation: true,
+            jwks_url: None,
+            public_key_pem: None,
+        };
+
+        let token = create_test_jwt(
+            r#"{"alg":"RS256","typ":"JWT"}"#,
+            r#"{"sub":"alice","exp":2000}"#,
+        );
+        let req = create_test_request(Some(&format!("Bearer {}", token)));
+
+        match config.on_request(req) {
+            Action::Continue(r) => {
+                assert_eq!(r.headers.get("x-auth-consumer").unwrap(), "alice");
+                assert_eq!(r.headers.get("x-auth-sub").unwrap(), "alice");
+            }
+            Action::ShortCircuit(_) => panic!("Expected request to be allowed"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_groups_claim_array() {
+        mock_time::set_mock_timestamp(1000);
+        let mut config = JwtAuth {
+            issuer: None,
+            audience: None,
+            clock_skew_seconds: 60,
+            groups_claim: Some("roles".to_string()),
+            skip_signature_validation: true,
+            jwks_url: None,
+            public_key_pem: None,
+        };
+
+        let token = create_test_jwt(
+            r#"{"alg":"RS256","typ":"JWT"}"#,
+            r#"{"sub":"alice","exp":2000,"roles":["admin","editor"]}"#,
+        );
+        let req = create_test_request(Some(&format!("Bearer {}", token)));
+
+        match config.on_request(req) {
+            Action::Continue(r) => {
+                assert_eq!(r.headers.get("x-auth-consumer").unwrap(), "alice");
+                assert_eq!(
+                    r.headers.get("x-auth-consumer-groups").unwrap(),
+                    "admin,editor"
+                );
+            }
+            Action::ShortCircuit(_) => panic!("Expected request to be allowed"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_groups_claim_space_separated_string() {
+        mock_time::set_mock_timestamp(1000);
+        let mut config = JwtAuth {
+            issuer: None,
+            audience: None,
+            clock_skew_seconds: 60,
+            groups_claim: Some("permissions".to_string()),
+            skip_signature_validation: true,
+            jwks_url: None,
+            public_key_pem: None,
+        };
+
+        let token = create_test_jwt(
+            r#"{"alg":"RS256","typ":"JWT"}"#,
+            r#"{"sub":"bob","exp":2000,"permissions":"read write execute"}"#,
+        );
+        let req = create_test_request(Some(&format!("Bearer {}", token)));
+
+        match config.on_request(req) {
+            Action::Continue(r) => {
+                assert_eq!(r.headers.get("x-auth-consumer").unwrap(), "bob");
+                assert_eq!(
+                    r.headers.get("x-auth-consumer-groups").unwrap(),
+                    "read,write,execute"
+                );
+            }
+            Action::ShortCircuit(_) => panic!("Expected request to be allowed"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_groups_claim_missing_claim() {
+        mock_time::set_mock_timestamp(1000);
+        let mut config = JwtAuth {
+            issuer: None,
+            audience: None,
+            clock_skew_seconds: 60,
+            groups_claim: Some("roles".to_string()),
+            skip_signature_validation: true,
+            jwks_url: None,
+            public_key_pem: None,
+        };
+
+        // JWT has no "roles" claim
+        let token = create_test_jwt(
+            r#"{"alg":"RS256","typ":"JWT"}"#,
+            r#"{"sub":"alice","exp":2000}"#,
+        );
+        let req = create_test_request(Some(&format!("Bearer {}", token)));
+
+        match config.on_request(req) {
+            Action::Continue(r) => {
+                assert_eq!(r.headers.get("x-auth-consumer").unwrap(), "alice");
+                assert!(!r.headers.contains_key("x-auth-consumer-groups"));
+            }
+            Action::ShortCircuit(_) => panic!("Expected request to be allowed"),
+        }
+    }
+
+    #[test]
+    fn test_config_groups_claim_deserialization() {
+        let json = r#"{
+            "groups_claim": "roles",
+            "skip_signature_validation": true
+        }"#;
+        let config: JwtAuth = serde_json::from_str(json).unwrap();
+        assert_eq!(config.groups_claim, Some("roles".to_string()));
     }
 }

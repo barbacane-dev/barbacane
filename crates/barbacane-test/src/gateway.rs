@@ -3993,4 +3993,174 @@ paths:
         let resp = gateway.get("/__barbacane/health").await.unwrap();
         assert_eq!(resp.status(), 200);
     }
+
+    // ==================== ACL Tests ====================
+
+    /// Helper to create Basic auth header for ACL tests.
+    fn acl_basic_auth(username: &str, password: &str) -> String {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let encoded = STANDARD.encode(format!("{}:{}", username, password));
+        format!("Basic {}", encoded)
+    }
+
+    #[tokio::test]
+    async fn test_acl_admin_allowed_admin_only() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/admin-only")
+            .header("Authorization", acl_basic_auth("admin", "admin123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_acl_editor_denied_admin_only() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/admin-only")
+            .header("Authorization", acl_basic_auth("editor", "editor123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_acl_editor_allowed_editors_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/editors")
+            .header("Authorization", acl_basic_auth("editor", "editor123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_acl_viewer_denied_editors_endpoint() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/editors")
+            .header("Authorization", acl_basic_auth("viewer", "viewer123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_acl_banned_group_denied() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/deny-banned")
+            .header("Authorization", acl_basic_auth("banned_user", "banned123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_acl_non_banned_allowed_deny_rule() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/deny-banned")
+            .header("Authorization", acl_basic_auth("editor", "editor123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_acl_consumer_allow_specific_user() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/consumer-allow")
+            .header("Authorization", acl_basic_auth("admin", "admin123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_acl_consumer_allow_denies_other() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/consumer-allow")
+            .header("Authorization", acl_basic_auth("editor", "editor123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_acl_static_consumer_groups_premium_allowed() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        // viewer gets "premium" group via static consumer_groups config
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/premium")
+            .header("Authorization", acl_basic_auth("viewer", "viewer123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_acl_static_consumer_groups_non_premium_denied() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        // admin has no "premium" group
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/premium")
+            .header("Authorization", acl_basic_auth("admin", "admin123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_acl_public_endpoint_no_auth() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway.get("/public").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_acl_missing_auth_returns_401() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/acl.yaml")
+            .await
+            .expect("failed to start gateway");
+        // No Authorization header — basic-auth should return 401 before ACL runs
+        let resp = gateway.get("/admin-only").await.unwrap();
+        assert_eq!(resp.status(), 401);
+    }
 }

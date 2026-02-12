@@ -24,7 +24,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 | Plugin | Type | Description | Source |
 |--------|------|-------------|--------|
 | ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ | **DONE** |
-| `acl` | Middleware | Access control by consumer/group after auth | Competitive analysis |
+| ~~`acl`~~ | ~~Middleware~~ | ~~Access control by consumer/group after auth~~ | **DONE** |
 | ~~`request-size-limit`~~ | ~~Middleware~~ | ~~Reject requests exceeding size (per-route)~~ | **DONE** |
 | ~~`oidc-auth`~~ | ~~Middleware~~ | ~~OpenID Connect discovery + JWKS validation (extends `jwt-auth`)~~ | **DONE** |
 | `bot-detection` | Middleware | Block known bots by User-Agent patterns | Competitive analysis |

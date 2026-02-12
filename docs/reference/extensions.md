@@ -326,6 +326,25 @@ Adds `X-Cache` header to responses:
     ttl: 86400
 ```
 
+### acl
+
+```yaml
+- name: acl
+  config:
+    allow: ["admin", "editor"]            # Groups allowed access
+    deny: ["banned"]                       # Groups denied (precedence over allow)
+    allow_consumers: ["superadmin"]        # Consumer IDs allowed (bypass groups)
+    deny_consumers: ["attacker"]           # Consumer IDs denied (highest precedence)
+    consumer_groups:                        # Static consumer→groups supplement
+      free_user: ["premium"]
+    message: "Access denied by ACL policy" # Custom 403 message
+    hide_consumer_in_errors: false         # Show consumer in error body
+```
+
+Reads `x-auth-consumer` and `x-auth-consumer-groups` headers set by upstream auth plugins. Must run after an authentication middleware (basic-auth, jwt-auth, oidc-auth, oauth2-auth, apikey-auth).
+
+Returns RFC 9457 Problem JSON on 403 with `"type": "urn:barbacane:error:acl-denied"`.
+
 ### observability
 
 Per-operation observability middleware for SLO monitoring, detailed logging, and custom metrics.
