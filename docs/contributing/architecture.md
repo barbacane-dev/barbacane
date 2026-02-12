@@ -373,6 +373,25 @@ cargo test --workspace
 - **Async I/O**: Tokio runtime, non-blocking everything
 - **Plugin caching**: WASM modules compiled once, instantiated per-request
 
+## Tech Debt
+
+### `$ref` resolution in spec parser
+
+The spec parser (`barbacane-spec-parser`) does not resolve `$ref` references in schemas. References like `$ref: '#/components/schemas/User'` are stored as-is in the parsed model rather than being dereferenced. This means users must pre-flatten their OpenAPI specs before feeding them to the compiler.
+
+**What's missing:**
+- Local `$ref` resolution (`#/components/schemas/*`, `#/components/parameters/*`, etc.)
+- Circular reference detection (recursive schemas could cause infinite loops in the validator)
+- Cross-file `$ref` resolution (`./common.yaml#/components/schemas/Error`)
+
+**Why it matters:** Using `$ref` for schema reuse is standard practice in any non-trivial OpenAPI spec. Not resolving refs adds friction for users and limits validation accuracy at compile time.
+
+**Suggested approach:** Implement a resolution pass after initial parsing that inlines local `#/components/*` refs, with a visited-set to detect cycles. Cross-file and external URL refs can remain out of scope initially.
+
+### Schema composition not interpreted at compile time
+
+`allOf`, `oneOf`, `anyOf`, and `discriminator` are stored as opaque JSON values. The `jsonschema` crate handles them correctly at runtime validation, but the compiler cannot analyze or optimize polymorphic schemas.
+
 ## Future Directions
 
 - **gRPC passthrough**: Transparent proxying for gRPC services

@@ -153,6 +153,8 @@ Items are tagged with their source ADR or SPEC for traceability.
 | Integration tests | Full control plane API lifecycle tests with PostgreSQL | P2 | M9 deferred |
 | Compile safety CI | Add fitness functions: deterministic build verification, fuzz testing for compiler | P2 | Tech review |
 | CLI subcommands | `barbacane-control spec/artifact/plugin` REST-based commands | P2 | M9 deferred |
+| `$ref` resolution in parser | Resolve local `#/components/*` refs at parse time instead of storing raw `$ref` values; currently users must pre-flatten specs. See [architecture.md](docs/contributing/architecture.md#tech-debt) | P1 | Tech review |
+| Schema composition analysis | Interpret `allOf`/`oneOf`/`anyOf`/`discriminator` at compile time instead of treating them as opaque JSON (runtime validation via `jsonschema` still works) | P2 | Tech review |
 | E1032 validation | Warn on OpenAPI security scheme without matching auth middleware | P2 | M6c deferred |
 | HTTP/2 stream config | Expose configuration for stream limits (currently fixed) | P3 | SPEC-002 |
 | Connection idle timeout | Make configurable (currently 60s hard-coded) | P3 | SPEC-002 |
