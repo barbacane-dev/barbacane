@@ -12,7 +12,7 @@ info:
     - CORS configuration
     - Request validation
     - Caching
-    - JWT authentication (on booking endpoints)
+    - OIDC authentication via mock OAuth2 server (on booking endpoints)
     - SLO monitoring with the observability middleware
   version: "3.0.0"
   contact:
@@ -316,7 +316,7 @@ paths:
                 $ref: "#/components/schemas/RealtimeStatus"
 
   # ===========================================================================
-  # Bookings - Requires JWT authentication
+  # Bookings - Requires OIDC authentication
   # ===========================================================================
   /bookings:
     get:
@@ -330,10 +330,11 @@ paths:
           path: "/api/v3/bookings"
           timeout: 10.0
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            skip_signature_validation: true  # Demo mode - don't validate signatures
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       parameters:
         - name: status
           in: query
@@ -373,10 +374,11 @@ paths:
           path: "/api/v3/bookings"
           timeout: 15.0
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            skip_signature_validation: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
         - name: request-size-limit
           config:
             max_bytes: 65536
@@ -419,10 +421,11 @@ paths:
           path: "/api/v3/bookings/{bookingId}"
           timeout: 5.0
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            skip_signature_validation: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       parameters:
         - name: bookingId
           in: path
@@ -451,10 +454,11 @@ paths:
           path: "/api/v3/bookings/{bookingId}"
           timeout: 10.0
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            skip_signature_validation: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       parameters:
         - name: bookingId
           in: path
@@ -480,10 +484,11 @@ paths:
           path: "/api/v3/bookings/{bookingId}/tickets"
           timeout: 5.0
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            skip_signature_validation: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       parameters:
         - name: bookingId
           in: path
@@ -514,10 +519,11 @@ paths:
           path: "/api/v3/bookings/{bookingId}/payment"
           timeout: 5.0
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            skip_signature_validation: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       parameters:
         - name: bookingId
           in: path
@@ -544,10 +550,11 @@ paths:
           path: "/api/v3/bookings/{bookingId}/payment"
           timeout: 45.0
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            skip_signature_validation: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
         - name: observability
           config:
             latency_slo_ms: 5000

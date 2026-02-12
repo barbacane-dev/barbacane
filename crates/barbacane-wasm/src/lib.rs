@@ -10,6 +10,7 @@ pub mod broker;
 pub mod cache;
 mod chain;
 mod circuit_breaker;
+pub mod crypto;
 mod engine;
 mod error;
 mod host;

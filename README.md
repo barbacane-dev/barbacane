@@ -9,9 +9,9 @@
 <p align="center">
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/unit%20tests-271%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-321%20passing-brightgreen" alt="Plugin Tests">
-  <img src="https://img.shields.io/badge/integration%20tests-142%20passing-brightgreen" alt="Integration Tests">
+  <img src="https://img.shields.io/badge/unit%20tests-288%20passing-brightgreen" alt="Unit Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-360%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/integration%20tests-149%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
@@ -83,6 +83,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `apikey-auth` | Middleware | API key authentication |
 | `basic-auth` | Middleware | HTTP Basic authentication (RFC 7617) |
 | `oauth2-auth` | Middleware | OAuth2 token introspection |
+| `oidc-auth` | Middleware | OpenID Connect (OIDC) authentication |
 | `rate-limit` | Middleware | Sliding window rate limiting |
 | `cache` | Middleware | Response caching |
 | `cors` | Middleware | CORS header management |

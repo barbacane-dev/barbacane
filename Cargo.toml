@@ -53,6 +53,7 @@ anyhow = "1"
 # Crypto
 sha2 = "0.10"
 hex = "0.4"
+ring = "0.17"
 
 # Archive
 flate2 = "1"

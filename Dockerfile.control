@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Barbacane Control Plane - Multi-stage build
 # Includes REST API and web UI
 
@@ -25,8 +26,14 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
-# Build the control plane binary
-RUN cargo build --release --package barbacane-control
+# Limit parallel jobs to avoid OOM in memory-constrained Docker environments
+ENV CARGO_BUILD_JOBS=2
+
+# Build the control plane binary (cache cargo registry + target dir across builds)
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --package barbacane-control && \
+    cp target/release/barbacane-control /usr/local/bin/barbacane-control
 
 # Runtime stage - Debian slim (needs libc for control plane dependencies)
 FROM debian:bookworm-slim
@@ -47,7 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r barbacane && useradd -r -g barbacane barbacane
 
 # Copy the binary from rust builder
-COPY --from=rust-builder /build/target/release/barbacane-control /usr/local/bin/barbacane-control
+COPY --from=rust-builder /usr/local/bin/barbacane-control /usr/local/bin/barbacane-control
 
 # Copy UI assets from ui builder
 COPY --from=ui-builder /ui/dist /var/www/html

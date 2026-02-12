@@ -52,6 +52,9 @@ jsonschema.workspace = true
 sha2.workspace = true
 hex.workspace = true
 
+# Crypto (for host_verify_signature)
+ring.workspace = true
+
 # UUID generation (for host_uuid_generate)
 uuid.workspace = true
 

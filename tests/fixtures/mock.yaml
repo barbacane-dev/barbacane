@@ -1,0 +1,84 @@
+openapi: "3.0.3"
+info:
+  title: Mock Dispatch Test API
+  version: "1.0.0"
+  description: API for testing mock dispatcher (static responses)
+
+paths:
+  /mock/ok:
+    get:
+      summary: Returns a 200 JSON response
+      operationId: getMockOk
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "ok"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /mock/not-found:
+    get:
+      summary: Returns a 404 response
+      operationId: getMockNotFound
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 404
+          body: '{"error": "not found"}'
+          content_type: application/json
+      responses:
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /mock/custom-headers:
+    get:
+      summary: Returns a response with custom headers
+      operationId: getMockCustomHeaders
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"data": "with headers"}'
+          content_type: application/json
+          headers:
+            X-Custom-Header: custom-value
+            X-Request-Source: mock
+      responses:
+        "200":
+          description: Success with custom headers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: string
+
+  /mock/empty:
+    delete:
+      summary: Returns a 204 No Content
+      operationId: deleteMockEmpty
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 204
+      responses:
+        "204":
+          description: No Content

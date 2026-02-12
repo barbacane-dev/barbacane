@@ -26,6 +26,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 | ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ | **DONE** |
 | `acl` | Middleware | Access control by consumer/group after auth | Competitive analysis |
 | ~~`request-size-limit`~~ | ~~Middleware~~ | ~~Reject requests exceeding size (per-route)~~ | **DONE** |
+| ~~`oidc-auth`~~ | ~~Middleware~~ | ~~OpenID Connect discovery + JWKS validation (extends `jwt-auth`)~~ | **DONE** |
 | `bot-detection` | Middleware | Block known bots by User-Agent patterns | Competitive analysis |
 | `redirect` | Middleware | URL redirections (301/302) | Competitive analysis |
 
@@ -46,7 +47,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 | `mtls-auth` | Middleware | Client certificate authentication | SPEC-004 |
 | `canary` | Middleware | Traffic splitting by percentage | Competitive analysis |
 | `graphql-proxy` | Dispatcher | GraphQL-specific routing and caching | Competitive analysis |
-| `saml-auth` | Middleware | SAML authentication | Competitive analysis |
+| `saml-auth` | Middleware | SAML authentication (most enterprise SSO covered by `oidc-auth`) | Competitive analysis |
 | `vault-auth` | Middleware | HashiCorp Vault integration for auth | ADR-0009 |
 
 ---
@@ -145,7 +146,7 @@ Items are tagged with their source ADR or SPEC for traceability.
 
 | Item | Description | Priority | Source |
 |------|-------------|----------|--------|
-| JWKS fetch | Load JWT public keys from `jwks_uri` | P1 | M6a deferred |
+| ~~JWKS fetch~~ | ~~Load JWT public keys from `jwks_uri` (prerequisite for `oidc-auth`)~~ | ~~P1~~ | **DONE** |
 | OPA WASM compilation | Define OPA version, compilation flags, error handling | P1 | SPEC-004 |
 | Auth plugin auditing | Security review process for auth plugins (security-critical WASM) | P1 | ADR-0009 |
 | Trace volume guidance | Documentation for managing trace volume at scale | P1 | ADR-0010 |

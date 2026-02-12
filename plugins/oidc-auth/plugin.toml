@@ -1,0 +1,9 @@
+[plugin]
+name = "oidc-auth"
+version = "0.1.0"
+type = "middleware"
+description = "OIDC authentication middleware with auto-discovery and JWKS rotation"
+wasm = "oidc-auth.wasm"
+
+[capabilities]
+host_functions = ["http_call", "verify_signature"]

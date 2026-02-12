@@ -257,6 +257,33 @@ pub mod cache {
     pub const READ_RESULT_FUNCTION: &str = "host_cache_read_result";
 }
 
+/// Host function for cryptographic signature verification.
+///
+/// ```text
+/// host_verify_signature(req_ptr: i32, req_len: i32) -> i32
+/// ```
+///
+/// Input: JSON-encoded request:
+/// ```json
+/// {
+///   "algorithm": "RS256",
+///   "jwk": { "kty": "RSA", "n": "...", "e": "..." },
+///   "message": "base64url-header.base64url-payload",
+///   "signature": [1, 2, 3]
+/// }
+/// ```
+///
+/// Returns: 1 (valid), 0 (invalid), -1 (error)
+///
+/// Supported algorithms: RS256, RS384, RS512, ES256, ES384
+pub mod verify_signature {
+    /// The capability name.
+    pub const CAPABILITY: &str = "verify_signature";
+
+    /// The function name in the barbacane namespace.
+    pub const FUNCTION_NAME: &str = "host_verify_signature";
+}
+
 /// Host functions for UUID generation.
 ///
 /// ```text

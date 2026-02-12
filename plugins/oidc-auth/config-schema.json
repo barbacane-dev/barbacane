@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:oidc-auth-config",
+  "title": "OIDC Authentication Middleware Config",
+  "description": "Configuration for the OIDC authentication middleware plugin",
+  "type": "object",
+  "required": ["issuer_url"],
+  "properties": {
+    "issuer_url": {
+      "type": "string",
+      "description": "OIDC issuer URL (e.g., https://accounts.google.com)",
+      "format": "uri"
+    },
+    "audience": {
+      "type": "string",
+      "description": "Expected audience (aud) claim. If set, tokens must match."
+    },
+    "required_scopes": {
+      "type": "string",
+      "description": "Space-separated required scopes. If set, token must have all of them."
+    },
+    "issuer_override": {
+      "type": "string",
+      "description": "Override the expected issuer (iss) claim. Useful when the provider's internal URL differs from its external URL (e.g., Docker networking).",
+      "format": "uri"
+    },
+    "clock_skew_seconds": {
+      "type": "integer",
+      "description": "Clock skew tolerance in seconds for exp/nbf validation",
+      "default": 60,
+      "minimum": 0
+    },
+    "jwks_refresh_seconds": {
+      "type": "integer",
+      "description": "How often to refresh JWKS keys (seconds)",
+      "default": 300,
+      "minimum": 10
+    },
+    "timeout": {
+      "type": "number",
+      "description": "HTTP timeout for discovery and JWKS calls (seconds)",
+      "default": 5,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}
