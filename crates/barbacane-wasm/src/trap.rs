@@ -72,6 +72,7 @@ impl TrapResult {
 }
 
 /// Classify a wasmtime trap into a human-readable category.
+#[allow(dead_code)] // Public API for error reporting
 pub fn classify_trap(trap: &wasmtime::Trap) -> &'static str {
     // wasmtime::Trap is now opaque, so we examine the message
     let msg = trap.to_string();

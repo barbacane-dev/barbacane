@@ -2,10 +2,7 @@
 members = [
     "crates/barbacane",
     "crates/barbacane-control",
-    "crates/barbacane-spec-parser",
     "crates/barbacane-compiler",
-    "crates/barbacane-router",
-    "crates/barbacane-validator",
     "crates/barbacane-plugin-sdk",
     "crates/barbacane-plugin-macros",
     "crates/barbacane-wasm",
@@ -130,10 +127,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 wat = "1"
 
 # Workspace crates (version required for crates.io publishing)
-barbacane-spec-parser = { path = "crates/barbacane-spec-parser", version = "0.1.0" }
 barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.1.0" }
-barbacane-router = { path = "crates/barbacane-router", version = "0.1.0" }
-barbacane-validator = { path = "crates/barbacane-validator", version = "0.1.0" }
 barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.1.0" }
 barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "0.1.0" }
 barbacane-wasm = { path = "crates/barbacane-wasm", version = "0.1.0" }
@@ -141,3 +135,22 @@ barbacane-telemetry = { path = "crates/barbacane-telemetry", version = "0.1.0" }
 barbacane-test = { path = "crates/barbacane-test", version = "0.1.0" }
 barbacane = { path = "crates/barbacane", version = "0.1.0" }
 barbacane-control = { path = "crates/barbacane-control", version = "0.1.0" }
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "symbols"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+debug = true
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "allow"
+panic = "warn"

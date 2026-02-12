@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::error::ParseError;
-use crate::model::{
+use super::error::ParseError;
+use super::model::{
     ApiSpec, ContentSchema, DispatchConfig, Message, MiddlewareConfig, Operation, Parameter,
     RequestBody, SpecFormat,
 };

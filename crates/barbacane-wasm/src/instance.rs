@@ -115,6 +115,7 @@ pub struct PluginState {
     pub last_uuid_result: Option<Vec<u8>>,
 }
 
+#[allow(dead_code)] // Constructors used by different pool configurations
 impl PluginState {
     /// Create new plugin state.
     pub fn new(plugin_name: String, limits: &PluginLimits) -> Self {
@@ -296,8 +297,7 @@ impl wasmtime::ResourceLimiter for PluginState {
 /// A WASM plugin instance ready for execution.
 pub struct PluginInstance {
     store: Store<PluginState>,
-    #[allow(dead_code)]
-    instance: Instance,
+    _instance: Instance,
     limits: PluginLimits,
 
     // Cached function references
@@ -412,7 +412,7 @@ impl PluginInstance {
 
         Ok(Self {
             store,
-            instance,
+            _instance: instance,
             limits,
             init_func,
             on_request_func,

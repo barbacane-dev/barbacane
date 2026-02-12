@@ -8,6 +8,10 @@
 //! module where they're registered with the wasmtime linker. This module
 //! provides documentation and helper types.
 
+// Constants define the WASM ABI spec (capability names, function names).
+// They serve as a single source of truth even when not directly referenced.
+#![allow(dead_code)]
+
 /// Host function for writing output.
 ///
 /// ```text

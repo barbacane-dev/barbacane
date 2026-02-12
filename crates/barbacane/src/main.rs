@@ -20,6 +20,7 @@ use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Incoming};
+use hyper::header::HeaderValue;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -41,8 +42,10 @@ use barbacane_compiler::{
     compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs, CompileOptions,
     CompiledOperation, Manifest, ProjectManifest,
 };
-use barbacane_router::{RouteEntry, RouteMatch, Router};
-use barbacane_validator::{OperationValidator, ProblemDetails, RequestLimits, ValidationError2};
+use barbacane_lib::router::{RouteEntry, RouteMatch, Router};
+use barbacane_lib::validator::{
+    OperationValidator, ProblemDetails, RequestLimits, ValidationError2,
+};
 
 /// Extract a reason string from a validation error for metrics.
 fn validation_error_reason(err: &ValidationError2) -> String {
@@ -153,7 +156,9 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
             // Merge paths
             if let Some(paths) = spec.get("paths").and_then(|p| p.as_object()) {
-                let merged_paths = merged["paths"].as_object_mut().unwrap();
+                let merged_paths = merged["paths"]
+                    .as_object_mut()
+                    .expect("json macro produces object");
                 for (path, methods) in paths {
                     merged_paths.insert(path.clone(), methods.clone());
                 }
@@ -161,7 +166,9 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
             // Merge components
             if let Some(components) = spec.get("components").and_then(|c| c.as_object()) {
-                let merged_components = merged["components"].as_object_mut().unwrap();
+                let merged_components = merged["components"]
+                    .as_object_mut()
+                    .expect("json macro produces object");
                 for (component_type, items) in components {
                     if let Some(items_obj) = items.as_object() {
                         let target = merged_components
@@ -189,7 +196,7 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
             if let Some(servers) = spec.get("servers").and_then(|s| s.as_array()) {
                 let merged_servers = merged
                     .as_object_mut()
-                    .unwrap()
+                    .expect("json macro produces object")
                     .entry("servers")
                     .or_insert_with(|| serde_json::json!([]));
                 if let Some(arr) = merged_servers.as_array_mut() {
@@ -205,7 +212,7 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
             if let Some(tags) = spec.get("tags").and_then(|t| t.as_array()) {
                 let merged_tags = merged
                     .as_object_mut()
-                    .unwrap()
+                    .expect("json macro produces object")
                     .entry("tags")
                     .or_insert_with(|| serde_json::json!([]));
                 if let Some(arr) = merged_tags.as_array_mut() {
@@ -226,15 +233,17 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
     // Clean up empty component sections
     if let Some(components) = merged.get_mut("components").and_then(|c| c.as_object_mut()) {
-        components.retain(|_, v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false));
+        components.retain(|_, v| v.as_object().is_some_and(|o| !o.is_empty()));
     }
     if merged
         .get("components")
         .and_then(|c| c.as_object())
-        .map(|o| o.is_empty())
-        .unwrap_or(false)
+        .is_some_and(|o| o.is_empty())
     {
-        merged.as_object_mut().unwrap().remove("components");
+        merged
+            .as_object_mut()
+            .expect("json macro produces object")
+            .remove("components");
     }
 
     merged
@@ -284,7 +293,9 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
             // Merge channels
             if let Some(channels) = spec.get("channels").and_then(|c| c.as_object()) {
-                let merged_channels = merged["channels"].as_object_mut().unwrap();
+                let merged_channels = merged["channels"]
+                    .as_object_mut()
+                    .expect("json macro produces object");
                 for (name, channel) in channels {
                     // Prefix with source filename to avoid conflicts
                     let key = if specs.len() > 1 && merged_channels.contains_key(name) {
@@ -299,7 +310,9 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
             // Merge operations
             if let Some(operations) = spec.get("operations").and_then(|o| o.as_object()) {
-                let merged_ops = merged["operations"].as_object_mut().unwrap();
+                let merged_ops = merged["operations"]
+                    .as_object_mut()
+                    .expect("json macro produces object");
                 for (name, op) in operations {
                     let key = if specs.len() > 1 && merged_ops.contains_key(name) {
                         let base = filename.trim_end_matches(".yaml").trim_end_matches(".json");
@@ -313,7 +326,9 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
             // Merge components
             if let Some(components) = spec.get("components").and_then(|c| c.as_object()) {
-                let merged_components = merged["components"].as_object_mut().unwrap();
+                let merged_components = merged["components"]
+                    .as_object_mut()
+                    .expect("json macro produces object");
                 for (component_type, items) in components {
                     if let Some(items_obj) = items.as_object() {
                         let target = merged_components
@@ -340,7 +355,7 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
             if let Some(servers) = spec.get("servers").and_then(|s| s.as_object()) {
                 let merged_servers = merged
                     .as_object_mut()
-                    .unwrap()
+                    .expect("json macro produces object")
                     .entry("servers")
                     .or_insert_with(|| serde_json::json!({}));
                 if let Some(map) = merged_servers.as_object_mut() {
@@ -360,26 +375,30 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
     }
 
     // Clean up empty sections
-    if let Some(channels) = merged.get("channels").and_then(|c| c.as_object()) {
-        if channels.is_empty() {
-            merged.as_object_mut().unwrap().remove("channels");
-        }
+    let obj = merged.as_object_mut().expect("json macro produces object");
+    if obj
+        .get("channels")
+        .and_then(|c| c.as_object())
+        .is_some_and(|c| c.is_empty())
+    {
+        obj.remove("channels");
     }
-    if let Some(operations) = merged.get("operations").and_then(|o| o.as_object()) {
-        if operations.is_empty() {
-            merged.as_object_mut().unwrap().remove("operations");
-        }
+    if obj
+        .get("operations")
+        .and_then(|o| o.as_object())
+        .is_some_and(|o| o.is_empty())
+    {
+        obj.remove("operations");
     }
-    if let Some(components) = merged.get_mut("components").and_then(|c| c.as_object_mut()) {
-        components.retain(|_, v| v.as_object().map(|o| !o.is_empty()).unwrap_or(false));
+    if let Some(components) = obj.get_mut("components").and_then(|c| c.as_object_mut()) {
+        components.retain(|_, v| v.as_object().is_some_and(|o| !o.is_empty()));
     }
-    if merged
+    if obj
         .get("components")
         .and_then(|c| c.as_object())
-        .map(|o| o.is_empty())
-        .unwrap_or(false)
+        .is_some_and(|o| o.is_empty())
     {
-        merged.as_object_mut().unwrap().remove("components");
+        obj.remove("components");
     }
 
     merged
@@ -575,24 +594,20 @@ struct Gateway {
     /// Request limits (body size, headers, URI length).
     limits: RequestLimits,
     dev_mode: bool,
-    /// WASM engine for plugin execution (kept for future plugin compilation).
-    #[allow(dead_code)]
-    wasm_engine: Arc<WasmEngine>,
+    /// WASM engine for plugin execution (kept alive for engine lifetime).
+    _wasm_engine: Arc<WasmEngine>,
     /// Plugin instance pool.
     plugin_pool: Arc<InstancePool>,
     /// Plugin resource limits (kept for future dynamic limit adjustment).
-    #[allow(dead_code)]
-    plugin_limits: PluginLimits,
+    _plugin_limits: PluginLimits,
     /// HTTP client for plugins making outbound calls (kept alive for pool lifetime).
-    #[allow(dead_code)]
-    http_client: Arc<HttpClient>,
+    _http_client: Arc<HttpClient>,
     /// Metrics registry for observability.
     metrics: Arc<MetricsRegistry>,
     /// API name from the first spec's title (for metrics labels).
     api_name: String,
     /// Request counter for generating request IDs (fallback if UUID too slow).
-    #[allow(dead_code)]
-    request_counter: AtomicU64,
+    _request_counter: AtomicU64,
 }
 
 impl Gateway {
@@ -776,13 +791,13 @@ impl Gateway {
             specs,
             limits,
             dev_mode,
-            wasm_engine,
+            _wasm_engine: wasm_engine,
             plugin_pool: Arc::new(plugin_pool),
-            plugin_limits,
-            http_client,
+            _plugin_limits: plugin_limits,
+            _http_client: http_client,
             metrics,
             api_name,
-            request_counter: AtomicU64::new(0),
+            _request_counter: AtomicU64::new(0),
         })
     }
 
@@ -800,13 +815,22 @@ impl Gateway {
         let headers = response.headers_mut();
 
         // Observability headers
-        headers.insert("server", SERVER_VERSION.parse().unwrap());
-        headers.insert("x-request-id", request_id.parse().unwrap());
-        headers.insert("x-trace-id", trace_id.parse().unwrap());
+        headers.insert("server", HeaderValue::from_static(SERVER_VERSION));
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_str(request_id).expect("uuid is valid ASCII"),
+        );
+        headers.insert(
+            "x-trace-id",
+            HeaderValue::from_str(trace_id).expect("uuid is valid ASCII"),
+        );
 
         // Security headers (enabled by default)
-        headers.insert("x-content-type-options", "nosniff".parse().unwrap());
-        headers.insert("x-frame-options", "DENY".parse().unwrap());
+        headers.insert(
+            "x-content-type-options",
+            HeaderValue::from_static("nosniff"),
+        );
+        headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
 
         response
     }
@@ -821,7 +845,7 @@ impl Gateway {
             let headers = response.headers_mut();
             // Deprecation header per draft-ietf-httpapi-deprecation-header
             // Value "true" indicates the endpoint is deprecated
-            headers.insert("deprecation", "true".parse().unwrap());
+            headers.insert("deprecation", HeaderValue::from_static("true"));
 
             // Sunset header per RFC 8594 if a sunset date is specified
             if let Some(sunset_date) = &operation.sunset {
@@ -1340,7 +1364,9 @@ impl Gateway {
         }
 
         let body = plugin_response.body.clone().unwrap_or_default();
-        builder.body(Full::new(Bytes::from(body))).unwrap()
+        builder
+            .body(Full::new(Bytes::from(body)))
+            .expect("valid response")
     }
 
     /// Dispatch via a WASM plugin (inner function taking pre-serialized request).
@@ -1457,7 +1483,7 @@ impl Gateway {
             .status(StatusCode::OK)
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Serve merged OpenAPI spec (all OpenAPI specs combined).
@@ -1514,7 +1540,7 @@ impl Gateway {
             .status(StatusCode::OK)
             .header("content-type", content_type)
             .body(Full::new(Bytes::from(content)))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Serve a specific spec file.
@@ -1546,7 +1572,7 @@ impl Gateway {
                         .status(StatusCode::OK)
                         .header("content-type", content_type)
                         .body(Full::new(Bytes::from(content.clone())))
-                        .unwrap()
+                        .expect("valid response")
                 }
             }
         } else {
@@ -1567,7 +1593,7 @@ impl Gateway {
             .status(StatusCode::OK)
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Build the Prometheus metrics response.
@@ -1578,7 +1604,7 @@ impl Gateway {
             .status(StatusCode::OK)
             .header("content-type", barbacane_telemetry::PROMETHEUS_CONTENT_TYPE)
             .body(Full::new(Bytes::from(body)))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Build a 404 Not Found response.
@@ -1589,7 +1615,7 @@ impl Gateway {
             .status(StatusCode::NOT_FOUND)
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body)))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Build a 405 Method Not Allowed response.
@@ -1602,7 +1628,7 @@ impl Gateway {
             .header("content-type", "application/json")
             .header("allow", allow_header)
             .body(Full::new(Bytes::from(body)))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Handle CORS preflight request by executing only the CORS middleware.
@@ -1653,7 +1679,7 @@ impl Gateway {
                     Response::builder()
                         .status(StatusCode::NO_CONTENT)
                         .body(Full::new(Bytes::new()))
-                        .unwrap(),
+                        .expect("valid response"),
                     request_id,
                     trace_id,
                 )
@@ -1678,21 +1704,18 @@ impl Gateway {
             .status(StatusCode::BAD_REQUEST)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Build a 400 validation error response (RFC 9457).
-    fn validation_error_response(
-        &self,
-        errors: &[barbacane_validator::ValidationError2],
-    ) -> Response<Full<Bytes>> {
+    fn validation_error_response(&self, errors: &[ValidationError2]) -> Response<Full<Bytes>> {
         let problem = ProblemDetails::validation_error(errors, self.dev_mode);
 
         Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(problem.to_json())))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Build a 500 Internal Server Error response (RFC 9457).
@@ -1716,7 +1739,7 @@ impl Gateway {
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap()
+            .expect("valid response")
     }
 
     /// Build a 500 response with detail visible only in dev mode.
@@ -1757,7 +1780,7 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
 
     // Collect parsed specs for cross-spec validation
-    let mut parsed_specs: Vec<(String, barbacane_spec_parser::ApiSpec)> = Vec::new();
+    let mut parsed_specs: Vec<(String, barbacane_compiler::ApiSpec)> = Vec::new();
 
     // Phase 1: Parse and validate each spec individually
     for spec_path in specs {
@@ -1783,7 +1806,7 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
         }
 
         // Try to parse the spec
-        match barbacane_spec_parser::parse_spec_file(path) {
+        match barbacane_compiler::parse_spec_file(path) {
             Ok(spec) => {
                 // Check for missing x-barbacane-dispatch on operations
                 for op in &spec.operations {
@@ -1847,19 +1870,19 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
             }
             Err(e) => {
                 let (code, message) = match &e {
-                    barbacane_spec_parser::ParseError::UnknownFormat => {
+                    barbacane_compiler::ParseError::UnknownFormat => {
                         ("E1001".to_string(), e.to_string())
                     }
-                    barbacane_spec_parser::ParseError::ParseError(_) => {
+                    barbacane_compiler::ParseError::ParseError(_) => {
                         ("E1002".to_string(), e.to_string())
                     }
-                    barbacane_spec_parser::ParseError::UnresolvedRef(_) => {
+                    barbacane_compiler::ParseError::UnresolvedRef(_) => {
                         ("E1003".to_string(), e.to_string())
                     }
-                    barbacane_spec_parser::ParseError::SchemaError(_) => {
+                    barbacane_compiler::ParseError::SchemaError(_) => {
                         ("E1004".to_string(), e.to_string())
                     }
-                    barbacane_spec_parser::ParseError::Io(io_err) => {
+                    barbacane_compiler::ParseError::Io(io_err) => {
                         ("E1000".to_string(), format!("I/O error: {}", io_err))
                     }
                 };
@@ -1915,7 +1938,10 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                 "invalid": results.iter().filter(|r| !r.valid).count(),
             }
         });
-        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).expect("serializable json")
+        );
     } else {
         // Text format
         for result in &results {

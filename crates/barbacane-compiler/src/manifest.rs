@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use barbacane_spec_parser::ApiSpec;
+use crate::spec_parser::ApiSpec;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CompileError;
@@ -400,7 +400,7 @@ plugins:
 
     #[test]
     fn extract_plugin_names_from_specs() {
-        use barbacane_spec_parser::{
+        use crate::spec_parser::{
             ApiSpec, DispatchConfig, MiddlewareConfig, Operation, SpecFormat,
         };
         use std::collections::BTreeMap;
@@ -470,7 +470,7 @@ plugins:
 
     #[test]
     fn validate_specs_all_declared() {
-        use barbacane_spec_parser::{ApiSpec, DispatchConfig, Operation, SpecFormat};
+        use crate::spec_parser::{ApiSpec, DispatchConfig, Operation, SpecFormat};
         use std::collections::BTreeMap;
 
         let spec = ApiSpec {
@@ -513,7 +513,7 @@ plugins:
 
     #[test]
     fn validate_specs_undeclared_plugin() {
-        use barbacane_spec_parser::{ApiSpec, DispatchConfig, Operation, SpecFormat};
+        use crate::spec_parser::{ApiSpec, DispatchConfig, Operation, SpecFormat};
         use std::collections::BTreeMap;
 
         let spec = ApiSpec {
@@ -559,7 +559,7 @@ plugins:
     }
 
     fn make_spec_using_plugin(plugin_name: &str) -> ApiSpec {
-        use barbacane_spec_parser::{DispatchConfig, Operation, SpecFormat};
+        use crate::spec_parser::{DispatchConfig, Operation, SpecFormat};
         use std::collections::BTreeMap;
 
         ApiSpec {

@@ -3,8 +3,9 @@
 //! This module provides an in-memory response cache for the cache middleware.
 //! Entries are keyed by (path, method, vary_headers) and include TTL expiration.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// A cached response entry.
@@ -37,7 +38,7 @@ struct InternalEntry {
     entry: CacheEntry,
     expires_at: Instant,
     created_at: Instant,
-    ttl_secs: u64,
+    _ttl_secs: u64,
 }
 
 /// Result of a cache lookup.
@@ -81,7 +82,7 @@ impl ResponseCache {
     pub fn get(&self, key: &str) -> CacheResult {
         self.maybe_cleanup();
 
-        let entries = self.entries.read().unwrap();
+        let entries = self.entries.read();
         let now = Instant::now();
 
         if let Some(internal) = entries.get(key) {
@@ -123,22 +124,22 @@ impl ResponseCache {
             entry,
             expires_at,
             created_at: now,
-            ttl_secs,
+            _ttl_secs: ttl_secs,
         };
 
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write();
         entries.insert(key.to_string(), internal);
     }
 
     /// Invalidate a cache entry.
     pub fn invalidate(&self, key: &str) {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write();
         entries.remove(key);
     }
 
     /// Clear all cache entries.
     pub fn clear(&self) {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self.entries.write();
         entries.clear();
     }
 
@@ -147,17 +148,17 @@ impl ResponseCache {
         let now = Instant::now();
 
         {
-            let last = self.last_cleanup.read().unwrap();
+            let last = self.last_cleanup.read();
             if now.duration_since(*last) < self.cleanup_interval {
                 return;
             }
         }
 
-        if let Ok(mut last) = self.last_cleanup.try_write() {
+        if let Some(mut last) = self.last_cleanup.try_write() {
             if now.duration_since(*last) >= self.cleanup_interval {
                 *last = now;
 
-                if let Ok(mut entries) = self.entries.try_write() {
+                if let Some(mut entries) = self.entries.try_write() {
                     entries.retain(|_, v| v.expires_at > now);
                 }
             }
@@ -166,7 +167,7 @@ impl ResponseCache {
 
     /// Get cache statistics.
     pub fn stats(&self) -> CacheStats {
-        let entries = self.entries.read().unwrap();
+        let entries = self.entries.read();
         let now = Instant::now();
         let valid_count = entries.values().filter(|e| e.expires_at > now).count();
 

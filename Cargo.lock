@@ -384,18 +384,17 @@ version = "0.1.1"
 dependencies = [
  "arc-swap",
  "barbacane-compiler",
- "barbacane-router",
- "barbacane-spec-parser",
  "barbacane-telemetry",
- "barbacane-validator",
  "barbacane-wasm",
  "bytes",
  "clap",
+ "criterion",
  "futures-util",
  "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "jsonschema",
  "reqwest",
  "rustls",
  "rustls-pemfile",
@@ -404,6 +403,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
@@ -415,7 +415,6 @@ dependencies = [
 name = "barbacane-compiler"
 version = "0.1.1"
 dependencies = [
- "barbacane-spec-parser",
  "criterion",
  "flate2",
  "serde",
@@ -435,7 +434,6 @@ dependencies = [
  "anyhow",
  "axum 0.8.8",
  "barbacane-compiler",
- "barbacane-spec-parser",
  "base64-simd",
  "chrono",
  "clap",
@@ -474,23 +472,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "barbacane-router"
-version = "0.1.1"
-dependencies = [
- "criterion",
-]
-
-[[package]]
-name = "barbacane-spec-parser"
-version = "0.1.1"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "barbacane-telemetry"
 version = "0.1.1"
 dependencies = [
@@ -519,18 +500,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "wiremock",
-]
-
-[[package]]
-name = "barbacane-validator"
-version = "0.1.1"
-dependencies = [
- "barbacane-spec-parser",
- "criterion",
- "jsonschema",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]

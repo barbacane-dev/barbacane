@@ -356,6 +356,7 @@ impl TestGateway {
 }
 
 /// Assert response status matches expected, printing body on failure for debugging.
+#[allow(clippy::panic)]
 pub async fn assert_status(resp: reqwest::Response, expected: u16) {
     let status = resp.status().as_u16();
     if status != expected {

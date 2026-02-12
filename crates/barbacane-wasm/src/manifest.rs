@@ -85,7 +85,7 @@ impl PluginManifest {
             ));
         }
 
-        let name_regex = regex_lite::Regex::new(r"^[a-z][a-z0-9-]*$").unwrap();
+        let name_regex = regex_lite::Regex::new(r"^[a-z][a-z0-9-]*$").expect("static regex");
         if !name_regex.is_match(&self.plugin.name) {
             return Err(WasmError::ManifestValidation(
                 "plugin name must be lowercase, kebab-case (^[a-z][a-z0-9-]*$)".into(),

@@ -162,7 +162,7 @@ pub async fn upload_spec_to_project(
     let content_str = String::from_utf8(content.clone())
         .map_err(|_| ProblemDetails::bad_request("File is not valid UTF-8"))?;
 
-    let parsed = barbacane_spec_parser::parse_spec(&content_str)
+    let parsed = barbacane_compiler::parse_spec(&content_str)
         .map_err(|e| ProblemDetails::bad_request(format!("Invalid spec: {}", e)))?;
 
     // Compute SHA256
@@ -181,8 +181,8 @@ pub async fn upload_spec_to_project(
     };
 
     let spec_type = match parsed.format {
-        barbacane_spec_parser::SpecFormat::OpenApi => "openapi",
-        barbacane_spec_parser::SpecFormat::AsyncApi => "asyncapi",
+        barbacane_compiler::SpecFormat::OpenApi => "openapi",
+        barbacane_compiler::SpecFormat::AsyncApi => "asyncapi",
     };
 
     let specs_repo = SpecsRepository::new(state.pool.clone());

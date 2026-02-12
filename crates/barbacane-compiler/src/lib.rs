@@ -6,6 +6,7 @@
 pub mod artifact;
 pub mod error;
 pub mod manifest;
+pub mod spec_parser;
 
 pub use artifact::{
     compile, compile_with_manifest, compile_with_options, compile_with_plugins, load_manifest,
@@ -15,5 +16,8 @@ pub use artifact::{
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{PathSource, PluginSource, ProjectManifest, ResolvedPlugin, UrlSource};
-// Re-export validation types from spec-parser
-pub use barbacane_spec_parser::{ContentSchema, MiddlewareConfig, Parameter, RequestBody};
+// Re-export spec-parser types for convenience
+pub use spec_parser::{
+    parse_spec, parse_spec_file, ApiSpec, AsyncAction, Channel, ContentSchema, DispatchConfig,
+    Message, MiddlewareConfig, Operation, Parameter, ParseError, RequestBody, SpecFormat,
+};

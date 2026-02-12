@@ -17,3 +17,6 @@ rcgen = { workspace = true }
 rustls = { workspace = true }
 base64 = "0.22"
 wiremock = "0.6"
+
+[lints]
+workspace = true

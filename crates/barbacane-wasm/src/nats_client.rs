@@ -6,8 +6,8 @@
 
 use crate::broker::{BrokerError, PublishResult};
 use bytes::Bytes;
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
 
 /// NATS publisher with connection caching.
 ///
@@ -88,7 +88,7 @@ impl NatsPublisher {
     async fn get_or_connect(&self, url: &str) -> Result<async_nats::Client, BrokerError> {
         // Check cache (lock is held briefly, no await while locked)
         {
-            let conns = self.connections.lock().unwrap();
+            let conns = self.connections.lock();
             if let Some(client) = conns.get(url) {
                 return Ok(client.clone());
             }
@@ -103,7 +103,7 @@ impl NatsPublisher {
 
         // Cache the new connection
         {
-            let mut conns = self.connections.lock().unwrap();
+            let mut conns = self.connections.lock();
             conns.insert(url.to_string(), client.clone());
         }
 
@@ -118,14 +118,14 @@ mod tests {
     #[test]
     fn publisher_starts_empty() {
         let publisher = NatsPublisher::new();
-        let conns = publisher.connections.lock().unwrap();
+        let conns = publisher.connections.lock();
         assert!(conns.is_empty());
     }
 
     #[test]
     fn default_impl() {
         let publisher = NatsPublisher::default();
-        let conns = publisher.connections.lock().unwrap();
+        let conns = publisher.connections.lock();
         assert!(conns.is_empty());
     }
 

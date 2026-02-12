@@ -8,7 +8,6 @@ license.workspace = true
 [dependencies]
 # Workspace crates
 barbacane-compiler = { workspace = true }
-barbacane-spec-parser = { workspace = true }
 
 # CLI
 clap = { workspace = true }
@@ -48,3 +47,6 @@ scalar_api_reference = "0.1"
 
 # Plugin seeding
 toml = { workspace = true }
+
+[lints]
+workspace = true
