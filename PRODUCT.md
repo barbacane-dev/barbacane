@@ -85,9 +85,7 @@ There is no "enterprise edition" with gated features. The open source version is
 
 ## Roadmap
 
-See [MILESTONES.md](MILESTONES.md) for the detailed implementation plan.
-
-**Current focus:** M1 — Compile and Route (the minimum viable loop)
+See [ROADMAP.md](ROADMAP.md) for the prioritized roadmap.
 
 ## Get Involved
 

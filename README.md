@@ -142,7 +142,7 @@ cargo bench --workspace
 
 ## Project Status
 
-Barbacane is under active development. See [MILESTONES.md](MILESTONES.md) for the roadmap and [CHANGELOG.md](CHANGELOG.md) for release history.
+Barbacane is under active development. See [ROADMAP.md](ROADMAP.md) for the roadmap and [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Contributing
 

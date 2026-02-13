@@ -22,12 +22,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Auth context headers: `x-auth-sub`, `x-auth-scope`, `x-auth-claims`
   - `issuer_override` config option for split-network environments (e.g., Docker)
 
+#### ACL & Consumer Headers
+- `acl` middleware plugin — group and consumer-based access control
+  - Allow/deny lists for consumer groups
+  - Configurable hide-groups behaviour
+- Standardized `x-auth-consumer` and `x-auth-consumer-groups` headers across all 5 auth plugins (`basic-auth`, `jwt-auth`, `oidc-auth`, `oauth2-auth`, `apikey-auth`)
+- `groups_claim` config option added to `jwt-auth` for JWT-based group extraction
+
+#### Plugins
+- `basic-auth` middleware plugin — HTTP Basic authentication with credential validation
+- `http-log` middleware plugin — HTTP logging with configurable endpoint and payload
+- Unit tests for all 17 plugins (321 tests) with dedicated CI job
+
 #### Host Functions
 - `host_verify_signature` — cryptographic signature verification using `ring`
   - Supports RSA (RS256, RS384, RS512) and ECDSA (ES256, ES384)
   - JWK-based public key input with DER/uncompressed point construction
   - Returns 1 (valid), 0 (invalid), -1 (error)
   - Registered as `verify_signature` capability
+
+### Changed
+- Consolidated workspace from 11 crates to 8: merged `barbacane-router`, `barbacane-validator`, and `barbacane-spec-parser` into their parent crates
+- Replaced all production `unwrap()`/`panic!()` with proper error handling (`expect()` with reason or `?` propagation)
+- Switched to `parking_lot::Mutex`/`RwLock` for lock primitives (no poisoning)
+- Enforced workspace-wide clippy lints: `unwrap_used = "warn"`, `panic = "warn"`
+- Narrowed CI clippy to `--lib --bins` (test code may use `unwrap`)
 
 ## [0.1.1] - 2026-02-10
 

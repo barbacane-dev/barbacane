@@ -4,6 +4,7 @@ description = "Test harnesses for Barbacane gateway and plugins"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 barbacane-compiler = { workspace = true }
