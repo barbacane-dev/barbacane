@@ -51,6 +51,7 @@ fn compute_hash(s: &str) -> String {
 }
 
 /// A resolved plugin ready for instantiation.
+#[allow(dead_code)] // Public API for plugin resolution pipeline
 pub struct ResolvedPlugin {
     /// The compiled WASM module.
     pub module: CompiledModule,

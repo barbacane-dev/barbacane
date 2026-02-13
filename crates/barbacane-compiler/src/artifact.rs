@@ -11,7 +11,7 @@ use tar::Builder;
 
 use std::collections::BTreeMap;
 
-use barbacane_spec_parser::{
+use crate::spec_parser::{
     parse_spec_file, ApiSpec, DispatchConfig, Message, MiddlewareConfig, Parameter, RequestBody,
     SpecFormat,
 };

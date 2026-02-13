@@ -9,8 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use barbacane_compiler::{compile, ARTIFACT_VERSION, COMPILER_VERSION};
-use barbacane_spec_parser::parse_spec_file;
+use barbacane_compiler::{compile, parse_spec_file, ARTIFACT_VERSION, COMPILER_VERSION};
 
 mod api;
 mod compiler;
@@ -210,8 +209,8 @@ fn main() -> ExitCode {
                                 "  {} - OK ({} {}, {} operations)",
                                 spec_path,
                                 match spec.format {
-                                    barbacane_spec_parser::SpecFormat::OpenApi => "openapi",
-                                    barbacane_spec_parser::SpecFormat::AsyncApi => "asyncapi",
+                                    barbacane_compiler::SpecFormat::OpenApi => "openapi",
+                                    barbacane_compiler::SpecFormat::AsyncApi => "asyncapi",
                                 },
                                 spec.version,
                                 spec.operations.len()
@@ -255,7 +254,7 @@ fn main() -> ExitCode {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("info".parse().unwrap()),
+                        .add_directive("info".parse().expect("valid log directive")),
                 )
                 .init();
 

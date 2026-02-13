@@ -62,6 +62,9 @@ uuid.workspace = true
 barbacane-plugin-sdk.workspace = true
 barbacane-telemetry.workspace = true
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = "3"

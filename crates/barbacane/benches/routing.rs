@@ -1,10 +1,10 @@
 //! Routing benchmarks for the prefix-trie router.
 //!
-//! Run with: cargo bench -p barbacane-router
+//! Run with: cargo bench -p barbacane
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use barbacane_router::{RouteEntry, Router};
+use barbacane_lib::router::{RouteEntry, Router};
 
 /// Generate a set of realistic API routes.
 fn generate_routes(count: usize) -> Vec<(String, String)> {

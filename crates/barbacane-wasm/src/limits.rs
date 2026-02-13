@@ -58,10 +58,12 @@ impl PluginLimits {
 }
 
 /// Resource limiter for wasmtime that enforces memory limits.
+#[allow(dead_code)] // Implements wasmtime::ResourceLimiter, will be passed to Store
 pub struct PluginResourceLimiter {
     limits: PluginLimits,
 }
 
+#[allow(dead_code)]
 impl PluginResourceLimiter {
     /// Create a new resource limiter with the given limits.
     pub fn new(limits: PluginLimits) -> Self {

@@ -3,8 +3,9 @@
 //! This module provides thread-safe rate limiting with a sliding log
 //! algorithm for accurate per-window rate limiting.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Result of a rate limit check.
@@ -127,7 +128,7 @@ impl RateLimiter {
         self.maybe_cleanup();
 
         // Check and update window
-        let mut windows = self.windows.write().unwrap();
+        let mut windows = self.windows.write();
 
         let window = windows
             .entry(key.to_string())
@@ -145,20 +146,20 @@ impl RateLimiter {
 
         // Check if we need to cleanup (every cleanup_threshold duration)
         {
-            let last = self.last_cleanup.read().unwrap();
+            let last = self.last_cleanup.read();
             if now.duration_since(*last) < self.cleanup_threshold {
                 return;
             }
         }
 
         // Try to acquire write lock for cleanup
-        if let Ok(mut last) = self.last_cleanup.try_write() {
+        if let Some(mut last) = self.last_cleanup.try_write() {
             // Double-check after acquiring lock
             if now.duration_since(*last) >= self.cleanup_threshold {
                 *last = now;
 
                 // Cleanup old windows
-                if let Ok(mut windows) = self.windows.try_write() {
+                if let Some(mut windows) = self.windows.try_write() {
                     let threshold = now - self.cleanup_threshold;
                     windows.retain(|_, window| {
                         // Keep if any timestamp is recent
@@ -171,7 +172,7 @@ impl RateLimiter {
 
     /// Get statistics about the rate limiter.
     pub fn stats(&self) -> RateLimiterStats {
-        let windows = self.windows.read().unwrap();
+        let windows = self.windows.read();
         RateLimiterStats {
             active_keys: windows.len(),
         }

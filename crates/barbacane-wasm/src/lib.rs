@@ -3,9 +3,6 @@
 //! This crate provides the wasmtime-based runtime for loading and executing
 //! WASM plugins (middlewares and dispatchers) according to SPEC-003.
 
-// Allow dead code for M3 host function scaffolding not yet integrated
-#![allow(dead_code)]
-
 pub mod broker;
 pub mod cache;
 mod chain;

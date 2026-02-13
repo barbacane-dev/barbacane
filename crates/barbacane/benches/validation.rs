@@ -1,13 +1,13 @@
 //! Validation benchmarks for the request validator.
 //!
-//! Run with: cargo bench -p barbacane-validator
+//! Run with: cargo bench -p barbacane
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 
-use barbacane_spec_parser::{ContentSchema, Parameter, RequestBody};
-use barbacane_validator::OperationValidator;
+use barbacane_compiler::{ContentSchema, Parameter, RequestBody};
+use barbacane_lib::validator::OperationValidator;
 
 /// Create parameters for benchmarking.
 fn create_parameters() -> Vec<Parameter> {

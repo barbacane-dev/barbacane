@@ -45,7 +45,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 reason: "Invalid or expired API key".to_string(),
             };
             let _ = sender
-                .send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+                .send(Message::Text(
+                    serde_json::to_string(&msg)
+                        .expect("serializable control plane message")
+                        .into(),
+                ))
                 .await;
             return;
         }
@@ -55,7 +59,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 reason: "Internal error".to_string(),
             };
             let _ = sender
-                .send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+                .send(Message::Text(
+                    serde_json::to_string(&msg)
+                        .expect("serializable control plane message")
+                        .into(),
+                ))
                 .await;
             return;
         }
@@ -67,7 +75,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             reason: "API key does not match project".to_string(),
         };
         let _ = sender
-            .send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+            .send(Message::Text(
+                serde_json::to_string(&msg)
+                    .expect("serializable control plane message")
+                    .into(),
+            ))
             .await;
         return;
     }
@@ -89,7 +101,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 reason: "Failed to register data plane".to_string(),
             };
             let _ = sender
-                .send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+                .send(Message::Text(
+                    serde_json::to_string(&msg)
+                        .expect("serializable control plane message")
+                        .into(),
+                ))
                 .await;
             return;
         }
@@ -105,7 +121,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     };
     if let Err(e) = sender
         .send(Message::Text(
-            serde_json::to_string(&confirm_msg).unwrap().into(),
+            serde_json::to_string(&confirm_msg)
+                .expect("serializable control plane message")
+                .into(),
         ))
         .await
     {

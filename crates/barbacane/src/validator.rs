@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 use thiserror::Error;
 
-use barbacane_spec_parser::{Parameter, RequestBody};
+use barbacane_compiler::{Parameter, RequestBody};
 
 /// Validation errors returned when a request doesn't conform to the spec.
 #[derive(Debug, Error)]
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn validate_required_body() {
-        use barbacane_spec_parser::ContentSchema;
+        use barbacane_compiler::ContentSchema;
         use std::collections::BTreeMap;
 
         let mut content = BTreeMap::new();
@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn validate_body_schema() {
-        use barbacane_spec_parser::ContentSchema;
+        use barbacane_compiler::ContentSchema;
         use std::collections::BTreeMap;
 
         let schema = serde_json::json!({
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn validate_unsupported_content_type() {
-        use barbacane_spec_parser::ContentSchema;
+        use barbacane_compiler::ContentSchema;
         use std::collections::BTreeMap;
 
         let mut content = BTreeMap::new();
@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn validate_asyncapi_message_payload() {
         // Simulates how the parser creates request_body from AsyncAPI message payload
-        use barbacane_spec_parser::ContentSchema;
+        use barbacane_compiler::ContentSchema;
         use std::collections::BTreeMap;
 
         // Message schema with required fields (typical event payload)
@@ -1064,7 +1064,7 @@ mod tests {
     #[test]
     fn validate_asyncapi_message_with_avro_content_type() {
         // AsyncAPI can use different content types (avro, protobuf, etc.)
-        use barbacane_spec_parser::ContentSchema;
+        use barbacane_compiler::ContentSchema;
         use std::collections::BTreeMap;
 
         let message_schema = serde_json::json!({

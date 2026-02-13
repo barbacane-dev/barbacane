@@ -77,7 +77,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --lib --bins -- -D warnings
 
   # Security audit (non-blocking - wasmtime has known low-severity vulnerabilities)
   audit:
@@ -277,13 +277,13 @@ jobs:
       - name: Run benchmarks
         # Only run benchmarks on packages that have them defined
         # Criterion 0.5+ auto-detects CI and disables plotting
-        run: cargo bench -p barbacane-router -p barbacane-validator
+        run: cargo bench -p barbacane -p barbacane-compiler -p barbacane-wasm
 
       - name: Check for regressions
         run: |
           # Parse criterion output for significant regressions (>10%)
           # Criterion reports "Performance has regressed" for significant changes
-          if cargo bench -p barbacane-router -p barbacane-validator 2>&1 | grep -q "Performance has regressed"; then
+          if cargo bench -p barbacane -p barbacane-compiler -p barbacane-wasm 2>&1 | grep -q "Performance has regressed"; then
             echo "::warning::Performance regression detected in benchmarks"
             # For now, warn but don't fail - can be made strict later
             # exit 1

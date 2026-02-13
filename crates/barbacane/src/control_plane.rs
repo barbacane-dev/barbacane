@@ -77,7 +77,6 @@ pub struct ControlPlaneConfig {
 
 /// Notification that a new artifact is available.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ArtifactNotification {
     pub artifact_id: Uuid,
     pub download_url: String,

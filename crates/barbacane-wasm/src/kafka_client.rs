@@ -6,12 +6,13 @@
 
 use crate::broker::{BrokerError, PublishResult};
 use chrono::Utc;
+use parking_lot::Mutex;
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
 use rskafka::client::{Client, ClientBuilder};
 use rskafka::record::Record;
 use rskafka::BackoffConfig;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Kafka publisher with connection caching.
@@ -107,7 +108,7 @@ impl KafkaPublisher {
     async fn get_or_connect(&self, brokers: &str) -> Result<Arc<Client>, BrokerError> {
         // Check cache (lock is held briefly, no await while locked)
         {
-            let clients = self.clients.lock().unwrap();
+            let clients = self.clients.lock();
             if let Some(client) = clients.get(brokers) {
                 return Ok(client.clone());
             }
@@ -132,7 +133,7 @@ impl KafkaPublisher {
 
         // Cache the new connection
         {
-            let mut clients = self.clients.lock().unwrap();
+            let mut clients = self.clients.lock();
             clients.insert(brokers.to_string(), client.clone());
         }
 
@@ -147,14 +148,14 @@ mod tests {
     #[test]
     fn publisher_starts_empty() {
         let publisher = KafkaPublisher::new();
-        let clients = publisher.clients.lock().unwrap();
+        let clients = publisher.clients.lock();
         assert!(clients.is_empty());
     }
 
     #[test]
     fn default_impl() {
         let publisher = KafkaPublisher::default();
-        let clients = publisher.clients.lock().unwrap();
+        let clients = publisher.clients.lock();
         assert!(clients.is_empty());
     }
 

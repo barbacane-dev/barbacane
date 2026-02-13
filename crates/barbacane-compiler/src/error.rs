@@ -17,7 +17,7 @@ pub struct CompileWarning {
 pub enum CompileError {
     /// Spec parsing failed.
     #[error(transparent)]
-    Parse(#[from] barbacane_spec_parser::ParseError),
+    Parse(#[from] crate::spec_parser::ParseError),
 
     /// E1010: Routing conflict.
     #[error("E1010: routing conflict: {0}")]

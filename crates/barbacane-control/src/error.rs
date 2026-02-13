@@ -124,9 +124,10 @@ impl IntoResponse for ProblemDetails {
         let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut response = Json(&self).into_response();
         *response.status_mut() = status;
-        response
-            .headers_mut()
-            .insert("content-type", "application/problem+json".parse().unwrap());
+        response.headers_mut().insert(
+            "content-type",
+            axum::http::HeaderValue::from_static("application/problem+json"),
+        );
         response
     }
 }

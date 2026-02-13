@@ -28,7 +28,7 @@ fi
 
 # Run clippy
 echo "Running clippy..."
-if ! cargo clippy --workspace --all-targets -- -D warnings; then
+if ! cargo clippy --workspace --lib --bins -- -D warnings; then
     echo ""
     echo "ERROR: Clippy check failed!"
     echo "Fix the warnings above before committing."

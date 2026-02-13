@@ -112,7 +112,7 @@ impl Router {
                             node: Node::default(),
                         }));
                     }
-                    &mut current.param_child.as_mut().unwrap().node
+                    &mut current.param_child.as_mut().expect("just set above").node
                 }
             };
         }

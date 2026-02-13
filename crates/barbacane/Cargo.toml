@@ -15,9 +15,8 @@ path = "src/main.rs"
 
 [dependencies]
 barbacane-compiler = { workspace = true }
-barbacane-router = { workspace = true }
-barbacane-validator = { workspace = true }
-barbacane-spec-parser = { workspace = true }
+jsonschema = { workspace = true }
+thiserror = { workspace = true }
 barbacane-wasm = { workspace = true }
 barbacane-telemetry = { workspace = true }
 tokio = { workspace = true }
@@ -41,5 +40,17 @@ arc-swap = "1.7"
 sha2 = { workspace = true }
 hex = { workspace = true }
 
+[lints]
+workspace = true
+
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "routing"
+harness = false
+
+[[bench]]
+name = "validation"
+harness = false
