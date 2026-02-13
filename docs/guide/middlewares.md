@@ -464,6 +464,111 @@ Returns `403 Forbidden` with Problem JSON (RFC 9457):
 
 Set `hide_consumer_in_errors: true` to omit the `consumer` field.
 
+### opa-authz
+
+Policy-based access control via [Open Policy Agent](https://www.openpolicyagent.org/). Sends request context to an OPA REST API endpoint and enforces the boolean decision. Typically placed after an authentication middleware so that auth claims are available as OPA input.
+
+```yaml
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "https://auth.example.com"
+      jwks_url: "https://auth.example.com/.well-known/jwks.json"
+  - name: opa-authz
+    config:
+      opa_url: "http://opa:8181/v1/data/authz/allow"
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `opa_url` | string | *(required)* | OPA Data API endpoint URL (e.g., `http://opa:8181/v1/data/authz/allow`) |
+| `timeout` | number | `5` | HTTP request timeout in seconds for OPA calls |
+| `include_body` | boolean | `false` | Include the request body in the OPA input payload |
+| `include_claims` | boolean | `true` | Include parsed `x-auth-claims` header (set by upstream auth plugins) in the OPA input |
+| `deny_message` | string | `Authorization denied by policy` | Custom message returned in the 403 response body |
+
+#### OPA Input Payload
+
+The plugin POSTs the following JSON to your OPA endpoint:
+
+```json
+{
+  "input": {
+    "method": "GET",
+    "path": "/admin/users",
+    "query": "page=1",
+    "headers": { "x-auth-consumer": "alice" },
+    "client_ip": "10.0.0.1",
+    "claims": { "sub": "alice", "roles": ["admin"] },
+    "body": "..."
+  }
+}
+```
+
+- `claims` is included only when `include_claims` is `true` and the `x-auth-claims` header contains valid JSON (set by auth plugins like `jwt-auth`, `oauth2-auth`)
+- `body` is included only when `include_body` is `true`
+
+#### Decision Logic
+
+The plugin expects OPA to return the standard Data API response:
+
+```json
+{ "result": true }
+```
+
+| OPA Response | Result |
+|-------------|--------|
+| `{"result": true}` | **200** — request continues |
+| `{"result": false}` | **403** — access denied |
+| `{}` (undefined document) | **403** — access denied |
+| Non-boolean `result` | **403** — access denied |
+| OPA unreachable or error | **503** — service unavailable |
+
+#### Error Responses
+
+**403 Forbidden** — OPA denies access:
+
+```json
+{
+  "type": "urn:barbacane:error:opa-denied",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "Authorization denied by policy"
+}
+```
+
+**503 Service Unavailable** — OPA is unreachable or returns a non-200 status:
+
+```json
+{
+  "type": "urn:barbacane:error:opa-unavailable",
+  "title": "Service Unavailable",
+  "status": 503,
+  "detail": "OPA service unreachable"
+}
+```
+
+#### Example OPA Policy
+
+```rego
+package authz
+
+default allow := false
+
+# Allow admins everywhere
+allow if {
+    input.claims.roles[_] == "admin"
+}
+
+# Allow GET on public paths
+allow if {
+    input.method == "GET"
+    startswith(input.path, "/public/")
+}
+```
+
 ---
 
 ## Rate Limiting
