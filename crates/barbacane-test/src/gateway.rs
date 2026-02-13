@@ -4164,4 +4164,63 @@ paths:
         let resp = gateway.get("/admin-only").await.unwrap();
         assert_eq!(resp.status(), 401);
     }
+
+    // --- OPA Authorization Tests ---
+
+    #[tokio::test]
+    async fn test_opa_unreachable_returns_503() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/opa-authz.yaml")
+            .await
+            .expect("failed to start gateway");
+        // OPA URL points to unreachable port — expect 503
+        let resp = gateway.get("/opa-protected").await.unwrap();
+        assert_eq!(resp.status(), 503);
+    }
+
+    #[tokio::test]
+    async fn test_opa_unreachable_returns_problem_json() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/opa-authz.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway.get("/opa-protected").await.unwrap();
+        assert_eq!(resp.status(), 503);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:opa-unavailable");
+        assert_eq!(body["status"], 503);
+    }
+
+    #[tokio::test]
+    async fn test_opa_with_auth_missing_credentials_returns_401() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/opa-authz.yaml")
+            .await
+            .expect("failed to start gateway");
+        // No auth header — basic-auth returns 401 before OPA runs
+        let resp = gateway.get("/opa-with-auth").await.unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn test_opa_with_auth_valid_credentials_opa_unreachable() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/opa-authz.yaml")
+            .await
+            .expect("failed to start gateway");
+        // Valid auth but OPA unreachable — expect 503
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/opa-with-auth")
+            .header("Authorization", acl_basic_auth("admin", "admin123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 503);
+    }
+
+    #[tokio::test]
+    async fn test_opa_public_endpoint_bypasses_opa() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/opa-authz.yaml")
+            .await
+            .expect("failed to start gateway");
+        // Public endpoint has no OPA middleware — should succeed
+        let resp = gateway.get("/public").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
 }

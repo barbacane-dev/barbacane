@@ -40,3 +40,5 @@ plugins:
     path: ../../plugins/lambda/lambda.wasm
   acl:
     path: ../../plugins/acl/acl.wasm
+  opa-authz:
+    path: ../../plugins/opa-authz/opa-authz.wasm

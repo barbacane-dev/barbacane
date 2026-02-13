@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Standardized `x-auth-consumer` and `x-auth-consumer-groups` headers across all 5 auth plugins (`basic-auth`, `jwt-auth`, `oidc-auth`, `oauth2-auth`, `apikey-auth`)
 - `groups_claim` config option added to `jwt-auth` for JWT-based group extraction
 
+#### OPA Authorization
+- `opa-authz` middleware plugin — policy-based access control via Open Policy Agent
+  - Calls OPA Data API via `host_http_call` (POST to configurable endpoint)
+  - Sends request context as OPA input: method, path, query, headers, client IP
+  - Optional inclusion of auth claims from upstream auth plugins (`include_claims`)
+  - Optional inclusion of request body (`include_body`)
+  - Configurable deny message and timeout
+  - 403 Forbidden with problem+json when policy denies, 503 when OPA unreachable
+
 #### Plugins
 - `basic-auth` middleware plugin — HTTP Basic authentication with credential validation
 - `http-log` middleware plugin — HTTP logging with configurable endpoint and payload
