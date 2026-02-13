@@ -213,8 +213,9 @@ impl TestGateway {
     /// Wait for the gateway to be ready by polling the health endpoint.
     async fn wait_for_ready(&mut self) -> Result<(), TestError> {
         let health_url = format!("{}/__barbacane/health", self.base_url());
-        // Increase timeout for CI environments (15 seconds instead of 5)
-        let max_attempts = 150;
+        // 60-second timeout — larger WASM plugins (e.g. CEL ~1.3 MB) need
+        // more JIT compile time, especially under heavy parallel test load.
+        let max_attempts = 600;
         let delay = Duration::from_millis(100);
 
         for _ in 0..max_attempts {

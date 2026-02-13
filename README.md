@@ -10,8 +10,8 @@
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/unit%20tests-288%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-423%20passing-brightgreen" alt="Plugin Tests">
-  <img src="https://img.shields.io/badge/integration%20tests-166%20passing-brightgreen" alt="Integration Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-444%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/integration%20tests-171%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
@@ -84,6 +84,9 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `basic-auth` | Middleware | HTTP Basic authentication (RFC 7617) |
 | `oauth2-auth` | Middleware | OAuth2 token introspection |
 | `oidc-auth` | Middleware | OpenID Connect (OIDC) authentication |
+| `acl` | Middleware | Consumer-based access control lists |
+| `opa-authz` | Middleware | Open Policy Agent authorization |
+| `cel` | Middleware | Inline CEL expression policy evaluation |
 | `rate-limit` | Middleware | Sliding window rate limiting |
 | `cache` | Middleware | Response caching |
 | `cors` | Middleware | CORS header management |
