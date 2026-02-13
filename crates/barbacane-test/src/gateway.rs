@@ -4223,4 +4223,73 @@ paths:
         let resp = gateway.get("/public").await.unwrap();
         assert_eq!(resp.status(), 200);
     }
+
+    // -----------------------------------------------------------------------
+    // CEL policy evaluation tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_cel_method_check_get_allowed() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cel.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway.get("/cel-method-check").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_cel_method_check_post_denied() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cel.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/cel-method-check")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    fn cel_basic_auth(username: &str, password: &str) -> String {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let encoded = STANDARD.encode(format!("{}:{}", username, password));
+        format!("Basic {}", encoded)
+    }
+
+    #[tokio::test]
+    async fn test_cel_with_auth_admin_allowed() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cel.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/cel-with-auth")
+            .header("Authorization", cel_basic_auth("admin", "admin123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_cel_with_auth_viewer_denied() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cel.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/cel-with-auth")
+            .header("Authorization", cel_basic_auth("viewer", "viewer123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn test_cel_public_endpoint_bypasses() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/cel.yaml")
+            .await
+            .expect("failed to start gateway");
+        let resp = gateway.get("/public").await.unwrap();
+        assert_eq!(resp.status(), 200);
+    }
 }

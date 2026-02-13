@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:schema:cel-config",
+  "title": "CEL Policy Evaluation Middleware Config",
+  "description": "Configuration for the CEL policy evaluation middleware plugin. Evaluates inline CEL expressions against request context for access control decisions.",
+  "type": "object",
+  "required": ["expression"],
+  "properties": {
+    "expression": {
+      "type": "string",
+      "description": "CEL expression that must evaluate to a boolean. Has access to a `request` object with fields: method, path, query, headers, body, client_ip, path_params, consumer, claims."
+    },
+    "deny_message": {
+      "type": "string",
+      "description": "Custom message returned in the 403 Forbidden response body when the expression evaluates to false.",
+      "default": "Access denied by policy"
+    }
+  },
+  "additionalProperties": false
+}

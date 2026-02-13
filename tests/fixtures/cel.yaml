@@ -1,0 +1,91 @@
+openapi: "3.0.3"
+info:
+  title: CEL Policy Test API
+  version: "1.0.0"
+  description: API for testing CEL policy evaluation middleware
+
+paths:
+  /cel-method-check:
+    get:
+      summary: Only GET requests allowed via CEL
+      operationId: getCelMethodCheck
+      x-barbacane-middlewares:
+        - name: cel
+          config:
+            expression: "request.method == 'GET'"
+            deny_message: "Only GET allowed"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "method-check"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Allowed
+        "403":
+          description: Forbidden
+    post:
+      summary: POST also routed here, CEL should deny
+      operationId: postCelMethodCheck
+      x-barbacane-middlewares:
+        - name: cel
+          config:
+            expression: "request.method == 'GET'"
+            deny_message: "Only GET allowed"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "method-check"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Allowed
+        "403":
+          description: Forbidden
+
+  /cel-with-auth:
+    get:
+      summary: CEL checks consumer identity after basic-auth
+      operationId: getCelWithAuth
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "cel-test"
+            credentials:
+              admin:
+                password: "admin123"
+                roles: [admin, editor]
+              viewer:
+                password: "viewer123"
+                roles: [viewer]
+        - name: cel
+          config:
+            expression: "request.consumer == 'admin'"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "auth-cel"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Admin access granted
+        "403":
+          description: Forbidden
+
+  /public:
+    get:
+      summary: Public endpoint (no middleware)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "public"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Public access

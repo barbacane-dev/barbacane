@@ -565,6 +565,65 @@ GET {{baseUrl}}/opa-with-auth
 GET {{baseUrl}}/public
 
 ### ================================================================
+### CEL Policy Evaluation (cel.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/cel.yaml -m tests/fixtures/barbacane.yaml -o /tmp/cel.bca
+###   ./target/debug/barbacane serve --artifact /tmp/cel.bca --dev
+###
+### Inline CEL expressions for policy-based access control.
+### No external service needed — evaluated in-process.
+
+### ================================
+### /cel-method-check (expression: "request.method == 'GET'")
+### ================================
+
+### GET allowed by CEL expression (200)
+GET {{baseUrl}}/cel-method-check
+
+###
+
+### POST denied by CEL expression (403)
+# Check: problem+json body with type urn:barbacane:error:cel-denied
+POST {{baseUrl}}/cel-method-check
+Content-Type: application/json
+
+{"data": "test"}
+
+###
+
+### ================================
+### /cel-with-auth (basic-auth + CEL: "request.consumer == 'admin'")
+### ================================
+### Users: admin/admin123, viewer/viewer123
+
+### Admin allowed by consumer check (200)
+# basic-auth sets x-auth-consumer=admin, CEL checks it
+GET {{baseUrl}}/cel-with-auth
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+###
+
+### Viewer denied by consumer check (403)
+# basic-auth sets x-auth-consumer=viewer, CEL denies
+GET {{baseUrl}}/cel-with-auth
+Authorization: Basic dmlld2VyOnZpZXdlcjEyMw==
+
+###
+
+### Missing auth (401) - basic-auth rejects before CEL
+GET {{baseUrl}}/cel-with-auth
+
+###
+
+### ================================
+### /public (no middleware)
+### ================================
+
+### Public access (200)
+GET {{baseUrl}}/public
+
+### ================================================================
 ### Rate Limiting (rate-limit.yaml)
 ### ================================================================
 ### Setup:
