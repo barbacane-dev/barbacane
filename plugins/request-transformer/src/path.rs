@@ -57,6 +57,7 @@ pub fn transform_path(path: &str, config: &PathConfig) -> String {
 }
 
 /// Log a message via host_log.
+#[cfg(not(test))]
 fn log_message(level: i32, msg: &str) {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -65,6 +66,12 @@ fn log_message(level: i32, msg: &str) {
     unsafe {
         host_log(level, msg.as_ptr() as i32, msg.len() as i32);
     }
+}
+
+/// Mock log_message for tests.
+#[cfg(test)]
+fn log_message(_level: i32, _msg: &str) {
+    // No-op in tests
 }
 
 #[cfg(test)]

@@ -71,6 +71,7 @@ fn extract_query_param(query: &Option<String>, param_name: &str) -> String {
 }
 
 /// Get a value from the request context using host function.
+#[cfg(not(test))]
 fn context_get(key: &str) -> Option<String> {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -92,6 +93,13 @@ fn context_get(key: &str) -> Option<String> {
 
         String::from_utf8(buf).ok()
     }
+}
+
+/// Mock context_get for tests.
+#[cfg(test)]
+fn context_get(_key: &str) -> Option<String> {
+    // Return None in tests (no context available)
+    None
 }
 
 #[cfg(test)]
