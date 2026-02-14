@@ -29,7 +29,7 @@ pub fn transform_body(body: &Option<String>, config: &BodyConfig, req: &Request)
     for pointer_str in &config.remove {
         match Pointer::parse(pointer_str) {
             Ok(ptr) => {
-                json.delete(&ptr);  // Returns Option, None means path didn't exist
+                json.delete(ptr); // Returns Option, None means path didn't exist
             }
             Err(e) => {
                 log_message(1, &format!("Invalid JSON Pointer '{}': {}", pointer_str, e));
@@ -40,14 +40,23 @@ pub fn transform_body(body: &Option<String>, config: &BodyConfig, req: &Request)
     // Apply rename operations (get → assign → delete)
     for (old_pointer_str, new_pointer_str) in &config.rename {
         // Parse pointers
-        let (old_ptr, new_ptr) = match (Pointer::parse(old_pointer_str), Pointer::parse(new_pointer_str)) {
+        let (old_ptr, new_ptr) = match (
+            Pointer::parse(old_pointer_str),
+            Pointer::parse(new_pointer_str),
+        ) {
             (Ok(old), Ok(new)) => (old, new),
             (Err(e), _) => {
-                log_message(1, &format!("Invalid old pointer '{}': {}", old_pointer_str, e));
+                log_message(
+                    1,
+                    &format!("Invalid old pointer '{}': {}", old_pointer_str, e),
+                );
                 continue;
             }
             (_, Err(e)) => {
-                log_message(1, &format!("Invalid new pointer '{}': {}", new_pointer_str, e));
+                log_message(
+                    1,
+                    &format!("Invalid new pointer '{}': {}", new_pointer_str, e),
+                );
                 continue;
             }
         };
@@ -57,13 +66,19 @@ pub fn transform_body(body: &Option<String>, config: &BodyConfig, req: &Request)
             let value_clone = value.clone();
 
             // Assign to new pointer
-            if let Err(e) = json.assign(&new_ptr, value_clone) {
-                log_message(1, &format!("Failed to rename '{}' to '{}': {}", old_pointer_str, new_pointer_str, e));
+            if let Err(e) = json.assign(new_ptr, value_clone) {
+                log_message(
+                    1,
+                    &format!(
+                        "Failed to rename '{}' to '{}': {}",
+                        old_pointer_str, new_pointer_str, e
+                    ),
+                );
                 continue;
             }
 
             // Delete old pointer
-            json.delete(&old_ptr);
+            json.delete(old_ptr);
         }
     }
 
@@ -74,7 +89,7 @@ pub fn transform_body(body: &Option<String>, config: &BodyConfig, req: &Request)
         match Pointer::parse(pointer_str) {
             Ok(ptr) => {
                 // Assign the value (creates intermediate objects if needed)
-                if let Err(e) = json.assign(&ptr, Value::String(interpolated_value)) {
+                if let Err(e) = json.assign(ptr, Value::String(interpolated_value)) {
                     log_message(1, &format!("Failed to add '{}': {}", pointer_str, e));
                 }
             }
@@ -88,7 +103,10 @@ pub fn transform_body(body: &Option<String>, config: &BodyConfig, req: &Request)
     match serde_json::to_string(&json) {
         Ok(s) => Some(s),
         Err(e) => {
-            log_message(0, &format!("Failed to serialize JSON after transformation: {}", e));
+            log_message(
+                0,
+                &format!("Failed to serialize JSON after transformation: {}", e),
+            );
             body.clone() // Return original on serialization error
         }
     }
@@ -138,7 +156,9 @@ mod tests {
         let body = Some(r#"{"user":"john"}"#.to_string());
 
         let mut config = BodyConfig::default();
-        config.add.insert("/gateway".to_string(), "barbacane".to_string());
+        config
+            .add
+            .insert("/gateway".to_string(), "barbacane".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -153,8 +173,12 @@ mod tests {
         let body = Some(r#"{"user":"john"}"#.to_string());
 
         let mut config = BodyConfig::default();
-        config.add.insert("/metadata/gateway".to_string(), "barbacane".to_string());
-        config.add.insert("/metadata/version".to_string(), "1.0".to_string());
+        config
+            .add
+            .insert("/metadata/gateway".to_string(), "barbacane".to_string());
+        config
+            .add
+            .insert("/metadata/version".to_string(), "1.0".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -170,9 +194,15 @@ mod tests {
         let body = Some(r#"{"user":"john"}"#.to_string());
 
         let mut config = BodyConfig::default();
-        config.add.insert("/userId".to_string(), "$path.id".to_string());
-        config.add.insert("/clientIp".to_string(), "$client_ip".to_string());
-        config.add.insert("/page".to_string(), "$query.page".to_string());
+        config
+            .add
+            .insert("/userId".to_string(), "$path.id".to_string());
+        config
+            .add
+            .insert("/clientIp".to_string(), "$client_ip".to_string());
+        config
+            .add
+            .insert("/page".to_string(), "$query.page".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -201,7 +231,8 @@ mod tests {
     #[test]
     fn test_remove_nested_field() {
         let req = create_test_request();
-        let body = Some(r#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_string());
+        let body =
+            Some(r#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_string());
 
         let mut config = BodyConfig::default();
         config.remove.push("/metadata/internal".to_string());
@@ -220,7 +251,9 @@ mod tests {
         let body = Some(r#"{"userName":"john","age":30}"#.to_string());
 
         let mut config = BodyConfig::default();
-        config.rename.insert("/userName".to_string(), "/user_name".to_string());
+        config
+            .rename
+            .insert("/userName".to_string(), "/user_name".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -236,7 +269,10 @@ mod tests {
         let body = Some(r#"{"metadata":{"oldName":"value"}}"#.to_string());
 
         let mut config = BodyConfig::default();
-        config.rename.insert("/metadata/oldName".to_string(), "/metadata/newName".to_string());
+        config.rename.insert(
+            "/metadata/oldName".to_string(),
+            "/metadata/newName".to_string(),
+        );
 
         let result = transform_body(&body, &config, &req);
         let json: Value = serde_json::from_str(&result.unwrap()).unwrap();
@@ -252,8 +288,12 @@ mod tests {
 
         let mut config = BodyConfig::default();
         config.remove.push("/toRemove".to_string());
-        config.rename.insert("/toRename".to_string(), "/renamed".to_string());
-        config.add.insert("/toOverwrite".to_string(), "new".to_string());
+        config
+            .rename
+            .insert("/toRename".to_string(), "/renamed".to_string());
+        config
+            .add
+            .insert("/toOverwrite".to_string(), "new".to_string());
         config.add.insert("/added".to_string(), "value".to_string());
 
         let result = transform_body(&body, &config, &req);
@@ -313,7 +353,9 @@ mod tests {
         let body = Some(r#"{"items":[{"id":1},{"id":2}]}"#.to_string());
 
         let mut config = BodyConfig::default();
-        config.add.insert("/items/0/gateway".to_string(), "barbacane".to_string());
+        config
+            .add
+            .insert("/items/0/gateway".to_string(), "barbacane".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value = serde_json::from_str(&result.unwrap()).unwrap();

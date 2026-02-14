@@ -6,7 +6,11 @@ use barbacane_plugin_sdk::prelude::*;
 use std::collections::BTreeMap;
 
 /// Transform request headers according to configuration.
-pub fn transform_headers(headers: &mut BTreeMap<String, String>, config: &HeaderConfig, req: &Request) {
+pub fn transform_headers(
+    headers: &mut BTreeMap<String, String>,
+    config: &HeaderConfig,
+    req: &Request,
+) {
     // Remove headers first
     for header_name in &config.remove {
         let header_lower = header_name.to_lowercase();
@@ -27,10 +31,9 @@ pub fn transform_headers(headers: &mut BTreeMap<String, String>, config: &Header
     for (header_name, value_template) in &config.set {
         let header_lower = header_name.to_lowercase();
 
-        if !headers.contains_key(&header_lower) {
-            let value = interpolate_value(value_template, req);
-            headers.insert(header_lower, value);
-        }
+        headers.entry(header_lower).or_insert_with(|| {
+            interpolate_value(value_template, req)
+        });
     }
 
     // Add headers (insert or overwrite)
@@ -69,8 +72,12 @@ mod tests {
         let mut headers = req.headers.clone();
 
         let mut config = HeaderConfig::default();
-        config.add.insert("x-gateway".to_string(), "barbacane".to_string());
-        config.add.insert("x-client-ip".to_string(), "$client_ip".to_string());
+        config
+            .add
+            .insert("x-gateway".to_string(), "barbacane".to_string());
+        config
+            .add
+            .insert("x-client-ip".to_string(), "$client_ip".to_string());
 
         transform_headers(&mut headers, &config, &req);
 
@@ -85,7 +92,9 @@ mod tests {
         headers.insert("x-test".to_string(), "old-value".to_string());
 
         let mut config = HeaderConfig::default();
-        config.add.insert("x-test".to_string(), "new-value".to_string());
+        config
+            .add
+            .insert("x-test".to_string(), "new-value".to_string());
 
         transform_headers(&mut headers, &config, &req);
 
@@ -99,7 +108,9 @@ mod tests {
 
         let mut config = HeaderConfig::default();
         config.set.insert("x-new".to_string(), "value".to_string());
-        config.set.insert("host".to_string(), "should-not-overwrite".to_string());
+        config
+            .set
+            .insert("host".to_string(), "should-not-overwrite".to_string());
 
         transform_headers(&mut headers, &config, &req);
 
@@ -130,7 +141,9 @@ mod tests {
         headers.insert("x-old-name".to_string(), "value".to_string());
 
         let mut config = HeaderConfig::default();
-        config.rename.insert("x-old-name".to_string(), "x-new-name".to_string());
+        config
+            .rename
+            .insert("x-old-name".to_string(), "x-new-name".to_string());
 
         transform_headers(&mut headers, &config, &req);
 
@@ -144,15 +157,24 @@ mod tests {
         let mut headers = BTreeMap::new();
 
         let mut config = HeaderConfig::default();
-        config.add.insert("x-user-id".to_string(), "$path.id".to_string());
-        config.add.insert("x-page".to_string(), "$query.page".to_string());
-        config.add.insert("x-original-host".to_string(), "$header.host".to_string());
+        config
+            .add
+            .insert("x-user-id".to_string(), "$path.id".to_string());
+        config
+            .add
+            .insert("x-page".to_string(), "$query.page".to_string());
+        config
+            .add
+            .insert("x-original-host".to_string(), "$header.host".to_string());
 
         transform_headers(&mut headers, &config, &req);
 
         assert_eq!(headers.get("x-user-id"), Some(&"123".to_string()));
         assert_eq!(headers.get("x-page"), Some(&"2".to_string()));
-        assert_eq!(headers.get("x-original-host"), Some(&"api.example.com".to_string()));
+        assert_eq!(
+            headers.get("x-original-host"),
+            Some(&"api.example.com".to_string())
+        );
     }
 
     #[test]
@@ -163,9 +185,15 @@ mod tests {
 
         let mut config = HeaderConfig::default();
         config.remove.push("host".to_string());
-        config.rename.insert("to-rename".to_string(), "renamed".to_string());
-        config.set.insert("x-set".to_string(), "set-value".to_string());
-        config.add.insert("x-add".to_string(), "add-value".to_string());
+        config
+            .rename
+            .insert("to-rename".to_string(), "renamed".to_string());
+        config
+            .set
+            .insert("x-set".to_string(), "set-value".to_string());
+        config
+            .add
+            .insert("x-add".to_string(), "add-value".to_string());
 
         transform_headers(&mut headers, &config, &req);
 

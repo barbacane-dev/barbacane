@@ -6,7 +6,11 @@ use barbacane_plugin_sdk::prelude::*;
 use form_urlencoded::{parse, Serializer};
 
 /// Transform query string according to configuration.
-pub fn transform_query(query: &Option<String>, config: &QueryConfig, req: &Request) -> Option<String> {
+pub fn transform_query(
+    query: &Option<String>,
+    config: &QueryConfig,
+    req: &Request,
+) -> Option<String> {
     // Parse query string into parameters
     let mut params = parse_query(query);
 
@@ -89,7 +93,9 @@ mod tests {
         let query = Some("existing=value".to_string());
 
         let mut config = QueryConfig::default();
-        config.add.insert("new_param".to_string(), "new_value".to_string());
+        config
+            .add
+            .insert("new_param".to_string(), "new_value".to_string());
         config.add.insert("id".to_string(), "$path.id".to_string());
 
         let result = transform_query(&query, &config, &req);
@@ -157,7 +163,9 @@ mod tests {
         let query = Some("old_name=value&other=data".to_string());
 
         let mut config = QueryConfig::default();
-        config.rename.insert("old_name".to_string(), "new_name".to_string());
+        config
+            .rename
+            .insert("old_name".to_string(), "new_name".to_string());
 
         let result = transform_query(&query, &config, &req);
         let result_str = result.unwrap();
@@ -172,7 +180,9 @@ mod tests {
         let req = create_test_request();
 
         let mut config = QueryConfig::default();
-        config.add.insert("new_param".to_string(), "value".to_string());
+        config
+            .add
+            .insert("new_param".to_string(), "value".to_string());
 
         let result = transform_query(&None, &config, &req);
         assert_eq!(result, Some("new_param=value".to_string()));
@@ -184,8 +194,12 @@ mod tests {
         let query = Some("existing=value".to_string());
 
         let mut config = QueryConfig::default();
-        config.add.insert("user_id".to_string(), "$path.id".to_string());
-        config.add.insert("client".to_string(), "$client_ip".to_string());
+        config
+            .add
+            .insert("user_id".to_string(), "$path.id".to_string());
+        config
+            .add
+            .insert("client".to_string(), "$client_ip".to_string());
 
         let result = transform_query(&query, &config, &req);
         let result_str = result.unwrap();
@@ -201,8 +215,12 @@ mod tests {
 
         let mut config = QueryConfig::default();
         config.remove.push("to_remove".to_string());
-        config.rename.insert("to_rename".to_string(), "renamed".to_string());
-        config.add.insert("to_overwrite".to_string(), "new".to_string());
+        config
+            .rename
+            .insert("to_rename".to_string(), "renamed".to_string());
+        config
+            .add
+            .insert("to_overwrite".to_string(), "new".to_string());
         config.add.insert("added".to_string(), "value".to_string());
 
         let result = transform_query(&query, &config, &req);
@@ -225,7 +243,9 @@ mod tests {
         let result_str = result.unwrap();
 
         // form_urlencoded should handle encoding/decoding
-        assert!(result_str.contains("name=hello+world") || result_str.contains("name=hello%20world"));
+        assert!(
+            result_str.contains("name=hello+world") || result_str.contains("name=hello%20world")
+        );
         assert!(result_str.contains("special"));
     }
 }

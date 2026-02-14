@@ -44,11 +44,16 @@ pub fn transform_path(path: &str, config: &PathConfig) -> String {
     if let Some(replace_config) = &config.replace {
         match Regex::new(&replace_config.pattern) {
             Ok(re) => {
-                result = re.replace_all(&result, &replace_config.replacement).to_string();
+                result = re
+                    .replace_all(&result, &replace_config.replacement)
+                    .to_string();
             }
             Err(e) => {
                 // Log error and skip replacement
-                log_message(1, &format!("Invalid regex pattern '{}': {}", replace_config.pattern, e));
+                log_message(
+                    1,
+                    &format!("Invalid regex pattern '{}': {}", replace_config.pattern, e),
+                );
             }
         }
     }
@@ -117,7 +122,10 @@ mod tests {
         config.add_prefix = Some("/internal".to_string());
 
         assert_eq!(transform_path("/api/v2/users", &config), "/internal/users");
-        assert_eq!(transform_path("/api/v2/users/123", &config), "/internal/users/123");
+        assert_eq!(
+            transform_path("/api/v2/users/123", &config),
+            "/internal/users/123"
+        );
     }
 
     #[test]
@@ -142,7 +150,10 @@ mod tests {
         });
 
         assert_eq!(transform_path("/users/123", &config), "/user/123/profile");
-        assert_eq!(transform_path("/users/456/data", &config), "/user/456/profile/data");
+        assert_eq!(
+            transform_path("/users/456/data", &config),
+            "/user/456/profile/data"
+        );
     }
 
     #[test]

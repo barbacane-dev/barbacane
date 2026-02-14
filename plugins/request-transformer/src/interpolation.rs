@@ -22,11 +22,7 @@ pub fn interpolate_value(template: &str, req: &Request) -> String {
 
     // $path.<name> - Route path parameters
     if let Some(param_name) = template.strip_prefix("$path.") {
-        return req
-            .path_params
-            .get(param_name)
-            .cloned()
-            .unwrap_or_default();
+        return req.path_params.get(param_name).cloned().unwrap_or_default();
     }
 
     // $header.<name> - Request headers (case-insensitive lookup)
@@ -146,7 +142,10 @@ mod tests {
         let req = create_test_request();
         assert_eq!(interpolate_value("$header.host", &req), "api.example.com");
         assert_eq!(interpolate_value("$header.Host", &req), "api.example.com"); // case-insensitive
-        assert_eq!(interpolate_value("$header.content-type", &req), "application/json");
+        assert_eq!(
+            interpolate_value("$header.content-type", &req),
+            "application/json"
+        );
         assert_eq!(interpolate_value("$header.missing", &req), "");
     }
 
