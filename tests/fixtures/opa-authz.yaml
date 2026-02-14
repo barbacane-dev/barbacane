@@ -1,0 +1,79 @@
+openapi: "3.0.3"
+info:
+  title: OPA Authorization Test API
+  version: "1.0.0"
+  description: API for testing OPA authorization middleware
+
+paths:
+  /opa-protected:
+    get:
+      summary: Endpoint protected by OPA (unreachable OPA returns 503)
+      operationId: getOpaProtected
+      x-barbacane-middlewares:
+        - name: opa-authz
+          config:
+            opa_url: "http://127.0.0.1:19999/v1/data/authz/allow"
+            timeout: 1
+            deny_message: "Policy denied access"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "opa-allowed"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Access granted by OPA
+        "403":
+          description: Access denied by OPA
+        "503":
+          description: OPA service unavailable
+
+  /opa-with-auth:
+    get:
+      summary: Endpoint with auth + OPA chain (unreachable OPA)
+      operationId: getOpaWithAuth
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "opa-test"
+            credentials:
+              admin:
+                password: "admin123"
+                roles: [admin]
+              viewer:
+                password: "viewer123"
+                roles: [viewer]
+        - name: opa-authz
+          config:
+            opa_url: "http://127.0.0.1:19999/v1/data/authz/allow"
+            timeout: 1
+            include_claims: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "auth+opa-allowed"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Access granted
+        "401":
+          description: Authentication required
+        "503":
+          description: OPA service unavailable
+
+  /public:
+    get:
+      summary: Public endpoint (no OPA)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "public"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Public access

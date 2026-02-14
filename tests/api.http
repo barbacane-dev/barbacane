@@ -512,6 +512,59 @@ Authorization: Basic YWRtaW46YWRtaW4xMjM=
 GET {{baseUrl}}/public
 
 ### ================================================================
+### OPA Authorization (opa-authz.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/opa-authz.yaml -m tests/fixtures/barbacane.yaml -o /tmp/opa-authz.bca
+###   ./target/debug/barbacane serve --artifact /tmp/opa-authz.bca --dev
+###
+### NOTE: The test fixture uses an unreachable OPA URL (127.0.0.1:19999).
+### Without a running OPA server, all protected endpoints return 503.
+### To test allow/deny decisions, run OPA locally:
+###   docker run -p 8181:8181 openpolicyagent/opa:latest run --server
+### and update opa_url in the fixture to http://localhost:8181/v1/data/authz/allow
+
+### ================================
+### /opa-protected (OPA only, unreachable → 503)
+### ================================
+
+### OPA unreachable - returns 503 (Service Unavailable)
+# Check: problem+json body with type urn:barbacane:error:opa-unavailable
+GET {{baseUrl}}/opa-protected
+
+###
+
+### ================================
+### /opa-with-auth (basic-auth + OPA chain)
+### ================================
+### Users: admin/admin123, viewer/viewer123
+
+### Admin credentials + OPA unreachable (503)
+# basic-auth passes, OPA call fails
+GET {{baseUrl}}/opa-with-auth
+Authorization: Basic YWRtaW46YWRtaW4xMjM=
+
+###
+
+### Viewer credentials + OPA unreachable (503)
+GET {{baseUrl}}/opa-with-auth
+Authorization: Basic dmlld2VyOnZpZXdlcjEyMw==
+
+###
+
+### Missing auth - basic-auth rejects before OPA (401)
+GET {{baseUrl}}/opa-with-auth
+
+###
+
+### ================================
+### /public (no middleware)
+### ================================
+
+### Public access bypasses OPA (200)
+GET {{baseUrl}}/public
+
+### ================================================================
 ### Rate Limiting (rate-limit.yaml)
 ### ================================================================
 ### Setup:

@@ -49,6 +49,7 @@ Near-term items ready to be picked up:
 
 | Plugin | Type | Description |
 |--------|------|-------------|
+| ~~`opa-authz`~~ | ~~Middleware~~ | ~~OPA policy evaluation via REST API (`host_http_call`)~~ — **done** |
 | `bot-detection` | Middleware | Block known bots by User-Agent patterns |
 | `redirect` | Middleware | URL redirections (301/302) |
 | ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ — **done** |
@@ -60,9 +61,8 @@ Near-term items ready to be picked up:
 
 | Plugin | Type | Description |
 |--------|------|-------------|
-| `opa-authz` | Middleware | OPA policy evaluation with WASM-compiled Rego |
+| `ldap-auth` | Middleware | LDAP/Active Directory authentication (requires LDAP host functions or HTTP proxy) |
 | `hmac-auth` | Middleware | Signature-based auth (AWS SigV4 style) |
-| `ldap-auth` | Middleware | LDAP/Active Directory authentication |
 | `grpc-web` | Middleware | gRPC-Web to gRPC translation |
 | `websocket` | Dispatcher | WebSocket proxy support |
 
