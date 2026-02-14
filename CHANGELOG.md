@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-02-14
+
 ### Added
 
 #### OIDC Authentication
@@ -64,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Switched to `parking_lot::Mutex`/`RwLock` for lock primitives (no poisoning)
 - Enforced workspace-wide clippy lints: `unwrap_used = "warn"`, `panic = "warn"`
 - Narrowed CI clippy to `--lib --bins` (test code may use `unwrap`)
+
+### Removed
+- `barbacane-router` crate (merged into `barbacane`)
+- `barbacane-validator` crate (merged into `barbacane`)
+- `barbacane-spec-parser` crate (merged into `barbacane-compiler`)
 
 ## [0.1.1] - 2026-02-10
 
@@ -280,6 +287,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane/barbacane/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/barbacane/barbacane/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/barbacane/barbacane/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/barbacane/barbacane/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/barbacane/barbacane/releases/tag/v0.1.0

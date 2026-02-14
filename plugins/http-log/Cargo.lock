@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "quote",
  "syn",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "barbacane-plugin-macros",
  "serde",
