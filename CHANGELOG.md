@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Auth context headers: `x-auth-sub`, `x-auth-scope`, `x-auth-claims`
   - `issuer_override` config option for split-network environments (e.g., Docker)
 
+#### CEL Policy Evaluation
+- `cel` middleware plugin — inline expression-based access control via [CEL](https://cel.dev/)
+  - Pre-compiled expressions for microsecond-latency evaluation
+  - Full request context: method, path, headers, query, body, client IP, path params
+  - Auth integration: `request.consumer` and `request.claims` from upstream auth plugins
+  - CEL standard library: `startsWith`, `endsWith`, `contains`, `exists`, `has`, `in`, `matches`
+  - Problem+json error responses (RFC 9457)
+
 #### ACL & Consumer Headers
 - `acl` middleware plugin — group and consumer-based access control
   - Allow/deny lists for consumer groups

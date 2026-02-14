@@ -569,6 +569,111 @@ allow if {
 }
 ```
 
+### cel
+
+Inline policy evaluation using [CEL (Common Expression Language)](https://cel.dev/). Evaluates expressions directly in-process — no external service needed. CEL is the same language used by Envoy, Kubernetes, and Firebase for policy rules.
+
+```yaml
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "https://auth.example.com"
+      jwks_url: "https://auth.example.com/.well-known/jwks.json"
+  - name: cel
+    config:
+      expression: >
+        'admin' in request.claims.roles
+        || (request.method == 'GET' && request.path.startsWith('/public/'))
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `expression` | string | *(required)* | CEL expression that must evaluate to a boolean |
+| `deny_message` | string | `Access denied by policy` | Custom message returned in the 403 response body |
+
+#### Request Context
+
+The expression has access to a `request` object with these fields:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `request.method` | string | HTTP method (`GET`, `POST`, etc.) |
+| `request.path` | string | Request path (e.g., `/api/users`) |
+| `request.query` | string | Query string (empty string if none) |
+| `request.headers` | map | Request headers (e.g., `request.headers.authorization`) |
+| `request.body` | string | Request body (empty string if none) |
+| `request.client_ip` | string | Client IP address |
+| `request.path_params` | map | Path parameters (e.g., `request.path_params.id`) |
+| `request.consumer` | string | Consumer identity from `x-auth-consumer` header (empty if absent) |
+| `request.claims` | map | Parsed JSON from `x-auth-claims` header (empty map if absent/invalid) |
+
+#### CEL Features
+
+CEL supports a rich expression language:
+
+```cel
+// String operations
+request.path.startsWith('/api/')
+request.path.endsWith('.json')
+request.headers.host.contains('example')
+
+// List operations
+'admin' in request.claims.roles
+request.claims.roles.exists(r, r == 'editor')
+
+// Field presence
+has(request.claims.email)
+
+// Logical operators
+request.method == 'GET' && request.consumer != ''
+request.method in ['GET', 'HEAD', 'OPTIONS']
+!(request.client_ip.startsWith('192.168.'))
+```
+
+#### Decision Logic
+
+| Expression Result | HTTP Response |
+|------------------|---------------|
+| `true` | Request continues to next middleware/dispatcher |
+| `false` | **403** Forbidden |
+| Non-boolean | **500** Internal Server Error |
+| Parse/evaluation error | **500** Internal Server Error |
+
+#### Error Responses
+
+**403 Forbidden** — expression evaluates to `false`:
+
+```json
+{
+  "type": "urn:barbacane:error:cel-denied",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "Access denied by policy"
+}
+```
+
+**500 Internal Server Error** — invalid expression or non-boolean result:
+
+```json
+{
+  "type": "urn:barbacane:error:cel-evaluation",
+  "title": "Internal Server Error",
+  "status": 500,
+  "detail": "expression returned string, expected bool"
+}
+```
+
+#### CEL vs OPA
+
+| | `cel` | `opa-authz` |
+|---|---|---|
+| Deployment | Embedded (no sidecar) | External OPA server |
+| Language | CEL | Rego |
+| Latency | Microseconds (in-process) | HTTP round-trip |
+| Best for | Inline route-level rules | Complex policy repos, audit trails |
+
 ---
 
 ## Rate Limiting

@@ -1,0 +1,9 @@
+[plugin]
+name = "cel"
+version = "0.1.0"
+type = "middleware"
+description = "CEL policy evaluation middleware — inline expression-based access control"
+wasm = "cel.wasm"
+
+[capabilities]
+log = true

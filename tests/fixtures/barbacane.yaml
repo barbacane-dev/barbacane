@@ -42,3 +42,5 @@ plugins:
     path: ../../plugins/acl/acl.wasm
   opa-authz:
     path: ../../plugins/opa-authz/opa-authz.wasm
+  cel:
+    path: ../../plugins/cel/cel.wasm

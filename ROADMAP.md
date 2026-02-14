@@ -56,6 +56,7 @@ Near-term items ready to be picked up:
 | ~~`acl`~~ | ~~Middleware~~ | ~~Access control by consumer/group after auth~~ — **done** |
 | ~~`request-size-limit`~~ | ~~Middleware~~ | ~~Reject requests exceeding size (per-route)~~ — **done** |
 | ~~`oidc-auth`~~ | ~~Middleware~~ | ~~OpenID Connect discovery + JWKS validation~~ — **done** |
+| ~~`cel`~~ | ~~Middleware~~ | ~~CEL expression-based inline policy evaluation~~ — **done** |
 
 ### P2 — Nice to Have
 

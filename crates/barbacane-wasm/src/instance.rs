@@ -1597,6 +1597,150 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         state.last_broker_result.take()
     })?;
 
+    // ── Minimal WASI stubs ──────────────────────────────────────────────
+    // Some plugins (e.g. cel) compile with wasm32-wasip1 and import WASI
+    // functions even though Barbacane provides its own host ABI. We add
+    // lightweight stubs so the linker can resolve these imports.
+    // Full WASI support (wasmtime-wasi) can replace these if needed.
+
+    // random_get — deterministic bytes for HashMap seed initialisation.
+    // Acceptable in a sandboxed single-request context (no HashDoS risk).
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "random_get",
+            |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 1,
+                };
+                let start = buf_ptr as usize;
+                let end = start + buf_len as usize;
+                let data = memory.data_mut(&mut caller);
+                if end > data.len() {
+                    return 1;
+                }
+                for (i, byte) in data[start..end].iter_mut().enumerate() {
+                    *byte = (i.wrapping_mul(0x9E3779B9) >> 24) as u8;
+                }
+                0
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
+
+    // sched_yield — no-op, always succeeds.
+    linker
+        .func_wrap("wasi_snapshot_preview1", "sched_yield", || -> i32 { 0 })
+        .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
+
+    // clock_time_get — returns current time in nanoseconds.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "clock_time_get",
+            |mut caller: Caller<'_, PluginState>,
+             _clock_id: i32,
+             _precision: i64,
+             time_ptr: i32|
+             -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 1,
+                };
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                let ptr = time_ptr as usize;
+                let data = memory.data_mut(&mut caller);
+                if ptr + 8 > data.len() {
+                    return 1;
+                }
+                data[ptr..ptr + 8].copy_from_slice(&nanos.to_le_bytes());
+                0
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
+
+    // fd_write — silently discards output (plugins use host_log instead).
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "fd_write",
+            |mut caller: Caller<'_, PluginState>,
+             _fd: i32,
+             iovs_ptr: i32,
+             iovs_len: i32,
+             nwritten_ptr: i32|
+             -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 1,
+                };
+                let data = memory.data_mut(&mut caller);
+                let mut total: u32 = 0;
+                for i in 0..iovs_len as usize {
+                    let base = (iovs_ptr as usize) + i * 8;
+                    if base + 8 > data.len() {
+                        return 1;
+                    }
+                    let len =
+                        u32::from_le_bytes(data[base + 4..base + 8].try_into().unwrap_or([0; 4]));
+                    total = total.saturating_add(len);
+                }
+                let ptr = nwritten_ptr as usize;
+                if ptr + 4 > data.len() {
+                    return 1;
+                }
+                data[ptr..ptr + 4].copy_from_slice(&total.to_le_bytes());
+                0
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
+
+    // environ_get — no environment variables exposed.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "environ_get",
+            |_caller: Caller<'_, PluginState>, _environ: i32, _environ_buf: i32| -> i32 { 0 },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
+
+    // environ_sizes_get — reports 0 vars, 0 bytes.
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "environ_sizes_get",
+            |mut caller: Caller<'_, PluginState>, num_ptr: i32, buf_size_ptr: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 1,
+                };
+                let data = memory.data_mut(&mut caller);
+                let np = num_ptr as usize;
+                let bp = buf_size_ptr as usize;
+                if np + 4 > data.len() || bp + 4 > data.len() {
+                    return 1;
+                }
+                data[np..np + 4].copy_from_slice(&0u32.to_le_bytes());
+                data[bp..bp + 4].copy_from_slice(&0u32.to_le_bytes());
+                0
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
+
+    // proc_exit — traps the module (should never be reached).
+    linker
+        .func_wrap(
+            "wasi_snapshot_preview1",
+            "proc_exit",
+            |_caller: Caller<'_, PluginState>, _code: i32| {
+                // Intentional trap — WASM execution stops here
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
+
     Ok(())
 }
 
