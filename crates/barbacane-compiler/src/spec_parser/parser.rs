@@ -9,8 +9,9 @@ use super::model::{
 };
 
 /// HTTP methods we recognize in OpenAPI paths.
+/// Includes `query` from OpenAPI 3.2 (RFC 9110 extension).
 const HTTP_METHODS: &[&str] = &[
-    "get", "post", "put", "delete", "patch", "head", "options", "trace",
+    "get", "post", "put", "delete", "patch", "head", "options", "trace", "query",
 ];
 
 /// Parse an OpenAPI or AsyncAPI spec from a YAML/JSON string.
@@ -208,12 +209,74 @@ fn parse_openapi_paths(
                 });
             }
         }
+
+        // OpenAPI 3.2: parse additionalOperations (custom HTTP methods)
+        if let Some(additional) = path_obj
+            .get("additionalOperations")
+            .and_then(|v| v.as_object())
+        {
+            for (method_name, op_value) in additional {
+                let op_obj = op_value.as_object().ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "additionalOperations.{} on {} must be an object",
+                        method_name, path
+                    ))
+                })?;
+
+                let mut params = path_params.clone();
+                params.extend(parse_parameters(op_obj));
+
+                let operation_id = op_obj
+                    .get("operationId")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let request_body = parse_request_body(op_obj);
+                let dispatch = extract_dispatch(op_obj);
+
+                let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
+                    Some(extract_middlewares(op_obj))
+                } else {
+                    None
+                };
+
+                let deprecated = op_obj
+                    .get("deprecated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                let sunset = op_obj
+                    .get("x-sunset")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let extensions = extract_extensions(op_obj);
+
+                operations.push(Operation {
+                    path: path.clone(),
+                    method: method_name.to_uppercase(),
+                    operation_id,
+                    parameters: params,
+                    request_body,
+                    dispatch,
+                    middlewares,
+                    deprecated,
+                    sunset,
+                    extensions,
+                    messages: Vec::new(),
+                    bindings: BTreeMap::new(),
+                });
+            }
+        }
     }
 
     Ok(operations)
 }
 
 /// Parse parameters from a path item or operation object.
+///
+/// OpenAPI 3.2: `in: querystring` parameters use `content` instead of `schema`.
+/// The schema is extracted from `content.<media-type>.schema`.
 fn parse_parameters(obj: &serde_json::Map<String, Value>) -> Vec<Parameter> {
     obj.get("parameters")
         .and_then(|v| v.as_array())
@@ -221,19 +284,39 @@ fn parse_parameters(obj: &serde_json::Map<String, Value>) -> Vec<Parameter> {
             arr.iter()
                 .filter_map(|item| {
                     let param_obj = item.as_object()?;
+                    let location = param_obj.get("in")?.as_str()?.to_string();
+
+                    // OpenAPI 3.2: querystring params use content instead of schema
+                    let schema = if location == "querystring" {
+                        extract_content_schema(param_obj)
+                    } else {
+                        param_obj.get("schema").cloned()
+                    };
+
                     Some(Parameter {
                         name: param_obj.get("name")?.as_str()?.to_string(),
-                        location: param_obj.get("in")?.as_str()?.to_string(),
+                        location,
                         required: param_obj
                             .get("required")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false),
-                        schema: param_obj.get("schema").cloned(),
+                        schema,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Extract schema from a parameter's `content` map (first media type entry).
+///
+/// Used for `in: querystring` parameters where the schema lives under
+/// `content.<media-type>.schema` instead of the top-level `schema` field.
+fn extract_content_schema(param_obj: &serde_json::Map<String, Value>) -> Option<Value> {
+    let content = param_obj.get("content")?.as_object()?;
+    // Use the first (and typically only) media type entry
+    let (_media_type, media_obj) = content.iter().next()?;
+    media_obj.as_object()?.get("schema").cloned()
 }
 
 /// Parse request body from an operation object.
@@ -1158,5 +1241,160 @@ channels: {}
 "#;
         let result = parse_spec(yaml);
         assert!(matches!(result, Err(ParseError::SchemaError(_))));
+    }
+
+    // ==================== OpenAPI 3.2 Tests ====================
+
+    #[test]
+    fn parse_query_method() {
+        let yaml = r#"
+openapi: "3.2.0"
+info:
+  title: Query Method API
+  version: "1.0.0"
+paths:
+  /search:
+    query:
+      operationId: searchItems
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filter:
+                  type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        assert_eq!(spec.version, "3.2.0");
+        assert_eq!(spec.operations.len(), 1);
+
+        let op = &spec.operations[0];
+        assert_eq!(op.path, "/search");
+        assert_eq!(op.method, "QUERY");
+        assert_eq!(op.operation_id, Some("searchItems".to_string()));
+        assert!(op.request_body.is_some());
+    }
+
+    #[test]
+    fn parse_additional_operations() {
+        let yaml = r#"
+openapi: "3.2.0"
+info:
+  title: Custom Methods API
+  version: "1.0.0"
+paths:
+  /cache/{key}:
+    get:
+      operationId: getCache
+      x-barbacane-dispatch:
+        name: mock
+    additionalOperations:
+      purge:
+        operationId: purgeCache
+        parameters:
+          - name: key
+            in: path
+            required: true
+            schema:
+              type: string
+        x-barbacane-dispatch:
+          name: mock
+          config:
+            status: 204
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        assert_eq!(spec.operations.len(), 2);
+
+        let get_op = spec
+            .operations
+            .iter()
+            .find(|op| op.method == "GET")
+            .unwrap();
+        assert_eq!(get_op.operation_id, Some("getCache".to_string()));
+
+        let purge_op = spec
+            .operations
+            .iter()
+            .find(|op| op.method == "PURGE")
+            .unwrap();
+        assert_eq!(purge_op.operation_id, Some("purgeCache".to_string()));
+        assert_eq!(purge_op.parameters.len(), 1);
+        assert_eq!(purge_op.parameters[0].name, "key");
+    }
+
+    #[test]
+    fn parse_additional_operations_inherits_path_params() {
+        let yaml = r#"
+openapi: "3.2.0"
+info:
+  title: Path Params Inheritance
+  version: "1.0.0"
+paths:
+  /items/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    additionalOperations:
+      link:
+        operationId: linkItem
+        x-barbacane-dispatch:
+          name: mock
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        assert_eq!(spec.operations.len(), 1);
+
+        let op = &spec.operations[0];
+        assert_eq!(op.method, "LINK");
+        // Path-level parameters should be inherited
+        assert_eq!(op.parameters.len(), 1);
+        assert_eq!(op.parameters[0].name, "id");
+    }
+
+    #[test]
+    fn parse_querystring_parameter() {
+        let yaml = r#"
+openapi: "3.2.0"
+info:
+  title: Querystring API
+  version: "1.0.0"
+paths:
+  /search:
+    get:
+      operationId: search
+      parameters:
+        - name: q
+          in: querystring
+          required: true
+          content:
+            application/x-www-form-urlencoded:
+              schema:
+                type: string
+                minLength: 1
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        let op = &spec.operations[0];
+        assert_eq!(op.parameters.len(), 1);
+
+        let param = &op.parameters[0];
+        assert_eq!(param.name, "q");
+        assert_eq!(param.location, "querystring");
+        assert!(param.required);
+        // Schema should be extracted from content, not top-level schema
+        assert!(param.schema.is_some());
+        assert_eq!(
+            param.schema.as_ref().unwrap().get("type").unwrap(),
+            "string"
+        );
     }
 }

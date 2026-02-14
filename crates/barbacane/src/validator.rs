@@ -301,6 +301,8 @@ pub struct OperationValidator {
     query_params: Vec<CompiledParam>,
     /// Header parameters with their compiled schemas.
     header_params: Vec<CompiledParam>,
+    /// OpenAPI 3.2: querystring parameter (entire query string as single value).
+    querystring_param: Option<CompiledParam>,
     /// Request body configuration.
     request_body: Option<CompiledRequestBody>,
 }
@@ -367,6 +369,7 @@ impl OperationValidator {
         let mut path_params = Vec::new();
         let mut query_params = Vec::new();
         let mut header_params = Vec::new();
+        let mut querystring_param = None;
 
         for param in parameters {
             let compiled = CompiledParam {
@@ -379,6 +382,7 @@ impl OperationValidator {
                 "path" => path_params.push(compiled),
                 "query" => query_params.push(compiled),
                 "header" => header_params.push(compiled),
+                "querystring" => querystring_param = Some(compiled),
                 _ => {} // Ignore cookie params for now
             }
         }
@@ -402,6 +406,7 @@ impl OperationValidator {
             path_params,
             query_params,
             header_params,
+            querystring_param,
             request_body: compiled_body,
         }
     }
@@ -441,6 +446,43 @@ impl OperationValidator {
             |name| param_map.get(name).cloned(),
             "query",
         )
+    }
+
+    /// OpenAPI 3.2: validate the entire query string as a single value.
+    pub fn validate_querystring(
+        &self,
+        query_string: Option<&str>,
+    ) -> Result<(), Vec<ValidationError2>> {
+        let Some(param) = &self.querystring_param else {
+            return Ok(());
+        };
+
+        let qs = query_string.unwrap_or("");
+
+        if qs.is_empty() && param.required {
+            return Err(vec![ValidationError2::MissingRequiredParameter {
+                name: param.name.clone(),
+                location: "querystring".into(),
+            }]);
+        }
+
+        if !qs.is_empty() {
+            if let Some(schema) = &param.schema {
+                let json_value = Value::String(qs.to_string());
+                let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
+                if !validation_errors.is_empty() {
+                    let reasons: Vec<String> =
+                        validation_errors.iter().map(|e| e.to_string()).collect();
+                    return Err(vec![ValidationError2::InvalidParameter {
+                        name: param.name.clone(),
+                        location: "querystring".into(),
+                        reason: reasons.join("; "),
+                    }]);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Validate request headers (case-insensitive matching).
@@ -530,9 +572,10 @@ impl OperationValidator {
         content_type: Option<&str>,
         body: &[u8],
     ) -> Result<(), Vec<ValidationError2>> {
-        // Validate in order: path -> query -> headers -> body
+        // Validate in order: path -> query -> querystring -> headers -> body
         self.validate_path_params(path_params)?;
         self.validate_query_params(query_string)?;
+        self.validate_querystring(query_string)?;
         self.validate_headers(headers)?;
         self.validate_body(content_type, body)?;
         Ok(())
@@ -1207,5 +1250,67 @@ mod tests {
         // Invalid parameter not matching pattern
         let result = validator.validate_path_params(&[("userId".into(), "invalid".into())]);
         assert!(result.is_err());
+    }
+
+    // ========================
+    // OpenAPI 3.2 Querystring Tests
+    // ========================
+
+    #[test]
+    fn validate_querystring_param_present() {
+        let schema = serde_json::json!({
+            "type": "string",
+            "minLength": 1
+        });
+        let params = vec![make_param("q", "querystring", true, Some(schema))];
+        let validator = OperationValidator::new(&params, None);
+
+        // Valid: non-empty query string
+        let result = validator.validate_querystring(Some("filter=active&sort=name"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_querystring_param_missing_required() {
+        let params = vec![make_param("q", "querystring", true, None)];
+        let validator = OperationValidator::new(&params, None);
+
+        // Missing required querystring
+        let result = validator.validate_querystring(Some(""));
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(matches!(
+            &errors[0],
+            ValidationError2::MissingRequiredParameter { location, .. }
+            if location == "querystring"
+        ));
+    }
+
+    #[test]
+    fn validate_querystring_param_schema() {
+        let schema = serde_json::json!({
+            "type": "string",
+            "pattern": "^[a-z]+=\\w+$"
+        });
+        let params = vec![make_param("q", "querystring", false, Some(schema))];
+        let validator = OperationValidator::new(&params, None);
+
+        // Valid: matches pattern
+        let result = validator.validate_querystring(Some("key=value"));
+        assert!(result.is_ok());
+
+        // Invalid: doesn't match pattern
+        let result = validator.validate_querystring(Some("KEY=value&other=123"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_querystring_not_set() {
+        // No querystring parameter defined — should pass through
+        let params = vec![make_param("name", "query", false, None)];
+        let validator = OperationValidator::new(&params, None);
+
+        let result = validator.validate_querystring(Some("anything"));
+        assert!(result.is_ok());
     }
 }
