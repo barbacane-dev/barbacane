@@ -4,11 +4,12 @@
 
 ## Why Barbacane?
 
-- **Spec-first**: Your OpenAPI spec is the source of truth
-- **Compile-time validation**: Catch misconfigurations before deployment
-- **Plugin architecture**: Extend with WASM plugins for auth, rate limiting, transforms
-- **Observable**: Prometheus metrics, structured JSON logging, distributed tracing with OTLP export
-- **European-made**: Built in Europe, hosted on EU infrastructure
+- **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. No separate gateway DSL to maintain.
+- **Compile-time safety** — Misconfigurations, ambiguous routes, and missing plugins are caught at compile time, not at 3 AM.
+- **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises.
+- **Secure by default** — Memory-safe runtime, TLS via Rustls, sandboxed WASM plugins, secrets never baked into artifacts.
+- **Extensible** — Write plugins in any language that compiles to WebAssembly. They run in a sandbox, so a buggy plugin can't take down the gateway.
+- **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export.
 
 ## Quick Start
 
