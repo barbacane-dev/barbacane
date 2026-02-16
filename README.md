@@ -93,6 +93,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `correlation-id` | Middleware | Request correlation ID propagation |
 | `request-size-limit` | Middleware | Request body size limits |
 | `ip-restriction` | Middleware | IP allowlist/blocklist |
+| `request-transformer` | Middleware | Modify headers, query params, path, and body before upstream |
 | `observability` | Middleware | SLO monitoring and detailed logging |
 | `http-log` | Middleware | Send request/response logs to HTTP endpoint |
 
