@@ -13,16 +13,28 @@
 
 ## Quick Start
 
+### With Docker
+
 ```bash
-# Build from source (crates.io publishing planned for v1.0)
-git clone https://github.com/barbacane/barbacane.git
+# Compile your OpenAPI spec
+docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane \
+  compile --spec /work/api.yaml --manifest /work/barbacane.yaml --output /work/api.bca
+
+# Run the gateway
+docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca \
+  ghcr.io/barbacane-dev/barbacane serve --artifact /config/api.bca --listen 0.0.0.0:8080
+```
+
+### From source
+
+```bash
+git clone https://github.com/barbacane-dev/barbacane.git
 cd barbacane && cargo build --release
 
-# Add x-barbacane-dispatch to your OpenAPI spec
-# Compile
+# Compile your OpenAPI spec
 ./target/release/barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 
-# Run
+# Run the gateway
 ./target/release/barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
@@ -58,7 +70,7 @@ cd barbacane && cargo build --release
 |--------|---------|--------|
 | OpenAPI | 3.0.x | Supported |
 | OpenAPI | 3.1.x | Supported |
-| OpenAPI | 3.2.x | Supported (draft) |
+| OpenAPI | 3.2.x | Supported |
 | AsyncAPI | 3.0.x | Supported |
 
 ### AsyncAPI Support
