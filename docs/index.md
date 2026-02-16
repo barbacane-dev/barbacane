@@ -15,7 +15,29 @@
 
 ### With Docker
 
-The playground includes a demo API, observability stack (Prometheus, Grafana, Loki, Tempo), and a control plane UI:
+The standalone image bundles the binary and all official plugins:
+
+```bash
+# Compile your OpenAPI spec (all plugins are pre-bundled)
+docker run --rm -v $(pwd):/work barbacane-standalone \
+  compile --spec /work/api.yaml --manifest /etc/barbacane/plugins.yaml --output /work/api.bca
+
+# Run the gateway
+docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca barbacane-standalone \
+  serve --artifact /config/api.bca --listen 0.0.0.0:8080
+```
+
+To build the standalone image locally:
+
+```bash
+git clone https://github.com/barbacane-dev/barbacane.git
+cd barbacane
+make docker-build-standalone
+```
+
+### Playground
+
+Full demo environment with observability stack (Prometheus, Grafana, Loki, Tempo) and control plane UI:
 
 ```bash
 git clone https://github.com/barbacane-dev/barbacane.git

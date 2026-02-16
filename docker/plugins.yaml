@@ -1,0 +1,48 @@
+# Default plugin manifest for standalone Docker image
+# All official plugins are bundled at /plugins/<name>/<name>.wasm
+
+plugins:
+  mock:
+    path: /plugins/mock/mock.wasm
+  http-upstream:
+    path: /plugins/http-upstream/http-upstream.wasm
+  jwt-auth:
+    path: /plugins/jwt-auth/jwt-auth.wasm
+  apikey-auth:
+    path: /plugins/apikey-auth/apikey-auth.wasm
+  oauth2-auth:
+    path: /plugins/oauth2-auth/oauth2-auth.wasm
+  oidc-auth:
+    path: /plugins/oidc-auth/oidc-auth.wasm
+  basic-auth:
+    path: /plugins/basic-auth/basic-auth.wasm
+  acl:
+    path: /plugins/acl/acl.wasm
+  opa-authz:
+    path: /plugins/opa-authz/opa-authz.wasm
+  cel:
+    path: /plugins/cel/cel.wasm
+  rate-limit:
+    path: /plugins/rate-limit/rate-limit.wasm
+  cache:
+    path: /plugins/cache/cache.wasm
+  cors:
+    path: /plugins/cors/cors.wasm
+  correlation-id:
+    path: /plugins/correlation-id/correlation-id.wasm
+  request-size-limit:
+    path: /plugins/request-size-limit/request-size-limit.wasm
+  ip-restriction:
+    path: /plugins/ip-restriction/ip-restriction.wasm
+  request-transformer:
+    path: /plugins/request-transformer/request-transformer.wasm
+  observability:
+    path: /plugins/observability/observability.wasm
+  http-log:
+    path: /plugins/http-log/http-log.wasm
+  kafka:
+    path: /plugins/kafka/kafka.wasm
+  nats:
+    path: /plugins/nats/nats.wasm
+  lambda:
+    path: /plugins/lambda/lambda.wasm
