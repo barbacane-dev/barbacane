@@ -1,7 +1,8 @@
-import { NavLink, Outlet, useParams } from 'react-router-dom'
+import { NavLink, Outlet, useParams, useOutletContext } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { FileCode, Puzzle, Package, Settings, ArrowLeft, RefreshCw, Rocket } from 'lucide-react'
 import { getProject } from '@/lib/api'
+import type { Project } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const projectTabs = [
@@ -105,7 +106,5 @@ export function ProjectLayout() {
 
 // Hook to access project data from child routes
 export function useProjectContext() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { project } = (window as any).__OUTLET_CONTEXT__ || {}
-  return { project }
+  return useOutletContext<{ project: Project }>()
 }
