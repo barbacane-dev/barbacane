@@ -6,12 +6,15 @@
 # Build:
 #   docker build -f Dockerfile.standalone -t barbacane-standalone .
 #
+# Pull:
+#   docker pull ghcr.io/barbacane-dev/barbacane-standalone
+#
 # Compile a spec:
-#   docker run --rm -v $(pwd):/work barbacane-standalone \
+#   docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane-standalone \
 #     compile --spec /work/api.yaml --manifest /etc/barbacane/plugins.yaml --output /work/api.bca
 #
 # Serve:
-#   docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca barbacane-standalone \
+#   docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca ghcr.io/barbacane-dev/barbacane-standalone \
 #     serve --artifact /config/api.bca --listen 0.0.0.0:8080
 
 # ---------------------------------------------------------------------------

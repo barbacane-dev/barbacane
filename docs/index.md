@@ -19,15 +19,15 @@ The standalone image bundles the binary and all official plugins:
 
 ```bash
 # Compile your OpenAPI spec (all plugins are pre-bundled)
-docker run --rm -v $(pwd):/work barbacane-standalone \
+docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane-standalone \
   compile --spec /work/api.yaml --manifest /etc/barbacane/plugins.yaml --output /work/api.bca
 
 # Run the gateway
-docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca barbacane-standalone \
+docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca ghcr.io/barbacane-dev/barbacane-standalone \
   serve --artifact /config/api.bca --listen 0.0.0.0:8080
 ```
 
-To build the standalone image locally:
+Also available on Docker Hub as `barbacane/barbacane-standalone`. To build locally:
 
 ```bash
 git clone https://github.com/barbacane-dev/barbacane.git

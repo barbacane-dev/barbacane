@@ -190,6 +190,19 @@ jobs:
           cache-from: type=gha,scope=barbacane-control-${{ matrix.suffix }}
           cache-to: type=gha,mode=max,scope=barbacane-control-${{ matrix.suffix }}
 
+      - name: Build and push standalone
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.standalone
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+            docker.io/barbacane/barbacane-standalone:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
+          cache-from: type=gha,scope=barbacane-standalone-${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=barbacane-standalone-${{ matrix.suffix }}
+
   # Create multi-arch manifests combining platform-specific images
   create-manifests:
     name: Create Multi-arch Manifests
@@ -265,6 +278,26 @@ jobs:
             docker.io/barbacane/barbacane-control:$VERSION-amd64 \
             docker.io/barbacane/barbacane-control:$VERSION-arm64
 
+      - name: Create GHCR standalone manifest
+        run: |
+          VERSION=${{ steps.tag.outputs.version }}
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:latest \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.version.outputs.minor }} \
+            -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.version.outputs.major }} \
+            ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION-amd64 \
+            ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION-arm64
+
+      - name: Create Docker Hub standalone manifest
+        run: |
+          VERSION=${{ steps.tag.outputs.version }}
+          docker buildx imagetools create -t docker.io/barbacane/barbacane-standalone:latest \
+            -t docker.io/barbacane/barbacane-standalone:$VERSION \
+            -t docker.io/barbacane/barbacane-standalone:${{ steps.version.outputs.minor }} \
+            -t docker.io/barbacane/barbacane-standalone:${{ steps.version.outputs.major }} \
+            docker.io/barbacane/barbacane-standalone:$VERSION-amd64 \
+            docker.io/barbacane/barbacane-standalone:$VERSION-arm64
+
   # Security scan the multi-arch images
   scan-containers:
     name: Scan Containers
@@ -318,6 +351,21 @@ jobs:
         with:
           sarif_file: 'trivy-control-plane.sarif'
           category: 'trivy-control-plane'
+
+      - name: Scan standalone image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.tag.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-standalone.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload standalone scan results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: 'trivy-standalone.sarif'
+          category: 'trivy-standalone'
 
   # Publish crates to crates.io
   publish-crates:
