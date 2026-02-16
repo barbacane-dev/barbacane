@@ -1,3 +1,4 @@
+export * from './use-dashboard'
 export * from './use-specs'
 export * from './use-plugins'
 export * from './use-artifacts'

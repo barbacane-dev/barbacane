@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import {
+  LayoutDashboard,
   FolderKanban,
   Store,
   Activity,
@@ -16,6 +17,7 @@ import { useTheme } from '@/hooks'
 import { useAuth } from '@/lib/auth'
 
 const mainNavigation = [
+  { name: 'Dashboard', href: '/', icon: LayoutDashboard, end: true },
   { name: 'Projects', href: '/projects', icon: FolderKanban },
 ]
 
@@ -42,6 +44,7 @@ export function Sidebar() {
             <NavLink
               key={item.name}
               to={item.href}
+              end={'end' in item ? item.end : undefined}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',

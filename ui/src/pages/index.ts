@@ -1,3 +1,4 @@
+export { DashboardPage } from './dashboard'
 export { SpecsPage } from './specs'
 export { PluginsPage } from './plugins'
 export { ArtifactsPage } from './artifacts'
