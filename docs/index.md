@@ -15,21 +15,25 @@
 
 ### With Docker
 
-```bash
-# Compile your OpenAPI spec
-docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane \
-  compile --spec /work/api.yaml --manifest /work/barbacane.yaml --output /work/api.bca
+The playground includes a demo API, observability stack (Prometheus, Grafana, Loki, Tempo), and a control plane UI:
 
-# Run the gateway
-docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca \
-  ghcr.io/barbacane-dev/barbacane serve --artifact /config/api.bca --listen 0.0.0.0:8080
+```bash
+git clone https://github.com/barbacane-dev/barbacane.git
+cd barbacane/playground
+docker-compose up -d
+
+# Gateway:       http://localhost:8080
+# Grafana:       http://localhost:3000 (admin/admin)
+# Control Plane: http://localhost:3001
 ```
 
 ### From source
 
 ```bash
 git clone https://github.com/barbacane-dev/barbacane.git
-cd barbacane && cargo build --release
+cd barbacane
+cargo build --release
+make plugins
 
 # Compile your OpenAPI spec
 ./target/release/barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
