@@ -86,7 +86,12 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
 
     // Run compilation
     let spec_path_refs: Vec<&Path> = spec_paths.iter().map(|p| p.as_path()).collect();
-    let compile_result = barbacane_compiler::compile(&spec_path_refs, &output_path);
+    let options = barbacane_compiler::CompileOptions {
+        allow_plaintext: !compilation.production,
+        ..Default::default()
+    };
+    let compile_result =
+        barbacane_compiler::compile_with_options(&spec_path_refs, &output_path, &options);
 
     match compile_result {
         Ok(result) => {
