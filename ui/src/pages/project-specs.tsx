@@ -1,13 +1,12 @@
 import { useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileCode, Upload, Trash2, RefreshCw, Eye, Play } from 'lucide-react'
+import { FileCode, Upload, Trash2, RefreshCw, Eye } from 'lucide-react'
 import {
   listProjectSpecs,
   uploadSpecToProject,
   deleteSpec,
   downloadSpecContent,
-  startCompilation,
 } from '@/lib/api'
 import type { Spec } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
@@ -37,13 +36,6 @@ export function ProjectSpecsPage() {
     mutationFn: deleteSpec,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-specs', projectId] })
-    },
-  })
-
-  const compileMutation = useMutation({
-    mutationFn: (specId: string) => startCompilation(specId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['project-compilations', projectId] })
     },
   })
 
@@ -210,15 +202,6 @@ export function ProjectSpecsPage() {
                     >
                       <Eye className="h-4 w-4 mr-1" />
                       View
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => compileMutation.mutate(spec.id)}
-                      disabled={compileMutation.isPending}
-                    >
-                      <Play className="h-4 w-4 mr-1" />
-                      Compile
                     </Button>
                     <Button
                       variant="ghost"
