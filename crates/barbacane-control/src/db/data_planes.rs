@@ -22,13 +22,14 @@ impl DataPlanesRepository {
     pub async fn create(&self, data_plane: NewDataPlane) -> Result<DataPlane, sqlx::Error> {
         sqlx::query_as::<_, DataPlane>(
             r#"
-            INSERT INTO data_planes (project_id, name, status, connected_at, metadata)
-            VALUES ($1, $2, 'online', NOW(), $3)
+            INSERT INTO data_planes (project_id, name, artifact_id, status, connected_at, metadata)
+            VALUES ($1, $2, $3, 'online', NOW(), $4)
             RETURNING *
             "#,
         )
         .bind(data_plane.project_id)
         .bind(&data_plane.name)
+        .bind(data_plane.artifact_id)
         .bind(&data_plane.metadata)
         .fetch_one(&self.pool)
         .await

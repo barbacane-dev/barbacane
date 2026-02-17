@@ -90,6 +90,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         .create(NewDataPlane {
             project_id: registration.project_id,
             name: registration.name.clone(),
+            artifact_id: registration.artifact_id,
             metadata: registration.metadata.clone(),
         })
         .await
@@ -212,6 +213,7 @@ struct RegistrationInfo {
     project_id: Uuid,
     api_key: String,
     name: Option<String>,
+    artifact_id: Option<Uuid>,
     metadata: serde_json::Value,
 }
 
@@ -228,13 +230,14 @@ async fn wait_for_registration(
                         project_id,
                         api_key,
                         name,
+                        artifact_id,
                         metadata,
-                        ..
                     }) => {
                         return Some(RegistrationInfo {
                             project_id,
                             api_key,
                             name,
+                            artifact_id,
                             metadata,
                         });
                     }
@@ -280,7 +283,13 @@ async fn handle_message(
                 requests_total,
                 "Heartbeat received"
             );
-            data_planes_repo.update_last_seen(data_plane_id).await?;
+
+            // Sync artifact_id if reported, otherwise just update last_seen
+            if let Some(aid) = artifact_id {
+                data_planes_repo.update_artifact(data_plane_id, aid).await?;
+            } else {
+                data_planes_repo.update_last_seen(data_plane_id).await?;
+            }
 
             let ack = ControlPlaneMessage::HeartbeatAck;
             sender

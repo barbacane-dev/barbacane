@@ -2554,6 +2554,8 @@ struct ConnectedModeConfig {
     api_key: String,
     /// Optional name for this data plane.
     data_plane_name: Option<String>,
+    /// Artifact ID currently loaded (set after loading).
+    initial_artifact_id: Option<uuid::Uuid>,
 }
 
 /// Convert a WebSocket URL to an HTTP base URL.
@@ -2745,6 +2747,7 @@ async fn run_serve(
             project_id: config.project_id,
             api_key: config.api_key,
             data_plane_name: config.data_plane_name,
+            initial_artifact_id: config.initial_artifact_id,
         });
         let (rx, tx) = client.start(shutdown_rx.clone());
         (Some(rx), Some(tx), Some(http_base))
@@ -3118,6 +3121,7 @@ async fn main() -> ExitCode {
                         project_id: project_uuid,
                         api_key: key.clone(),
                         data_plane_name: data_plane_name.clone(),
+                        initial_artifact_id: None,
                     })
                 }
                 (None, None, None) => None,

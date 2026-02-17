@@ -73,6 +73,7 @@ pub struct ControlPlaneConfig {
     pub project_id: Uuid,
     pub api_key: String,
     pub data_plane_name: Option<String>,
+    pub initial_artifact_id: Option<Uuid>,
 }
 
 /// Notification that a new artifact is available.
@@ -89,6 +90,16 @@ pub struct ArtifactDownloadedResponse {
     pub artifact_id: Uuid,
     pub success: bool,
     pub error: Option<String>,
+}
+
+/// Result of a connection attempt.
+enum ConnectOutcome {
+    /// Clean shutdown via signal — exit loop.
+    Shutdown,
+    /// Successfully registered but connection was later lost — reset backoff.
+    ConnectionLost(String),
+    /// Failed before completing registration — increase backoff.
+    ConnectionFailed(String),
 }
 
 /// Control plane client that maintains connection and handles messages.
@@ -148,11 +159,18 @@ impl ControlPlaneClient {
                 .try_connect(&mut shutdown_rx, &artifact_tx, &mut response_rx)
                 .await
             {
-                Ok(()) => {
-                    // Connection was cleanly closed (e.g., shutdown)
+                ConnectOutcome::Shutdown => {
                     return;
                 }
-                Err(e) => {
+                ConnectOutcome::ConnectionLost(e) => {
+                    // Was registered, connection dropped — reset backoff for fast reconnect
+                    tracing::warn!(
+                        error = %e,
+                        "Control plane connection lost, reconnecting immediately"
+                    );
+                    backoff_ms = INITIAL_BACKOFF_MS;
+                }
+                ConnectOutcome::ConnectionFailed(e) => {
                     tracing::warn!(
                         error = %e,
                         backoff_ms = backoff_ms,
@@ -171,7 +189,7 @@ impl ControlPlaneClient {
                 _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {}
             }
 
-            // Increase backoff for next attempt
+            // Increase backoff for next attempt, capped at MAX_BACKOFF_MS
             backoff_ms =
                 ((backoff_ms as f64) * BACKOFF_MULTIPLIER).min(MAX_BACKOFF_MS as f64) as u64;
         }
@@ -183,11 +201,17 @@ impl ControlPlaneClient {
         shutdown_rx: &mut watch::Receiver<bool>,
         artifact_tx: &mpsc::Sender<ArtifactNotification>,
         response_rx: &mut mpsc::Receiver<ArtifactDownloadedResponse>,
-    ) -> Result<(), String> {
+    ) -> ConnectOutcome {
         // Connect to WebSocket
-        let (ws_stream, _response) = connect_async(&self.config.control_plane_url)
-            .await
-            .map_err(|e| format!("WebSocket connection failed: {}", e))?;
+        let (ws_stream, _response) = match connect_async(&self.config.control_plane_url).await {
+            Ok(conn) => conn,
+            Err(e) => {
+                return ConnectOutcome::ConnectionFailed(format!(
+                    "WebSocket connection failed: {}",
+                    e
+                ))
+            }
+        };
 
         let (mut sender, mut receiver) = ws_stream.split();
 
@@ -196,29 +220,55 @@ impl ControlPlaneClient {
             project_id: self.config.project_id,
             api_key: self.config.api_key.clone(),
             name: self.config.data_plane_name.clone(),
-            artifact_id: None, // TODO: pass current artifact ID
+            artifact_id: self.config.initial_artifact_id,
             metadata: serde_json::json!({}),
         };
 
-        let register_json = serde_json::to_string(&register_msg)
-            .map_err(|e| format!("Failed to serialize register message: {}", e))?;
+        let register_json = match serde_json::to_string(&register_msg) {
+            Ok(j) => j,
+            Err(e) => {
+                return ConnectOutcome::ConnectionFailed(format!(
+                    "Failed to serialize register message: {}",
+                    e
+                ))
+            }
+        };
 
-        sender
-            .send(Message::Text(register_json.into()))
-            .await
-            .map_err(|e| format!("Failed to send register message: {}", e))?;
+        if let Err(e) = sender.send(Message::Text(register_json.into())).await {
+            return ConnectOutcome::ConnectionFailed(format!(
+                "Failed to send register message: {}",
+                e
+            ));
+        }
 
         // Wait for registration response
-        let registration_response = tokio::time::timeout(Duration::from_secs(30), receiver.next())
-            .await
-            .map_err(|_| "Registration timeout")?
-            .ok_or("Connection closed before registration")?
-            .map_err(|e| format!("WebSocket error: {}", e))?;
+        let registration_response =
+            match tokio::time::timeout(Duration::from_secs(30), receiver.next()).await {
+                Ok(Some(Ok(msg))) => msg,
+                Ok(Some(Err(e))) => {
+                    return ConnectOutcome::ConnectionFailed(format!("WebSocket error: {}", e))
+                }
+                Ok(None) => {
+                    return ConnectOutcome::ConnectionFailed(
+                        "Connection closed before registration".to_string(),
+                    )
+                }
+                Err(_) => {
+                    return ConnectOutcome::ConnectionFailed("Registration timeout".to_string())
+                }
+            };
 
         let heartbeat_interval_secs = match registration_response {
             Message::Text(text) => {
-                let msg: ControlPlaneMessage = serde_json::from_str(&text)
-                    .map_err(|e| format!("Failed to parse registration response: {}", e))?;
+                let msg: ControlPlaneMessage = match serde_json::from_str(&text) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return ConnectOutcome::ConnectionFailed(format!(
+                            "Failed to parse registration response: {}",
+                            e
+                        ))
+                    }
+                };
 
                 match msg {
                     ControlPlaneMessage::Registered {
@@ -233,15 +283,24 @@ impl ControlPlaneClient {
                         heartbeat_interval_secs
                     }
                     ControlPlaneMessage::RegistrationFailed { reason } => {
-                        return Err(format!("Registration failed: {}", reason));
+                        return ConnectOutcome::ConnectionFailed(format!(
+                            "Registration failed: {}",
+                            reason
+                        ));
                     }
                     other => {
-                        return Err(format!("Unexpected registration response: {:?}", other));
+                        return ConnectOutcome::ConnectionFailed(format!(
+                            "Unexpected registration response: {:?}",
+                            other
+                        ));
                     }
                 }
             }
             other => {
-                return Err(format!("Unexpected message type: {:?}", other));
+                return ConnectOutcome::ConnectionFailed(format!(
+                    "Unexpected message type: {:?}",
+                    other
+                ));
             }
         };
 
@@ -250,7 +309,8 @@ impl ControlPlaneClient {
             tokio::time::interval(Duration::from_secs(heartbeat_interval_secs as u64));
         let start_time = std::time::Instant::now();
 
-        // Main message loop
+        // Main message loop — we are now registered, so any disconnect
+        // should trigger reconnection (ConnectionLost), not give up.
         loop {
             tokio::select! {
                 // Shutdown signal
@@ -258,7 +318,7 @@ impl ControlPlaneClient {
                     if *shutdown_rx.borrow() {
                         tracing::info!("Disconnecting from control plane");
                         let _ = sender.close().await;
-                        return Ok(());
+                        return ConnectOutcome::Shutdown;
                     }
                 }
 
@@ -270,11 +330,18 @@ impl ControlPlaneClient {
                         requests_total: 0, // TODO: pass actual metrics
                     };
 
-                    let json = serde_json::to_string(&heartbeat)
-                        .map_err(|e| format!("Failed to serialize heartbeat: {}", e))?;
+                    let json = match serde_json::to_string(&heartbeat) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to serialize heartbeat");
+                            continue;
+                        }
+                    };
 
                     if let Err(e) = sender.send(Message::Text(json.into())).await {
-                        return Err(format!("Failed to send heartbeat: {}", e));
+                        return ConnectOutcome::ConnectionLost(format!(
+                            "Failed to send heartbeat: {}", e
+                        ));
                     }
 
                     tracing::debug!("Heartbeat sent");
@@ -288,8 +355,13 @@ impl ControlPlaneClient {
                         error: response.error,
                     };
 
-                    let json = serde_json::to_string(&msg)
-                        .map_err(|e| format!("Failed to serialize artifact downloaded: {}", e))?;
+                    let json = match serde_json::to_string(&msg) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to serialize artifact downloaded");
+                            continue;
+                        }
+                    };
 
                     if let Err(e) = sender.send(Message::Text(json.into())).await {
                         tracing::warn!(error = %e, "Failed to send artifact downloaded response");
@@ -321,10 +393,14 @@ impl ControlPlaneClient {
                             let _ = sender.send(Message::Pong(data)).await;
                         }
                         Some(Ok(Message::Close(_))) | None => {
-                            return Err("Connection closed by control plane".to_string());
+                            return ConnectOutcome::ConnectionLost(
+                                "Connection closed by control plane".to_string()
+                            );
                         }
                         Some(Err(e)) => {
-                            return Err(format!("WebSocket error: {}", e));
+                            return ConnectOutcome::ConnectionLost(format!(
+                                "WebSocket error: {}", e
+                            ));
                         }
                         _ => {}
                     }
@@ -562,6 +638,7 @@ mod tests {
             project_id: Uuid::new_v4(),
             api_key: "test-api-key".to_string(),
             data_plane_name: Some("test-plane".to_string()),
+            initial_artifact_id: None,
         };
 
         assert!(config.control_plane_url.starts_with("ws://"));
