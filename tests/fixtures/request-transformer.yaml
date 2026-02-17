@@ -1,0 +1,246 @@
+openapi: "3.1.0"
+info:
+  title: Request Transformer Test API
+  version: "1.0.0"
+  description: API for testing request-transformer middleware
+
+paths:
+  /headers:
+    post:
+      operationId: headerTransformations
+      summary: Test header transformations (add, set, remove, rename)
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            headers:
+              add:
+                X-Gateway: "barbacane"
+                X-Custom: "added-value"
+              remove:
+                - Authorization
+              rename:
+                X-Old-Name: X-New-Name
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"received":"headers"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /query:
+    get:
+      operationId: queryTransformations
+      summary: Test query parameter transformations
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            querystring:
+              add:
+                gateway: "barbacane"
+                version: "1.0"
+              remove:
+                - internal_token
+              rename:
+                oldParam: newParam
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"received":"query"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /path/strip:
+    get:
+      operationId: pathStripPrefix
+      summary: Test path strip_prefix transformation
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            path:
+              strip_prefix: "/path"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"path":"stripped"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /api/add:
+    get:
+      operationId: pathAddPrefix
+      summary: Test path add_prefix transformation
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            path:
+              add_prefix: "/v1"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"path":"prefixed"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /replace/test:
+    get:
+      operationId: pathReplace
+      summary: Test path regex replace transformation
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            path:
+              replace:
+                pattern: "/replace/(\\w+)"
+                replacement: "/new/$1"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"path":"replaced"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /body:
+    post:
+      operationId: bodyTransformations
+      summary: Test JSON body transformations
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            body:
+              add:
+                /gateway: "barbacane"
+                /metadata/version: "1.0"
+              remove:
+                - /password
+                - /internal_flags
+              rename:
+                /userName: /user_name
+                /userId: /user_id
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"received":"body"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /users/{userId}/interpolation:
+    post:
+      operationId: variableInterpolation
+      summary: Test variable interpolation in transformations
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            headers:
+              add:
+                X-Client-IP: "$client_ip"
+                X-User-ID: "$path.userId"
+                X-Original-Host: "$header.host"
+            querystring:
+              add:
+                userId: "$path.userId"
+                page: "$query.page"
+            body:
+              add:
+                /clientIp: "$client_ip"
+                /userId: "$path.userId"
+                /page: "$query.page"
+                /host: "$header.host"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"interpolated":"values"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /query-to-body:
+    post:
+      operationId: queryToBody
+      summary: Transform query parameter to body field (common use case from ADR-0020)
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            querystring:
+              remove:
+                - userId
+            body:
+              add:
+                /userId: "$query.userId"
+                /metadata/gateway: "barbacane"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"transformed":"query-to-body"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /combined:
+    post:
+      operationId: combinedTransformations
+      summary: Test all transformation types together
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            path:
+              add_prefix: "/v1"
+            headers:
+              add:
+                X-Gateway: "barbacane"
+              remove:
+                - Authorization
+            querystring:
+              add:
+                version: "1.0"
+              remove:
+                - internal
+            body:
+              add:
+                /gateway: "barbacane"
+              remove:
+                - /password
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"all":"transformations"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /passthrough:
+    get:
+      operationId: passthrough
+      summary: Endpoint without request-transformer (baseline)
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"passthrough":"no-transformations"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success

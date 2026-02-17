@@ -345,6 +345,38 @@ Reads `x-auth-consumer` and `x-auth-consumer-groups` headers set by upstream aut
 
 Returns RFC 9457 Problem JSON on 403 with `"type": "urn:barbacane:error:acl-denied"`.
 
+### request-transformer
+
+Declarative request transformations before upstream dispatch.
+
+```yaml
+- name: request-transformer
+  config:
+    headers:
+      add: { X-Gateway: "barbacane" }   # Add/overwrite headers
+      set: { X-Source: "external" }      # Add only if absent
+      remove: ["Authorization"]          # Remove by name
+      rename: { X-Old: X-New }           # Rename headers
+    querystring:
+      add: { version: "1.0" }           # Add/overwrite params
+      remove: ["internal"]              # Remove params
+      rename: { old: new }              # Rename params
+    path:
+      strip_prefix: "/api/v1"           # Remove path prefix
+      add_prefix: "/internal"           # Add path prefix
+      replace:                          # Regex replace
+        pattern: "/v1/(.*)"
+        replacement: "/v2/$1"
+    body:
+      add: { /metadata/gw: "barbacane" }  # JSON Pointer add
+      remove: ["/password"]               # JSON Pointer remove
+      rename: { /userName: /user_name }   # JSON Pointer rename
+```
+
+Supports variable interpolation: `$client_ip`, `$header.*`, `$query.*`, `$path.*`, `context:*`. Variables resolve against the original request.
+
+See [Middlewares Guide](../guide/middlewares.md#request-transformer) for full documentation.
+
 ### observability
 
 Per-operation observability middleware for SLO monitoring, detailed logging, and custom metrics.

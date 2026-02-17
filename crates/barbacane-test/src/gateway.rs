@@ -4293,4 +4293,175 @@ paths:
         let resp = gateway.get("/public").await.unwrap();
         assert_eq!(resp.status(), 200);
     }
+
+    // =========================================================================
+    // Request Transformer middleware integration tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_request_transformer_header_transformations() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/headers")
+            .header("content-type", "application/json")
+            .header("X-Old-Name", "rename-me")
+            .header("Authorization", "Bearer secret")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["received"], "headers");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_query_transformations() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .get("/query?oldParam=value&internal_token=secret")
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["received"], "query");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_path_strip_prefix() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/path/strip").await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["path"], "stripped");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_path_add_prefix() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/api/add").await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["path"], "prefixed");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_path_regex_replace() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/replace/test").await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["path"], "replaced");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_body_transformations() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .post(
+                "/body",
+                r#"{"userName":"alice","userId":"42","password":"secret","internal_flags":true}"#,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["received"], "body");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_variable_interpolation() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/users/123/interpolation?page=5")
+            .header("content-type", "application/json")
+            .body(r#"{"existing":"data"}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["interpolated"], "values");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_query_to_body() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        // ADR-0020 showcase: move userId from query to body
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/query-to-body?userId=42")
+            .header("content-type", "application/json")
+            .body(r#"{}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["transformed"], "query-to-body");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_combined_transformations() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway
+            .request_builder(reqwest::Method::POST, "/combined?internal=secret")
+            .header("content-type", "application/json")
+            .header("Authorization", "Bearer token")
+            .body(r#"{"password":"secret","data":"keep"}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["all"], "transformations");
+    }
+
+    #[tokio::test]
+    async fn test_request_transformer_passthrough_no_plugin() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/request-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/passthrough").await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["passthrough"], "no-transformations");
+    }
 }

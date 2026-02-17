@@ -10,7 +10,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 What's actively being worked on:
 
-- [ ] `request-transformer` plugin — modify headers, query params, body before upstream
+- [x] `request-transformer` plugin — modify headers, query params, path, body before upstream
 - [ ] `response-transformer` plugin — modify response headers/body before client
 - [ ] Documentation for transformation plugins
 
@@ -38,7 +38,7 @@ Near-term items ready to be picked up:
 
 | Plugin | Type | Description |
 |--------|------|-------------|
-| ~~`request-transformer`~~ | Middleware | Modify headers, query params, body before upstream — **in progress** |
+| ~~`request-transformer`~~ | ~~Middleware~~ | ~~Modify headers, query params, path, body before upstream~~ — **done** |
 | ~~`response-transformer`~~ | Middleware | Modify response headers/body before client — **in progress** |
 | ~~`ip-restriction`~~ | ~~Middleware~~ | ~~Allow/deny by IP or CIDR range~~ — **done** |
 | ~~`basic-auth`~~ | ~~Middleware~~ | ~~Username/password authentication~~ — **done** |

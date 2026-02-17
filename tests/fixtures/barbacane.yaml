@@ -44,3 +44,5 @@ plugins:
     path: ../../plugins/opa-authz/opa-authz.wasm
   cel:
     path: ../../plugins/cel/cel.wasm
+  request-transformer:
+    path: ../../plugins/request-transformer/request-transformer.wasm
