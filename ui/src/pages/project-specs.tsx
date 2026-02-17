@@ -1,14 +1,14 @@
 import { useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileCode, Upload, Trash2, RefreshCw, Eye, Download } from 'lucide-react'
+import { FileCode, Upload, Trash2, RefreshCw, Eye, Download, AlertTriangle, X } from 'lucide-react'
 import {
   listProjectSpecs,
   uploadSpecToProject,
   deleteSpec,
   downloadSpecContent,
 } from '@/lib/api'
-import type { Spec } from '@/lib/api'
+import type { Spec, ComplianceWarning } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
@@ -18,6 +18,7 @@ export function ProjectSpecsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [viewingSpec, setViewingSpec] = useState<Spec | null>(null)
   const [specContent, setSpecContent] = useState<string>('')
+  const [uploadWarnings, setUploadWarnings] = useState<ComplianceWarning[]>([])
 
   const specsQuery = useQuery({
     queryKey: ['project-specs', projectId],
@@ -27,9 +28,10 @@ export function ProjectSpecsPage() {
 
   const uploadMutation = useMutation({
     mutationFn: (file: File) => uploadSpecToProject(projectId!, file),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['project-specs', projectId] })
       queryClient.invalidateQueries({ queryKey: ['project-operations', projectId] })
+      setUploadWarnings(data.warnings ?? [])
     },
   })
 
@@ -132,6 +134,38 @@ export function ProjectSpecsPage() {
               ? uploadMutation.error.message
               : 'Failed to upload spec'}
           </p>
+        </div>
+      )}
+
+      {uploadWarnings.length > 0 && (
+        <div className="mb-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-yellow-600 dark:text-yellow-500 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-yellow-800 dark:text-yellow-400">
+                  Spec uploaded with {uploadWarnings.length} compliance {uploadWarnings.length === 1 ? 'warning' : 'warnings'}
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {uploadWarnings.map((w, i) => (
+                    <li key={i} className="text-sm text-yellow-700 dark:text-yellow-400/80">
+                      <span className="font-mono text-xs">{w.code}</span>{' '}
+                      {w.message}
+                      {w.location && (
+                        <span className="text-yellow-600/70 dark:text-yellow-500/60"> — {w.location}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <button
+              onClick={() => setUploadWarnings([])}
+              className="text-yellow-600 hover:text-yellow-800 dark:text-yellow-500 dark:hover:text-yellow-300"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       )}
 

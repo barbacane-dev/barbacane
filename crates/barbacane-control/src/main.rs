@@ -91,9 +91,9 @@ enum Command {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
 
-        /// Skip plugins that already exist in the registry.
-        #[arg(long, default_value_t = true)]
-        skip_existing: bool,
+        /// Force re-seed plugins that already exist (update metadata and binary).
+        #[arg(long)]
+        force: bool,
 
         /// Show detailed output.
         #[arg(long)]
@@ -276,12 +276,12 @@ fn main() -> ExitCode {
         Command::SeedPlugins {
             plugins_dir,
             database_url,
-            skip_existing,
+            force,
             verbose,
         } => {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             rt.block_on(async {
-                match seed_plugins(&plugins_dir, &database_url, skip_existing, verbose).await {
+                match seed_plugins(&plugins_dir, &database_url, force, verbose).await {
                     Ok(count) => {
                         println!("Seeded {} plugin(s) into the registry.", count);
                         ExitCode::SUCCESS
@@ -335,7 +335,7 @@ struct PluginInfo {
 async fn seed_plugins(
     plugins_dir: &str,
     database_url: &str,
-    skip_existing: bool,
+    force: bool,
     verbose: bool,
 ) -> anyhow::Result<usize> {
     use sha2::{Digest, Sha256};
@@ -399,14 +399,13 @@ async fn seed_plugins(
         }
 
         // Check if plugin already exists
-        if skip_existing
-            && repo
-                .exists(&manifest.plugin.name, &manifest.plugin.version)
-                .await?
-        {
+        let already_exists = repo
+            .exists(&manifest.plugin.name, &manifest.plugin.version)
+            .await?;
+        if already_exists && !force {
             if verbose {
                 eprintln!(
-                    "  Skipping {} v{} - already exists",
+                    "  Skipping {} v{} - already exists (use --force to update)",
                     manifest.plugin.name, manifest.plugin.version
                 );
             }
@@ -466,15 +465,24 @@ async fn seed_plugins(
             sha256,
         };
 
-        repo.create(new_plugin).await?;
-        seeded_count += 1;
-
-        if verbose {
-            eprintln!(
-                "  Registered {} v{} ({})",
-                manifest.plugin.name, manifest.plugin.version, manifest.plugin.plugin_type
-            );
+        if already_exists {
+            repo.upsert(new_plugin).await?;
+            if verbose {
+                eprintln!(
+                    "  Updated {} v{} ({})",
+                    manifest.plugin.name, manifest.plugin.version, manifest.plugin.plugin_type
+                );
+            }
+        } else {
+            repo.create(new_plugin).await?;
+            if verbose {
+                eprintln!(
+                    "  Registered {} v{} ({})",
+                    manifest.plugin.name, manifest.plugin.version, manifest.plugin.plugin_type
+                );
+            }
         }
+        seeded_count += 1;
     }
 
     Ok(seeded_count)

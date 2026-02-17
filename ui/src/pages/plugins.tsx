@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Puzzle, Upload, Trash2, RefreshCw, Github, ExternalLink, AlertCircle, X } from 'lucide-react'
+import { Puzzle, Upload, Trash2, RefreshCw, Github, ExternalLink, AlertCircle, X, FileJson } from 'lucide-react'
 import { listPlugins, registerPlugin, deletePlugin } from '@/lib/api'
-import type { PluginType } from '@/lib/api'
+import type { Plugin, PluginType } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
@@ -35,6 +35,9 @@ export function PluginsPage() {
     description: '',
     file: null as File | null,
   })
+
+  // Schema viewer state
+  const [viewingSchema, setViewingSchema] = useState<Plugin | null>(null)
 
   // Delete error state
   const [deleteError, setDeleteError] = useState<{ pluginKey: string; message: string } | null>(null)
@@ -644,25 +647,63 @@ export function PluginsPage() {
                       Registered {formatDate(plugin.registered_at)}
                     </p>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      if (confirm(`Delete plugin "${plugin.name}" v${plugin.version}?`)) {
-                        deleteMutation.mutate({
-                          name: plugin.name,
-                          version: plugin.version,
-                        })
-                      }
-                    }}
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  <div className="flex gap-1">
+                    {plugin.config_schema && Object.keys(plugin.config_schema).length > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setViewingSchema(plugin)}
+                        title="View config schema"
+                      >
+                        <FileJson className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (confirm(`Delete plugin "${plugin.name}" v${plugin.version}?`)) {
+                          deleteMutation.mutate({
+                            name: plugin.name,
+                            version: plugin.version,
+                          })
+                        }
+                      }}
+                      disabled={deleteMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {/* Schema Viewer Modal */}
+      {viewingSchema && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Card className="w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <CardContent className="p-4 border-b border-border">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-medium">{viewingSchema.name}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Configuration Schema — v{viewingSchema.version}
+                  </p>
+                </div>
+                <Button variant="outline" onClick={() => setViewingSchema(null)}>
+                  Close
+                </Button>
+              </div>
+            </CardContent>
+            <div className="flex-1 overflow-auto p-4">
+              <pre className="text-xs font-mono whitespace-pre-wrap bg-muted p-4 rounded-lg">
+                {JSON.stringify(viewingSchema.config_schema, null, 2)}
+              </pre>
+            </div>
+          </Card>
         </div>
       )}
     </div>

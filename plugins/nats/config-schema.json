@@ -4,8 +4,12 @@
   "title": "NATS Dispatcher Config",
   "description": "Configuration for the NATS dispatcher plugin",
   "type": "object",
-  "required": ["subject"],
+  "required": ["url", "subject"],
   "properties": {
+    "url": {
+      "type": "string",
+      "description": "NATS server URL (e.g. 'nats://localhost:4222')"
+    },
     "subject": {
       "type": "string",
       "description": "NATS subject to publish messages to (supports wildcards like 'events.>')"

@@ -273,14 +273,19 @@ function StatCard({
   label,
   value,
   subtitle,
+  onClick,
 }: {
   icon: React.ComponentType<{ className?: string }>
   label: string
   value: string | number
   subtitle?: string
+  onClick?: () => void
 }) {
   return (
-    <Card>
+    <Card
+      className={onClick ? 'cursor-pointer hover:border-primary/50 transition-colors' : undefined}
+      onClick={onClick}
+    >
       <CardContent className="p-5">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
@@ -432,6 +437,7 @@ function DashboardView() {
           icon={FolderKanban}
           label="Projects"
           value={stats.projects}
+          onClick={() => navigate('/projects')}
         />
         <StatCard
           icon={Server}
@@ -451,12 +457,14 @@ function DashboardView() {
           icon={Hammer}
           label="Compilations"
           value={stats.compilations}
+          onClick={() => navigate('/activity')}
         />
         <StatCard
           icon={Puzzle}
           label="Plugins"
           value={stats.plugins}
           subtitle="registered"
+          onClick={() => navigate('/plugin-registry')}
         />
       </div>
 

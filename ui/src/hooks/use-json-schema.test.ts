@@ -294,6 +294,67 @@ describe('validateJsonSchema', () => {
       expect(result.errors.length).toBeGreaterThanOrEqual(2)
     })
   })
+
+  describe('with $schema and $id meta-keywords', () => {
+    it('validates correctly when schema has $schema and $id', () => {
+      const schema = {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        $id: 'urn:barbacane:plugin:rate-limit:config',
+        type: 'object',
+        properties: {
+          quota: { type: 'integer', minimum: 1 },
+        },
+        additionalProperties: false,
+      }
+      const result = validateJsonSchema({ quota: 10 }, schema)
+      expect(result.valid).toBe(true)
+    })
+
+    it('detects errors in schema with $schema and $id', () => {
+      const schema = {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        $id: 'urn:barbacane:plugin:rate-limit:config',
+        type: 'object',
+        properties: {
+          quota: { type: 'integer', minimum: 1 },
+        },
+        additionalProperties: false,
+      }
+      const result = validateJsonSchema({ quota: 'bad' }, schema)
+      expect(result.valid).toBe(false)
+    })
+
+    it('works when switching between different $id schemas', () => {
+      const schema1 = {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        $id: 'urn:barbacane:plugin:rate-limit:config',
+        type: 'object',
+        required: ['quota'],
+        properties: {
+          quota: { type: 'integer' },
+        },
+      }
+      const schema2 = {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        $id: 'urn:barbacane:plugin:cors:config',
+        type: 'object',
+        required: ['allowed_origins'],
+        properties: {
+          allowed_origins: { type: 'array', items: { type: 'string' } },
+        },
+      }
+
+      const r1 = validateJsonSchema({ quota: 10 }, schema1)
+      expect(r1.valid).toBe(true)
+
+      const r2 = validateJsonSchema({ allowed_origins: ['*'] }, schema2)
+      expect(r2.valid).toBe(true)
+
+      // Validate against wrong schema
+      const r3 = validateJsonSchema({ allowed_origins: ['*'] }, schema1)
+      expect(r3.valid).toBe(false)
+    })
+  })
 })
 
 describe('generateSkeletonFromSchema', () => {

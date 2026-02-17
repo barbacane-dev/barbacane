@@ -8,25 +8,20 @@ import {
   Clock,
   Loader2,
   Download,
-  Play,
   Trash2,
 } from 'lucide-react'
 import {
   listProjectCompilations,
   listProjectArtifacts,
-  listProjectSpecs,
   downloadArtifact,
   deleteArtifact,
-  startCompilation,
 } from '@/lib/api'
 import type { Compilation, CompilationError } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
-import { useProjectContext } from '@/components/layout'
 import { cn } from '@/lib/utils'
 
 export function ProjectBuildsPage() {
   const { id: projectId } = useParams<{ id: string }>()
-  const { project } = useProjectContext()
   const queryClient = useQueryClient()
 
   const compilationsQuery = useQuery({
@@ -42,45 +37,13 @@ export function ProjectBuildsPage() {
     enabled: !!projectId,
   })
 
-  const specsQuery = useQuery({
-    queryKey: ['project-specs', projectId],
-    queryFn: () => listProjectSpecs(projectId!),
-    enabled: !!projectId,
-  })
-
-  const specs = specsQuery.data ?? []
   const compilations = compilationsQuery.data ?? []
   const artifacts = artifactsQuery.data ?? []
-
-  const hasActiveCompilation = compilations.some(
-    (c) => c.status === 'pending' || c.status === 'compiling'
-  )
 
   const deleteArtifactMutation = useMutation({
     mutationFn: deleteArtifact,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
-    },
-  })
-
-  const compileMutation = useMutation({
-    mutationFn: async () => {
-      if (specs.length === 0) {
-        throw new Error('No specs to compile')
-      }
-      const [primary, ...rest] = specs
-      return startCompilation(primary.id, {
-        production: project.production_mode,
-        additional_specs: rest.length > 0 ? rest.map((s) => s.id) : undefined,
-      })
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ['project-compilations', projectId],
-      })
-      queryClient.invalidateQueries({
-        queryKey: ['project-artifacts', projectId],
-      })
     },
   })
 
@@ -215,47 +178,19 @@ export function ProjectBuildsPage() {
             Compilation history and downloadable artifacts
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              compilationsQuery.refetch()
-              artifactsQuery.refetch()
-            }}
-            disabled={isLoading}
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isLoading && 'animate-spin')} />
-            Refresh
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => compileMutation.mutate()}
-            disabled={
-              specs.length === 0 ||
-              hasActiveCompilation ||
-              compileMutation.isPending
-            }
-          >
-            <Play className="h-4 w-4 mr-2" />
-            {compileMutation.isPending
-              ? 'Starting...'
-              : hasActiveCompilation
-                ? 'Build in progress'
-                : 'Compile Project'}
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            compilationsQuery.refetch()
+            artifactsQuery.refetch()
+          }}
+          disabled={isLoading}
+        >
+          <RefreshCw className={cn('h-4 w-4 mr-2', isLoading && 'animate-spin')} />
+          Refresh
+        </Button>
       </div>
-
-      {compileMutation.isError && (
-        <div className="mb-4 rounded-lg border border-destructive bg-destructive/10 p-4">
-          <p className="text-sm text-destructive">
-            {compileMutation.error instanceof Error
-              ? compileMutation.error.message
-              : 'Failed to start compilation'}
-          </p>
-        </div>
-      )}
 
       {/* Artifacts Section */}
       <div className="mb-8">

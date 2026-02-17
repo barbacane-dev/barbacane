@@ -77,11 +77,18 @@ export interface SpecRevision {
   created_at: string
 }
 
+export interface ComplianceWarning {
+  code: string
+  message: string
+  location?: string
+}
+
 export interface UploadResponse {
   id: string
   name: string
   revision: number
   sha256: string
+  warnings?: ComplianceWarning[]
 }
 
 export interface Plugin {

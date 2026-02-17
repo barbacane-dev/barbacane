@@ -53,5 +53,8 @@ scalar_api_reference = "0.1"
 # Plugin seeding
 toml = { workspace = true }
 
+# Validation
+jsonschema = { workspace = true }
+
 [lints]
 workspace = true
