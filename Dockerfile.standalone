@@ -1,0 +1,93 @@
+# Barbacane Standalone - Batteries-included image with all official plugins
+#
+# This image bundles the barbacane binary and all official plugin WASMs,
+# so you can compile and serve specs without cloning the repository.
+#
+# Build:
+#   docker build -f Dockerfile.standalone -t barbacane-standalone .
+#
+# Pull:
+#   docker pull ghcr.io/barbacane-dev/barbacane-standalone
+#
+# Compile a spec:
+#   docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane-standalone \
+#     compile --spec /work/api.yaml --manifest /etc/barbacane/plugins.yaml --output /work/api.bca
+#
+# Serve:
+#   docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca ghcr.io/barbacane-dev/barbacane-standalone \
+#     serve --artifact /config/api.bca --listen 0.0.0.0:8080
+
+# ---------------------------------------------------------------------------
+# Stage 1: Build the barbacane binary
+# ---------------------------------------------------------------------------
+FROM rust:1.93-slim-bookworm AS binary-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    clang \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+ENV CARGO_BUILD_JOBS=2
+
+RUN cargo build --release --package barbacane && \
+    cp target/release/barbacane /usr/local/bin/barbacane
+
+# ---------------------------------------------------------------------------
+# Stage 2: Build all WASM plugins
+# ---------------------------------------------------------------------------
+FROM rust:1.93-slim-bookworm AS plugin-builder
+
+RUN rustup target add wasm32-unknown-unknown
+
+WORKDIR /build
+
+# Copy workspace root (SDK and macros use workspace inheritance)
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+# Copy all plugins
+COPY plugins/ plugins/
+
+# Build each plugin and collect WASMs to /plugins/<name>/<name>.wasm
+RUN mkdir -p /plugins && \
+    for p in plugins/*/; do \
+        if [ -f "$p/Cargo.toml" ]; then \
+            name=$(basename "$p"); \
+            echo "Building plugin: $name"; \
+            (cd "$p" && cargo build --release --target wasm32-unknown-unknown) && \
+            wasm_file=$(find "$p/target/wasm32-unknown-unknown/release" -maxdepth 1 -name "*.wasm" ! -name "*.d" 2>/dev/null | grep -v deps | head -1) && \
+            if [ -n "$wasm_file" ]; then \
+                mkdir -p "/plugins/$name" && \
+                cp "$wasm_file" "/plugins/$name/$name.wasm"; \
+                echo "  -> /plugins/$name/$name.wasm"; \
+            else \
+                echo "  WARNING: no WASM output for $name"; \
+            fi; \
+        fi; \
+    done
+
+# ---------------------------------------------------------------------------
+# Stage 3: Runtime image
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Binary
+COPY --from=binary-builder /usr/local/bin/barbacane /usr/local/bin/barbacane
+
+# Bundled plugins
+COPY --from=plugin-builder /plugins/ /plugins/
+
+# Default manifest mapping all official plugins
+COPY docker/plugins.yaml /etc/barbacane/plugins.yaml
+
+WORKDIR /workspace
+ENTRYPOINT ["barbacane"]

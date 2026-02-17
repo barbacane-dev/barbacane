@@ -149,7 +149,7 @@ db-reset:
 # Docker
 # -----------------------------------------------------------------------------
 
-.PHONY: docker-build docker-build-gateway docker-build-control \
+.PHONY: docker-build docker-build-gateway docker-build-control docker-build-standalone \
         docker-up docker-down docker-run docker-run-control
 
 docker-build: docker-build-gateway docker-build-control
@@ -159,6 +159,9 @@ docker-build-gateway:
 
 docker-build-control:
 	docker build -f Dockerfile.control -t barbacane-control .
+
+docker-build-standalone:
+	docker build -f Dockerfile.standalone -t barbacane-standalone .
 
 docker-up:
 	docker-compose up -d
@@ -207,9 +210,10 @@ help:
 	@echo "  make db-reset       Reset database"
 	@echo ""
 	@echo "Docker:"
-	@echo "  make docker-build          Build all images"
-	@echo "  make docker-build-gateway  Build data plane image"
-	@echo "  make docker-build-control  Build control plane image"
+	@echo "  make docker-build              Build gateway + control images"
+	@echo "  make docker-build-gateway      Build data plane image"
+	@echo "  make docker-build-control      Build control plane image"
+	@echo "  make docker-build-standalone   Build standalone image (binary + plugins)"
 	@echo "  make docker-up             Start full stack (compose)"
 	@echo "  make docker-down           Stop full stack"
 	@echo "  make docker-run            Run data plane standalone"

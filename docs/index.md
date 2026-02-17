@@ -4,24 +4,63 @@
 
 ## Why Barbacane?
 
-- **Spec-first**: Your OpenAPI spec is the source of truth
-- **Compile-time validation**: Catch misconfigurations before deployment
-- **Plugin architecture**: Extend with WASM plugins for auth, rate limiting, transforms
-- **Observable**: Prometheus metrics, structured JSON logging, distributed tracing with OTLP export
-- **European-made**: Built in Europe, hosted on EU infrastructure
+- **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. No separate gateway DSL to maintain.
+- **Compile-time safety** — Misconfigurations, ambiguous routes, and missing plugins are caught at compile time, not at 3 AM.
+- **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises.
+- **Secure by default** — Memory-safe runtime, TLS via Rustls, sandboxed WASM plugins, secrets never baked into artifacts.
+- **Extensible** — Write plugins in any language that compiles to WebAssembly. They run in a sandbox, so a buggy plugin can't take down the gateway.
+- **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export.
 
 ## Quick Start
 
-```bash
-# Build from source (crates.io publishing planned for v1.0)
-git clone https://github.com/barbacane/barbacane.git
-cd barbacane && cargo build --release
+### With Docker
 
-# Add x-barbacane-dispatch to your OpenAPI spec
-# Compile
+The standalone image bundles the binary and all official plugins:
+
+```bash
+# Compile your OpenAPI spec (all plugins are pre-bundled)
+docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane-standalone \
+  compile --spec /work/api.yaml --manifest /etc/barbacane/plugins.yaml --output /work/api.bca
+
+# Run the gateway
+docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca ghcr.io/barbacane-dev/barbacane-standalone \
+  serve --artifact /config/api.bca --listen 0.0.0.0:8080
+```
+
+Also available on Docker Hub as `barbacane/barbacane-standalone`. To build locally:
+
+```bash
+git clone https://github.com/barbacane-dev/barbacane.git
+cd barbacane
+make docker-build-standalone
+```
+
+### Playground
+
+Full demo environment with observability stack (Prometheus, Grafana, Loki, Tempo) and control plane UI:
+
+```bash
+git clone https://github.com/barbacane-dev/barbacane.git
+cd barbacane/playground
+docker-compose up -d
+
+# Gateway:       http://localhost:8080
+# Grafana:       http://localhost:3000 (admin/admin)
+# Control Plane: http://localhost:3001
+```
+
+### From source
+
+```bash
+git clone https://github.com/barbacane-dev/barbacane.git
+cd barbacane
+cargo build --release
+make plugins
+
+# Compile your OpenAPI spec
 ./target/release/barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 
-# Run
+# Run the gateway
 ./target/release/barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
@@ -57,7 +96,7 @@ cd barbacane && cargo build --release
 |--------|---------|--------|
 | OpenAPI | 3.0.x | Supported |
 | OpenAPI | 3.1.x | Supported |
-| OpenAPI | 3.2.x | Supported (draft) |
+| OpenAPI | 3.2.x | Supported |
 | AsyncAPI | 3.0.x | Supported |
 
 ### AsyncAPI Support
