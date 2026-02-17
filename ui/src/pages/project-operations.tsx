@@ -62,13 +62,6 @@ type EditState =
       dispatch: DispatchBinding | null
       middlewares: MiddlewareBinding[] | null
     }
-  | {
-      type: 'config'
-      label: string
-      configJson: string
-      schema: Record<string, unknown> | null
-      onSave: (config: Record<string, unknown>) => void
-    }
 
 // ============================================================================
 // Main page component
@@ -239,18 +232,6 @@ export function ProjectOperationsPage() {
             })
           }}
           onClose={() => setEditState(null)}
-          onEditConfig={(mw, schema, onUpdate) => {
-            setEditState({
-              type: 'config',
-              label: mw.name,
-              configJson: JSON.stringify(mw.config ?? {}, null, 2),
-              schema,
-              onSave: (config) => {
-                onUpdate(config)
-                // Return to the middleware editing dialog - the caller handles restoring state
-              },
-            })
-          }}
         />
       )}
 
@@ -285,16 +266,6 @@ export function ProjectOperationsPage() {
         />
       )}
 
-      {/* Config Editor Dialog */}
-      {editState?.type === 'config' && (
-        <ConfigEditorDialog
-          label={editState.label}
-          initialJson={editState.configJson}
-          schema={editState.schema}
-          onSave={editState.onSave}
-          onClose={() => setEditState(null)}
-        />
-      )}
     </div>
   )
 }
@@ -558,7 +529,6 @@ function EditMiddlewaresDialog({
   error,
   onSave,
   onClose,
-  onEditConfig,
 }: {
   title: string
   middlewares: MiddlewareBinding[]
@@ -568,14 +538,23 @@ function EditMiddlewaresDialog({
   error: Error | null
   onSave: (middlewares: MiddlewareBinding[]) => void
   onClose: () => void
-  onEditConfig: (
-    mw: MiddlewareBinding,
-    schema: Record<string, unknown> | null,
-    onUpdate: (config: Record<string, unknown>) => void
-  ) => void
 }) {
   const [middlewares, setMiddlewares] = useState<MiddlewareBinding[]>(initialMiddlewares)
   const [showPicker, setShowPicker] = useState(false)
+  const [editingConfigIdx, setEditingConfigIdx] = useState<number | null>(null)
+  const [configJson, setConfigJson] = useState('')
+  const [jsonParseError, setJsonParseError] = useState<string | null>(null)
+  const [validationErrors, setValidationErrors] = useState<{ path: string; message: string }[]>([])
+
+  const editingPlugin = useMemo(() => {
+    if (editingConfigIdx !== null) {
+      const mw = middlewares[editingConfigIdx]
+      return mw ? pluginMap.get(mw.name.split('@')[0]) ?? null : null
+    }
+    return null
+  }, [editingConfigIdx, middlewares, pluginMap])
+
+  const { validate, hasSchema } = useJsonSchema(editingPlugin?.config_schema ?? null)
 
   const handleAdd = (plugin: Plugin) => {
     const skeleton = generateSkeletonFromSchema(plugin.config_schema)
@@ -587,21 +566,129 @@ function EditMiddlewaresDialog({
     setMiddlewares((prev) => prev.filter((_, i) => i !== index))
   }
 
+  const handleOpenConfig = (index: number) => {
+    const mw = middlewares[index]
+    setConfigJson(JSON.stringify(mw.config ?? {}, null, 2))
+    setEditingConfigIdx(index)
+    setJsonParseError(null)
+    setValidationErrors([])
+  }
+
+  const handleConfigChange = (value: string) => {
+    setConfigJson(value)
+    setJsonParseError(null)
+    setValidationErrors([])
+    try {
+      const parsed = JSON.parse(value)
+      const result = validate(parsed)
+      setValidationErrors(result.errors)
+    } catch {
+      // parse error shown on save only
+    }
+  }
+
+  const handleSaveConfig = () => {
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(configJson)
+      setJsonParseError(null)
+    } catch {
+      setJsonParseError('Invalid JSON syntax')
+      return
+    }
+
+    const result = validate(parsed)
+    setValidationErrors(result.errors)
+    if (!result.valid) return
+
+    if (editingConfigIdx !== null) {
+      setMiddlewares((prev) =>
+        prev.map((m, i) => (i === editingConfigIdx ? { ...m, config: parsed } : m))
+      )
+      setEditingConfigIdx(null)
+    }
+  }
+
+  const isEditingConfig = editingConfigIdx !== null
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <Card className="w-full max-w-lg max-h-[80vh] flex flex-col">
         <CardContent className="p-6 flex flex-col gap-4 overflow-hidden">
           <h2 className="text-lg font-semibold">{title}</h2>
 
-          <div className="flex-1 overflow-auto space-y-2">
-            {middlewares.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                No middlewares. Add one below.
-              </p>
-            ) : (
-              middlewares.map((mw, i) => {
-                const plugin = pluginMap.get(mw.name.split('@')[0])
-                return (
+          {isEditingConfig ? (
+            /* Inline config editor */
+            <div className="flex-1 overflow-auto space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Configure {middlewares[editingConfigIdx]?.name}
+                </label>
+                {hasSchema && (
+                  <Badge variant="outline" className="text-xs">
+                    Schema validation
+                  </Badge>
+                )}
+              </div>
+              <textarea
+                value={configJson}
+                onChange={(e) => handleConfigChange(e.target.value)}
+                className={cn(
+                  'w-full h-40 rounded-lg border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1',
+                  jsonParseError || validationErrors.length > 0
+                    ? 'border-destructive focus:ring-destructive'
+                    : 'border-input focus:ring-primary'
+                )}
+                placeholder="{}"
+              />
+              {jsonParseError && (
+                <div className="p-2 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-2 text-destructive text-sm">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {jsonParseError}
+                </div>
+              )}
+              {validationErrors.length > 0 && !jsonParseError && (
+                <div className="p-2 rounded-lg bg-destructive/10 border border-destructive/20">
+                  <div className="flex items-center gap-2 text-destructive text-sm mb-1">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    Validation errors ({validationErrors.length})
+                  </div>
+                  <ul className="space-y-0.5">
+                    {validationErrors.map((err, i) => (
+                      <li key={i} className="text-xs text-destructive/80">
+                        <code className="bg-destructive/10 px-1 rounded">{err.path}</code>{' '}
+                        {err.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditingConfigIdx(null)}
+                >
+                  Back
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleSaveConfig}
+                  disabled={validationErrors.length > 0}
+                >
+                  Apply
+                </Button>
+              </div>
+            </div>
+          ) : (
+            /* Middleware list */
+            <div className="flex-1 overflow-auto space-y-2">
+              {middlewares.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">
+                  No middlewares. Add one below.
+                </p>
+              ) : (
+                middlewares.map((mw, i) => (
                   <div
                     key={i}
                     className="flex items-center gap-2 p-3 rounded-lg border border-border"
@@ -619,19 +706,7 @@ function EditMiddlewaresDialog({
                       variant="ghost"
                       size="sm"
                       className="h-7 px-2"
-                      onClick={() =>
-                        onEditConfig(
-                          mw,
-                          plugin?.config_schema ?? null,
-                          (config) => {
-                            setMiddlewares((prev) =>
-                              prev.map((m, idx) =>
-                                idx === i ? { ...m, config } : m
-                              )
-                            )
-                          }
-                        )
-                      }
+                      onClick={() => handleOpenConfig(i)}
                     >
                       <Settings2 className="h-3.5 w-3.5" />
                     </Button>
@@ -644,43 +719,47 @@ function EditMiddlewaresDialog({
                       <X className="h-3.5 w-3.5" />
                     </Button>
                   </div>
-                )
-              })
-            )}
+                ))
+              )}
 
-            {showPicker ? (
-              <PluginPicker
-                plugins={availablePlugins}
-                onSelect={handleAdd}
-                onCancel={() => setShowPicker(false)}
-              />
-            ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={() => setShowPicker(true)}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Middleware
-              </Button>
-            )}
-          </div>
-
-          {error && (
-            <p className="text-sm text-destructive">
-              {error instanceof Error ? error.message : 'Failed to save'}
-            </p>
+              {showPicker ? (
+                <PluginPicker
+                  plugins={availablePlugins}
+                  onSelect={handleAdd}
+                  onCancel={() => setShowPicker(false)}
+                />
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setShowPicker(true)}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Middleware
+                </Button>
+              )}
+            </div>
           )}
 
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button onClick={() => onSave(middlewares)} disabled={isPending}>
-              {isPending ? 'Saving...' : 'Save'}
-            </Button>
-          </div>
+          {!isEditingConfig && (
+            <>
+              {error && (
+                <p className="text-sm text-destructive">
+                  {error instanceof Error ? error.message : 'Failed to save'}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button onClick={() => onSave(middlewares)} disabled={isPending}>
+                  {isPending ? 'Saving...' : 'Save'}
+                </Button>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -1049,121 +1128,6 @@ function EditOperationDialog({
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-// ============================================================================
-// Config Editor Dialog (standalone, used from global middlewares editing)
-// ============================================================================
-
-function ConfigEditorDialog({
-  label,
-  initialJson,
-  schema,
-  onSave,
-  onClose,
-}: {
-  label: string
-  initialJson: string
-  schema: Record<string, unknown> | null
-  onSave: (config: Record<string, unknown>) => void
-  onClose: () => void
-}) {
-  const [configJson, setConfigJson] = useState(initialJson)
-  const [jsonParseError, setJsonParseError] = useState<string | null>(null)
-  const [validationErrors, setValidationErrors] = useState<{ path: string; message: string }[]>([])
-  const { validate, hasSchema } = useJsonSchema(schema)
-
-  const handleChange = (value: string) => {
-    setConfigJson(value)
-    setJsonParseError(null)
-    setValidationErrors([])
-    try {
-      const parsed = JSON.parse(value)
-      const result = validate(parsed)
-      setValidationErrors(result.errors)
-    } catch {
-      // parse error shown on save only
-    }
-  }
-
-  const handleSave = () => {
-    let parsed: Record<string, unknown>
-    try {
-      parsed = JSON.parse(configJson)
-      setJsonParseError(null)
-    } catch {
-      setJsonParseError('Invalid JSON syntax')
-      return
-    }
-
-    const result = validate(parsed)
-    setValidationErrors(result.errors)
-    if (!result.valid) return
-
-    onSave(parsed)
-    onClose()
-  }
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
-      <Card className="w-full max-w-lg">
-        <CardContent className="p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Configure {label}</h2>
-            {hasSchema && (
-              <Badge variant="outline" className="text-xs">
-                Schema validation
-              </Badge>
-            )}
-          </div>
-
-          <textarea
-            value={configJson}
-            onChange={(e) => handleChange(e.target.value)}
-            className={cn(
-              'w-full h-48 rounded-lg border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1',
-              jsonParseError || validationErrors.length > 0
-                ? 'border-destructive focus:ring-destructive'
-                : 'border-input focus:ring-primary'
-            )}
-            placeholder="{}"
-          />
-
-          {jsonParseError && (
-            <div className="p-2 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-2 text-destructive text-sm">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {jsonParseError}
-            </div>
-          )}
-          {validationErrors.length > 0 && !jsonParseError && (
-            <div className="p-2 rounded-lg bg-destructive/10 border border-destructive/20">
-              <div className="flex items-center gap-2 text-destructive text-sm mb-1">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                Validation errors ({validationErrors.length})
-              </div>
-              <ul className="space-y-0.5">
-                {validationErrors.map((err, i) => (
-                  <li key={i} className="text-xs text-destructive/80">
-                    <code className="bg-destructive/10 px-1 rounded">{err.path}</code>{' '}
-                    {err.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button onClick={handleSave} disabled={validationErrors.length > 0}>
-              Apply
-            </Button>
-          </div>
         </CardContent>
       </Card>
     </div>
