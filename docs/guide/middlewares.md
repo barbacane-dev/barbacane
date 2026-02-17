@@ -1014,6 +1014,155 @@ Optional fields (`correlation_id`, `headers`, `body_size`, `query`) are omitted 
 
 ---
 
+## Request Transformation
+
+### request-transformer
+
+Declaratively modifies requests before they reach the dispatcher. Supports header, query parameter, path, and JSON body transformations with variable interpolation.
+
+```yaml
+x-barbacane-middlewares:
+  - name: request-transformer
+    config:
+      headers:
+        add:
+          X-Gateway: "barbacane"
+          X-Client-IP: "$client_ip"
+        set:
+          X-Request-Source: "external"
+        remove:
+          - Authorization
+          - X-Internal-Token
+        rename:
+          X-Old-Name: X-New-Name
+      querystring:
+        add:
+          gateway: "barbacane"
+          userId: "$path.userId"
+        remove:
+          - internal_token
+        rename:
+          oldParam: newParam
+      path:
+        strip_prefix: "/api/v1"
+        add_prefix: "/internal"
+        replace:
+          pattern: "/users/(\\w+)/orders"
+          replacement: "/v2/orders/$1"
+      body:
+        add:
+          /metadata/gateway: "barbacane"
+          /userId: "$path.userId"
+        remove:
+          - /password
+          - /internal_flags
+        rename:
+          /userName: /user_name
+```
+
+#### Configuration
+
+##### headers
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `add` | object | `{}` | Add or overwrite headers. Supports variable interpolation |
+| `set` | object | `{}` | Add headers only if not already present. Supports variable interpolation |
+| `remove` | array | `[]` | Remove headers by name (case-insensitive) |
+| `rename` | object | `{}` | Rename headers (old-name to new-name) |
+
+##### querystring
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `add` | object | `{}` | Add or overwrite query parameters. Supports variable interpolation |
+| `remove` | array | `[]` | Remove query parameters by name |
+| `rename` | object | `{}` | Rename query parameters (old-name to new-name) |
+
+##### path
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `strip_prefix` | string | - | Remove prefix from path (e.g., `/api/v2`) |
+| `add_prefix` | string | - | Add prefix to path (e.g., `/internal`) |
+| `replace.pattern` | string | - | Regex pattern to match in path |
+| `replace.replacement` | string | - | Replacement string (supports regex capture groups) |
+
+Path operations are applied in order: strip prefix, add prefix, regex replace.
+
+##### body
+
+JSON body transformations use [JSON Pointer (RFC 6901)](https://tools.ietf.org/html/rfc6901) paths.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `add` | object | `{}` | Add or overwrite JSON fields. Supports variable interpolation |
+| `remove` | array | `[]` | Remove JSON fields by JSON Pointer path |
+| `rename` | object | `{}` | Rename JSON fields (old-pointer to new-pointer) |
+
+Body transformations only apply to requests with `application/json` content type. Non-JSON bodies pass through unchanged.
+
+#### Variable Interpolation
+
+Values in `add`, `set`, and body `add` support variable templates:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `$client_ip` | Client IP address | `192.168.1.1` |
+| `$header.<name>` | Request header value (case-insensitive) | `$header.host` |
+| `$query.<name>` | Query parameter value | `$query.page` |
+| `$path.<name>` | Path parameter value | `$path.userId` |
+| `context:<key>` | Request context value (set by other middlewares) | `context:auth.sub` |
+
+Variables always resolve against the **original** incoming request, regardless of transformations applied by earlier sections. This means a query parameter removed in `querystring.remove` is still available via `$query.<name>` in `body.add`.
+
+If a variable cannot be resolved, it is replaced with an empty string.
+
+#### Transformation Order
+
+Transformations are applied in this order:
+
+1. **Path** — strip prefix, add prefix, regex replace
+2. **Headers** — add, set, remove, rename
+3. **Query parameters** — add, remove, rename
+4. **Body** — add, remove, rename
+
+#### Use Cases
+
+**Strip API version prefix:**
+```yaml
+- name: request-transformer
+  config:
+    path:
+      strip_prefix: "/api/v2"
+```
+
+**Move query parameter to body (ADR-0020 showcase):**
+```yaml
+- name: request-transformer
+  config:
+    querystring:
+      remove:
+        - userId
+    body:
+      add:
+        /userId: "$query.userId"
+```
+
+**Add gateway metadata to every request:**
+```yaml
+# Global middleware
+x-barbacane-middlewares:
+  - name: request-transformer
+    config:
+      headers:
+        add:
+          X-Gateway: "barbacane"
+          X-Client-IP: "$client_ip"
+```
+
+---
+
 ## Planned Middlewares
 
 The following middlewares are planned for future milestones:
@@ -1098,15 +1247,16 @@ Put middlewares in logical order:
 
 ```yaml
 x-barbacane-middlewares:
-  - name: correlation-id    # 1. Add tracing ID first
-  - name: http-log          # 2. Log all requests (captures full lifecycle)
-  - name: cors              # 3. Handle CORS early
-  - name: ip-restriction    # 4. Block bad IPs immediately
-  - name: request-size-limit # 5. Reject oversized requests
-  - name: rate-limit        # 6. Rate limit before auth (cheaper)
-  - name: oidc-auth         # 7. Authenticate (OIDC/JWT)
-  - name: basic-auth        # 8. Authenticate (fallback)
-  - name: acl               # 9. Authorize (after auth sets consumer headers)
+  - name: correlation-id       # 1. Add tracing ID first
+  - name: http-log             # 2. Log all requests (captures full lifecycle)
+  - name: cors                 # 3. Handle CORS early
+  - name: ip-restriction       # 4. Block bad IPs immediately
+  - name: request-size-limit   # 5. Reject oversized requests
+  - name: rate-limit           # 6. Rate limit before auth (cheaper)
+  - name: oidc-auth            # 7. Authenticate (OIDC/JWT)
+  - name: basic-auth           # 8. Authenticate (fallback)
+  - name: acl                  # 9. Authorize (after auth sets consumer headers)
+  - name: request-transformer  # 10. Transform request before dispatch
 ```
 
 ### Fail Fast

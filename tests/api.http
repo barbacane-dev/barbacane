@@ -909,3 +909,127 @@ Content-Type: application/json
 
 ### Combined health check
 GET {{baseUrl}}/__barbacane/health
+
+### ================================================================
+### Request Transformer (request-transformer.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/request-transformer.yaml -m tests/fixtures/barbacane.yaml -o /tmp/request-transformer.bca
+###   ./target/debug/barbacane serve --artifact /tmp/request-transformer.bca --dev
+
+### ================================
+### Header Transformations
+### ================================
+
+### Add/remove/rename headers (200)
+# X-Gateway and X-Custom headers are added to request
+# Authorization header is removed before upstream
+# X-Old-Name header is renamed to X-New-Name
+POST {{baseUrl}}/headers
+Content-Type: application/json
+Authorization: Bearer secret-token
+X-Old-Name: rename-me
+
+{}
+
+###
+
+### ================================
+### Query Parameter Transformations
+### ================================
+
+### Add/remove/rename query params (200)
+# gateway=barbacane and version=1.0 are added
+# internal_token is removed before upstream
+# oldParam is renamed to newParam
+GET {{baseUrl}}/query?oldParam=value&internal_token=secret
+
+###
+
+### ================================
+### Path Transformations
+### ================================
+
+### Strip path prefix (200)
+# Strips /path prefix, upstream sees /strip
+GET {{baseUrl}}/path/strip
+
+###
+
+### Add path prefix (200)
+# Adds /v1 prefix, upstream sees /v1/api/add
+GET {{baseUrl}}/api/add
+
+###
+
+### Regex path replace (200)
+# /replace/test → /new/test via regex capture group
+GET {{baseUrl}}/replace/test
+
+###
+
+### ================================
+### JSON Body Transformations
+### ================================
+
+### Add/remove/rename body fields (200)
+# Adds /gateway and /metadata/version fields
+# Removes /password and /internal_flags
+# Renames /userName → /user_name, /userId → /user_id
+POST {{baseUrl}}/body
+Content-Type: application/json
+
+{"userName":"alice","userId":"42","password":"secret","internal_flags":true}
+
+###
+
+### ================================
+### Variable Interpolation
+### ================================
+
+### Interpolate request variables into headers, query, and body (200)
+# $client_ip, $path.userId, $header.host, $query.page
+POST {{baseUrl}}/users/123/interpolation?page=5
+Content-Type: application/json
+
+{"existing":"data"}
+
+###
+
+### ================================
+### Query-to-Body (ADR-0020 showcase)
+### ================================
+
+### Move userId from query to body field (200)
+# Query userId is removed, body /userId is set from original query value
+# Body /metadata/gateway is set to static "barbacane"
+POST {{baseUrl}}/query-to-body?userId=42
+Content-Type: application/json
+
+{}
+
+###
+
+### ================================
+### Combined Transformations
+### ================================
+
+### All transformation types together (200)
+# Path: add /v1 prefix
+# Headers: add X-Gateway, remove Authorization
+# Query: add version=1.0, remove internal
+# Body: add /gateway, remove /password
+POST {{baseUrl}}/combined?internal=secret
+Content-Type: application/json
+Authorization: Bearer token
+
+{"password":"secret","data":"keep"}
+
+###
+
+### ================================
+### Passthrough (baseline)
+### ================================
+
+### No request-transformer middleware (200)
+GET {{baseUrl}}/passthrough

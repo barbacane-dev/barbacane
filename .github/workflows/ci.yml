@@ -275,17 +275,69 @@ jobs:
             ${{ runner.os }}-criterion-main
 
       - name: Run benchmarks
-        # Only run benchmarks on packages that have them defined
-        # Criterion 0.5+ auto-detects CI and disables plotting
-        run: cargo bench -p barbacane -p barbacane-compiler -p barbacane-wasm
-
-      - name: Check for regressions
         run: |
-          # Parse criterion output for significant regressions (>10%)
-          # Criterion reports "Performance has regressed" for significant changes
-          if cargo bench -p barbacane -p barbacane-compiler -p barbacane-wasm 2>&1 | grep -q "Performance has regressed"; then
-            echo "::warning::Performance regression detected in benchmarks"
-            # For now, warn but don't fail - can be made strict later
-            # exit 1
+          cargo bench -p barbacane -p barbacane-compiler -p barbacane-wasm 2>&1 | tee /tmp/bench-output.txt
+
+      - name: Parse benchmark results
+        run: |
+          # Extract benchmark results into a GitHub Step Summary table.
+          # Criterion output format (name and stats on separate lines):
+          #   bench_group/bench_name/size
+          #                           time:   [low est high]
+          #                           change: [low% mid% high%] (p = ...)
+          #                           Performance has regressed/improved.
+
+          echo "## Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          regressed=$(grep -c "Performance has regressed" /tmp/bench-output.txt || true)
+          improved=$(grep -c "Performance has improved" /tmp/bench-output.txt || true)
+          no_change=$(grep -c "No change in performance" /tmp/bench-output.txt || true)
+
+          if [ "$regressed" -gt 0 ]; then
+            echo "> [!WARNING]" >> "$GITHUB_STEP_SUMMARY"
+            echo "> **$regressed** benchmark(s) regressed, **$improved** improved, **$no_change** unchanged" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "> **$improved** improved, **$no_change** unchanged, no regressions" >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "Benchmark check passed"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "| Benchmark | Time (est) | Change | Verdict |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-----------|--------|---------|" >> "$GITHUB_STEP_SUMMARY"
+
+          # Parse criterion output into table rows.
+          # Criterion uses two formats depending on benchmark name length:
+          #   Multi-line:  bench_name\n                        time:   [low est high]
+          #   Single-line: bench_name  time:   [low est high]
+          # Both followed by change: and verdict lines.
+          perl -ne '
+              if (/^[A-Za-z_]/ && /\// && !/time:/ && !/^(?:Benchmarking|Found |Gnuplot)/) {
+                  chomp; $name = $_; $name =~ s/^\s+|\s+$//g;
+              }
+              if (/^[A-Za-z_]/ && /\// && /time:/ && !/^Benchmarking/) {
+                  chomp; $name = $_; $name =~ s/\s*time:.*//; $name =~ s/^\s+|\s+$//g;
+              }
+              if (/time:/ && /\[/) {
+                  /\[([^\]]+)\]/; @t = split(/\s+/, $1);
+                  $time_est = "$t[2] $t[3]";
+              }
+              if (/change:/ && /\[/) {
+                  /\[([^\]]+)\]/; @p = split(/\s+/, $1);
+                  $change = $p[1];
+              }
+              if (/Performance has regressed/) {
+                  printf "| \x60%s\x60 | %s | %s | :red_circle: regressed |\n", $name, $time_est, $change;
+              }
+              if (/Performance has improved/) {
+                  printf "| \x60%s\x60 | %s | %s | :green_circle: improved |\n", $name, $time_est, $change;
+              }
+              if (/No change in performance/) {
+                  printf "| \x60%s\x60 | %s | %s | :white_circle: no change |\n", $name, $time_est, $change;
+              }
+          ' /tmp/bench-output.txt >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$regressed" -gt 0 ]; then
+            echo "::warning::$regressed benchmark(s) regressed — see job summary for details"
+          fi

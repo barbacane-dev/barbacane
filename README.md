@@ -9,9 +9,9 @@
 <p align="center">
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/unit%20tests-288%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-444%20passing-brightgreen" alt="Plugin Tests">
-  <img src="https://img.shields.io/badge/integration%20tests-171%20passing-brightgreen" alt="Integration Tests">
+  <img src="https://img.shields.io/badge/unit%20tests-296%20passing-brightgreen" alt="Unit Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-495%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/integration%20tests-181%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
@@ -93,6 +93,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `correlation-id` | Middleware | Request correlation ID propagation |
 | `request-size-limit` | Middleware | Request body size limits |
 | `ip-restriction` | Middleware | IP allowlist/blocklist |
+| `request-transformer` | Middleware | Modify headers, query params, path, and body before upstream |
 | `observability` | Middleware | SLO monitoring and detailed logging |
 | `http-log` | Middleware | Send request/response logs to HTTP endpoint |
 

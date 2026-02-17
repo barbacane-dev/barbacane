@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Request Transformer
+- `request-transformer` middleware plugin — declarative request transformations before upstream dispatch
+  - Header transformations: add, set (if absent), remove, rename
+  - Query parameter transformations: add, remove, rename
+  - Path rewriting: strip prefix, add prefix, regex replace with capture groups
+  - JSON body transformations using JSON Pointer (RFC 6901): add, remove, rename fields
+  - Variable interpolation: `$client_ip`, `$header.*`, `$query.*`, `$path.*`, `context:*`
+  - Snapshot-based interpolation: variables resolve against the original request, unaffected by prior transforms
+  - Lazy-compiled regex for path replace (compiled once, reused across requests)
+
 ## [0.1.2] - 2026-02-14
 
 ### Added

@@ -1,0 +1,10 @@
+[plugin]
+name = "request-transformer"
+version = "0.1.0"
+type = "middleware"
+description = "Transform HTTP requests: headers, query parameters, path, and body"
+wasm = "request-transformer.wasm"
+
+[capabilities]
+log = true
+context_get = true

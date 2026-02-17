@@ -13,6 +13,7 @@ exclude = [
     "plugins/mock",
     "plugins/lambda",
     "plugins/observability",
+    "plugins/request-transformer",
 ]
 resolver = "2"
 
