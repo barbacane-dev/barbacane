@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:ip-restriction:config",
+  "title": "IP Restriction Middleware Configuration",
+  "type": "object",
+  "properties": {
+    "allow": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Allowlist of IPs or CIDR ranges. If non-empty, only these IPs are permitted."
+    },
+    "deny": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Denylist of IPs or CIDR ranges. These IPs are always blocked (takes precedence over allow)."
+    },
+    "message": {
+      "type": "string",
+      "default": "Access denied",
+      "description": "Custom error message returned to denied requests"
+    },
+    "status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599,
+      "default": 403,
+      "description": "HTTP status code returned to denied requests"
+    }
+  },
+  "additionalProperties": false
+}

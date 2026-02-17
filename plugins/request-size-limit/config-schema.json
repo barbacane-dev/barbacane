@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:request-size-limit:config",
+  "title": "Request Size Limit Middleware Configuration",
+  "type": "object",
+  "properties": {
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1048576,
+      "description": "Maximum allowed request body size in bytes (default: 1 MiB)"
+    },
+    "check_content_length": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to check Content-Length header for early rejection"
+    }
+  },
+  "additionalProperties": false
+}

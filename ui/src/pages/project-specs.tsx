@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileCode, Upload, Trash2, RefreshCw, Eye } from 'lucide-react'
+import { FileCode, Upload, Trash2, RefreshCw, Eye, Download } from 'lucide-react'
 import {
   listProjectSpecs,
   uploadSpecToProject,
@@ -29,6 +29,7 @@ export function ProjectSpecsPage() {
     mutationFn: (file: File) => uploadSpecToProject(projectId!, file),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-specs', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['project-operations', projectId] })
     },
   })
 
@@ -36,6 +37,7 @@ export function ProjectSpecsPage() {
     mutationFn: deleteSpec,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-specs', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['project-operations', projectId] })
     },
   })
 
@@ -54,6 +56,25 @@ export function ProjectSpecsPage() {
       setViewingSpec(spec)
     } catch (err) {
       console.error('Failed to load spec content:', err)
+    }
+  }
+
+  const handleDownloadSpec = async (spec: Spec) => {
+    try {
+      const content = await downloadSpecContent(spec.id)
+      const blob = new Blob([content], { type: 'application/yaml' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = spec.name.endsWith('.yaml') || spec.name.endsWith('.yml') || spec.name.endsWith('.json')
+        ? spec.name
+        : `${spec.name}.yaml`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Failed to download spec:', err)
     }
   }
 
@@ -202,6 +223,14 @@ export function ProjectSpecsPage() {
                     >
                       <Eye className="h-4 w-4 mr-1" />
                       View
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleDownloadSpec(spec)}
+                    >
+                      <Download className="h-4 w-4 mr-1" />
+                      Download
                     </Button>
                     <Button
                       variant="ghost"
