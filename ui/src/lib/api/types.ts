@@ -216,3 +216,47 @@ export interface DeployResponse {
   artifact_id: string
   data_planes_notified: number
 }
+
+// Operations types (plugin bindings extracted from specs)
+export interface ProjectOperationsResponse {
+  specs: SpecOperations[]
+}
+
+export interface SpecOperations {
+  spec_id: string
+  spec_name: string
+  spec_type: string
+  global_middlewares: MiddlewareBinding[]
+  operations: OperationSummary[]
+}
+
+export interface MiddlewareBinding {
+  name: string
+  config?: Record<string, unknown>
+}
+
+export interface DispatchBinding {
+  name: string
+  config?: Record<string, unknown>
+}
+
+export interface OperationSummary {
+  path: string
+  method: string
+  operation_id?: string
+  dispatch?: DispatchBinding
+  middlewares: MiddlewareBinding[] | null
+  deprecated: boolean
+}
+
+export interface PatchSpecOperationsRequest {
+  global_middlewares?: MiddlewareBinding[]
+  operations?: OperationPatch[]
+}
+
+export interface OperationPatch {
+  path: string
+  method: string
+  dispatch?: DispatchBinding | null
+  middlewares?: MiddlewareBinding[] | null
+}

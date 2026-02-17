@@ -444,6 +444,7 @@ dependencies = [
  "scalar_api_reference",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "sqlx",
  "tempfile",

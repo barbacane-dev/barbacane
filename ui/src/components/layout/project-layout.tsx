@@ -1,12 +1,13 @@
 import { NavLink, Outlet, useParams, useOutletContext } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { FileCode, Puzzle, Package, Settings, ArrowLeft, RefreshCw, Rocket } from 'lucide-react'
+import { FileCode, Puzzle, Package, Settings, ArrowLeft, RefreshCw, Rocket, GitBranch } from 'lucide-react'
 import { getProject } from '@/lib/api'
 import type { Project } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const projectTabs = [
   { name: 'Specs', href: 'specs', icon: FileCode },
+  { name: 'Operations', href: 'operations', icon: GitBranch },
   { name: 'Plugins', href: 'plugins', icon: Puzzle },
   { name: 'Builds', href: 'builds', icon: Package },
   { name: 'Deploy', href: 'deploy', icon: Rocket },

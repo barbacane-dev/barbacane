@@ -20,6 +20,7 @@ import {
   ProjectSpecsPage,
   ProjectPluginsPage,
   ProjectBuildsPage,
+  ProjectOperationsPage,
   ProjectDeployPage,
   ProjectSettingsPage,
 } from '@/pages'
@@ -55,6 +56,7 @@ const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="specs" replace /> },
           { path: 'specs', element: <ProjectSpecsPage /> },
+          { path: 'operations', element: <ProjectOperationsPage /> },
           { path: 'plugins', element: <ProjectPluginsPage /> },
           { path: 'builds', element: <ProjectBuildsPage /> },
           { path: 'deploy', element: <ProjectDeployPage /> },
