@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Puzzle, Plus, Trash2, RefreshCw, Settings2, AlertCircle } from 'lucide-react'
+import { Puzzle, Plus, Trash2, RefreshCw, Settings2, AlertCircle, Shield, Zap } from 'lucide-react'
 import {
   listProjectPlugins,
   listPlugins,
@@ -191,6 +191,12 @@ export function ProjectPluginsPage() {
 
   const configs = configsQuery.data ?? []
   const availablePlugins = availablePluginsQuery.data ?? []
+
+  // Map plugin name → Plugin for quick lookup
+  const pluginMap = useMemo(
+    () => new Map((availablePluginsQuery.data ?? []).map((p) => [p.name, p])),
+    [availablePluginsQuery.data]
+  )
 
   // Filter out plugins already added to the project
   const addedPluginNames = new Set(configs.map((c) => c.plugin_name))
@@ -485,73 +491,106 @@ export function ProjectPluginsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {configs.map((config) => (
-            <Card key={config.id}>
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <Puzzle className="h-10 w-10 text-secondary" />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-medium">{config.plugin_name}</h3>
-                        <Badge variant="outline">v{config.plugin_version}</Badge>
-                        {config.enabled ? (
-                          <Badge className="bg-green-500/10 text-green-500">
-                            Enabled
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary">Disabled</Badge>
+          {configs.map((config) => {
+            const pluginInfo = pluginMap.get(config.plugin_name)
+            return (
+              <Card key={config.id}>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      {pluginInfo?.plugin_type === 'dispatcher' ? (
+                        <Zap className="h-10 w-10 text-secondary shrink-0" />
+                      ) : (
+                        <Shield className="h-10 w-10 text-secondary shrink-0" />
+                      )}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-medium">{config.plugin_name}</h3>
+                          <Badge variant="outline">v{config.plugin_version}</Badge>
+                          {pluginInfo && (
+                            <Badge variant="outline" className="text-xs">
+                              {pluginInfo.plugin_type}
+                            </Badge>
+                          )}
+                          {config.enabled ? (
+                            <Badge className="bg-green-500/10 text-green-500">
+                              Enabled
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary">Disabled</Badge>
+                          )}
+                        </div>
+                        {pluginInfo?.description && (
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {pluginInfo.description}
+                          </p>
                         )}
+                        <div className="mt-1 flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-muted-foreground">
+                            Priority: {config.priority}
+                          </span>
+                          {pluginInfo?.capabilities && pluginInfo.capabilities.length > 0 && (
+                            <>
+                              <span className="text-muted-foreground">·</span>
+                              {pluginInfo.capabilities.map((cap) => (
+                                <Badge
+                                  key={cap}
+                                  variant="secondary"
+                                  className="text-[10px] px-1.5 py-0"
+                                >
+                                  {cap}
+                                </Badge>
+                              ))}
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        Priority: {config.priority}
-                      </p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setEditingConfig(config)
+                          setConfigJson(JSON.stringify(config.config, null, 2))
+                          setValidationErrors([])
+                          setJsonParseError(null)
+                        }}
+                      >
+                        <Settings2 className="h-4 w-4 mr-1" />
+                        Configure
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          updateMutation.mutate({
+                            pluginName: config.plugin_name,
+                            enabled: !config.enabled,
+                          })
+                        }
+                        disabled={updateMutation.isPending}
+                      >
+                        {config.enabled ? 'Disable' : 'Enable'}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          if (confirm(`Remove "${config.plugin_name}" from project?`)) {
+                            removeMutation.mutate(config.plugin_name)
+                          }
+                        }}
+                        disabled={removeMutation.isPending}
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setEditingConfig(config)
-                        setConfigJson(JSON.stringify(config.config, null, 2))
-                        setValidationErrors([])
-                        setJsonParseError(null)
-                      }}
-                    >
-                      <Settings2 className="h-4 w-4 mr-1" />
-                      Configure
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        updateMutation.mutate({
-                          pluginName: config.plugin_name,
-                          enabled: !config.enabled,
-                        })
-                      }
-                      disabled={updateMutation.isPending}
-                    >
-                      {config.enabled ? 'Disable' : 'Enable'}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        if (confirm(`Remove "${config.plugin_name}" from project?`)) {
-                          removeMutation.mutate(config.plugin_name)
-                        }
-                      }}
-                      disabled={removeMutation.isPending}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
       )}
     </div>
