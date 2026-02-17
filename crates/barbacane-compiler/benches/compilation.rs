@@ -11,7 +11,7 @@ use std::path::Path;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use barbacane_compiler::{compile_with_options, CompileOptions};
+use barbacane_compiler::{compile, CompileOptions};
 
 /// Generate an OpenAPI 3.1 spec YAML with N operations.
 ///
@@ -94,8 +94,7 @@ fn bench_spec_compilation(c: &mut Criterion) {
 
                 b.iter(|| {
                     let spec_ref: &Path = &spec_path;
-                    let result =
-                        compile_with_options(&[spec_ref], black_box(&output_path), &options);
+                    let result = compile(&[spec_ref], &[], black_box(&output_path), &options);
                     black_box(result.unwrap());
                 });
             },

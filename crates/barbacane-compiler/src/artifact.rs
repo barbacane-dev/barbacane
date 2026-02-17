@@ -148,24 +148,22 @@ pub struct CompiledOperation {
 
 /// Compile one or more spec files into a .bca artifact.
 ///
-/// Uses default options (plaintext http:// URLs are not allowed).
-pub fn compile(spec_paths: &[&Path], output: &Path) -> Result<CompileResult, CompileError> {
-    compile_with_options(spec_paths, output, &CompileOptions::default())
-}
-
-/// Compile one or more spec files into a .bca artifact with options.
+/// Bundles the provided plugins into the artifact. Pass `&[]` if the specs
+/// don't reference any plugins.
 ///
-/// Note: This function does NOT validate plugins against a manifest.
-/// Use `compile_with_manifest` for manifest-aware compilation.
-///
-/// Returns a `CompileResult` containing the manifest and any warnings.
-pub fn compile_with_options(
+/// This function does NOT validate that spec-referenced plugins are present
+/// in `plugins` — the caller is responsible for validation (see
+/// [`extract_plugin_names`] and [`ProjectManifest::validate_specs`]).
+/// For manifest-based compilation with built-in validation, use
+/// [`compile_with_manifest`].
+pub fn compile(
     spec_paths: &[&Path],
+    plugins: &[PluginBundle],
     output: &Path,
     options: &CompileOptions,
 ) -> Result<CompileResult, CompileError> {
     let specs = parse_specs(spec_paths)?;
-    compile_inner(&specs, &[], output, options)
+    compile_inner(&specs, plugins, output, options)
 }
 
 /// Compile specs with a project manifest into a .bca artifact.
@@ -330,16 +328,6 @@ pub struct PluginBundle {
     pub plugin_type: String,
     /// WASM binary content.
     pub wasm_bytes: Vec<u8>,
-}
-
-/// Compile specs with bundled plugins into a .bca artifact.
-pub fn compile_with_plugins(
-    spec_paths: &[&Path],
-    plugins: &[PluginBundle],
-    output: &Path,
-) -> Result<CompileResult, CompileError> {
-    let specs = parse_specs(spec_paths)?;
-    compile_inner(&specs, plugins, output, &CompileOptions::default())
 }
 
 /// Parse spec files into (ApiSpec, content, sha256) tuples.
@@ -1075,7 +1063,13 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path).unwrap();
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         assert_eq!(result.manifest.barbacane_artifact_version, ARTIFACT_VERSION);
         assert_eq!(result.manifest.routes_count, 1);
@@ -1103,7 +1097,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::MissingDispatch(_))));
     }
@@ -1138,7 +1137,12 @@ paths:
         let path2 = create_test_spec(temp.path(), "api2.yaml", spec2);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[path1.as_path(), path2.as_path()], &output_path);
+        let result = compile(
+            &[path1.as_path(), path2.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::RoutingConflict(_))));
     }
@@ -1161,7 +1165,13 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        compile(&[spec_path.as_path()], &output_path).unwrap();
+        compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         let loaded = load_manifest(&output_path).unwrap();
         assert_eq!(loaded.barbacane_artifact_version, ARTIFACT_VERSION);
@@ -1192,7 +1202,13 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        compile(&[spec_path.as_path()], &output_path).unwrap();
+        compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         let routes = load_routes(&output_path).unwrap();
         assert_eq!(routes.operations.len(), 2);
@@ -1219,12 +1235,18 @@ paths:
         let output_path = temp.path().join("artifact.bca");
 
         // Default options reject plaintext HTTP
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
         assert!(matches!(result, Err(CompileError::PlaintextUpstream(_))));
 
         // With allow_plaintext, it should succeed
-        let result = compile_with_options(
+        let result = compile(
             &[spec_path.as_path()],
+            &[],
             &output_path,
             &CompileOptions {
                 allow_plaintext: true,
@@ -1255,7 +1277,12 @@ paths:
         let output_path = temp.path().join("artifact.bca");
 
         // HTTPS should be allowed by default
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
         assert!(result.is_ok());
     }
 
@@ -1290,7 +1317,13 @@ paths:
             wasm_bytes: fake_wasm.clone(),
         }];
 
-        let result = compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
+        let result = compile(
+            &[spec_path.as_path()],
+            &plugins,
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         assert_eq!(result.manifest.plugins.len(), 1);
         assert_eq!(result.manifest.plugins[0].name, "test-plugin");
@@ -1349,7 +1382,13 @@ operations:
         let spec_path = create_test_spec(temp.path(), "events.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path).unwrap();
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         assert_eq!(result.manifest.barbacane_artifact_version, ARTIFACT_VERSION);
         assert_eq!(result.manifest.routes_count, 1);
@@ -1421,7 +1460,13 @@ operations:
         let spec_path = create_test_spec(temp.path(), "notifications.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path).unwrap();
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         assert_eq!(result.manifest.routes_count, 1);
 
@@ -1457,7 +1502,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::InvalidPathTemplate(_))));
     }
@@ -1480,7 +1530,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::InvalidPathTemplate(_))));
     }
@@ -1503,7 +1558,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::InvalidPathTemplate(_))));
     }
@@ -1532,7 +1592,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(
             result,
@@ -1561,7 +1626,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(
             result,
@@ -1590,7 +1660,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(
             result,
@@ -1628,7 +1703,12 @@ paths:
         let path2 = create_test_spec(temp.path(), "api2.yaml", spec2);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[path1.as_path(), path2.as_path()], &output_path);
+        let result = compile(
+            &[path1.as_path(), path2.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::AmbiguousRoute(_))));
     }
@@ -1658,7 +1738,12 @@ paths:
         let output_path = temp.path().join("artifact.bca");
 
         // This should succeed - different paths, same param name is fine
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
         assert!(result.is_ok());
     }
 
@@ -1697,7 +1782,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", &spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::SchemaTooDeep(_))));
     }
@@ -1740,7 +1830,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", &spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
 
         assert!(matches!(result, Err(CompileError::SchemaTooComplex(_))));
     }
@@ -1780,7 +1875,12 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        let result = compile(&[spec_path.as_path()], &output_path);
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        );
         assert!(result.is_ok());
     }
 
@@ -1842,7 +1942,13 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        compile(&[spec_path.as_path()], &output_path).unwrap();
+        compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         let routes = load_routes(&output_path).unwrap();
         assert_eq!(routes.operations.len(), 1);
@@ -1875,7 +1981,13 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        compile(&[spec_path.as_path()], &output_path).unwrap();
+        compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         let routes = load_routes(&output_path).unwrap();
         let op = &routes.operations[0];
@@ -1911,7 +2023,13 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        compile(&[spec_path.as_path()], &output_path).unwrap();
+        compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         let routes = load_routes(&output_path).unwrap();
         let op = &routes.operations[0];
@@ -1951,7 +2069,13 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        compile(&[spec_path.as_path()], &output_path).unwrap();
+        compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         let routes = load_routes(&output_path).unwrap();
         let op = &routes.operations[0];
@@ -1964,7 +2088,7 @@ paths:
     }
 
     #[test]
-    fn compile_with_plugins_inherits_global_middlewares() {
+    fn compile_inherits_global_middlewares() {
         let temp = TempDir::new().unwrap();
 
         let spec_content = r#"
@@ -1986,7 +2110,13 @@ paths:
         let output_path = temp.path().join("artifact.bca");
 
         let plugins = vec![];
-        let result = compile_with_plugins(&[spec_path.as_path()], &plugins, &output_path).unwrap();
+        let result = compile(
+            &[spec_path.as_path()],
+            &plugins,
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
 
         let routes = load_routes(&output_path).unwrap();
         let op = &routes.operations[0];

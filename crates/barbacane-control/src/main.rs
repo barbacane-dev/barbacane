@@ -9,7 +9,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use barbacane_compiler::{compile, parse_spec_file, ARTIFACT_VERSION, COMPILER_VERSION};
+use barbacane_compiler::{
+    compile, parse_spec_file, CompileOptions, ARTIFACT_VERSION, COMPILER_VERSION,
+};
 
 mod api;
 mod compiler;
@@ -130,7 +132,7 @@ fn main() -> ExitCode {
 
             let output_path = Path::new(&output);
 
-            match compile(&spec_paths, output_path) {
+            match compile(&spec_paths, &[], output_path, &CompileOptions::default()) {
                 Ok(result) => {
                     // Print warnings if any
                     for warning in &result.warnings {
