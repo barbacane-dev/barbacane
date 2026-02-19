@@ -1,0 +1,148 @@
+openapi: "3.1.0"
+info:
+  title: S3 Dispatcher Test API
+  version: "1.0.0"
+  description: |
+    Test spec for the s3 dispatcher.
+    Requires an S3-compatible endpoint at http://localhost:4566 (e.g. LocalStack or RustFS).
+
+    Start a local S3-compatible backend:
+      docker run -d -p 9000:9000 \
+        -e RUSTFS_ACCESS_KEY=test -e RUSTFS_SECRET_KEY=testtest \
+        rustfs/rustfs:latest
+
+    Pre-create buckets:
+      aws --endpoint-url http://localhost:9000 --no-verify-ssl s3 mb s3://my-bucket
+      aws --endpoint-url http://localhost:9000 --no-verify-ssl s3 mb s3://assets
+
+paths:
+  # ── Multi-bucket proxy ─────────────────────────────────────────────────────
+  # Bucket and key are both extracted from path parameters.
+  # {key+} wildcard captures multi-segment keys (e.g. folder/subfolder/file.txt).
+
+  /s3/{bucket}/{key+}:
+    get:
+      operationId: getObject
+      summary: Download an S3 object
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: test
+          secret_access_key: testtest
+          endpoint: http://localhost:9000
+          force_path_style: true
+      responses:
+        "200":
+          description: Object content
+        "403":
+          description: Access denied
+        "404":
+          description: Object not found
+
+    put:
+      operationId: putObject
+      summary: Upload an S3 object
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: test
+          secret_access_key: testtest
+          endpoint: http://localhost:9000
+          force_path_style: true
+      responses:
+        "200":
+          description: Object uploaded
+        "403":
+          description: Access denied
+
+    delete:
+      operationId: deleteObject
+      summary: Delete an S3 object
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: test
+          secret_access_key: testtest
+          endpoint: http://localhost:9000
+          force_path_style: true
+      responses:
+        "204":
+          description: Object deleted
+        "404":
+          description: Object not found
+
+  # ── Single-bucket variant ──────────────────────────────────────────────────
+  # Bucket is hard-coded in config; only the key comes from the path.
+  # Ideal for CDN-style asset routes (/assets/{key+}).
+
+  /assets/{key+}:
+    get:
+      operationId: getAsset
+      summary: Download an asset from the hard-coded assets bucket
+      parameters:
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: test
+          secret_access_key: testtest
+          endpoint: http://localhost:9000
+          force_path_style: true
+          bucket: assets
+      responses:
+        "200":
+          description: Asset content
+        "404":
+          description: Asset not found

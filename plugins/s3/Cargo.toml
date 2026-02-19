@@ -1,0 +1,22 @@
+[package]
+name = "barbacane-s3-dispatcher"
+version = "0.1.0"
+edition = "2021"
+description = "AWS S3 / S3-compatible object storage dispatcher plugin for Barbacane API gateway"
+license = "MIT"
+
+# Mark as standalone crate (not part of any workspace)
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+barbacane-plugin-sdk = { path = "../../crates/barbacane-plugin-sdk" }
+barbacane-sigv4 = { path = "../sigv4" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true

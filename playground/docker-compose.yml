@@ -13,6 +13,7 @@
 #   - NATS: nats://localhost:4222
 #   - Mock OAuth: http://localhost:9099
 #   - WireMock: http://localhost:8081/__admin
+#   - RustFS console: http://localhost:9001 (playground/playground-secret)
 
 services:
   # ==========================================================================
@@ -22,7 +23,7 @@ services:
     build:
       context: ..
       dockerfile: playground/Dockerfile.compile
-    command: ["compile", "--spec", "/specs/train-travel-api.yaml", "--spec", "/specs/train-events.yaml", "--manifest", "/manifest/barbacane.yaml", "--output", "/output/api.bca", "--allow-plaintext"]
+    command: ["compile", "--spec", "/specs/train-travel-api.yaml", "--spec", "/specs/train-events.yaml", "--spec", "/specs/s3-proxy.yaml", "--manifest", "/manifest/barbacane.yaml", "--output", "/output/api.bca", "--allow-plaintext"]
     volumes:
       - ./specs:/specs:ro
       - ./barbacane.yaml:/manifest/barbacane.yaml:ro
@@ -57,6 +58,8 @@ services:
         condition: service_healthy
       mock-oauth:
         condition: service_started
+      rustfs:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/__barbacane/health"]
       interval: 5s
@@ -268,6 +271,47 @@ services:
       timeout: 5s
       retries: 5
 
+  # ==========================================================================
+  # Object Storage (RustFS — S3-compatible, written in Rust)
+  # ==========================================================================
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    environment:
+      RUSTFS_ACCESS_KEY: playground
+      RUSTFS_SECRET_KEY: playground-secret
+      RUSTFS_VOLUMES: /data
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ==========================================================================
+  # RustFS Init (creates default buckets on first run)
+  # ==========================================================================
+  rustfs-init:
+    image: amazon/aws-cli:latest
+    environment:
+      AWS_ACCESS_KEY_ID: playground
+      AWS_SECRET_ACCESS_KEY: playground-secret
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        aws --endpoint-url http://rustfs:9000 s3 mb s3://playground --region us-east-1 2>/dev/null || true
+        aws --endpoint-url http://rustfs:9000 s3 mb s3://assets --region us-east-1 2>/dev/null || true
+        echo "Welcome to Barbacane Playground" | \
+          aws --endpoint-url http://rustfs:9000 s3 cp - s3://assets/welcome.txt 2>/dev/null || true
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   artifact_data:
   postgres_data:
@@ -275,3 +319,4 @@ volumes:
   loki_data:
   tempo_data:
   grafana_data:
+  rustfs_data:

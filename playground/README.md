@@ -30,6 +30,7 @@ That's it! The API specs are compiled automatically before the gateway starts.
 | **NATS** | nats://localhost:4222 | Message broker ([monitoring](http://localhost:8222)) |
 | **Mock OAuth** | http://localhost:9099 | OIDC Provider ([discovery](http://localhost:9099/barbacane/.well-known/openid-configuration)) |
 | **WireMock** | http://localhost:8081/__admin | Mock backend admin |
+| **RustFS** | http://localhost:9000 | S3-compatible object storage ([console](http://localhost:9001)) |
 
 ## API Endpoints
 
@@ -141,6 +142,40 @@ curl http://localhost:8222/varz
 ```
 
 Available event subjects: `trains.trips.delayed`, `trains.trips.cancelled`, `trains.stations.platform-changed`, `trains.bookings.confirmed`, `trains.bookings.cancelled`, `trains.payments.succeeded`, `trains.payments.failed`.
+
+### S3 Object Storage Proxy (RustFS)
+
+The playground includes a full S3 proxy powered by the `s3` dispatcher and backed by [RustFS](https://rustfs.com) — an S3-compatible object storage written in Rust. The proxy demonstrates Barbacane as a secure S3 gateway: auth is handled by the gateway, S3 credentials never leave the server.
+
+```bash
+# Get an access token (required for /storage routes)
+TOKEN=$(curl -s -X POST http://localhost:9099/barbacane/token \
+  -d "grant_type=client_credentials&scope=openid&client_id=playground&client_secret=secret" \
+  | jq -r '.access_token')
+
+# Upload an object (authenticated)
+curl -X PUT http://localhost:8080/storage/playground/hello.txt \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: text/plain" \
+  -d "Hello from Barbacane!"
+
+# Download the object (authenticated)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/storage/playground/hello.txt
+
+# Download a nested key — {key+} captures slashes
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/storage/playground/2024/reports/q4.pdf"
+
+# Public asset CDN (no auth, rate-limited)
+# The init container pre-creates: s3://assets/welcome.txt
+curl http://localhost:8080/assets/welcome.txt
+
+# Without a token → 401 Unauthorized
+curl http://localhost:8080/storage/playground/hello.txt
+```
+
+RustFS console: http://localhost:9001 (credentials: `playground` / `playground-secret`)
 
 ## Feature Demonstrations
 

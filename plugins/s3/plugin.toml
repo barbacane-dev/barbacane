@@ -1,0 +1,9 @@
+[plugin]
+name = "s3"
+version = "0.1.0"
+type = "dispatcher"
+description = "AWS S3 / S3-compatible object storage dispatcher with SigV4 signing"
+wasm = "s3.wasm"
+
+[capabilities]
+host_functions = ["http_call", "log"]

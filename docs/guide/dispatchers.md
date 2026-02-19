@@ -504,6 +504,154 @@ On successful publish, returns 202 Accepted:
 |--------|-----------|
 | 502 Bad Gateway | NATS publish failed |
 
+### s3
+
+Proxies requests to AWS S3 or any S3-compatible object storage (MinIO, RustFS, Ceph, etc.) with AWS Signature Version 4 signing. Supports multi-bucket routing via path parameters and single-bucket CDN-style routes.
+
+```yaml
+x-barbacane-dispatch:
+  name: s3
+  config:
+    region: us-east-1
+    access_key_id: env://AWS_ACCESS_KEY_ID
+    secret_access_key: env://AWS_SECRET_ACCESS_KEY
+```
+
+#### Configuration
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `access_key_id` | string | Yes | - | AWS access key ID. Supports `env://` references (e.g. `env://AWS_ACCESS_KEY_ID`) |
+| `secret_access_key` | string | Yes | - | AWS secret access key. Supports `env://` references |
+| `region` | string | Yes | - | AWS region (e.g. `us-east-1`, `eu-west-1`) |
+| `session_token` | string | No | - | Session token for temporary credentials (STS / AssumeRole / IRSA). Supports `env://` references |
+| `endpoint` | string | No | - | Custom S3-compatible endpoint URL (e.g. `https://minio.internal:9000`). When set, path-style URLs are always used |
+| `force_path_style` | boolean | No | `false` | Use path-style URLs (`s3.{region}.amazonaws.com/{bucket}/{key}`) instead of virtual-hosted style. Automatically `true` when `endpoint` is set |
+| `bucket` | string | No | - | Hard-coded bucket name. When set, `bucket_param` is ignored. Use for single-bucket routes like `/assets/{key+}` |
+| `bucket_param` | string | No | `"bucket"` | Name of the path parameter that holds the bucket |
+| `key_param` | string | No | `"key"` | Name of the path parameter that holds the object key |
+| `timeout` | number | No | `30` | Request timeout in seconds |
+
+#### URL Styles
+
+**Virtual-hosted (default for AWS S3):**
+```
+Host: {bucket}.s3.{region}.amazonaws.com
+Path: /{key}
+```
+
+**Path-style (set `force_path_style: true` or when `endpoint` is set):**
+```
+Host: s3.{region}.amazonaws.com   # or custom endpoint host
+Path: /{bucket}/{key}
+```
+
+Custom endpoints always use path-style regardless of `force_path_style`.
+
+#### Wildcard Keys
+
+Use `{key+}` (greedy wildcard) to capture multi-segment S3 keys containing slashes:
+
+```yaml
+/files/{bucket}/{key+}:
+  get:
+    parameters:
+      - { name: bucket, in: path, required: true, schema: { type: string } }
+      - { name: key, in: path, required: true, allowReserved: true, schema: { type: string } }
+    x-barbacane-dispatch:
+      name: s3
+      config:
+        region: us-east-1
+        access_key_id: env://AWS_ACCESS_KEY_ID
+        secret_access_key: env://AWS_SECRET_ACCESS_KEY
+```
+
+`GET /files/uploads/2024/01/report.pdf` → S3 key `2024/01/report.pdf` in bucket `uploads`.
+
+#### Examples
+
+**Multi-bucket proxy with OIDC authentication:**
+```yaml
+paths:
+  /storage/{bucket}/{key+}:
+    get:
+      parameters:
+        - { name: bucket, in: path, required: true, schema: { type: string } }
+        - { name: key, in: path, required: true, allowReserved: true, schema: { type: string } }
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          config:
+            issuer: https://auth.example.com
+            audience: my-api
+            required: true
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: eu-west-1
+          access_key_id: env://AWS_ACCESS_KEY_ID
+          secret_access_key: env://AWS_SECRET_ACCESS_KEY
+```
+
+**Single-bucket CDN (hard-coded bucket, rate limited):**
+```yaml
+paths:
+  /assets/{key+}:
+    get:
+      parameters:
+        - { name: key, in: path, required: true, allowReserved: true, schema: { type: string } }
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            limit: 120
+            window: 60
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          bucket: public-assets
+          access_key_id: env://AWS_ACCESS_KEY_ID
+          secret_access_key: env://AWS_SECRET_ACCESS_KEY
+```
+
+**S3-compatible storage (MinIO / RustFS):**
+```yaml
+x-barbacane-dispatch:
+  name: s3
+  config:
+    region: us-east-1
+    endpoint: https://minio.internal:9000
+    access_key_id: env://MINIO_ACCESS_KEY
+    secret_access_key: env://MINIO_SECRET_KEY
+    bucket: uploads
+```
+
+**Temporary credentials (STS / AssumeRole / IRSA):**
+```yaml
+x-barbacane-dispatch:
+  name: s3
+  config:
+    region: us-east-1
+    access_key_id: env://AWS_ACCESS_KEY_ID
+    secret_access_key: env://AWS_SECRET_ACCESS_KEY
+    session_token: env://AWS_SESSION_TOKEN
+    bucket: my-bucket
+```
+
+#### Error Handling
+
+| Status | Condition |
+|--------|-----------|
+| 400 Bad Request | Missing bucket or key path parameter |
+| 502 Bad Gateway | `host_http_call` failed (network error, endpoint unreachable) |
+| 403 / 404 / 5xx | Passed through transparently from S3 |
+
+#### Security
+
+- **Credentials**: Use `env://` references so secrets are never baked into spec files or compiled artifacts
+- **Session tokens**: Support for STS, AssumeRole, and IRSA (IAM Roles for Service Accounts) via `session_token`
+- **Signing**: All requests are signed with AWS Signature Version 4. The signed headers are `host`, `x-amz-content-sha256`, `x-amz-date`, and `x-amz-security-token` (when a session token is present)
+- **Binary objects**: The current implementation returns the response body as a UTF-8 string. Binary objects (images, archives, etc.) are not suitable for this dispatcher — use pre-signed URLs for binary downloads
+
 ---
 
 ## Custom WASM Dispatchers
