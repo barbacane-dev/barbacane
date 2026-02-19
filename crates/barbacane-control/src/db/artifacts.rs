@@ -78,6 +78,31 @@ impl ArtifactsRepository {
         Ok(row.map(|(data,)| data))
     }
 
+    /// Check if any artifact's manifest references a given plugin name+version.
+    pub async fn plugin_is_referenced(
+        &self,
+        name: &str,
+        version: &str,
+    ) -> Result<bool, sqlx::Error> {
+        // The artifact manifest is JSONB with a `plugins` array of objects
+        // containing `name` and `version` fields. Use the @> containment operator.
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM artifacts
+                WHERE manifest->'plugins' @> jsonb_build_array(
+                    jsonb_build_object('name', $1::text, 'version', $2::text)
+                )
+            )
+            "#,
+        )
+        .bind(name)
+        .bind(version)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists)
+    }
+
     /// Delete an artifact.
     pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM artifacts WHERE id = $1")

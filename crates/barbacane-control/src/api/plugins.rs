@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::db::{NewPlugin, Plugin, PluginsRepository};
+use crate::db::{ArtifactsRepository, NewPlugin, Plugin, PluginsRepository};
 use crate::error::ProblemDetails;
 
 use super::router::AppState;
@@ -220,6 +220,24 @@ pub async fn delete_plugin(
     State(state): State<AppState>,
     Path((name, version)): Path<(String, String)>,
 ) -> Result<StatusCode, ProblemDetails> {
+    // Refuse to delete if any artifact still bundles this plugin version.
+    let artifacts_repo = ArtifactsRepository::new(state.pool.clone());
+    if artifacts_repo
+        .plugin_is_referenced(&name, &version)
+        .await
+        .map_err(|e| {
+            ProblemDetails::internal_error_with_detail(format!(
+                "Failed to check artifact references: {}",
+                e
+            ))
+        })?
+    {
+        return Err(ProblemDetails::conflict(format!(
+            "Plugin {}:{} is referenced by existing artifacts and cannot be deleted",
+            name, version
+        )));
+    }
+
     let repo = PluginsRepository::new(state.pool.clone());
     let deleted = repo.delete(&name, &version).await?;
     if deleted {
