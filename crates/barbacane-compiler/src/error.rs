@@ -51,10 +51,6 @@ pub enum CompileError {
     #[error("E1052: schema too complex: {0}")]
     SchemaTooComplex(String),
 
-    /// E1053: Circular $ref detected in schema.
-    #[error("E1053: circular schema reference: {0}")]
-    CircularSchemaRef(String),
-
     /// E1054: Invalid path template syntax.
     #[error("E1054: invalid path template: {0}")]
     InvalidPathTemplate(String),

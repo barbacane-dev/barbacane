@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde_json::Value;
 
@@ -7,6 +7,63 @@ use super::model::{
     ApiSpec, ContentSchema, DispatchConfig, Message, MiddlewareConfig, Operation, Parameter,
     RequestBody, SpecFormat,
 };
+
+/// Resolve a JSON Reference like `#/components/schemas/User` from the spec root.
+///
+/// Only local references (`#/...`) are supported. Returns `None` for external refs.
+fn resolve_ref<'a>(root: &'a Value, ref_path: &str) -> Option<&'a Value> {
+    if !ref_path.starts_with("#/") {
+        return None;
+    }
+    let mut current = root;
+    for segment in ref_path[2..].split('/') {
+        let unescaped = segment.replace("~1", "/").replace("~0", "~");
+        current = current.get(&unescaped)?;
+    }
+    Some(current)
+}
+
+/// Recursively resolve all `$ref` pointers in a JSON Schema value.
+///
+/// Inlines the referenced definition in place. `visited` tracks the current resolution
+/// chain to detect circular references.
+fn resolve_schema_refs(
+    value: &Value,
+    root: &Value,
+    visited: &mut HashSet<String>,
+) -> Result<Value, ParseError> {
+    match value {
+        Value::Object(obj) => {
+            if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
+                if !visited.insert(ref_str.to_string()) {
+                    return Err(ParseError::SchemaError(format!(
+                        "circular $ref detected: {}",
+                        ref_str
+                    )));
+                }
+                let target = resolve_ref(root, ref_str)
+                    .ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
+                let resolved = resolve_schema_refs(target, root, visited)?;
+                visited.remove(ref_str);
+                Ok(resolved)
+            } else {
+                let mut new_obj = serde_json::Map::with_capacity(obj.len());
+                for (key, val) in obj {
+                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, visited)?);
+                }
+                Ok(Value::Object(new_obj))
+            }
+        }
+        Value::Array(arr) => {
+            let items: Result<Vec<_>, _> = arr
+                .iter()
+                .map(|v| resolve_schema_refs(v, root, visited))
+                .collect();
+            Ok(Value::Array(items?))
+        }
+        other => Ok(other.clone()),
+    }
+}
 
 /// HTTP methods we recognize in OpenAPI paths.
 /// Includes `query` from OpenAPI 3.2 (RFC 9110 extension).
@@ -53,8 +110,8 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
 
     // Parse operations based on format
     let operations = match format {
-        SpecFormat::OpenApi => parse_openapi_paths(root_obj)?,
-        SpecFormat::AsyncApi => parse_asyncapi_channels(root_obj)?,
+        SpecFormat::OpenApi => parse_openapi_paths(root_obj, &root)?,
+        SpecFormat::AsyncApi => parse_asyncapi_channels(root_obj, &root)?,
     };
 
     Ok(ApiSpec {
@@ -134,6 +191,7 @@ fn extract_dispatch(obj: &serde_json::Map<String, Value>) -> Option<DispatchConf
 /// Parse OpenAPI 3.x paths into operations.
 fn parse_openapi_paths(
     root: &serde_json::Map<String, Value>,
+    spec_root: &Value,
 ) -> Result<Vec<Operation>, ParseError> {
     let mut operations = Vec::new();
 
@@ -148,7 +206,7 @@ fn parse_openapi_paths(
         })?;
 
         // Path-level parameters (inherited by all operations)
-        let path_params = parse_parameters(path_obj);
+        let path_params = parse_parameters(path_obj, spec_root)?;
 
         for method in HTTP_METHODS {
             if let Some(op_value) = path_obj.get(*method) {
@@ -162,14 +220,14 @@ fn parse_openapi_paths(
 
                 // Merge path-level and operation-level parameters
                 let mut params = path_params.clone();
-                params.extend(parse_parameters(op_obj));
+                params.extend(parse_parameters(op_obj, spec_root)?);
 
                 let operation_id = op_obj
                     .get("operationId")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                let request_body = parse_request_body(op_obj);
+                let request_body = parse_request_body(op_obj, spec_root)?;
 
                 let dispatch = extract_dispatch(op_obj);
 
@@ -224,14 +282,14 @@ fn parse_openapi_paths(
                 })?;
 
                 let mut params = path_params.clone();
-                params.extend(parse_parameters(op_obj));
+                params.extend(parse_parameters(op_obj, spec_root)?);
 
                 let operation_id = op_obj
                     .get("operationId")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                let request_body = parse_request_body(op_obj);
+                let request_body = parse_request_body(op_obj, spec_root)?;
                 let dispatch = extract_dispatch(op_obj);
 
                 let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
@@ -277,35 +335,49 @@ fn parse_openapi_paths(
 ///
 /// OpenAPI 3.2: `in: querystring` parameters use `content` instead of `schema`.
 /// The schema is extracted from `content.<media-type>.schema`.
-fn parse_parameters(obj: &serde_json::Map<String, Value>) -> Vec<Parameter> {
-    obj.get("parameters")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| {
-                    let param_obj = item.as_object()?;
-                    let location = param_obj.get("in")?.as_str()?.to_string();
+fn parse_parameters(
+    obj: &serde_json::Map<String, Value>,
+    spec_root: &Value,
+) -> Result<Vec<Parameter>, ParseError> {
+    let Some(arr) = obj.get("parameters").and_then(|v| v.as_array()) else {
+        return Ok(Vec::new());
+    };
 
-                    // OpenAPI 3.2: querystring params use content instead of schema
-                    let schema = if location == "querystring" {
-                        extract_content_schema(param_obj)
-                    } else {
-                        param_obj.get("schema").cloned()
-                    };
+    let mut params = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(param_obj) = item.as_object() else {
+            continue;
+        };
+        let Some(location) = param_obj.get("in").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let location = location.to_string();
 
-                    Some(Parameter {
-                        name: param_obj.get("name")?.as_str()?.to_string(),
-                        location,
-                        required: param_obj
-                            .get("required")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
-                        schema,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        // OpenAPI 3.2: querystring params use content instead of schema
+        let raw_schema = if location == "querystring" {
+            extract_content_schema(param_obj)
+        } else {
+            param_obj.get("schema").cloned()
+        };
+
+        let schema = raw_schema
+            .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+            .transpose()?;
+
+        let Some(name) = param_obj.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        params.push(Parameter {
+            name: name.to_string(),
+            location,
+            required: param_obj
+                .get("required")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            schema,
+        });
+    }
+    Ok(params)
 }
 
 /// Extract schema from a parameter's `content` map (first media type entry).
@@ -320,23 +392,33 @@ fn extract_content_schema(param_obj: &serde_json::Map<String, Value>) -> Option<
 }
 
 /// Parse request body from an operation object.
-fn parse_request_body(obj: &serde_json::Map<String, Value>) -> Option<RequestBody> {
-    let body = obj.get("requestBody")?.as_object()?;
+fn parse_request_body(
+    obj: &serde_json::Map<String, Value>,
+    spec_root: &Value,
+) -> Result<Option<RequestBody>, ParseError> {
+    let Some(body) = obj.get("requestBody").and_then(|v| v.as_object()) else {
+        return Ok(None);
+    };
 
     let required = body
         .get("required")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let content_obj = body.get("content")?.as_object()?;
+    let Some(content_obj) = body.get("content").and_then(|v| v.as_object()) else {
+        return Ok(None);
+    };
 
     let mut content = BTreeMap::new();
     for (media_type, media_obj) in content_obj {
-        let schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
+        let raw_schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
+        let schema = raw_schema
+            .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+            .transpose()?;
         content.insert(media_type.clone(), ContentSchema { schema });
     }
 
-    Some(RequestBody { required, content })
+    Ok(Some(RequestBody { required, content }))
 }
 
 /// Parse AsyncAPI 3.x channels and operations.
@@ -346,6 +428,7 @@ fn parse_request_body(obj: &serde_json::Map<String, Value>) -> Option<RequestBod
 /// - `operations`: Map of operation IDs to operation definitions (action, channel ref)
 fn parse_asyncapi_channels(
     root: &serde_json::Map<String, Value>,
+    spec_root: &Value,
 ) -> Result<Vec<Operation>, ParseError> {
     let mut operations = Vec::new();
 
@@ -360,7 +443,7 @@ fn parse_asyncapi_channels(
     };
 
     // Build channel lookup: channel_name -> (address, messages, parameters, bindings)
-    let channel_lookup = build_channel_lookup(channels);
+    let channel_lookup = build_channel_lookup(channels, spec_root)?;
 
     for (op_id, op_value) in ops {
         let op_obj = op_value.as_object().ok_or_else(|| {
@@ -390,10 +473,10 @@ fn parse_asyncapi_channels(
 
         // Resolve channel reference
         let (address, channel_messages, channel_params, channel_bindings) =
-            resolve_channel_ref(op_obj, &channel_lookup)?;
+            resolve_channel_ref(op_obj, &channel_lookup, spec_root)?;
 
         // Parse operation-level messages (may override or filter channel messages)
-        let messages = parse_operation_messages(op_obj, &channel_messages);
+        let messages = parse_operation_messages(op_obj, &channel_messages, spec_root)?;
 
         // For SEND operations, create a request body from the first message payload
         let request_body = if method == "SEND" && !messages.is_empty() {
@@ -481,12 +564,13 @@ type ChannelInfo = (
 /// Build a lookup map of channel names to their definitions.
 fn build_channel_lookup(
     channels: Option<&serde_json::Map<String, Value>>,
-) -> BTreeMap<String, ChannelInfo> {
+    spec_root: &Value,
+) -> Result<BTreeMap<String, ChannelInfo>, ParseError> {
     let mut lookup = BTreeMap::new();
 
     let channels = match channels {
         Some(c) => c,
-        None => return lookup,
+        None => return Ok(lookup),
     };
 
     for (name, channel_value) in channels {
@@ -503,10 +587,10 @@ fn build_channel_lookup(
             .unwrap_or_else(|| name.clone());
 
         // Parse messages
-        let messages = parse_channel_messages(channel_obj);
+        let messages = parse_channel_messages(channel_obj, spec_root)?;
 
         // Parse parameters
-        let parameters = parse_channel_parameters(channel_obj);
+        let parameters = parse_channel_parameters(channel_obj, spec_root)?;
 
         // Parse bindings
         let bindings = channel_obj
@@ -522,77 +606,90 @@ fn build_channel_lookup(
         lookup.insert(name.clone(), (address, messages, parameters, bindings));
     }
 
-    lookup
+    Ok(lookup)
 }
 
 /// Parse messages from a channel definition.
-fn parse_channel_messages(channel: &serde_json::Map<String, Value>) -> Vec<Message> {
+fn parse_channel_messages(
+    channel: &serde_json::Map<String, Value>,
+    spec_root: &Value,
+) -> Result<Vec<Message>, ParseError> {
     let messages_obj = match channel.get("messages").and_then(|v| v.as_object()) {
         Some(m) => m,
-        None => return Vec::new(),
+        None => return Ok(Vec::new()),
     };
 
-    messages_obj
-        .iter()
-        .filter_map(|(name, msg_value)| {
-            let msg_obj = msg_value.as_object()?;
+    let mut messages = Vec::with_capacity(messages_obj.len());
+    for (name, msg_value) in messages_obj {
+        let Some(msg_obj) = msg_value.as_object() else {
+            continue;
+        };
 
-            let payload = msg_obj.get("payload").cloned();
+        let payload = msg_obj
+            .get("payload")
+            .map(|p| resolve_schema_refs(p, spec_root, &mut HashSet::new()))
+            .transpose()?;
 
-            let content_type = msg_obj
-                .get("contentType")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+        let content_type = msg_obj
+            .get("contentType")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-            let bindings = msg_obj
-                .get("bindings")
-                .and_then(|v| v.as_object())
-                .map(|b| {
-                    b.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<BTreeMap<_, _>>()
-                })
-                .unwrap_or_default();
-
-            Some(Message {
-                name: name.clone(),
-                payload,
-                content_type,
-                bindings,
+        let bindings = msg_obj
+            .get("bindings")
+            .and_then(|v| v.as_object())
+            .map(|b| {
+                b.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<BTreeMap<_, _>>()
             })
-        })
-        .collect()
+            .unwrap_or_default();
+
+        messages.push(Message {
+            name: name.clone(),
+            payload,
+            content_type,
+            bindings,
+        });
+    }
+    Ok(messages)
 }
 
 /// Parse parameters from a channel definition (for templated addresses).
-fn parse_channel_parameters(channel: &serde_json::Map<String, Value>) -> Vec<Parameter> {
+fn parse_channel_parameters(
+    channel: &serde_json::Map<String, Value>,
+    spec_root: &Value,
+) -> Result<Vec<Parameter>, ParseError> {
     let params = match channel.get("parameters").and_then(|v| v.as_object()) {
         Some(p) => p,
-        None => return Vec::new(),
+        None => return Ok(Vec::new()),
     };
 
-    params
-        .iter()
-        .map(|(name, param_value)| {
-            let param_obj = param_value.as_object();
+    let mut result = Vec::with_capacity(params.len());
+    for (name, param_value) in params {
+        let raw_schema = param_value
+            .as_object()
+            .and_then(|o| o.get("schema").cloned());
+        let schema = raw_schema
+            .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+            .transpose()?;
 
-            let schema = param_obj.and_then(|o| o.get("schema").cloned());
-
-            // In AsyncAPI, channel parameters are always required
-            Parameter {
-                name: name.clone(),
-                location: "path".to_string(),
-                required: true,
-                schema,
-            }
-        })
-        .collect()
+        // In AsyncAPI, channel parameters are always required
+        result.push(Parameter {
+            name: name.clone(),
+            location: "path".to_string(),
+            required: true,
+            schema,
+        });
+    }
+    Ok(result)
 }
 
 /// Resolve a channel reference from an operation.
 fn resolve_channel_ref(
     op: &serde_json::Map<String, Value>,
     lookup: &BTreeMap<String, ChannelInfo>,
+    spec_root: &Value,
 ) -> Result<ChannelInfo, ParseError> {
     let channel = op
         .get("channel")
@@ -623,8 +720,8 @@ fn resolve_channel_ref(
                 .map(|s| s.to_string())
                 .unwrap_or_default();
 
-            let messages = parse_channel_messages(channel_obj);
-            let parameters = parse_channel_parameters(channel_obj);
+            let messages = parse_channel_messages(channel_obj, spec_root)?;
+            let parameters = parse_channel_parameters(channel_obj, spec_root)?;
             let bindings = channel_obj
                 .get("bindings")
                 .and_then(|v| v.as_object())
@@ -648,59 +745,65 @@ fn resolve_channel_ref(
 fn parse_operation_messages(
     op: &serde_json::Map<String, Value>,
     channel_messages: &[Message],
-) -> Vec<Message> {
+    spec_root: &Value,
+) -> Result<Vec<Message>, ParseError> {
     // If operation has explicit messages array, use those
-    if let Some(msgs) = op.get("messages").and_then(|v| v.as_array()) {
-        msgs.iter()
-            .filter_map(|msg| {
-                if let Some(obj) = msg.as_object() {
-                    if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
-                        // Reference to channel message
-                        // Format: "#/channels/channelName/messages/messageName"
-                        let parts: Vec<&str> = ref_str.split('/').collect();
-                        if parts.len() >= 5 && parts[3] == "messages" {
-                            let msg_name = parts[4];
-                            return channel_messages
-                                .iter()
-                                .find(|m| m.name == msg_name)
-                                .cloned();
-                        }
-                    }
-                    // Inline message definition
-                    let name = obj
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("default")
-                        .to_string();
-                    let payload = obj.get("payload").cloned();
-                    let content_type = obj
-                        .get("contentType")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let bindings = obj
-                        .get("bindings")
-                        .and_then(|v| v.as_object())
-                        .map(|b| {
-                            b.iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect::<BTreeMap<_, _>>()
-                        })
-                        .unwrap_or_default();
+    let Some(msgs) = op.get("messages").and_then(|v| v.as_array()) else {
+        // Use all channel messages (already resolved)
+        return Ok(channel_messages.to_vec());
+    };
 
-                    return Some(Message {
-                        name,
-                        payload,
-                        content_type,
-                        bindings,
-                    });
+    let mut result = Vec::with_capacity(msgs.len());
+    for msg in msgs {
+        let Some(obj) = msg.as_object() else {
+            continue;
+        };
+
+        if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
+            // Reference to channel message
+            // Format: "#/channels/channelName/messages/messageName"
+            let parts: Vec<&str> = ref_str.split('/').collect();
+            if parts.len() >= 5 && parts[3] == "messages" {
+                let msg_name = parts[4];
+                if let Some(m) = channel_messages.iter().find(|m| m.name == msg_name) {
+                    result.push(m.clone());
                 }
-                None
+            }
+            continue;
+        }
+
+        // Inline message definition
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .to_string();
+        let payload = obj
+            .get("payload")
+            .map(|p| resolve_schema_refs(p, spec_root, &mut HashSet::new()))
+            .transpose()?;
+        let content_type = obj
+            .get("contentType")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let bindings = obj
+            .get("bindings")
+            .and_then(|v| v.as_object())
+            .map(|b| {
+                b.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<BTreeMap<_, _>>()
             })
-            .collect()
-    } else {
-        // Use all channel messages
-        channel_messages.to_vec()
+            .unwrap_or_default();
+
+        result.push(Message {
+            name,
+            payload,
+            content_type,
+            bindings,
+        });
     }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -1396,5 +1499,210 @@ paths:
             param.schema.as_ref().unwrap().get("type").unwrap(),
             "string"
         );
+    }
+
+    // ── $ref resolution tests ────────────────────────────────────────────
+
+    #[test]
+    fn resolve_ref_in_parameter_schema() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    UserId:
+      type: integer
+      format: int64
+paths:
+  /users/{id}:
+    get:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/UserId"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let param = &spec.operations[0].parameters[0];
+        let schema = param.schema.as_ref().unwrap();
+        // $ref should be inlined — no $ref key, actual schema fields present
+        assert!(schema.get("$ref").is_none());
+        assert_eq!(schema.get("type").unwrap(), "integer");
+        assert_eq!(schema.get("format").unwrap(), "int64");
+    }
+
+    #[test]
+    fn resolve_ref_in_request_body() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    CreateUser:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+paths:
+  /users:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUser"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let body = spec.operations[0].request_body.as_ref().unwrap();
+        let schema = body.content["application/json"].schema.as_ref().unwrap();
+        assert!(schema.get("$ref").is_none());
+        assert_eq!(schema.get("type").unwrap(), "object");
+        assert!(schema.get("properties").is_some());
+    }
+
+    #[test]
+    fn resolve_nested_ref() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+    User:
+      type: object
+      properties:
+        address:
+          $ref: "#/components/schemas/Address"
+paths:
+  /users:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/User"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let body = spec.operations[0].request_body.as_ref().unwrap();
+        let schema = body.content["application/json"].schema.as_ref().unwrap();
+        assert!(schema.get("$ref").is_none());
+        // Nested $ref inside User.properties.address should also be resolved
+        let address_schema = schema.get("properties").unwrap().get("address").unwrap();
+        assert!(address_schema.get("$ref").is_none());
+        assert_eq!(address_schema.get("type").unwrap(), "object");
+    }
+
+    #[test]
+    fn unresolved_ref_returns_error() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /users:
+    get:
+      parameters:
+        - name: id
+          in: query
+          schema:
+            $ref: "#/components/schemas/DoesNotExist"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let err = parse_spec(yaml).unwrap_err();
+        assert!(
+            matches!(err, ParseError::UnresolvedRef(ref s) if s.contains("DoesNotExist")),
+            "expected UnresolvedRef, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn circular_ref_returns_error() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        child:
+          $ref: "#/components/schemas/Node"
+paths:
+  /nodes:
+    get:
+      parameters:
+        - name: root
+          in: query
+          schema:
+            $ref: "#/components/schemas/Node"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let err = parse_spec(yaml).unwrap_err();
+        assert!(
+            matches!(err, ParseError::SchemaError(ref s) if s.contains("circular")),
+            "expected SchemaError with 'circular', got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn asyncapi_message_payload_ref() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    UserEvent:
+      type: object
+      properties:
+        userId:
+          type: string
+channels:
+  userSignedUp:
+    address: user/signedup
+    messages:
+      userSignedUp:
+        payload:
+          $ref: "#/components/schemas/UserEvent"
+operations:
+  onUserSignedUp:
+    action: receive
+    channel:
+      $ref: "#/channels/userSignedUp"
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let op = &spec.operations[0];
+        let msg = &op.messages[0];
+        let payload = msg.payload.as_ref().unwrap();
+        assert!(payload.get("$ref").is_none());
+        assert_eq!(payload.get("type").unwrap(), "object");
     }
 }

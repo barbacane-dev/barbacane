@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::router::AppState;
-use crate::db::{ArtifactsRepository, DataPlane, DataPlanesRepository};
+use crate::db::{ArtifactsRepository, DataPlane, DataPlanesRepository, ProjectsRepository};
 use crate::error::ProblemDetails;
 
 /// GET /projects/{id}/data-planes - List data planes for a project.
@@ -17,6 +17,13 @@ pub async fn list_data_planes(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<DataPlane>>, ProblemDetails> {
+    // Verify project exists
+    let projects_repo = ProjectsRepository::new(state.pool.clone());
+    let _ = projects_repo
+        .get_by_id(project_id)
+        .await?
+        .ok_or_else(|| ProblemDetails::not_found(format!("Project {} not found", project_id)))?;
+
     let repo = DataPlanesRepository::new(state.pool.clone());
 
     let data_planes = repo.list_for_project(project_id).await.map_err(|e| {

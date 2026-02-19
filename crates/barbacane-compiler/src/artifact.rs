@@ -488,7 +488,8 @@ fn compile_inner(
                 }
             }
 
-            // Validate schema complexity and circular refs for parameters (E1051, E1052, E1053)
+            // Validate schema complexity for parameters (E1051, E1052)
+            // Note: circular $ref detection (E1053) is now performed at parse time.
             for param in &op.parameters {
                 if let Some(schema) = &param.schema {
                     let param_location = format!("{} parameter '{}'", location, param.name);
@@ -498,12 +499,10 @@ fn compile_inner(
                         options.max_schema_properties,
                         &param_location,
                     )?;
-                    let mut visited = HashSet::new();
-                    detect_circular_refs(schema, schema, &mut visited, &param_location)?;
                 }
             }
 
-            // Validate request body schema complexity and circular refs (E1051, E1052, E1053)
+            // Validate request body schema complexity (E1051, E1052)
             if let Some(ref body) = op.request_body {
                 for (content_type, content) in &body.content {
                     if let Some(schema) = &content.schema {
@@ -514,8 +513,6 @@ fn compile_inner(
                             options.max_schema_properties,
                             &body_location,
                         )?;
-                        let mut visited = HashSet::new();
-                        detect_circular_refs(schema, schema, &mut visited, &body_location)?;
                     }
                 }
             }
@@ -875,81 +872,6 @@ fn measure_schema_complexity(value: &serde_json::Value, current_depth: usize) ->
         }
         _ => (current_depth, 0),
     }
-}
-
-/// Detect circular $ref references in a schema (E1053).
-fn detect_circular_refs(
-    schema: &serde_json::Value,
-    root: &serde_json::Value,
-    visited: &mut HashSet<String>,
-    location: &str,
-) -> Result<(), CompileError> {
-    if let Some(obj) = schema.as_object() {
-        // Check for $ref
-        if let Some(ref_val) = obj.get("$ref").and_then(|v| v.as_str()) {
-            if !visited.insert(ref_val.to_string()) {
-                return Err(CompileError::CircularSchemaRef(format!(
-                    "{} - circular reference to '{}'",
-                    location, ref_val
-                )));
-            }
-
-            // Try to resolve and recurse
-            if let Some(resolved) = resolve_json_ref(root, ref_val) {
-                detect_circular_refs(resolved, root, visited, location)?;
-            }
-
-            visited.remove(ref_val);
-        }
-
-        // Recurse into nested schemas
-        if let Some(serde_json::Value::Object(props)) = obj.get("properties") {
-            for prop_value in props.values() {
-                detect_circular_refs(prop_value, root, visited, location)?;
-            }
-        }
-
-        if let Some(items) = obj.get("items") {
-            detect_circular_refs(items, root, visited, location)?;
-        }
-
-        for key in ["allOf", "oneOf", "anyOf"] {
-            if let Some(serde_json::Value::Array(schemas)) = obj.get(key) {
-                for s in schemas {
-                    detect_circular_refs(s, root, visited, location)?;
-                }
-            }
-        }
-
-        if let Some(additional) = obj.get("additionalProperties") {
-            if additional.is_object() {
-                detect_circular_refs(additional, root, visited, location)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Resolve a JSON reference (e.g., "#/components/schemas/User").
-fn resolve_json_ref<'a>(
-    root: &'a serde_json::Value,
-    ref_path: &str,
-) -> Option<&'a serde_json::Value> {
-    if !ref_path.starts_with("#/") {
-        return None;
-    }
-
-    let path = &ref_path[2..]; // Skip "#/"
-    let mut current = root;
-
-    for segment in path.split('/') {
-        // Handle JSON Pointer escaping
-        let unescaped = segment.replace("~1", "/").replace("~0", "~");
-        current = current.get(&unescaped)?;
-    }
-
-    Some(current)
 }
 
 // Need to add hex encoding manually since we don't have the hex crate
