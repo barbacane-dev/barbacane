@@ -109,15 +109,16 @@ paths:
           path: "/api/v2/users/{id}"
 ```
 
-**Wildcard proxy:**
+**Wildcard proxy** (multi-segment path capture with `{param+}`):
 ```yaml
 paths:
-  /proxy/{path}:
+  /proxy/{path+}:
     get:
       parameters:
         - name: path
           in: path
           required: true
+          allowReserved: true  # value may contain unencoded '/'
           schema:
             type: string
       x-barbacane-dispatch:
@@ -127,6 +128,8 @@ paths:
           path: "/{path}"
           timeout: 10.0
 ```
+
+A request to `/proxy/api/v2/users/123` captures `path=api/v2/users/123` and forwards to `https://backend.internal/api/v2/users/123`. See [Path Parameters](../guide/spec-configuration.md#path-parameters) for details.
 
 ### Secret References
 

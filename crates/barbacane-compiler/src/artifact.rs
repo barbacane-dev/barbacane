@@ -694,12 +694,19 @@ fn extract_upstream_url(config: &serde_json::Value) -> Option<String> {
 /// - Balanced braces
 /// - Non-empty parameter names
 /// - Valid characters in parameter names (alphanumeric + underscore)
+/// - Wildcard suffix `+` allowed only as the last character before `}`, and only on the final segment
+/// - At most one wildcard parameter per path
 /// - No duplicate parameter names in the same path
 fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError> {
     let mut seen_params: HashSet<String> = HashSet::new();
     let mut brace_depth = 0;
     let mut current_param = String::new();
     let mut in_param = false;
+    let mut has_wildcard = false;
+
+    // Split into segments to enforce "wildcard must be the last segment" rule.
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let last_segment = segments.last().copied().unwrap_or("");
 
     for ch in path.chars() {
         match ch {
@@ -723,28 +730,67 @@ fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError
                 brace_depth -= 1;
                 in_param = false;
 
-                if current_param.is_empty() {
+                let is_wildcard_param = current_param.ends_with('+');
+                let base_name = if is_wildcard_param {
+                    &current_param[..current_param.len() - 1]
+                } else {
+                    &current_param
+                };
+
+                if base_name.is_empty() {
                     return Err(CompileError::InvalidPathTemplate(format!(
                         "{} - empty parameter name",
                         location
                     )));
                 }
-                if !seen_params.insert(current_param.clone()) {
+
+                if is_wildcard_param {
+                    if has_wildcard {
+                        return Err(CompileError::InvalidPathTemplate(format!(
+                            "{} - at most one wildcard parameter ({{name+}}) allowed per path",
+                            location
+                        )));
+                    }
+                    // Wildcard must be the last segment
+                    let param_segment = format!("{{{}}}", current_param);
+                    if last_segment != param_segment {
+                        return Err(CompileError::InvalidPathTemplate(format!(
+                            "{} - wildcard parameter '{{{}}}' must be the last path segment",
+                            location, current_param
+                        )));
+                    }
+                    has_wildcard = true;
+                }
+
+                if !seen_params.insert(base_name.to_string()) {
                     return Err(CompileError::InvalidPathTemplate(format!(
                         "{} - duplicate parameter '{}'",
-                        location, current_param
+                        location, base_name
                     )));
                 }
                 current_param.clear();
             }
             _ if in_param => {
-                if !ch.is_alphanumeric() && ch != '_' {
+                // Allow `+` only as the final character before `}` (wildcard suffix).
+                // We check this lazily: accept `+` here but verify at `}` that it's last.
+                if ch == '+' {
+                    // Peek-ahead isn't available in a char iterator; we'll detect misplacement
+                    // at `}` time by checking that `+` is the last char of current_param.
+                    current_param.push(ch);
+                } else if !ch.is_alphanumeric() && ch != '_' {
                     return Err(CompileError::InvalidPathTemplate(format!(
                         "{} - invalid character '{}' in parameter name",
                         location, ch
                     )));
+                } else if current_param.ends_with('+') {
+                    // A non-`}` character after `+` means `+` was mid-name, not a suffix.
+                    return Err(CompileError::InvalidPathTemplate(format!(
+                        "{} - '+' is only allowed as the last character of a wildcard parameter name (e.g. {{key+}})",
+                        location
+                    )));
+                } else {
+                    current_param.push(ch);
                 }
-                current_param.push(ch);
             }
             _ => {}
         }
@@ -762,10 +808,13 @@ fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError
 
 /// Normalize a path template for structural comparison (E1050).
 ///
-/// Replaces parameter names with a placeholder: /users/{id} -> /users/{_}
+/// Replaces parameter names with a placeholder while preserving the wildcard `+` modifier:
+/// - `/users/{id}` -> `/users/{_}`
+/// - `/files/{bucket}/{key+}` -> `/files/{_}/{_+}`
 fn normalize_path_template(path: &str) -> String {
     let mut result = String::with_capacity(path.len());
     let mut in_param = false;
+    let mut is_wildcard = false;
 
     for ch in path.chars() {
         match ch {
@@ -773,10 +822,19 @@ fn normalize_path_template(path: &str) -> String {
                 result.push('{');
                 result.push('_');
                 in_param = true;
+                is_wildcard = false;
             }
             '}' => {
+                if is_wildcard {
+                    result.push('+');
+                }
                 result.push('}');
                 in_param = false;
+                is_wildcard = false;
+            }
+            '+' if in_param => {
+                // Mark as wildcard; the `+` is emitted at `}` time.
+                is_wildcard = true;
             }
             _ if in_param => {
                 // Skip parameter name characters
@@ -1752,6 +1810,12 @@ paths:
             "/users/{_}/posts/{_}"
         );
         assert_eq!(normalize_path_template("/static/path"), "/static/path");
+        // Wildcard params preserve the `+` suffix in normalized form
+        assert_eq!(normalize_path_template("/files/{path+}"), "/files/{_+}");
+        assert_eq!(
+            normalize_path_template("/files/{bucket}/{key+}"),
+            "/files/{_}/{_+}"
+        );
     }
 
     #[test]
@@ -1760,6 +1824,12 @@ paths:
         assert!(validate_path_template("/users/{id}", "test").is_ok());
         assert!(validate_path_template("/users/{user_id}", "test").is_ok());
         assert!(validate_path_template("/users/{id}/posts/{postId}", "test").is_ok());
+        // Wildcard as sole param
+        assert!(validate_path_template("/files/{path+}", "test").is_ok());
+        // Wildcard after a regular param
+        assert!(validate_path_template("/files/{bucket}/{key+}", "test").is_ok());
+        // Wildcard after two regular params
+        assert!(validate_path_template("/api/{version}/files/{rest+}", "test").is_ok());
     }
 
     #[test]
@@ -1774,6 +1844,14 @@ paths:
         assert!(validate_path_template("/users/{{id}}", "test").is_err());
         // Invalid character in param name
         assert!(validate_path_template("/users/{id-name}", "test").is_err());
+        // Wildcard not at end
+        assert!(validate_path_template("/users/{id+}/orders", "test").is_err());
+        // Multiple wildcards
+        assert!(validate_path_template("/a/{x+}/{y+}", "test").is_err());
+        // `+` in the middle of the name (not a suffix)
+        assert!(validate_path_template("/users/{na+me}", "test").is_err());
+        // Empty base name with wildcard only
+        assert!(validate_path_template("/users/{+}", "test").is_err());
     }
 
     #[test]

@@ -9,6 +9,62 @@ Barbacane extends OpenAPI and AsyncAPI specs with custom `x-barbacane-*` extensi
 | `x-barbacane-dispatch` | Operation | Route request to a dispatcher (required) |
 | `x-barbacane-middlewares` | Root or Operation | Apply middleware chain |
 
+## Path Parameters
+
+### Regular Parameters
+
+Use `{paramName}` for single-segment parameters — the parameter captures exactly one path segment:
+
+```yaml
+paths:
+  /users/{id}/orders/{orderId}:
+    get:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+```
+
+### Wildcard Parameters
+
+Use `{paramName+}` to capture all remaining path segments as a single value, including any `/` characters:
+
+```yaml
+paths:
+  /files/{bucket}/{key+}:
+    get:
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true   # tells client tooling not to percent-encode '/'
+          schema:
+            type: string
+```
+
+A `GET /files/my-bucket/docs/2024/report.pdf` request captures `bucket=my-bucket` and `key=docs/2024/report.pdf`.
+
+**Rules:**
+- The wildcard parameter must be the **last segment** of the path
+- At most one wildcard parameter per path
+- Parameter names use the same characters as regular params (alphanumeric and `_`)
+
+**`allowReserved` note:** This is advisory metadata for client generators and documentation tools — it signals that the value may contain unencoded `/` characters. Barbacane does not parse or enforce it, but including it produces correct client SDKs.
+
+---
+
 ## Dispatchers
 
 Every operation needs an `x-barbacane-dispatch` to tell Barbacane how to handle it:
@@ -448,6 +504,7 @@ Errors you might see:
 | E1010 | Routing conflict (same path+method in multiple specs) |
 | E1020 | Missing `x-barbacane-dispatch` on operation |
 | E1031 | Plaintext `http://` upstream URL (use HTTPS or `--allow-plaintext` at compile time) |
+| E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards) |
 
 ## Next Steps
 
