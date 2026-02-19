@@ -65,20 +65,31 @@ pub async fn upload_spec(
     multipart: Multipart,
 ) -> Result<(StatusCode, Json<UploadResponse>), ProblemDetails> {
     let (content, filename) = super::multipart::extract_file_field(multipart).await?;
+    store_spec(&state.pool, content, filename, DEFAULT_PROJECT_ID, None).await
+}
 
-    // Parse the spec to extract metadata
+/// Parse, hash, upsert, and compliance-check a spec upload.
+///
+/// `project_id` determines where the spec is stored.
+/// `check_project_id` is passed to the compliance checker to test project-level plugin
+/// enablement; pass `None` to skip that check (used for the global /specs endpoint).
+pub(super) async fn store_spec(
+    pool: &PgPool,
+    content: Vec<u8>,
+    filename: String,
+    project_id: Uuid,
+    check_project_id: Option<Uuid>,
+) -> Result<(StatusCode, Json<UploadResponse>), ProblemDetails> {
     let content_str = String::from_utf8(content.clone())
         .map_err(|_| ProblemDetails::bad_request("File is not valid UTF-8"))?;
 
     let parsed = barbacane_compiler::parse_spec(&content_str)
         .map_err(|e| ProblemDetails::bad_request(format!("Invalid spec: {}", e)))?;
 
-    // Compute SHA256
     let mut hasher = Sha256::new();
     hasher.update(&content);
     let sha256 = hex::encode(hasher.finalize());
 
-    // Extract spec name from the parsed spec or filename
     let name = if parsed.title.is_empty() {
         filename
             .trim_end_matches(".yaml")
@@ -93,30 +104,21 @@ pub async fn upload_spec(
         barbacane_compiler::SpecFormat::AsyncApi => "asyncapi",
     };
 
-    let repo = SpecsRepository::new(state.pool.clone());
-
-    // Use default project for backward compatibility
-    let project_id = DEFAULT_PROJECT_ID;
-
-    // Check if spec with this name exists in the default project
+    let repo = SpecsRepository::new(pool.clone());
     let existing = repo.get_by_project_and_name(project_id, &name).await?;
 
-    let (spec, revision) = if let Some(_existing_spec) = existing {
-        // Create new revision
-        let (spec, revision) = repo
-            .update(
-                project_id,
-                &name,
-                spec_type,
-                &parsed.version,
-                &sha256,
-                content.clone(),
-                &filename,
-            )
-            .await?;
-        (spec, revision)
+    let (spec, revision) = if existing.is_some() {
+        repo.update(
+            project_id,
+            &name,
+            spec_type,
+            &parsed.version,
+            &sha256,
+            content.clone(),
+            &filename,
+        )
+        .await?
     } else {
-        // Create new spec in default project
         let new_spec = NewSpec {
             project_id,
             name: name.clone(),
@@ -130,8 +132,7 @@ pub async fn upload_spec(
         (spec, 1)
     };
 
-    // Run compliance checks (non-blocking — warnings only)
-    let warnings = check_spec_compliance(&parsed, &state.pool, None).await;
+    let warnings = check_spec_compliance(&parsed, pool, check_project_id).await;
 
     Ok((
         StatusCode::CREATED,
