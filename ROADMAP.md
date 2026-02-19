@@ -166,7 +166,7 @@ Near-term items ready to be picked up:
 
 | Item | Description | Priority |
 |------|-------------|----------|
-| `$ref` resolution in parser | Resolve local `#/components/*` refs at parse time instead of storing raw `$ref` values; currently users must pre-flatten specs | P1 |
+| ~~`$ref` resolution in parser~~ | ~~Resolve local `#/components/*` refs at parse time instead of storing raw `$ref` values; currently users must pre-flatten specs~~ — **done** | ~~P1~~ |
 | Schema composition analysis | Interpret `allOf`/`oneOf`/`anyOf`/`discriminator` at compile time instead of treating them as opaque JSON (runtime validation via `jsonschema` still works) | P2 |
 | E1032 validation | Warn on OpenAPI security scheme without matching auth middleware | P2 |
 | OPA WASM compilation | Define OPA version, compilation flags, error handling | P1 |

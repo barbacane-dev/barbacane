@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### `$ref` Resolution in Spec Parser
+- Local `$ref` pointers (`#/components/schemas/*`, `#/components/parameters/*`, etc.) are now resolved and inlined at parse time
+- Applies to OpenAPI parameter schemas, request body schemas, and AsyncAPI message payloads
+- Circular references produce a parse error (E1004) instead of causing infinite loops
+- Unresolved references produce E1003 at parse time with a clear pointer to the missing component
+- Users no longer need to pre-flatten specs with external tools before uploading
+
+### Fixed
+
+- `GET /projects/{id}/data-planes` now returns 404 when the project does not exist (previously returned 200 with an empty array)
+
 #### Request Transformer
 - `request-transformer` middleware plugin — declarative request transformations before upstream dispatch
   - Header transformations: add, set (if absent), remove, rename
