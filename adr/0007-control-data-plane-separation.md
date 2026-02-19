@@ -221,7 +221,7 @@ The connected mode was fully implemented in Milestone 12:
 - `--control-plane`, `--project-id`, `--api-key` CLI flags
 - WebSocket client with exponential backoff reconnection (1s to 60s)
 - 30-second heartbeat interval
-- Artifact notification handling (hot-reload not yet implemented)
+- Artifact notification handling with hot-reload (download, verify, swap without restart)
 
 **Database:**
 - `data_planes` table for connection tracking

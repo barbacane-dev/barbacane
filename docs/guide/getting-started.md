@@ -183,9 +183,8 @@ plugins:
     path: ./plugins/http-upstream.wasm
 ```
 
-The manifest declares all WASM plugins used by your spec. Plugins can be sourced from:
+The manifest declares all WASM plugins used by your spec. Plugins are sourced from a local path:
 - **Local path**: `path: ./plugins/name.wasm`
-- **URL** (planned): `url: https://plugins.example.com/name.wasm`
 
 ### 3. Validate the Spec
 

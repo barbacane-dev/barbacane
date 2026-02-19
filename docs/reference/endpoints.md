@@ -211,18 +211,6 @@ scrape_configs:
 
 ---
 
-## Future Endpoints
-
-These endpoints are planned for future releases:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `/__barbacane/ready` | Readiness probe (after warm-up) |
-| `/__barbacane/config` | Runtime configuration |
-| `/__barbacane/routes` | Route table inspection |
-
----
-
 ## Security Considerations
 
 Reserved endpoints are public by default. In production, consider:

@@ -510,38 +510,6 @@ On successful publish, returns 202 Accepted:
 
 Custom dispatchers can be implemented as WASM plugins using the Plugin SDK. The `mock` dispatcher is an example of a WASM-based dispatcher.
 
-### Planned Dispatchers
-
-The following dispatchers are planned for future releases:
-
-#### gRPC Dispatcher
-
-```yaml
-x-barbacane-dispatch:
-  name: grpc
-  config:
-    upstream: grpc-backend
-    service: users.UserService
-    method: GetUser
-```
-
-#### GraphQL Dispatcher
-
-```yaml
-x-barbacane-dispatch:
-  name: graphql
-  config:
-    upstream: graphql-backend
-    operation: |
-      query GetUser($id: ID!) {
-        user(id: $id) {
-          id
-          name
-          email
-        }
-      }
-```
-
 ---
 
 ## Dispatcher Development

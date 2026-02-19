@@ -1163,31 +1163,6 @@ x-barbacane-middlewares:
 
 ---
 
-## Planned Middlewares
-
-The following middlewares are planned for future milestones:
-
-### idempotency
-
-Ensures idempotent processing.
-
-```yaml
-x-barbacane-middlewares:
-  - name: idempotency
-    config:
-      header: Idempotency-Key
-      ttl: 86400
-```
-
-#### Configuration
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `header` | string | `Idempotency-Key` | Header containing key |
-| `ttl` | integer | 86400 | Key expiration (seconds) |
-
----
-
 ## Context Passing
 
 Middlewares can set context for downstream components:

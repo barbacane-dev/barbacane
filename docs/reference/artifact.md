@@ -194,20 +194,13 @@ sha256sum extracted/routes.json
 ### Integrity
 
 - All embedded files have SHA-256 checksums in the manifest
-- The gateway can verify checksums on load (planned)
+- The gateway verifies checksums on load
 
 ### Contents
 
 - Source specs are embedded and served publicly via `/__barbacane/specs`
 - Do not include secrets in spec files
 - Use environment variables or secret management for sensitive config
-
-### Signing (Planned)
-
-Future versions will support:
-- GPG signatures
-- Artifact signing with private keys
-- Signature verification on load
 
 ## Programmatic Access
 

@@ -51,6 +51,7 @@ Near-term items ready to be picked up:
 |--------|------|-------------|
 | ~~`opa-authz`~~ | ~~Middleware~~ | ~~OPA policy evaluation via REST API (`host_http_call`)~~ — **done** |
 | `bot-detection` | Middleware | Block known bots by User-Agent patterns |
+| `idempotency` | Middleware | Idempotent request processing via `Idempotency-Key` header (requires cache capability) |
 | `redirect` | Middleware | URL redirections (301/302) |
 | ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ — **done** |
 | ~~`acl`~~ | ~~Middleware~~ | ~~Access control by consumer/group after auth~~ — **done** |
@@ -99,6 +100,9 @@ Near-term items ready to be picked up:
 | Feature | Description | Priority |
 |---------|-------------|----------|
 | Rollback support | One-click rollback to previous artifact version | P1 |
+| Artifact signing | GPG/private-key signing + verification on load | P2 |
+| URL plugin source | Load WASM plugins from `url:` in manifests (in addition to `path:`) | P2 |
+| Admin introspection endpoints | `/__barbacane/ready`, `/__barbacane/config`, `/__barbacane/routes` | P3 |
 | Data plane groups | Deploy to specific subsets of data planes | P2 |
 | Audit log | Track all spec/artifact/deployment changes | P2 |
 | RBAC | Role-based access control for control plane API | P2 |
