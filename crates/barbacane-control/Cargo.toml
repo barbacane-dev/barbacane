@@ -56,5 +56,10 @@ toml = { workspace = true }
 # Validation
 jsonschema = { workspace = true }
 
+[dev-dependencies]
+tower = { workspace = true }
+bytes = { workspace = true }
+http-body-util = "0.1"
+
 [lints]
 workspace = true

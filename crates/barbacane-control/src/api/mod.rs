@@ -17,3 +17,6 @@ pub mod ws;
 
 pub use router::create_router;
 pub use ws::ConnectionManager;
+
+#[cfg(test)]
+mod tests;
