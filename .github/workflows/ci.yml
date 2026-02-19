@@ -170,7 +170,7 @@ jobs:
 
       - name: Run unit tests
         # Exclude barbacane-test as it contains integration tests requiring gateway binary
-        run: cargo test --workspace --lib --exclude barbacane-test -- --test-threads=4
+        run: cargo test --workspace --lib --bins --exclude barbacane-test -- --test-threads=4
 
   # Control plane API tests (require PostgreSQL)
   control-plane-tests:
