@@ -117,7 +117,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     // Register in connection manager
     state
         .connection_manager
-        .register(data_plane_id, project_id, registration.name.clone(), tx);
+        .register(data_plane_id, project_id, tx);
 
     tracing::info!(
         data_plane_id = %data_plane_id,

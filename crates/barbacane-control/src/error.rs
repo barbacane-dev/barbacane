@@ -56,19 +56,6 @@ impl ProblemDetails {
         }
     }
 
-    /// Create a 422 Unprocessable Entity error for validation failures.
-    #[allow(dead_code)]
-    pub fn validation_failed(errors: Vec<ValidationIssue>) -> Self {
-        Self {
-            error_type: "urn:barbacane:error:spec-invalid".into(),
-            title: "Spec Validation Failed".into(),
-            status: 422,
-            detail: Some(format!("{} validation error(s)", errors.len())),
-            instance: None,
-            errors,
-        }
-    }
-
     /// Create a 409 Conflict error.
     pub fn conflict(detail: impl Into<String>) -> Self {
         Self {
@@ -99,19 +86,6 @@ impl ProblemDetails {
             error_type: "urn:barbacane:error:internal-error".into(),
             title: "Internal Server Error".into(),
             status: 500,
-            detail: Some(detail.into()),
-            instance: None,
-            errors: vec![],
-        }
-    }
-
-    /// Create a 503 Service Unavailable error.
-    #[allow(dead_code)]
-    pub fn service_unavailable(detail: impl Into<String>) -> Self {
-        Self {
-            error_type: "urn:barbacane:error:service-unavailable".into(),
-            title: "Service Unavailable".into(),
-            status: 503,
             detail: Some(detail.into()),
             instance: None,
             errors: vec![],

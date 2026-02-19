@@ -53,20 +53,6 @@ impl DataPlanesRepository {
         .await
     }
 
-    /// List online data planes for a project.
-    #[allow(dead_code)]
-    pub async fn list_online_for_project(
-        &self,
-        project_id: Uuid,
-    ) -> Result<Vec<DataPlane>, sqlx::Error> {
-        sqlx::query_as::<_, DataPlane>(
-            "SELECT * FROM data_planes WHERE project_id = $1 AND status = 'online' ORDER BY connected_at DESC",
-        )
-        .bind(project_id)
-        .fetch_all(&self.pool)
-        .await
-    }
-
     /// Update last_seen timestamp (called on heartbeat).
     pub async fn update_last_seen(&self, id: Uuid) -> Result<Option<DataPlane>, sqlx::Error> {
         sqlx::query_as::<_, DataPlane>(
@@ -98,27 +84,6 @@ impl DataPlanesRepository {
         )
         .bind(id)
         .bind(artifact_id)
-        .fetch_optional(&self.pool)
-        .await
-    }
-
-    /// Set data plane status.
-    #[allow(dead_code)]
-    pub async fn set_status(
-        &self,
-        id: Uuid,
-        status: &str,
-    ) -> Result<Option<DataPlane>, sqlx::Error> {
-        sqlx::query_as::<_, DataPlane>(
-            r#"
-            UPDATE data_planes
-            SET status = $2, last_seen = NOW()
-            WHERE id = $1
-            RETURNING *
-            "#,
-        )
-        .bind(id)
-        .bind(status)
         .fetch_optional(&self.pool)
         .await
     }

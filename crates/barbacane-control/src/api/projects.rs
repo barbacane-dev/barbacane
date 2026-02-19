@@ -123,7 +123,7 @@ pub async fn list_project_specs(
 pub async fn upload_spec_to_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<(StatusCode, Json<UploadResponse>), ProblemDetails> {
     // Verify project exists
     let projects_repo = ProjectsRepository::new(state.pool.clone());
@@ -132,31 +132,7 @@ pub async fn upload_spec_to_project(
         .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("Project {} not found", project_id)))?;
 
-    let mut file_data: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ProblemDetails::bad_request(format!("Invalid multipart data: {}", e)))?
-    {
-        let name = field.name().unwrap_or_default().to_string();
-        if name == "file" {
-            filename = field.file_name().map(String::from);
-            file_data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|e| {
-                        ProblemDetails::bad_request(format!("Failed to read file: {}", e))
-                    })?
-                    .to_vec(),
-            );
-        }
-    }
-
-    let content = file_data.ok_or_else(|| ProblemDetails::bad_request("Missing 'file' field"))?;
-    let filename = filename.ok_or_else(|| ProblemDetails::bad_request("Missing filename"))?;
+    let (content, filename) = super::multipart::extract_file_field(multipart).await?;
 
     // Parse the spec to extract metadata
     let content_str = String::from_utf8(content.clone())

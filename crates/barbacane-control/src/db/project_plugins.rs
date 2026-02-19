@@ -139,22 +139,4 @@ impl ProjectPluginConfigsRepository {
         .await?;
         Ok(result.rows_affected() > 0)
     }
-
-    /// List only enabled plugins for a project, ordered by priority.
-    #[allow(dead_code)]
-    pub async fn list_enabled_for_project(
-        &self,
-        project_id: Uuid,
-    ) -> Result<Vec<ProjectPluginConfig>, sqlx::Error> {
-        sqlx::query_as::<_, ProjectPluginConfig>(
-            r#"
-            SELECT * FROM project_plugin_configs
-            WHERE project_id = $1 AND enabled = true
-            ORDER BY priority, plugin_name
-            "#,
-        )
-        .bind(project_id)
-        .fetch_all(&self.pool)
-        .await
-    }
 }

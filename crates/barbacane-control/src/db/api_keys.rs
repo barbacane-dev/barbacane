@@ -84,23 +84,6 @@ impl ApiKeysRepository {
             .await
     }
 
-    /// Validate an API key and return the associated key record if valid.
-    #[allow(dead_code)]
-    pub async fn validate(&self, key: &str) -> Result<Option<ApiKey>, sqlx::Error> {
-        let hash = Self::hash_key(key);
-        sqlx::query_as::<_, ApiKey>(
-            r#"
-            SELECT * FROM api_keys
-            WHERE key_hash = $1
-              AND revoked_at IS NULL
-              AND (expires_at IS NULL OR expires_at > NOW())
-            "#,
-        )
-        .bind(hash)
-        .fetch_optional(&self.pool)
-        .await
-    }
-
     /// Validate an API key and update last_used_at.
     pub async fn validate_and_touch(&self, key: &str) -> Result<Option<ApiKey>, sqlx::Error> {
         let hash = Self::hash_key(key);
@@ -142,15 +125,5 @@ impl ApiKeysRepository {
         .bind(id)
         .fetch_optional(&self.pool)
         .await
-    }
-
-    /// Delete an API key.
-    #[allow(dead_code)]
-    pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected() > 0)
     }
 }

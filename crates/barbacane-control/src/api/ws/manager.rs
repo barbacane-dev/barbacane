@@ -8,12 +8,9 @@ use super::protocol::ControlPlaneMessage;
 
 /// Information about a connected data plane.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct DataPlaneConnection {
-    pub data_plane_id: Uuid,
-    pub project_id: Uuid,
-    pub name: Option<String>,
-    pub tx: mpsc::Sender<ControlPlaneMessage>,
+struct DataPlaneConnection {
+    project_id: Uuid,
+    tx: mpsc::Sender<ControlPlaneMessage>,
 }
 
 /// Manages active WebSocket connections to data planes.
@@ -39,15 +36,9 @@ impl ConnectionManager {
         &self,
         data_plane_id: Uuid,
         project_id: Uuid,
-        name: Option<String>,
         tx: mpsc::Sender<ControlPlaneMessage>,
     ) {
-        let conn = DataPlaneConnection {
-            data_plane_id,
-            project_id,
-            name,
-            tx,
-        };
+        let conn = DataPlaneConnection { project_id, tx };
 
         self.connections.insert(data_plane_id, conn);
 
@@ -79,24 +70,12 @@ impl ConnectionManager {
         }
     }
 
-    /// Get a connection by ID.
-    #[allow(dead_code)]
-    pub fn get(&self, data_plane_id: Uuid) -> Option<DataPlaneConnection> {
-        self.connections.get(&data_plane_id).map(|r| r.clone())
-    }
-
     /// List all connected data plane IDs for a project.
     pub fn list_for_project(&self, project_id: Uuid) -> Vec<Uuid> {
         self.project_connections
             .get(&project_id)
             .map(|r| r.clone())
             .unwrap_or_default()
-    }
-
-    /// Get the number of connected data planes.
-    #[allow(dead_code)]
-    pub fn connection_count(&self) -> usize {
-        self.connections.len()
     }
 
     /// Get the number of connected data planes for a project.

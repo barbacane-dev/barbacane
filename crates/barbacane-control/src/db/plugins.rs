@@ -114,13 +114,8 @@ impl PluginsRepository {
         .await
     }
 
-    /// Delete a plugin version.
-    /// Returns an error if the plugin is referenced by an artifact.
+    /// Delete a plugin version. Returns `Ok(false)` if not found.
     pub async fn delete(&self, name: &str, version: &str) -> Result<bool, sqlx::Error> {
-        // Check if plugin is referenced by any artifact
-        // Note: This check depends on how artifacts reference plugins.
-        // For now, we just delete. A proper implementation would check artifact_specs or manifest.
-
         let result = sqlx::query("DELETE FROM plugins WHERE name = $1 AND version = $2")
             .bind(name)
             .bind(version)

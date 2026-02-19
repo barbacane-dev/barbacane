@@ -62,33 +62,9 @@ pub struct ComplianceWarning {
 /// POST /specs - Upload a new spec or new revision
 pub async fn upload_spec(
     State(state): State<AppState>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<(StatusCode, Json<UploadResponse>), ProblemDetails> {
-    let mut file_data: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ProblemDetails::bad_request(format!("Invalid multipart data: {}", e)))?
-    {
-        let name = field.name().unwrap_or_default().to_string();
-        if name == "file" {
-            filename = field.file_name().map(String::from);
-            file_data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|e| {
-                        ProblemDetails::bad_request(format!("Failed to read file: {}", e))
-                    })?
-                    .to_vec(),
-            );
-        }
-    }
-
-    let content = file_data.ok_or_else(|| ProblemDetails::bad_request("Missing 'file' field"))?;
-    let filename = filename.ok_or_else(|| ProblemDetails::bad_request("Missing filename"))?;
+    let (content, filename) = super::multipart::extract_file_field(multipart).await?;
 
     // Parse the spec to extract metadata
     let content_str = String::from_utf8(content.clone())

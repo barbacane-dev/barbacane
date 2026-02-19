@@ -6,15 +6,6 @@ use uuid::Uuid;
 
 use super::models::Compilation;
 
-/// Compilation status values.
-#[allow(dead_code)]
-pub mod status {
-    pub const PENDING: &str = "pending";
-    pub const COMPILING: &str = "compiling";
-    pub const SUCCEEDED: &str = "succeeded";
-    pub const FAILED: &str = "failed";
-}
-
 /// Repository for compilation job operations.
 #[derive(Clone)]
 pub struct CompilationsRepository {
@@ -46,26 +37,6 @@ impl CompilationsRepository {
         .bind(project_id)
         .bind(production)
         .bind(&additional_specs)
-        .fetch_one(&self.pool)
-        .await
-    }
-
-    /// Create a new pending compilation job for a project.
-    #[allow(dead_code)]
-    pub async fn create_for_project(
-        &self,
-        project_id: Uuid,
-        production: bool,
-    ) -> Result<Compilation, sqlx::Error> {
-        sqlx::query_as::<_, Compilation>(
-            r#"
-            INSERT INTO compilations (project_id, production, additional_specs)
-            VALUES ($1, $2, '[]')
-            RETURNING *
-            "#,
-        )
-        .bind(project_id)
-        .bind(production)
         .fetch_one(&self.pool)
         .await
     }
@@ -105,22 +76,6 @@ impl CompilationsRepository {
             "#,
         )
         .bind(project_id)
-        .fetch_all(&self.pool)
-        .await
-    }
-
-    /// List pending compilations (for worker to pick up).
-    #[allow(dead_code)]
-    pub async fn list_pending(&self, limit: i64) -> Result<Vec<Compilation>, sqlx::Error> {
-        sqlx::query_as::<_, Compilation>(
-            r#"
-            SELECT * FROM compilations
-            WHERE status = 'pending'
-            ORDER BY started_at ASC
-            LIMIT $1
-            "#,
-        )
-        .bind(limit)
         .fetch_all(&self.pool)
         .await
     }
@@ -192,20 +147,5 @@ impl CompilationsRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
-    }
-
-    /// Get compilations by status.
-    #[allow(dead_code)]
-    pub async fn list_by_status(&self, status: &str) -> Result<Vec<Compilation>, sqlx::Error> {
-        sqlx::query_as::<_, Compilation>(
-            r#"
-            SELECT * FROM compilations
-            WHERE status = $1
-            ORDER BY started_at DESC
-            "#,
-        )
-        .bind(status)
-        .fetch_all(&self.pool)
-        .await
     }
 }

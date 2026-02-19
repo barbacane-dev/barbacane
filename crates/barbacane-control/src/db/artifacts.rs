@@ -77,15 +77,6 @@ impl ArtifactsRepository {
             .await
     }
 
-    /// Get an artifact by SHA256 hash.
-    #[allow(dead_code)]
-    pub async fn get_by_sha256(&self, sha256: &str) -> Result<Option<Artifact>, sqlx::Error> {
-        sqlx::query_as::<_, Artifact>("SELECT * FROM artifacts WHERE sha256 = $1")
-            .bind(sha256)
-            .fetch_optional(&self.pool)
-            .await
-    }
-
     /// Delete an artifact.
     pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM artifacts WHERE id = $1")
@@ -93,23 +84,6 @@ impl ArtifactsRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
-    }
-
-    /// Get artifacts for a specific spec (via artifact_specs junction).
-    #[allow(dead_code)]
-    pub async fn list_for_spec(&self, spec_id: Uuid) -> Result<Vec<Artifact>, sqlx::Error> {
-        sqlx::query_as::<_, Artifact>(
-            r#"
-            SELECT a.*
-            FROM artifacts a
-            INNER JOIN artifact_specs aps ON a.id = aps.artifact_id
-            WHERE aps.spec_id = $1
-            ORDER BY a.compiled_at DESC
-            "#,
-        )
-        .bind(spec_id)
-        .fetch_all(&self.pool)
-        .await
     }
 
     /// Link an artifact to a spec revision.
