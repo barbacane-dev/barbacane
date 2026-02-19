@@ -2441,7 +2441,10 @@ async fn perform_hot_reload(
         "Hot-reload completed successfully"
     );
 
-    // Old gateway will be dropped when the last in-flight request completes
+    // Drop old gateway on a blocking thread to avoid panic when wasmtime's
+    // runtime is dropped inside an async context.
+    tokio::task::spawn_blocking(move || drop(old_gateway));
+
     HotReloadResult::Success { artifact_id }
 }
 
@@ -2551,6 +2554,28 @@ struct ConnectedModeConfig {
     api_key: String,
     /// Optional name for this data plane.
     data_plane_name: Option<String>,
+    /// Artifact ID currently loaded (set after loading).
+    initial_artifact_id: Option<uuid::Uuid>,
+}
+
+/// Convert a WebSocket URL to an HTTP base URL.
+///
+/// E.g., `ws://host:9090/ws/data-plane` → `http://host:9090`
+///       `wss://host:9090/ws/data-plane` → `https://host:9090`
+fn ws_url_to_http_base(ws_url: &str) -> String {
+    let http_url = ws_url
+        .replacen("wss://", "https://", 1)
+        .replacen("ws://", "http://", 1);
+    // Strip the path portion, keeping only scheme + authority
+    // Find the third '/' (after "http://") to locate where the path starts
+    if let Some(authority_end) = http_url
+        .find("://")
+        .and_then(|i| http_url[i + 3..].find('/').map(|j| i + 3 + j))
+    {
+        http_url[..authority_end].to_string()
+    } else {
+        http_url
+    }
 }
 
 /// Load TLS certificates and create a rustls ServerConfig.
@@ -2709,21 +2734,25 @@ async fn run_serve(
     });
 
     // Start control plane client if in connected mode
-    let (mut artifact_rx, response_tx) = if let Some(config) = connected_mode {
+    let (mut artifact_rx, response_tx, control_plane_http_base) = if let Some(config) =
+        connected_mode
+    {
         eprintln!(
             "barbacane: connecting to control plane at {}",
             config.control_plane_url
         );
+        let http_base = ws_url_to_http_base(&config.control_plane_url);
         let client = control_plane::ControlPlaneClient::new(control_plane::ControlPlaneConfig {
             control_plane_url: config.control_plane_url,
             project_id: config.project_id,
             api_key: config.api_key,
             data_plane_name: config.data_plane_name,
+            initial_artifact_id: config.initial_artifact_id,
         });
         let (rx, tx) = client.start(shutdown_rx.clone());
-        (Some(rx), Some(tx))
+        (Some(rx), Some(tx), Some(http_base))
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     // Keep-alive timeout (currently used for documentation; HTTP/1.1 uses internal defaults)
@@ -2743,12 +2772,19 @@ async fn run_serve(
                 }
             }
             // Handle artifact notifications from control plane
-            Some(notification) = async {
+            Some(mut notification) = async {
                 match artifact_rx.as_mut() {
                     Some(rx) => rx.recv().await,
                     None => std::future::pending().await,
                 }
             } => {
+                // Resolve relative download URLs against control plane base
+                if notification.download_url.starts_with('/') {
+                    if let Some(base) = &control_plane_http_base {
+                        notification.download_url = format!("{}{}", base, notification.download_url);
+                    }
+                }
+
                 eprintln!(
                     "barbacane: new artifact available: {}, initiating hot-reload",
                     notification.artifact_id
@@ -3085,6 +3121,7 @@ async fn main() -> ExitCode {
                         project_id: project_uuid,
                         api_key: key.clone(),
                         data_plane_name: data_plane_name.clone(),
+                        initial_artifact_id: None,
                     })
                 }
                 (None, None, None) => None,
@@ -3110,5 +3147,31 @@ async fn main() -> ExitCode {
             )
             .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ws_url_to_http_base() {
+        assert_eq!(
+            ws_url_to_http_base("ws://localhost:9090/ws/data-plane"),
+            "http://localhost:9090"
+        );
+        assert_eq!(
+            ws_url_to_http_base("wss://control.example.com/ws/data-plane"),
+            "https://control.example.com"
+        );
+        assert_eq!(
+            ws_url_to_http_base("ws://10.0.0.1:8080/ws/data-plane"),
+            "http://10.0.0.1:8080"
+        );
+        // No path
+        assert_eq!(
+            ws_url_to_http_base("ws://localhost:9090"),
+            "http://localhost:9090"
+        );
     }
 }

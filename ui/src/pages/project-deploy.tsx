@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -12,6 +12,9 @@ import {
   Check,
   AlertCircle,
   Clock,
+  Package,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 import {
   listProjectDataPlanes,
@@ -22,7 +25,7 @@ import {
   deployToProjectDataPlanes,
   listProjectArtifacts,
 } from '@/lib/api'
-import type { DataPlane, ApiKey, ApiKeyCreated } from '@/lib/api'
+import type { ApiKey, ApiKeyCreated } from '@/lib/api'
 import { Button, Card, CardContent, CardHeader, CardTitle, Badge } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
@@ -33,6 +36,7 @@ export function ProjectDeployPage() {
   const [newKeyName, setNewKeyName] = useState('')
   const [createdKey, setCreatedKey] = useState<ApiKeyCreated | null>(null)
   const [copiedKey, setCopiedKey] = useState(false)
+  const [showOffline, setShowOffline] = useState(false)
 
   // Queries
   const dataPlanes = useQuery({
@@ -84,7 +88,22 @@ export function ProjectDeployPage() {
     mutationFn: (artifactId?: string) =>
       deployToProjectDataPlanes(projectId!, artifactId ? { artifact_id: artifactId } : {}),
     onSuccess: () => {
+      // Refetch immediately + staggered to catch async status transitions
       queryClient.invalidateQueries({ queryKey: ['project-data-planes', projectId] })
+      setTimeout(() => dataPlanes.refetch(), 1000)
+      setTimeout(() => dataPlanes.refetch(), 3000)
+    },
+  })
+
+  const cleanupMutation = useMutation({
+    mutationFn: async (offlineIds: string[]) => {
+      await Promise.all(
+        offlineIds.map((id) => disconnectProjectDataPlane(projectId!, id))
+      )
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-data-planes', projectId] })
+      setShowOffline(false)
     },
   })
 
@@ -109,7 +128,13 @@ export function ProjectDeployPage() {
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'Never'
-    return new Date(dateStr).toLocaleString()
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   }
 
   const getStatusBadge = (status: string) => {
@@ -124,7 +149,17 @@ export function ProjectDeployPage() {
   }
 
   const latestArtifact = artifacts.data?.[0]
-  const onlineCount = dataPlanes.data?.filter(dp => dp.status === 'online').length ?? 0
+  const artifactMap = new Map(artifacts.data?.map(a => [a.id, a]) ?? [])
+
+  const onlinePlanes = useMemo(
+    () => dataPlanes.data?.filter((dp) => dp.status !== 'offline') ?? [],
+    [dataPlanes.data]
+  )
+  const offlinePlanes = useMemo(
+    () => dataPlanes.data?.filter((dp) => dp.status === 'offline') ?? [],
+    [dataPlanes.data]
+  )
+  const onlineCount = onlinePlanes.length
 
   return (
     <div className="p-8 space-y-6">
@@ -216,45 +251,151 @@ export function ProjectDeployPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {dataPlanes.data?.map((dp: DataPlane) => (
-                <div
-                  key={dp.id}
-                  className="flex items-center justify-between p-4 rounded-lg border border-border"
-                >
-                  <div className="flex items-center gap-4">
-                    <div
-                      className={cn(
-                        'h-3 w-3 rounded-full',
-                        dp.status === 'online' ? 'bg-green-500' : 'bg-gray-400'
-                      )}
-                    />
-                    <div>
-                      <p className="font-medium">{dp.name || dp.id.slice(0, 8)}</p>
-                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                        {getStatusBadge(dp.status)}
-                        {dp.last_seen && (
-                          <span className="flex items-center gap-1">
-                            <Clock className="h-3 w-3" />
-                            Last seen: {formatDate(dp.last_seen)}
-                          </span>
+              {/* Online / deploying planes */}
+              {onlinePlanes.map((dp) => {
+                const deployedArtifact = dp.artifact_id ? artifactMap.get(dp.artifact_id) : null
+                return (
+                  <div
+                    key={dp.id}
+                    className="flex items-center justify-between p-4 rounded-lg border border-border"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="h-3 w-3 rounded-full bg-green-500" />
+                      <div>
+                        <p className="font-medium">{dp.name || dp.id.slice(0, 8)}</p>
+                        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                          {getStatusBadge(dp.status)}
+                          {dp.last_seen && (
+                            <span className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              Last seen: {formatDate(dp.last_seen)}
+                            </span>
+                          )}
+                        </div>
+                        {dp.artifact_id && (
+                          <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                            <Package className="h-3 w-3" />
+                            <span className="font-mono">{dp.artifact_id.slice(0, 8)}</span>
+                            {deployedArtifact && (
+                              <>
+                                <span>v{deployedArtifact.compiler_version}</span>
+                                <span>{formatDate(deployedArtifact.compiled_at)}</span>
+                              </>
+                            )}
+                            {dp.artifact_id === latestArtifact?.id ? (
+                              <Badge variant="default" className="bg-green-500/10 text-green-500 text-[10px] px-1.5 py-0">
+                                latest
+                              </Badge>
+                            ) : latestArtifact && (
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                outdated
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                        {!dp.artifact_id && (
+                          <p className="mt-1 text-xs text-muted-foreground italic">
+                            No artifact deployed
+                          </p>
                         )}
                       </div>
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (confirm('Disconnect this data plane?')) {
+                          disconnectMutation.mutate(dp.id)
+                        }
+                      }}
+                      disabled={disconnectMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      if (confirm('Disconnect this data plane?')) {
-                        disconnectMutation.mutate(dp.id)
-                      }
-                    }}
-                    disabled={disconnectMutation.isPending}
+                )
+              })}
+
+              {/* Offline planes — collapsible */}
+              {offlinePlanes.length > 0 && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full"
+                    onClick={() => setShowOffline((v) => !v)}
                   >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                    {showOffline ? (
+                      <ChevronDown className="h-4 w-4" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4" />
+                    )}
+                    {offlinePlanes.length} offline data plane{offlinePlanes.length !== 1 ? 's' : ''}
+                  </button>
+
+                  {showOffline && (
+                    <div className="mt-3 space-y-3">
+                      <div className="flex justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (confirm(`Remove all ${offlinePlanes.length} offline data plane(s)?`)) {
+                              cleanupMutation.mutate(offlinePlanes.map((dp) => dp.id))
+                            }
+                          }}
+                          disabled={cleanupMutation.isPending}
+                        >
+                          {cleanupMutation.isPending ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              Cleaning up...
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Clean up all
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                      {offlinePlanes.map((dp) => (
+                        <div
+                          key={dp.id}
+                          className="flex items-center justify-between p-4 rounded-lg border border-border opacity-60"
+                        >
+                          <div className="flex items-center gap-4">
+                            <div className="h-3 w-3 rounded-full bg-gray-400" />
+                            <div>
+                              <p className="font-medium">{dp.name || dp.id.slice(0, 8)}</p>
+                              <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                                {getStatusBadge(dp.status)}
+                                {dp.last_seen && (
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="h-3 w-3" />
+                                    Last seen: {formatDate(dp.last_seen)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              if (confirm('Remove this data plane?')) {
+                                disconnectMutation.mutate(dp.id)
+                              }
+                            }}
+                            disabled={disconnectMutation.isPending}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </CardContent>

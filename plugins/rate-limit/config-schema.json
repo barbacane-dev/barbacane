@@ -25,5 +25,6 @@
       "default": "client_ip",
       "description": "Partition key for rate limiting. Options: 'client_ip', 'header:<name>', 'context:<key>', or a static string"
     }
-  }
+  },
+  "additionalProperties": false
 }

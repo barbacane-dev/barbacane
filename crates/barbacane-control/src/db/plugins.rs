@@ -129,6 +129,35 @@ impl PluginsRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Insert or update a plugin (upsert by name+version).
+    pub async fn upsert(&self, plugin: NewPlugin) -> Result<Plugin, sqlx::Error> {
+        sqlx::query_as::<_, Plugin>(
+            r#"
+            INSERT INTO plugins (name, version, plugin_type, description, capabilities, config_schema, wasm_binary, sha256)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (name, version) DO UPDATE SET
+                plugin_type = EXCLUDED.plugin_type,
+                description = EXCLUDED.description,
+                capabilities = EXCLUDED.capabilities,
+                config_schema = EXCLUDED.config_schema,
+                wasm_binary = EXCLUDED.wasm_binary,
+                sha256 = EXCLUDED.sha256,
+                registered_at = NOW()
+            RETURNING name, version, plugin_type, description, capabilities, config_schema, sha256, registered_at
+            "#,
+        )
+        .bind(&plugin.name)
+        .bind(&plugin.version)
+        .bind(&plugin.plugin_type)
+        .bind(&plugin.description)
+        .bind(&plugin.capabilities)
+        .bind(&plugin.config_schema)
+        .bind(&plugin.wasm_binary)
+        .bind(&plugin.sha256)
+        .fetch_one(&self.pool)
+        .await
+    }
+
     /// Check if a plugin exists.
     pub async fn exists(&self, name: &str, version: &str) -> Result<bool, sqlx::Error> {
         let count: i64 =

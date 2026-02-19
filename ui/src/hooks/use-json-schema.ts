@@ -2,13 +2,35 @@ import { useMemo, useCallback } from 'react'
 import Ajv, { type ErrorObject } from 'ajv'
 import addFormats from 'ajv-formats'
 
-// Create a singleton Ajv instance with formats
-const ajv = new Ajv({
-  allErrors: true, // Return all errors, not just the first one
-  verbose: true, // Include schema and data in errors
-  strict: false, // Allow additional keywords
-})
-addFormats(ajv)
+/**
+ * Create a fresh Ajv instance.
+ *
+ * We avoid a singleton because Ajv caches compiled schemas by `$id`.
+ * When different plugins' schemas share the same Ajv instance, switching
+ * between schemas (or recompiling after a change) throws
+ * "schema with key or id already exists".
+ */
+function createAjv(): Ajv {
+  const instance = new Ajv({
+    allErrors: true,
+    verbose: true,
+    strict: false,
+  })
+  addFormats(instance)
+  return instance
+}
+
+/**
+ * Strip JSON Schema meta-keywords that Ajv cannot resolve.
+ *
+ * Plugin schemas use `$schema: "https://json-schema.org/draft/2020-12/schema"`
+ * and `$id` URNs. Ajv (draft-07) tries to resolve `$schema` as a meta-schema
+ * reference and fails. These fields are metadata — not needed for validation.
+ */
+function stripMetaKeywords(schema: Record<string, unknown>): Record<string, unknown> {
+  const { $schema, $id, ...rest } = schema
+  return rest
+}
 
 export interface ValidationError {
   path: string
@@ -85,7 +107,8 @@ export function useJsonSchema(schema: Record<string, unknown> | null | undefined
     }
 
     try {
-      return ajv.compile(schema)
+      const ajv = createAjv()
+      return ajv.compile(stripMetaKeywords(schema))
     } catch (error) {
       console.error('Failed to compile JSON Schema:', error)
       return null
@@ -132,7 +155,8 @@ export function validateJsonSchema(
   }
 
   try {
-    const validate = ajv.compile(schema)
+    const ajv = createAjv()
+    const validate = ajv.compile(stripMetaKeywords(schema))
     const valid = validate(data)
     return {
       valid: !!valid,

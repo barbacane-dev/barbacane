@@ -13,12 +13,15 @@ import type {
   HealthResponse,
   InitRequest,
   InitResponse,
+  PatchSpecOperationsRequest,
   Plugin,
   PluginType,
   ProblemDetails,
   Project,
+  ProjectOperationsResponse,
   ProjectPluginConfig,
   Spec,
+  SpecOperations,
   SpecRevision,
   SpecType,
   UpdateProjectPluginRequest,
@@ -402,6 +405,23 @@ export async function deployToProjectDataPlanes(
   return request<DeployResponse>(`/projects/${projectId}/deploy`, {
     method: 'POST',
     body: JSON.stringify(data ?? {}),
+  })
+}
+
+// Project operations (plugin bindings)
+export async function getProjectOperations(
+  projectId: string
+): Promise<ProjectOperationsResponse> {
+  return request<ProjectOperationsResponse>(`/projects/${projectId}/operations`)
+}
+
+export async function patchSpecOperations(
+  specId: string,
+  data: PatchSpecOperationsRequest
+): Promise<SpecOperations> {
+  return request<SpecOperations>(`/specs/${specId}/operations`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
   })
 }
 

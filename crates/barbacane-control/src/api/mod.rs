@@ -6,6 +6,7 @@ mod compilations;
 mod data_planes;
 mod health;
 mod init;
+mod operations;
 mod plugins;
 mod project_plugins;
 mod projects;

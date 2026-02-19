@@ -19,6 +19,7 @@ clap = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }
@@ -51,6 +52,9 @@ scalar_api_reference = "0.1"
 
 # Plugin seeding
 toml = { workspace = true }
+
+# Validation
+jsonschema = { workspace = true }
 
 [lints]
 workspace = true

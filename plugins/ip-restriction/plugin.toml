@@ -1,0 +1,9 @@
+[plugin]
+name = "ip-restriction"
+version = "0.1.0"
+type = "middleware"
+description = "Allows or denies requests based on client IP address or CIDR ranges"
+wasm = "ip-restriction.wasm"
+
+[capabilities]
+log = true

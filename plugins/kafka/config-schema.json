@@ -4,8 +4,12 @@
   "title": "Kafka Dispatcher Config",
   "description": "Configuration for the Kafka dispatcher plugin",
   "type": "object",
-  "required": ["topic"],
+  "required": ["brokers", "topic"],
   "properties": {
+    "brokers": {
+      "type": "string",
+      "description": "Comma-separated Kafka broker addresses (e.g. 'kafka:9092' or 'kafka1:9092,kafka2:9092')"
+    },
     "topic": {
       "type": "string",
       "description": "Kafka topic to publish messages to"

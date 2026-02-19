@@ -22,13 +22,14 @@ impl DataPlanesRepository {
     pub async fn create(&self, data_plane: NewDataPlane) -> Result<DataPlane, sqlx::Error> {
         sqlx::query_as::<_, DataPlane>(
             r#"
-            INSERT INTO data_planes (project_id, name, status, connected_at, metadata)
-            VALUES ($1, $2, 'online', NOW(), $3)
+            INSERT INTO data_planes (project_id, name, artifact_id, status, connected_at, metadata)
+            VALUES ($1, $2, $3, 'online', NOW(), $4)
             RETURNING *
             "#,
         )
         .bind(data_plane.project_id)
         .bind(&data_plane.name)
+        .bind(data_plane.artifact_id)
         .bind(&data_plane.metadata)
         .fetch_one(&self.pool)
         .await
@@ -146,8 +147,24 @@ impl DataPlanesRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Mark all online data planes as offline.
+    ///
+    /// Called on startup since the in-memory connection manager is empty
+    /// and no WebSocket connections exist yet.
+    pub async fn mark_all_offline(&self) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            UPDATE data_planes
+            SET status = 'offline', last_seen = NOW()
+            WHERE status = 'online'
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Mark stale data planes as offline (those not seen in the last N minutes).
-    #[allow(dead_code)]
     pub async fn mark_stale_offline(&self, stale_minutes: i64) -> Result<u64, sqlx::Error> {
         let cutoff = Utc::now() - chrono::Duration::minutes(stale_minutes);
         let result = sqlx::query(

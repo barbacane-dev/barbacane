@@ -234,6 +234,7 @@ pub struct DataPlane {
 pub struct NewDataPlane {
     pub project_id: Uuid,
     pub name: Option<String>,
+    pub artifact_id: Option<Uuid>,
     #[serde(default = "default_metadata")]
     pub metadata: serde_json::Value,
 }

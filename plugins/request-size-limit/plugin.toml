@@ -1,0 +1,9 @@
+[plugin]
+name = "request-size-limit"
+version = "0.1.0"
+type = "middleware"
+description = "Rejects requests that exceed a configurable size limit"
+wasm = "request-size-limit.wasm"
+
+[capabilities]
+log = true

@@ -15,7 +15,7 @@ use crate::db::{
 use crate::error::ProblemDetails;
 
 use super::router::AppState;
-use super::specs::UploadResponse;
+use super::specs::{check_spec_compliance, UploadResponse};
 
 /// POST /projects - Create a new project
 pub async fn create_project(
@@ -221,6 +221,9 @@ pub async fn upload_spec_to_project(
         (spec, 1)
     };
 
+    // Run compliance checks (non-blocking — warnings only)
+    let warnings = check_spec_compliance(&parsed, &state.pool, Some(project_id)).await;
+
     Ok((
         StatusCode::CREATED,
         Json(UploadResponse {
@@ -228,6 +231,7 @@ pub async fn upload_spec_to_project(
             name: spec.name,
             revision,
             sha256,
+            warnings,
         }),
     ))
 }

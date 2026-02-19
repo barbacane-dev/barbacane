@@ -8,6 +8,7 @@ import { AuthProvider } from '@/lib/auth'
 import { ProtectedRoute } from '@/components/auth'
 import { RootLayout, ProjectLayout } from '@/components/layout'
 import {
+  DashboardPage,
   SpecsPage,
   PluginsPage,
   ArtifactsPage,
@@ -19,6 +20,7 @@ import {
   ProjectSpecsPage,
   ProjectPluginsPage,
   ProjectBuildsPage,
+  ProjectOperationsPage,
   ProjectDeployPage,
   ProjectSettingsPage,
 } from '@/pages'
@@ -45,8 +47,7 @@ const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
-      // Landing page is now projects
-      { index: true, element: <Navigate to="/projects" replace /> },
+      { index: true, element: <DashboardPage /> },
       // Projects
       { path: 'projects', element: <ProjectsPage /> },
       {
@@ -55,6 +56,7 @@ const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="specs" replace /> },
           { path: 'specs', element: <ProjectSpecsPage /> },
+          { path: 'operations', element: <ProjectOperationsPage /> },
           { path: 'plugins', element: <ProjectPluginsPage /> },
           { path: 'builds', element: <ProjectBuildsPage /> },
           { path: 'deploy', element: <ProjectDeployPage /> },

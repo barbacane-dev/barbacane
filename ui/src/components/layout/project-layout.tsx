@@ -1,11 +1,14 @@
-import { NavLink, Outlet, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { FileCode, Puzzle, Package, Settings, ArrowLeft, RefreshCw, Rocket } from 'lucide-react'
-import { getProject } from '@/lib/api'
+import { NavLink, Outlet, useParams, useOutletContext, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { FileCode, Puzzle, Package, Settings, ArrowLeft, RefreshCw, Rocket, GitBranch, Play, Loader2 } from 'lucide-react'
+import { getProject, listProjectSpecs, listProjectCompilations, startCompilation } from '@/lib/api'
+import type { Project } from '@/lib/api'
+import { Button } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 const projectTabs = [
   { name: 'Specs', href: 'specs', icon: FileCode },
+  { name: 'Operations', href: 'operations', icon: GitBranch },
   { name: 'Plugins', href: 'plugins', icon: Puzzle },
   { name: 'Builds', href: 'builds', icon: Package },
   { name: 'Deploy', href: 'deploy', icon: Rocket },
@@ -14,11 +17,48 @@ const projectTabs = [
 
 export function ProjectLayout() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const projectQuery = useQuery({
     queryKey: ['project', id],
     queryFn: () => getProject(id!),
     enabled: !!id,
+  })
+
+  const specsQuery = useQuery({
+    queryKey: ['project-specs', id],
+    queryFn: () => listProjectSpecs(id!),
+    enabled: !!id,
+  })
+
+  const compilationsQuery = useQuery({
+    queryKey: ['project-compilations', id],
+    queryFn: () => listProjectCompilations(id!),
+    enabled: !!id,
+  })
+
+  const hasActiveCompilation = (compilationsQuery.data ?? []).some(
+    (c) => c.status === 'pending' || c.status === 'compiling'
+  )
+
+  const compileMutation = useMutation({
+    mutationFn: async () => {
+      const specs = specsQuery.data ?? []
+      if (specs.length === 0) {
+        throw new Error('No specs to compile')
+      }
+      const [primary, ...rest] = specs
+      return startCompilation(primary.id, {
+        production: projectQuery.data?.production_mode,
+        additional_specs: rest.length > 0 ? rest.map((s) => s.id) : undefined,
+      })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-compilations', id] })
+      queryClient.invalidateQueries({ queryKey: ['project-artifacts', id] })
+      navigate(`/projects/${id}/builds`)
+    },
   })
 
   if (projectQuery.isLoading) {
@@ -64,12 +104,36 @@ export function ProjectLayout() {
           <span>/</span>
           <span className="text-foreground">{project.name}</span>
         </div>
-        <h1 className="text-xl font-semibold">{project.name}</h1>
-        {project.description && (
-          <p className="text-sm text-muted-foreground mt-1">
-            {project.description}
-          </p>
-        )}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold">{project.name}</h1>
+            {project.description && (
+              <p className="text-sm text-muted-foreground mt-1">
+                {project.description}
+              </p>
+            )}
+          </div>
+          <Button
+            size="sm"
+            onClick={() => compileMutation.mutate()}
+            disabled={
+              (specsQuery.data ?? []).length === 0 ||
+              hasActiveCompilation ||
+              compileMutation.isPending
+            }
+          >
+            {compileMutation.isPending || hasActiveCompilation ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Play className="h-4 w-4 mr-2" />
+            )}
+            {compileMutation.isPending
+              ? 'Starting...'
+              : hasActiveCompilation
+                ? 'Build in progress'
+                : 'Compile'}
+          </Button>
+        </div>
       </div>
 
       {/* Tab navigation */}
@@ -105,7 +169,5 @@ export function ProjectLayout() {
 
 // Hook to access project data from child routes
 export function useProjectContext() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { project } = (window as any).__OUTLET_CONTEXT__ || {}
-  return { project }
+  return useOutletContext<{ project: Project }>()
 }

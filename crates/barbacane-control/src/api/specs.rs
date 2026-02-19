@@ -1,5 +1,7 @@
 //! Specs API handlers.
 
+use std::collections::{HashMap, HashSet};
+
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
@@ -7,9 +9,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::db::{NewSpec, Spec, SpecRevisionSummary, SpecsRepository};
+use crate::db::{
+    NewSpec, PluginsRepository, ProjectPluginConfigsRepository, Spec, SpecRevisionSummary,
+    SpecsRepository,
+};
 use crate::error::ProblemDetails;
 
 use super::router::AppState;
@@ -41,6 +47,16 @@ pub struct UploadResponse {
     pub name: String,
     pub revision: i32,
     pub sha256: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ComplianceWarning>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComplianceWarning {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 /// POST /specs - Upload a new spec or new revision
@@ -138,6 +154,9 @@ pub async fn upload_spec(
         (spec, 1)
     };
 
+    // Run compliance checks (non-blocking — warnings only)
+    let warnings = check_spec_compliance(&parsed, &state.pool, None).await;
+
     Ok((
         StatusCode::CREATED,
         Json(UploadResponse {
@@ -145,6 +164,7 @@ pub async fn upload_spec(
             name: spec.name,
             revision,
             sha256,
+            warnings,
         }),
     ))
 }
@@ -252,5 +272,349 @@ pub async fn delete_spec(
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ProblemDetails::not_found(format!("Spec {} not found", id)))
+    }
+}
+
+// ── Spec compliance checks ──────────────────────────────────────────
+
+/// A plugin reference extracted from x-barbacane-* extensions.
+struct PluginUsage {
+    name: String,
+    used_as: &'static str, // "middleware" or "dispatcher"
+    location: String,
+    config: serde_json::Value,
+}
+
+/// Normalize a plugin name by stripping an optional `@version` suffix.
+fn normalize_plugin_name(name: &str) -> String {
+    match name.split_once('@') {
+        Some((base, _)) => base.to_string(),
+        None => name.to_string(),
+    }
+}
+
+/// Extract all plugin references from a parsed spec with their usage context.
+fn extract_plugin_usages(spec: &barbacane_compiler::ApiSpec) -> Vec<PluginUsage> {
+    let mut usages = Vec::new();
+
+    for mw in &spec.global_middlewares {
+        usages.push(PluginUsage {
+            name: normalize_plugin_name(&mw.name),
+            used_as: "middleware",
+            location: "global middlewares".to_string(),
+            config: mw.config.clone(),
+        });
+    }
+
+    for op in &spec.operations {
+        let op_loc = format!("{} {}", op.method, op.path);
+
+        if let Some(dispatch) = &op.dispatch {
+            usages.push(PluginUsage {
+                name: normalize_plugin_name(&dispatch.name),
+                used_as: "dispatcher",
+                location: op_loc.clone(),
+                config: dispatch.config.clone(),
+            });
+        }
+
+        if let Some(middlewares) = &op.middlewares {
+            for mw in middlewares {
+                usages.push(PluginUsage {
+                    name: normalize_plugin_name(&mw.name),
+                    used_as: "middleware",
+                    location: op_loc.clone(),
+                    config: mw.config.clone(),
+                });
+            }
+        }
+    }
+
+    usages
+}
+
+/// Info about a registered plugin, used during compliance checks.
+struct RegistryEntry<'a> {
+    plugin_type: &'a str,
+    config_schema: &'a serde_json::Value,
+}
+
+/// Check a parsed spec for compliance issues.
+///
+/// Returns non-blocking warnings about:
+/// - `W1001` — plugin referenced but not registered in the global registry
+/// - `W1002` — plugin type mismatch (e.g. dispatcher used as middleware)
+/// - `W1003` — plugin referenced but not enabled in the project
+/// - `W1004` — plugin config does not match the registered config schema
+pub async fn check_spec_compliance(
+    spec: &barbacane_compiler::ApiSpec,
+    pool: &PgPool,
+    project_id: Option<Uuid>,
+) -> Vec<ComplianceWarning> {
+    let usages = extract_plugin_usages(spec);
+    if usages.is_empty() {
+        return vec![];
+    }
+
+    // Load registry plugins into a name → entry map
+    let plugins_repo = PluginsRepository::new(pool.clone());
+    let all_plugins = match plugins_repo.list(None, None).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to load plugin registry for compliance check");
+            return vec![];
+        }
+    };
+    let registry: HashMap<&str, RegistryEntry<'_>> = all_plugins
+        .iter()
+        .map(|p| {
+            (
+                p.name.as_str(),
+                RegistryEntry {
+                    plugin_type: p.plugin_type.as_str(),
+                    config_schema: &p.config_schema,
+                },
+            )
+        })
+        .collect();
+
+    // Optionally load project-enabled plugins
+    let enabled_in_project: Option<HashSet<String>> = if let Some(pid) = project_id {
+        let repo = ProjectPluginConfigsRepository::new(pool.clone());
+        match repo.list_for_project(pid).await {
+            Ok(configs) => Some(
+                configs
+                    .into_iter()
+                    .filter(|c| c.enabled)
+                    .map(|c| c.plugin_name)
+                    .collect(),
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load project plugins for compliance check");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut warnings = Vec::new();
+    let mut warned_once: HashSet<String> = HashSet::new();
+
+    for usage in &usages {
+        // W1001: unknown plugin
+        if !registry.contains_key(usage.name.as_str()) {
+            if warned_once.insert(format!("unknown:{}", usage.name)) {
+                warnings.push(ComplianceWarning {
+                    code: "W1001".to_string(),
+                    message: format!("Plugin '{}' is not registered", usage.name),
+                    location: Some(usage.location.clone()),
+                });
+            }
+            continue;
+        }
+
+        let entry = &registry[usage.name.as_str()];
+
+        // W1002: type mismatch
+        if entry.plugin_type != usage.used_as {
+            warnings.push(ComplianceWarning {
+                code: "W1002".to_string(),
+                message: format!(
+                    "Plugin '{}' is a {} but used as {}",
+                    usage.name, entry.plugin_type, usage.used_as
+                ),
+                location: Some(usage.location.clone()),
+            });
+        }
+
+        // W1003: not enabled in project
+        if let Some(ref enabled) = enabled_in_project {
+            if !enabled.contains(&usage.name)
+                && warned_once.insert(format!("project:{}", usage.name))
+            {
+                warnings.push(ComplianceWarning {
+                    code: "W1003".to_string(),
+                    message: format!("Plugin '{}' is not enabled in this project", usage.name),
+                    location: Some(usage.location.clone()),
+                });
+            }
+        }
+
+        // W1004: config schema validation
+        if entry.config_schema.is_object() {
+            if let Ok(validator) = jsonschema::validator_for(entry.config_schema) {
+                let errors: Vec<String> = validator
+                    .iter_errors(&usage.config)
+                    .map(|e| e.to_string())
+                    .collect();
+                if !errors.is_empty() {
+                    warnings.push(ComplianceWarning {
+                        code: "W1004".to_string(),
+                        message: format!("Plugin '{}' config: {}", usage.name, errors.join("; ")),
+                        location: Some(usage.location.clone()),
+                    });
+                }
+            }
+        }
+    }
+
+    warnings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use barbacane_compiler::{ApiSpec, DispatchConfig, MiddlewareConfig, Operation, SpecFormat};
+    use std::collections::BTreeMap;
+
+    fn empty_spec() -> ApiSpec {
+        ApiSpec {
+            filename: None,
+            format: SpecFormat::OpenApi,
+            version: "3.1.0".to_string(),
+            title: "Test".to_string(),
+            api_version: "1.0.0".to_string(),
+            operations: vec![],
+            global_middlewares: vec![],
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    fn test_operation(method: &str, path: &str) -> Operation {
+        Operation {
+            path: path.to_string(),
+            method: method.to_string(),
+            operation_id: None,
+            parameters: vec![],
+            request_body: None,
+            dispatch: None,
+            middlewares: None,
+            deprecated: false,
+            sunset: None,
+            extensions: BTreeMap::new(),
+            messages: vec![],
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn normalize_plugin_name_strips_version() {
+        assert_eq!(normalize_plugin_name("cors@1.0.0"), "cors");
+        assert_eq!(normalize_plugin_name("rate-limit@2.3.1"), "rate-limit");
+    }
+
+    #[test]
+    fn normalize_plugin_name_without_version() {
+        assert_eq!(normalize_plugin_name("cors"), "cors");
+        assert_eq!(normalize_plugin_name("http-upstream"), "http-upstream");
+    }
+
+    #[test]
+    fn extract_usages_empty_spec() {
+        let spec = empty_spec();
+        let usages = extract_plugin_usages(&spec);
+        assert!(usages.is_empty());
+    }
+
+    #[test]
+    fn extract_usages_global_middlewares() {
+        let mut spec = empty_spec();
+        spec.global_middlewares = vec![
+            MiddlewareConfig {
+                name: "cors".to_string(),
+                config: serde_json::json!({"origins": ["*"]}),
+            },
+            MiddlewareConfig {
+                name: "rate-limit@1.0.0".to_string(),
+                config: serde_json::json!({"quota": 60}),
+            },
+        ];
+
+        let usages = extract_plugin_usages(&spec);
+        assert_eq!(usages.len(), 2);
+        assert_eq!(usages[0].name, "cors");
+        assert_eq!(usages[0].used_as, "middleware");
+        assert_eq!(usages[0].location, "global middlewares");
+        assert_eq!(usages[1].name, "rate-limit");
+    }
+
+    #[test]
+    fn extract_usages_operation_dispatch() {
+        let mut spec = empty_spec();
+        let mut op = test_operation("GET", "/users");
+        op.dispatch = Some(DispatchConfig {
+            name: "http-upstream".to_string(),
+            config: serde_json::json!({"url": "http://backend:8080"}),
+        });
+        spec.operations.push(op);
+
+        let usages = extract_plugin_usages(&spec);
+        assert_eq!(usages.len(), 1);
+        assert_eq!(usages[0].name, "http-upstream");
+        assert_eq!(usages[0].used_as, "dispatcher");
+        assert_eq!(usages[0].location, "GET /users");
+    }
+
+    #[test]
+    fn extract_usages_operation_middlewares() {
+        let mut spec = empty_spec();
+        let mut op = test_operation("POST", "/bookings");
+        op.middlewares = Some(vec![MiddlewareConfig {
+            name: "auth".to_string(),
+            config: serde_json::json!({}),
+        }]);
+        spec.operations.push(op);
+
+        let usages = extract_plugin_usages(&spec);
+        assert_eq!(usages.len(), 1);
+        assert_eq!(usages[0].name, "auth");
+        assert_eq!(usages[0].used_as, "middleware");
+        assert_eq!(usages[0].location, "POST /bookings");
+    }
+
+    #[test]
+    fn extract_usages_combined() {
+        let mut spec = empty_spec();
+        spec.global_middlewares = vec![MiddlewareConfig {
+            name: "cors".to_string(),
+            config: serde_json::json!({}),
+        }];
+
+        let mut op = test_operation("GET", "/stations");
+        op.dispatch = Some(DispatchConfig {
+            name: "http-upstream".to_string(),
+            config: serde_json::json!({}),
+        });
+        op.middlewares = Some(vec![MiddlewareConfig {
+            name: "cache".to_string(),
+            config: serde_json::json!({"ttl": 300}),
+        }]);
+        spec.operations.push(op);
+
+        let usages = extract_plugin_usages(&spec);
+        assert_eq!(usages.len(), 3);
+        assert_eq!(usages[0].name, "cors");
+        assert_eq!(usages[0].used_as, "middleware");
+        assert_eq!(usages[1].name, "http-upstream");
+        assert_eq!(usages[1].used_as, "dispatcher");
+        assert_eq!(usages[2].name, "cache");
+        assert_eq!(usages[2].used_as, "middleware");
+    }
+
+    #[test]
+    fn extract_usages_preserves_config() {
+        let mut spec = empty_spec();
+        let config = serde_json::json!({"url": "nats://localhost:4222", "subject": "events"});
+        let mut op = test_operation("SEND", "/events");
+        op.dispatch = Some(DispatchConfig {
+            name: "nats".to_string(),
+            config: config.clone(),
+        });
+        spec.operations.push(op);
+
+        let usages = extract_plugin_usages(&spec);
+        assert_eq!(usages.len(), 1);
+        assert_eq!(usages[0].config, config);
     }
 }

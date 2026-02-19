@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::{
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use sqlx::PgPool;
@@ -21,8 +21,8 @@ use scalar_api_reference::scalar_html_default;
 
 use super::ws::ConnectionManager;
 use super::{
-    api_keys, artifacts, compilations, data_planes, health, init, plugins, project_plugins,
-    projects, specs, ws,
+    api_keys, artifacts, compilations, data_planes, health, init, operations, plugins,
+    project_plugins, projects, specs, ws,
 };
 
 /// OpenAPI spec content embedded at compile time.
@@ -115,6 +115,11 @@ pub fn create_router(
             "/artifacts/{id}/download",
             get(artifacts::download_artifact),
         )
+        // Spec operations (plugin bindings)
+        .route(
+            "/specs/{id}/operations",
+            patch(operations::patch_spec_operations),
+        )
         // Compilations
         .route("/compilations/{id}", get(compilations::get_compilation))
         .route(
@@ -149,6 +154,11 @@ pub fn create_router(
         .route(
             "/projects/{id}/plugins/{name}",
             delete(project_plugins::remove_plugin_from_project),
+        )
+        // Project operations (plugin bindings across all specs)
+        .route(
+            "/projects/{id}/operations",
+            get(operations::get_project_operations),
         )
         // Project compilations and artifacts
         .route(

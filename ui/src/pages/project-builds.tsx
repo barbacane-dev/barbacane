@@ -1,5 +1,5 @@
-import { useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useParams, Link } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Package,
   RefreshCw,
@@ -8,18 +8,21 @@ import {
   Clock,
   Loader2,
   Download,
+  Trash2,
 } from 'lucide-react'
 import {
   listProjectCompilations,
   listProjectArtifacts,
   downloadArtifact,
+  deleteArtifact,
 } from '@/lib/api'
-import type { Compilation } from '@/lib/api'
+import type { Compilation, CompilationError } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 export function ProjectBuildsPage() {
   const { id: projectId } = useParams<{ id: string }>()
+  const queryClient = useQueryClient()
 
   const compilationsQuery = useQuery({
     queryKey: ['project-compilations', projectId],
@@ -32,6 +35,16 @@ export function ProjectBuildsPage() {
     queryKey: ['project-artifacts', projectId],
     queryFn: () => listProjectArtifacts(projectId!),
     enabled: !!projectId,
+  })
+
+  const compilations = compilationsQuery.data ?? []
+  const artifacts = artifactsQuery.data ?? []
+
+  const deleteArtifactMutation = useMutation({
+    mutationFn: deleteArtifact,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
+    },
   })
 
   const handleDownload = async (artifactId: string) => {
@@ -92,9 +105,69 @@ export function ProjectBuildsPage() {
     }
   }
 
+  const renderCompilationErrors = (errors: CompilationError[]) => {
+    return errors.map((err, i) => {
+      // Strip code prefix from message if backend didn't (defensive)
+      const message = err.message.startsWith(`${err.code}:`)
+        ? err.message.slice(err.code.length + 1).trim()
+        : err.message
+
+      // E1040: missing plugins — parse plugin names and show structured output
+      if (err.code === 'E1040') {
+        const pluginNames = [...message.matchAll(/'([^']+)'/g)].map((m) => m[1])
+
+        return (
+          <div
+            key={i}
+            className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 p-3"
+          >
+            <p className="text-xs font-medium text-destructive">
+              <span className="font-mono">[{err.code}]</span> Missing plugin
+              {pluginNames.length !== 1 ? 's' : ''}
+            </p>
+            {pluginNames.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {pluginNames.map((name) => (
+                  <Badge
+                    key={name}
+                    variant="outline"
+                    className="border-destructive/30 text-destructive text-xs"
+                  >
+                    {name}
+                  </Badge>
+                ))}
+              </div>
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Enable them on the{' '}
+              <Link
+                to={`/projects/${projectId}/plugins`}
+                className="underline text-primary hover:text-primary/80"
+              >
+                Plugins page
+              </Link>{' '}
+              before compiling.
+            </p>
+          </div>
+        )
+      }
+
+      // Default: generic error display
+      return (
+        <div
+          key={i}
+          className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 p-3"
+        >
+          <p className="text-xs text-destructive">
+            <span className="font-mono font-medium">[{err.code}]</span>{' '}
+            {message}
+          </p>
+        </div>
+      )
+    })
+  }
+
   const isLoading = compilationsQuery.isLoading || artifactsQuery.isLoading
-  const compilations = compilationsQuery.data ?? []
-  const artifacts = artifactsQuery.data ?? []
 
   return (
     <div className="p-8">
@@ -130,7 +203,7 @@ export function ProjectBuildsPage() {
           <div className="rounded-lg border border-dashed border-border p-8 text-center">
             <Package className="mx-auto h-10 w-10 text-muted-foreground" />
             <p className="mt-2 text-sm text-muted-foreground">
-              No artifacts yet. Compile a spec to create an artifact.
+              No artifacts yet. Compile your project to create an artifact.
             </p>
           </div>
         ) : (
@@ -151,14 +224,28 @@ export function ProjectBuildsPage() {
                         </div>
                       </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDownload(artifact.id)}
-                    >
-                      <Download className="h-4 w-4 mr-1" />
-                      Download
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDownload(artifact.id)}
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Download
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          if (confirm(`Delete artifact ${artifact.id.slice(0, 8)}?`)) {
+                            deleteArtifactMutation.mutate(artifact.id)
+                          }
+                        }}
+                        disabled={deleteArtifactMutation.isPending}
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
                     Built {formatDate(artifact.compiled_at)}
@@ -207,18 +294,8 @@ export function ProjectBuildsPage() {
                           {compilation.completed_at &&
                             ` | Completed ${formatDate(compilation.completed_at)}`}
                         </p>
-                        {compilation.errors && compilation.errors.length > 0 && (
-                          <div className="mt-2">
-                            {compilation.errors.map((err, i) => (
-                              <p
-                                key={i}
-                                className="text-xs text-destructive font-mono"
-                              >
-                                [{err.code}] {err.message}
-                              </p>
-                            ))}
-                          </div>
-                        )}
+                        {compilation.errors && compilation.errors.length > 0 &&
+                          renderCompilationErrors(compilation.errors)}
                       </div>
                     </div>
                     {compilation.artifact_id && (
