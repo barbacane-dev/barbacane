@@ -13,6 +13,9 @@ struct Node {
     static_children: HashMap<String, Node>,
     /// Parameter child (at most one per node).
     param_child: Option<Box<ParamNode>>,
+    /// Wildcard child — matches all remaining path segments joined by `/`.
+    /// Only valid at a terminal position (no further trie nodes after it).
+    wildcard_child: Option<Box<WildcardNode>>,
     /// Method-to-route mapping at this terminal node.
     methods: HashMap<String, RouteEntry>,
 }
@@ -23,6 +26,18 @@ struct ParamNode {
     /// Parameter name (e.g. "id").
     name: String,
     /// The subtree below this parameter.
+    node: Node,
+}
+
+/// A wildcard segment node (e.g. `{path+}`).
+///
+/// Matches all remaining path segments joined by `/` and captures the result
+/// as a single parameter value.
+#[derive(Debug)]
+struct WildcardNode {
+    /// Parameter name (e.g. "path" from `{path+}`).
+    name: String,
+    /// Terminal node — holds the method map.
     node: Node,
 }
 
@@ -52,6 +67,8 @@ pub enum RouteMatch {
 enum Segment {
     Static(String),
     Param(String),
+    /// Matches all remaining segments joined by `/`. Must be the last segment.
+    Wildcard(String),
 }
 
 impl Router {
@@ -114,6 +131,19 @@ impl Router {
                     }
                     &mut current.param_child.as_mut().expect("just set above").node
                 }
+                Segment::Wildcard(name) => {
+                    if current.wildcard_child.is_none() {
+                        current.wildcard_child = Some(Box::new(WildcardNode {
+                            name: name.clone(),
+                            node: Node::default(),
+                        }));
+                    }
+                    &mut current
+                        .wildcard_child
+                        .as_mut()
+                        .expect("just set above")
+                        .node
+                }
             };
         }
 
@@ -135,14 +165,14 @@ impl Router {
         let segment = segments[0];
         let remaining = &segments[1..];
 
-        // Static children take precedence (more specific match)
+        // Static children take precedence (most specific match).
         if let Some(child) = node.static_children.get(segment) {
             if let Some(result) = self.traverse_and_match(child, remaining, params) {
                 return Some(result);
             }
         }
 
-        // Try parameter child
+        // Try single-segment parameter child.
         if let Some(param_child) = &node.param_child {
             let param_len = params.len();
             params.push((param_child.name.clone(), segment.to_string()));
@@ -151,7 +181,23 @@ impl Router {
                 return Some(result);
             }
 
-            // Backtrack if this path didn't work
+            // Backtrack if this path didn't work.
+            params.truncate(param_len);
+        }
+
+        // Try wildcard child — consumes all remaining segments (including the current one).
+        if let Some(wildcard_child) = &node.wildcard_child {
+            let joined = std::iter::once(segment)
+                .chain(remaining.iter().copied())
+                .collect::<Vec<_>>()
+                .join("/");
+            let param_len = params.len();
+            params.push((wildcard_child.name.clone(), joined));
+
+            if let Some(result) = self.traverse_and_match(&wildcard_child.node, &[], params) {
+                return Some(result);
+            }
+
             params.truncate(param_len);
         }
 
@@ -165,7 +211,12 @@ fn parse_path_template(path: &str) -> Vec<Segment> {
         .filter(|s| !s.is_empty())
         .map(|s| {
             if s.starts_with('{') && s.ends_with('}') {
-                Segment::Param(s[1..s.len() - 1].to_string())
+                let inner = &s[1..s.len() - 1];
+                if let Some(base) = inner.strip_suffix('+') {
+                    Segment::Wildcard(base.to_string())
+                } else {
+                    Segment::Param(inner.to_string())
+                }
             } else {
                 Segment::Static(s.to_string())
             }
@@ -388,6 +439,116 @@ mod tests {
         match router.lookup("/users", "DELETE") {
             RouteMatch::Found { entry, .. } => assert_eq!(entry.operation_index, 2),
             _ => panic!("expected Found for DELETE"),
+        }
+    }
+
+    // === Wildcard parameter tests ===
+
+    #[test]
+    fn wildcard_matches_single_segment() {
+        let mut router = Router::new();
+        router.insert("/files/{name+}", "GET", RouteEntry { operation_index: 0 });
+
+        match router.lookup("/files/readme.txt", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(params, vec![("name".to_string(), "readme.txt".to_string())]);
+            }
+            _ => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn wildcard_matches_multiple_segments() {
+        let mut router = Router::new();
+        router.insert("/files/{path+}", "GET", RouteEntry { operation_index: 0 });
+
+        match router.lookup("/files/a/b/c/file.txt", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(
+                    params,
+                    vec![("path".to_string(), "a/b/c/file.txt".to_string())]
+                );
+            }
+            _ => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn wildcard_with_prefix_param() {
+        let mut router = Router::new();
+        router.insert(
+            "/files/{bucket}/{key+}",
+            "GET",
+            RouteEntry { operation_index: 0 },
+        );
+
+        match router.lookup("/files/my-bucket/folder/sub/file.txt", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(
+                    params,
+                    vec![
+                        ("bucket".to_string(), "my-bucket".to_string()),
+                        ("key".to_string(), "folder/sub/file.txt".to_string()),
+                    ]
+                );
+            }
+            _ => panic!("expected Found"),
+        }
+    }
+
+    #[test]
+    fn static_takes_precedence_over_wildcard() {
+        let mut router = Router::new();
+        router.insert("/files/special", "GET", RouteEntry { operation_index: 0 });
+        router.insert("/files/{path+}", "GET", RouteEntry { operation_index: 1 });
+
+        // Static wins for exact match
+        match router.lookup("/files/special", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert!(params.is_empty());
+            }
+            _ => panic!("expected Found for static"),
+        }
+
+        // Wildcard wins for multi-segment
+        match router.lookup("/files/other/file.txt", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 1);
+                assert_eq!(
+                    params,
+                    vec![("path".to_string(), "other/file.txt".to_string())]
+                );
+            }
+            _ => panic!("expected Found for wildcard"),
+        }
+    }
+
+    #[test]
+    fn param_takes_precedence_over_wildcard() {
+        let mut router = Router::new();
+        router.insert("/files/{name}", "GET", RouteEntry { operation_index: 0 });
+        router.insert("/files/{path+}", "GET", RouteEntry { operation_index: 1 });
+
+        // Single segment: param wins (more specific)
+        match router.lookup("/files/readme.txt", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(params, vec![("name".to_string(), "readme.txt".to_string())]);
+            }
+            _ => panic!("expected Found for param"),
+        }
+
+        // Multi-segment: only wildcard can match
+        match router.lookup("/files/a/b.txt", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 1);
+                assert_eq!(params, vec![("path".to_string(), "a/b.txt".to_string())]);
+            }
+            _ => panic!("expected Found for wildcard"),
         }
     }
 }

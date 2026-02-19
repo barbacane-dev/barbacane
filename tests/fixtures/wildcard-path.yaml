@@ -1,0 +1,84 @@
+openapi: "3.1.0"
+info:
+  title: Wildcard Path Parameter Test API
+  version: "1.0.0"
+paths:
+  # Static route — must take precedence over the wildcard below
+  /files/special:
+    get:
+      operationId: getSpecialFile
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"static"}'
+      responses:
+        "200":
+          description: OK
+
+  # Wildcard route — captures any single or multi-segment path under /files/
+  /files/{path+}:
+    get:
+      operationId: getFile
+      parameters:
+        - name: path
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"wildcard"}'
+      responses:
+        "200":
+          description: OK
+
+  # Wildcard with a regular prefix param — S3-style bucket + key
+  /storage/{bucket}/{key+}:
+    get:
+      operationId: getObject
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"storage"}'
+      responses:
+        "200":
+          description: OK
+    put:
+      operationId: putObject
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"storage"}'
+      responses:
+        "200":
+          description: OK
