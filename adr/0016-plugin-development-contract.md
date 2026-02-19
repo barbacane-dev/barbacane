@@ -80,7 +80,7 @@ Example `config-schema.json` for the `rate-limit` plugin:
 }
 ```
 
-At compile time (`barbacane-control compile`), every `config` block in the spec is validated against the plugin's JSON Schema. If the schema rejects it, compilation fails. No invalid config reaches the data plane.
+At compile time (`barbacane compile`), every `config` block in the spec is validated against the plugin's JSON Schema. If the schema rejects it, compilation fails. No invalid config reaches the data plane.
 
 ### WASM Export Contract
 

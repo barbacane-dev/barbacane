@@ -13,7 +13,7 @@ The solution is a **compilation step**: specs are processed ahead of time into a
 
 ### Compiler Responsibilities
 
-The spec compiler (`barbacane-control compile`) takes OpenAPI/AsyncAPI specs as input and produces a deployable artifact. It performs:
+The spec compiler (`barbacane compile`) takes OpenAPI/AsyncAPI specs as input and produces a deployable artifact. It performs:
 
 #### 1. Validation (fail fast)
 
@@ -133,10 +133,10 @@ At startup, the data plane memory-maps `routes.fb` and `schemas.fb` — no parsi
 ### Compilation Pipeline (CI/CD)
 
 ```
-┌──────────┐     ┌────────────────┐     ┌────────────┐     ┌──────────┐
-│ Git push │────▶│ barbacane-control │──▶│  artifact   │────▶│  Deploy  │
-│ (specs)  │     │    compile       │    │   .bca     │     │  (edge)  │
-└──────────┘     └────────────────┘     └────────────┘     └──────────┘
+┌──────────┐     ┌───────────────────┐     ┌────────────┐     ┌──────────┐
+│ Git push │────▶│ barbacane compile  │────▶│  artifact   │────▶│  Deploy  │
+│ (specs)  │     │ --spec --manifest  │     │   .bca     │     │  (edge)  │
+└──────────┘     └───────────────────┘     └────────────┘     └──────────┘
                         │
                   Validates:                Stores in:
                   - spec conformance        - Object storage

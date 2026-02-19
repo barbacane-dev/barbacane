@@ -361,23 +361,28 @@ barbacane-control spec history <ID> [--server <URL>]
 
 ### 4.3 Compilation
 
-```
-# Remote (via control plane server)
-barbacane-control compile --spec-id <ID> [--server <URL>] [--production] [--output <PATH>]
+```bash
+# Local compilation (developer workflow — uses barbacane binary)
+barbacane compile --spec <FILE>... --manifest barbacane.yaml --output artifact.bca
 
-# Local (standalone, no server needed)
-barbacane-control compile --specs <FILE>... [--output <PATH>] [--registry <URL>] [--production|--development]
+# Remote async compilation (via control plane REST API)
+curl -X POST http://localhost:9090/specs/{id}/compile \
+  -H "Content-Type: application/json" \
+  -d '{"production": true}'
+# then poll: GET /compilations/{id}
 ```
 
-Local compilation contacts the plugin registry to resolve plugin references but does not require a running control plane server.
+Local compilation resolves plugins from the `barbacane.yaml` manifest and produces a `.bca` artifact. Remote compilation is triggered via the REST API and runs asynchronously on the control plane.
 
 ### 4.4 Validation
 
-```
-barbacane-control validate --specs <FILE>...
-```
+```bash
+# Quick validation — spec structure + extensions only, no plugin resolution
+barbacane validate --spec <FILE>...
 
-Quick validation: spec structure + extension schemas only. No plugin resolution.
+# JSON output for CI
+barbacane validate --spec <FILE>... --format json
+```
 
 ### 4.5 Plugin management
 

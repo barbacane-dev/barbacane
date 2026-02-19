@@ -266,6 +266,15 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 
+**Connected mode** (optional — connect to a control plane for centralized management):
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--control-plane` | No | - | Control plane WebSocket URL (e.g., `ws://control:9090/ws/data-plane`) |
+| `--project-id` | No | - | Project UUID for control plane registration. Required if `--control-plane` is set |
+| `--api-key` | No | - | API key for control plane auth. Also readable from `BARBACANE_API_KEY` env var |
+| `--data-plane-name` | No | - | Name for this instance in the control plane UI |
+
 ### Examples
 
 ```bash
@@ -633,7 +642,7 @@ kill %1
 
 ## barbacane-control
 
-The control plane CLI for managing specs, plugins, and artifacts via REST API.
+The control plane CLI for running the control plane server and managing the plugin registry.
 
 ```bash
 barbacane-control <COMMAND> [OPTIONS]
@@ -643,8 +652,6 @@ barbacane-control <COMMAND> [OPTIONS]
 
 | Command | Description |
 |---------|-------------|
-| `compile` | Compile spec(s) into a `.bca` artifact (local) |
-| `validate` | Validate spec(s) without compiling |
 | `serve` | Start the control plane REST API server |
 | `seed-plugins` | Seed the plugin registry with built-in plugins |
 
@@ -664,7 +671,7 @@ barbacane-control seed-plugins [OPTIONS]
 |--------|----------|---------|-------------|
 | `--plugins-dir` | No | `plugins` | Path to the plugins directory |
 | `--database-url` | Yes | - | PostgreSQL connection URL |
-| `--skip-existing` | No | `true` | Skip plugins that already exist in the registry |
+| `--force` | No | `false` | Re-seed plugins that already exist (updates metadata and binary) |
 | `--verbose` | No | `false` | Show detailed output |
 
 The `--database-url` can also be set via the `DATABASE_URL` environment variable.
@@ -787,7 +794,9 @@ The server exposes a REST API for managing specs, plugins, artifacts, and projec
 |----------|-------------|
 | **System** | |
 | `GET /health` | Health check |
-| `GET /api/docs` | Interactive API documentation (Scalar) |
+| `GET /openapi` | OpenAPI specification (YAML) |
+| `GET /docs` | Interactive API documentation (Scalar) |
+| `POST /init` | Initialize a new project |
 | **Specs** | |
 | `POST /specs` | Upload spec (multipart) |
 | `GET /specs` | List specs |
@@ -796,16 +805,22 @@ The server exposes a REST API for managing specs, plugins, artifacts, and projec
 | `GET /specs/{id}/history` | Revision history |
 | `GET /specs/{id}/content` | Download spec content |
 | `POST /specs/{id}/compile` | Start async compilation |
+| `GET /specs/{id}/compilations` | List compilations for a spec |
+| `PATCH /specs/{id}/operations` | Update plugin bindings for spec operations |
+| **Compilations** | |
 | `GET /compilations/{id}` | Poll compilation status |
+| `DELETE /compilations/{id}` | Delete a compilation record |
 | **Plugins** | |
 | `POST /plugins` | Register plugin (multipart) |
 | `GET /plugins` | List plugins |
+| `GET /plugins/{name}` | List versions of a plugin |
 | `GET /plugins/{name}/{version}` | Get plugin metadata |
 | `DELETE /plugins/{name}/{version}` | Delete plugin |
 | `GET /plugins/{name}/{version}/download` | Download WASM binary |
 | **Artifacts** | |
 | `GET /artifacts` | List artifacts |
 | `GET /artifacts/{id}` | Get artifact metadata |
+| `DELETE /artifacts/{id}` | Delete an artifact |
 | `GET /artifacts/{id}/download` | Download `.bca` file |
 | **Projects** | |
 | `POST /projects` | Create a new project |
@@ -813,25 +828,31 @@ The server exposes a REST API for managing specs, plugins, artifacts, and projec
 | `GET /projects/{id}` | Get project details |
 | `PUT /projects/{id}` | Update project |
 | `DELETE /projects/{id}` | Delete project |
+| `GET /projects/{id}/specs` | List specs in a project |
+| `POST /projects/{id}/specs` | Upload spec to a project |
+| `GET /projects/{id}/operations` | List all operations across project specs |
 | `GET /projects/{id}/plugins` | List plugins configured for project |
 | `POST /projects/{id}/plugins` | Add plugin to project |
 | `PUT /projects/{id}/plugins/{name}` | Update plugin config |
 | `DELETE /projects/{id}/plugins/{name}` | Remove plugin from project |
+| `GET /projects/{id}/compilations` | List compilations for a project |
+| `GET /projects/{id}/artifacts` | List artifacts for a project |
 | `POST /projects/{id}/deploy` | Deploy artifact to connected data planes |
 | **Data Planes** | |
 | `GET /projects/{id}/data-planes` | List connected data planes |
-| `GET /data-planes/{id}` | Get data plane status |
+| `GET /projects/{id}/data-planes/{dp_id}` | Get data plane status |
+| `DELETE /projects/{id}/data-planes/{dp_id}` | Disconnect a data plane |
 | **API Keys** | |
 | `POST /projects/{id}/api-keys` | Create API key for data plane auth |
 | `GET /projects/{id}/api-keys` | List API keys |
-| `DELETE /projects/{id}/api-keys/{id}` | Revoke API key |
+| `DELETE /projects/{id}/api-keys/{key_id}` | Revoke API key |
 
 ### Interactive API Documentation
 
 The control plane includes interactive API documentation powered by [Scalar](https://scalar.com/). Access it at:
 
 ```
-http://localhost:9090/api/docs
+http://localhost:9090/docs
 ```
 
 This provides a browsable interface for exploring and testing all API endpoints.

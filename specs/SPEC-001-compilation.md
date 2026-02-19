@@ -28,7 +28,7 @@ The compiler auto-detects the format from the root `openapi` or `asyncapi` field
 The compiler accepts one or more spec files in a single invocation:
 
 ```bash
-barbacane-control compile --specs user-api.yaml billing-api.yaml
+barbacane compile --spec user-api.yaml --spec billing-api.yaml --manifest barbacane.yaml --output combined.bca
 ```
 
 Multiple specs are merged into a single artifact. Routing conflicts (same path + method across specs) fail compilation with `E1010`.
@@ -200,18 +200,16 @@ All referenced `.wasm` binaries are copied into `plugins/`. OPA policies compile
 
 ## 6. CLI Interface
 
-### 6.1 `barbacane-control compile`
+### 6.1 `barbacane compile`
 
 ```
-barbacane-control compile [OPTIONS] --specs <FILE>...
+barbacane compile --spec <FILE>... --manifest <PATH> --output <PATH> [OPTIONS]
 
 OPTIONS:
-  --specs <FILE>...          One or more OpenAPI/AsyncAPI spec files (required)
-  --output <PATH>            Output artifact path (default: ./artifact.bca)
-  --registry <URL>           Plugin registry URL (default: from config)
-  --production               Enable production checks (reject http:// upstreams) [default]
-  --development              Disable production-only checks
-  --verbose                  Show detailed compilation output
+  --spec <FILE>...           One or more OpenAPI/AsyncAPI spec files (short: -s, required)
+  --manifest <PATH>          Path to barbacane.yaml plugin manifest (short: -m, required)
+  --output <PATH>            Output artifact path (short: -o, required)
+  --allow-plaintext          Allow http:// upstream URLs (development only)
 ```
 
 Exit codes:
@@ -220,22 +218,22 @@ Exit codes:
 |------|---------|
 | `0` | Compilation succeeded |
 | `1` | Validation error (see stderr for error codes) |
-| `2` | Plugin resolution error |
-| `3` | I/O error (file not found, registry unreachable) |
+| `2` | Manifest or plugin resolution error |
+| `3` | I/O error (file not found, write failed) |
 
-### 6.2 `barbacane-control validate`
+### 6.2 `barbacane validate`
 
 Quick validation without full compilation (no plugin resolution, no artifact output):
 
 ```
-barbacane-control validate [OPTIONS] --specs <FILE>...
+barbacane validate --spec <FILE>... [OPTIONS]
 
 OPTIONS:
-  --specs <FILE>...          One or more spec files (required)
-  --verbose                  Show detailed output
+  --spec <FILE>...           One or more spec files (short: -s, required)
+  --format <FORMAT>          Output format: text or json (default: text)
 ```
 
-Runs checks from sections 4.1 and 4.2 only. Does not contact the plugin registry.
+Runs checks from sections 4.1 and 4.2 only. Does not resolve plugins.
 
 ### 6.3 Error output format
 

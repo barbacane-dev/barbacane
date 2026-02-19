@@ -351,7 +351,7 @@ When adding plugins to a project, the UI:
 The control plane includes interactive API documentation powered by Scalar:
 
 ```
-http://localhost:9090/api/docs
+http://localhost:9090/docs
 ```
 
 This provides a browsable interface for exploring and testing all API endpoints directly from your browser.

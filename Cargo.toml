@@ -131,6 +131,10 @@ proc-macro2 = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 wat = "1"
 
+# CLI testing
+assert_cmd = "2"
+predicates = "3"
+
 # Workspace crates (version required for crates.io publishing)
 barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.1.2" }
 barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.1.2" }

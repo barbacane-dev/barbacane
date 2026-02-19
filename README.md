@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/unit%20tests-305%20passing-brightgreen" alt="Unit Tests">
   <img src="https://img.shields.io/badge/plugin%20tests-495%20passing-brightgreen" alt="Plugin Tests">
   <img src="https://img.shields.io/badge/integration%20tests-181%20passing-brightgreen" alt="Integration Tests">
+  <img src="https://img.shields.io/badge/cli%20tests-17%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>

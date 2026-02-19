@@ -103,8 +103,8 @@ Spec authors follow the same pipeline locally as in production — no special "d
 
 ```
 1. Write/edit spec        →  user-api.yaml
-2. Compile locally        →  barbacane-control compile --specs user-api.yaml
-3. Run locally            →  barbacane --artifact user-api.bca --allow-plaintext-upstream
+2. Compile locally        →  barbacane compile --spec user-api.yaml --manifest barbacane.yaml --output user-api.bca
+3. Run locally            →  barbacane serve --artifact user-api.bca --allow-plaintext-upstream
 4. Test with curl/httpie  →  curl http://localhost:8080/users/123
 5. Iterate
 ```
@@ -131,10 +131,10 @@ Quick validation without full compilation:
 
 ```bash
 # Validate spec structure and extensions only (no plugin resolution)
-barbacane-control validate --specs user-api.yaml
+barbacane validate --spec user-api.yaml
 
 # Full compile (validates everything, produces artifact)
-barbacane-control compile --specs user-api.yaml
+barbacane compile --spec user-api.yaml --manifest barbacane.yaml --output user-api.bca
 ```
 
 #### Contract Testing

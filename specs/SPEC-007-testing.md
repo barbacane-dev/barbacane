@@ -143,9 +143,9 @@ Spec authors follow the same pipeline locally as in production:
 
 ```
 1. Edit spec             →  user-api.yaml
-2. Validate (fast)       →  barbacane-control validate --specs user-api.yaml
-3. Compile               →  barbacane-control compile --specs user-api.yaml --development
-4. Run data plane        →  barbacane --artifact artifact.bca --dev --allow-plaintext-upstream
+2. Validate (fast)       →  barbacane validate --spec user-api.yaml
+3. Compile               →  barbacane compile --spec user-api.yaml --manifest barbacane.yaml --output artifact.bca --allow-plaintext
+4. Run data plane        →  barbacane serve --artifact artifact.bca --dev --allow-plaintext-upstream
 5. Test with curl        →  curl http://localhost:8080/users/123
 6. Iterate from step 1
 ```

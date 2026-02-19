@@ -51,7 +51,7 @@ Client ──▶ [SNI Router] ─┤
 A single artifact **can** contain multiple OpenAPI/AsyncAPI specs (e.g., a user API and a billing API managed by the same team). This is a single-tenant scenario with multiple specs, not multi-tenancy:
 
 ```yaml
-# barbacane-control compile --specs user-api.yaml billing-api.yaml
+# barbacane compile --spec user-api.yaml --spec billing-api.yaml --manifest barbacane.yaml --output combined.bca
 ```
 
 Routing between specs within one artifact uses `servers` (hostnames or base paths) as defined in the OpenAPI specs themselves.
