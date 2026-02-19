@@ -467,7 +467,9 @@ impl PluginInstance {
         let len = config_json.len() as i32;
 
         // Reset fuel for this call
-        self.store.set_fuel(self.limits.max_fuel).ok();
+        if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
+            tracing::warn!(error = %e, "failed to reset WASM fuel");
+        }
 
         // Call init
         let result = init_func
@@ -521,7 +523,9 @@ impl PluginInstance {
         let len = data.len() as i32;
 
         // Reset fuel
-        self.store.set_fuel(self.limits.max_fuel).ok();
+        if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
+            tracing::warn!(error = %e, "failed to reset WASM fuel");
+        }
 
         // Call function
         let result = func

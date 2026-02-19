@@ -95,16 +95,6 @@ impl SpecsRepository {
             .await
     }
 
-    /// Get a spec by name (global - deprecated, use get_by_project_and_name).
-    #[deprecated(note = "Use get_by_project_and_name instead")]
-    #[allow(dead_code)]
-    pub async fn get_by_name(&self, name: &str) -> Result<Option<Spec>, sqlx::Error> {
-        sqlx::query_as::<_, Spec>("SELECT * FROM specs WHERE name = $1")
-            .bind(name)
-            .fetch_optional(&self.pool)
-            .await
-    }
-
     /// Get a spec by project ID and name.
     pub async fn get_by_project_and_name(
         &self,

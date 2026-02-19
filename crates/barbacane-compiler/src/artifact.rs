@@ -335,7 +335,7 @@ fn parse_specs(spec_paths: &[&Path]) -> Result<Vec<(ApiSpec, String, String)>, C
     let mut specs = Vec::new();
     for path in spec_paths {
         let content = std::fs::read_to_string(path)?;
-        let sha256 = compute_sha256(&content);
+        let sha256 = compute_sha256(content.as_bytes());
         let spec = parse_spec_file(path)?;
         specs.push((spec, content, sha256));
     }
@@ -546,7 +546,7 @@ fn compile_inner(
     // Build routes.json
     let routes = CompiledRoutes { operations };
     let routes_json = serde_json::to_string_pretty(&routes)?;
-    let routes_sha256 = compute_sha256(&routes_json);
+    let routes_sha256 = compute_sha256(routes_json.as_bytes());
 
     // Build plugin metadata
     let mut bundled_plugins = Vec::new();
@@ -558,7 +558,7 @@ fn compile_inner(
 
     for plugin in plugins {
         let wasm_path = format!("plugins/{}.wasm", plugin.name);
-        let sha256 = compute_sha256_bytes(&plugin.wasm_bytes);
+        let sha256 = compute_sha256(&plugin.wasm_bytes);
 
         checksums.insert(wasm_path.clone(), format!("sha256:{}", sha256));
 
@@ -596,7 +596,7 @@ fn compile_inner(
 
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
-        compiled_at: chrono_lite_now(),
+        compiled_at: now_utc_iso8601(),
         compiler_version: COMPILER_VERSION.to_string(),
         source_specs,
         routes_count: routes.operations.len(),
@@ -645,20 +645,9 @@ fn compile_inner(
     Ok(CompileResult { manifest, warnings })
 }
 
-/// Compute SHA-256 hash of a string.
-fn compute_sha256(content: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    let result = hasher.finalize();
-    hex::encode(result)
-}
-
 /// Compute SHA-256 hash of bytes.
-fn compute_sha256_bytes(content: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content);
-    let result = hasher.finalize();
-    hex::encode(result)
+fn compute_sha256(content: &[u8]) -> String {
+    hex::encode(Sha256::new().chain_update(content).finalize())
 }
 
 /// Add a file to a tar archive from bytes.
@@ -675,61 +664,9 @@ fn add_file_to_tar<W: Write>(
     archive.append_data(&mut header, name, content)
 }
 
-/// Get current UTC timestamp in ISO 8601 format (without external crate).
-fn chrono_lite_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let secs = duration.as_secs();
-
-    // Simple UTC timestamp calculation
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // Days since 1970-01-01
-    let mut year = 1970i32;
-    let mut remaining_days = days as i32;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let days_in_months: [i32; 12] = if is_leap_year(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for days_in_month in days_in_months {
-        if remaining_days < days_in_month {
-            break;
-        }
-        remaining_days -= days_in_month;
-        month += 1;
-    }
-
-    let day = remaining_days + 1;
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
-    )
-}
-
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+/// Get current UTC timestamp in ISO 8601 format.
+fn now_utc_iso8601() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 /// Extract upstream URL from dispatch config, if present.

@@ -430,8 +430,10 @@ dependencies = [
 name = "barbacane-compiler"
 version = "0.1.2"
 dependencies = [
+ "chrono",
  "criterion",
  "flate2",
+ "hex",
  "serde",
  "serde_json",
  "serde_yaml",

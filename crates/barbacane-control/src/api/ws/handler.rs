@@ -12,6 +12,15 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::protocol::{ControlPlaneMessage, DataPlaneMessage, DEFAULT_HEARTBEAT_INTERVAL_SECS};
+
+/// Serialize a control plane message into a WebSocket text frame.
+fn to_ws_message(msg: &ControlPlaneMessage) -> Message {
+    Message::Text(
+        serde_json::to_string(msg)
+            .expect("ControlPlaneMessage is always JSON-serializable")
+            .into(),
+    )
+}
 use crate::api::router::AppState;
 use crate::db::{ApiKeysRepository, DataPlanesRepository, NewDataPlane};
 
@@ -44,13 +53,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             let msg = ControlPlaneMessage::RegistrationFailed {
                 reason: "Invalid or expired API key".to_string(),
             };
-            let _ = sender
-                .send(Message::Text(
-                    serde_json::to_string(&msg)
-                        .expect("serializable control plane message")
-                        .into(),
-                ))
-                .await;
+            let _ = sender.send(to_ws_message(&msg)).await;
             return;
         }
         Err(e) => {
@@ -58,13 +61,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             let msg = ControlPlaneMessage::RegistrationFailed {
                 reason: "Internal error".to_string(),
             };
-            let _ = sender
-                .send(Message::Text(
-                    serde_json::to_string(&msg)
-                        .expect("serializable control plane message")
-                        .into(),
-                ))
-                .await;
+            let _ = sender.send(to_ws_message(&msg)).await;
             return;
         }
     };
@@ -74,13 +71,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         let msg = ControlPlaneMessage::RegistrationFailed {
             reason: "API key does not match project".to_string(),
         };
-        let _ = sender
-            .send(Message::Text(
-                serde_json::to_string(&msg)
-                    .expect("serializable control plane message")
-                    .into(),
-            ))
-            .await;
+        let _ = sender.send(to_ws_message(&msg)).await;
         return;
     }
 
@@ -101,13 +92,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             let msg = ControlPlaneMessage::RegistrationFailed {
                 reason: "Failed to register data plane".to_string(),
             };
-            let _ = sender
-                .send(Message::Text(
-                    serde_json::to_string(&msg)
-                        .expect("serializable control plane message")
-                        .into(),
-                ))
-                .await;
+            let _ = sender.send(to_ws_message(&msg)).await;
             return;
         }
     };
@@ -120,14 +105,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         data_plane_id,
         heartbeat_interval_secs: DEFAULT_HEARTBEAT_INTERVAL_SECS,
     };
-    if let Err(e) = sender
-        .send(Message::Text(
-            serde_json::to_string(&confirm_msg)
-                .expect("serializable control plane message")
-                .into(),
-        ))
-        .await
-    {
+    if let Err(e) = sender.send(to_ws_message(&confirm_msg)).await {
         tracing::error!(error = %e, "Failed to send registration confirmation");
         let _ = data_planes_repo.delete(data_plane_id).await;
         return;
