@@ -96,17 +96,14 @@ impl PluginsRepository {
         .await
     }
 
-    /// Get a plugin with its WASM binary.
+    /// Get a plugin with its WASM binary (type + binary only, for bundle assembly and downloads).
     pub async fn get_with_binary(
         &self,
         name: &str,
         version: &str,
     ) -> Result<Option<PluginWithBinary>, sqlx::Error> {
         sqlx::query_as::<_, PluginWithBinary>(
-            r#"
-            SELECT * FROM plugins
-            WHERE name = $1 AND version = $2
-            "#,
+            "SELECT name, version, plugin_type, wasm_binary FROM plugins WHERE name = $1 AND version = $2",
         )
         .bind(name)
         .bind(version)

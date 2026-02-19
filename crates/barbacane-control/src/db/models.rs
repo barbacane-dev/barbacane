@@ -96,10 +96,13 @@ pub struct Spec {
 
 /// A spec revision record with content.
 #[derive(Debug, Clone, FromRow)]
-#[allow(dead_code)]
 pub struct SpecRevision {
-    pub id: Uuid,
-    pub spec_id: Uuid,
+    /// Internal PK — populated by sqlx but not needed in application code.
+    #[sqlx(rename = "id")]
+    pub _id: Uuid,
+    /// FK to parent spec — populated by sqlx but not needed in application code.
+    #[sqlx(rename = "spec_id")]
+    pub _spec_id: Uuid,
     pub revision: i32,
     pub sha256: String,
     pub content: Vec<u8>,
@@ -129,19 +132,13 @@ pub struct Plugin {
     pub registered_at: DateTime<Utc>,
 }
 
-/// Plugin with binary data for downloads.
+/// Plugin data needed for WASM bundle assembly (type + binary only).
 #[derive(Debug, Clone, FromRow)]
-#[allow(dead_code)]
 pub struct PluginWithBinary {
     pub name: String,
     pub version: String,
     pub plugin_type: String,
-    pub description: Option<String>,
-    pub capabilities: serde_json::Value,
-    pub config_schema: serde_json::Value,
     pub wasm_binary: Vec<u8>,
-    pub sha256: String,
-    pub registered_at: DateTime<Utc>,
 }
 
 /// A compiled artifact record.
@@ -150,20 +147,6 @@ pub struct Artifact {
     pub id: Uuid,
     pub project_id: Option<Uuid>,
     pub manifest: serde_json::Value,
-    pub sha256: String,
-    pub size_bytes: i64,
-    pub compiler_version: String,
-    pub compiled_at: DateTime<Utc>,
-}
-
-/// Artifact with binary data for downloads.
-#[derive(Debug, Clone, FromRow)]
-#[allow(dead_code)]
-pub struct ArtifactWithData {
-    pub id: Uuid,
-    pub project_id: Option<Uuid>,
-    pub manifest: serde_json::Value,
-    pub data: Vec<u8>,
     pub sha256: String,
     pub size_bytes: i64,
     pub compiler_version: String,
@@ -250,8 +233,8 @@ pub struct ApiKey {
     pub project_id: Uuid,
     pub name: String,
     #[serde(skip_serializing)]
-    #[allow(dead_code)]
-    pub key_hash: String,
+    #[sqlx(rename = "key_hash")]
+    pub _key_hash: String,
     pub key_prefix: String,
     pub scopes: Vec<String>,
     pub expires_at: Option<DateTime<Utc>>,

@@ -47,8 +47,8 @@ pub async fn download_artifact(
     ProblemDetails,
 > {
     let repo = ArtifactsRepository::new(state.pool.clone());
-    let artifact = repo
-        .get_with_data(id)
+    let data = repo
+        .get_data(id)
         .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("Artifact {} not found", id)))?;
 
@@ -64,7 +64,7 @@ pub async fn download_artifact(
                 format!("attachment; filename=\"{}.bca\"", id),
             ),
         ],
-        artifact.data,
+        data,
     ))
 }
 

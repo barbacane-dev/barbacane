@@ -106,14 +106,4 @@ impl ProjectsRepository {
             .await?;
         Ok(result.rows_affected() > 0)
     }
-
-    /// Check if a project exists.
-    #[allow(dead_code)]
-    pub async fn exists(&self, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM projects WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(result.is_some())
-    }
 }

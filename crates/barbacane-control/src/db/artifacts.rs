@@ -3,7 +3,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::models::{Artifact, ArtifactWithData};
+use super::models::Artifact;
 
 /// Repository for artifact operations.
 #[derive(Clone)]
@@ -69,12 +69,13 @@ impl ArtifactsRepository {
             .await
     }
 
-    /// Get an artifact with its binary data for download.
-    pub async fn get_with_data(&self, id: Uuid) -> Result<Option<ArtifactWithData>, sqlx::Error> {
-        sqlx::query_as::<_, ArtifactWithData>("SELECT * FROM artifacts WHERE id = $1")
+    /// Get the binary data of an artifact for download.
+    pub async fn get_data(&self, id: Uuid) -> Result<Option<Vec<u8>>, sqlx::Error> {
+        let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT data FROM artifacts WHERE id = $1")
             .bind(id)
             .fetch_optional(&self.pool)
-            .await
+            .await?;
+        Ok(row.map(|(data,)| data))
     }
 
     /// Delete an artifact.
