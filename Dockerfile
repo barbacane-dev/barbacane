@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Barbacane Data Plane - Multi-stage build
 # Produces a minimal, rootless container image
 
@@ -21,10 +20,8 @@ COPY crates/ crates/
 # Limit parallel jobs to avoid OOM in memory-constrained Docker environments
 ENV CARGO_BUILD_JOBS=2
 
-# Build the data plane binary (cache cargo registry + target dir across builds)
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
-    cargo build --release --package barbacane && \
+# Build the data plane binary
+RUN cargo build --release --package barbacane && \
     cp target/release/barbacane /usr/local/bin/barbacane
 
 # Runtime stage - distroless for minimal attack surface
