@@ -1297,11 +1297,19 @@ impl Gateway {
             ChainResult::Continue { request, context } => Ok((request, instances, context)),
             ChainResult::ShortCircuit {
                 response,
-                middleware_index: _,
-                context: _,
+                middleware_index,
+                context,
             } => {
-                // Parse and return the short-circuit response
-                match serde_json::from_slice::<barbacane_wasm::Response>(&response) {
+                // Run on_response for middlewares that already executed on_request
+                // (in reverse order, excluding the short-circuiting middleware itself)
+                let final_response = barbacane_wasm::execute_on_response_partial(
+                    &mut instances,
+                    &response,
+                    middleware_index,
+                    context,
+                );
+
+                match serde_json::from_slice::<barbacane_wasm::Response>(&final_response) {
                     Ok(plugin_response) => Err(self.build_response_from_plugin(&plugin_response)),
                     Err(e) => {
                         tracing::error!(error = %e, "failed to parse middleware response");
