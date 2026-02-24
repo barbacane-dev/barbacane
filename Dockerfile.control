@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # Barbacane Control Plane - Multi-stage build
 # Includes REST API and web UI
 
@@ -29,10 +28,8 @@ COPY crates/ crates/
 # Limit parallel jobs to avoid OOM in memory-constrained Docker environments
 ENV CARGO_BUILD_JOBS=2
 
-# Build the control plane binary (cache cargo registry + target dir across builds)
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
-    cargo build --release --package barbacane-control && \
+# Build the control plane binary
+RUN cargo build --release --package barbacane-control && \
     cp target/release/barbacane-control /usr/local/bin/barbacane-control
 
 # Runtime stage - Debian slim (needs libc for control plane dependencies)
