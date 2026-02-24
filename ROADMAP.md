@@ -49,6 +49,7 @@ Near-term items ready to be picked up:
 
 | Plugin | Type | Description |
 |--------|------|-------------|
+| ~~`s3`~~ | ~~Dispatcher~~ | ~~S3 / S3-compatible object storage proxy with SigV4 signing (virtual-hosted + path-style + custom endpoints)~~ — **done** |
 | ~~`opa-authz`~~ | ~~Middleware~~ | ~~OPA policy evaluation via REST API (`host_http_call`)~~ — **done** |
 | ~~`bot-detection`~~ | ~~Middleware~~ | ~~Block known bots by User-Agent patterns~~ — **done** |
 | `idempotency` | Middleware | Idempotent request processing via `Idempotency-Key` header (requires cache capability) |
@@ -94,6 +95,7 @@ Near-term items ready to be picked up:
 | ~~Hot-reload~~ | ~~Download and swap artifact at runtime without restart~~ — **done** |
 | ~~CORS auto-preflight~~ | ~~Automatic OPTIONS response for CORS preflight requests~~ — **done** |
 | ~~Per-middleware timing metrics~~ | ~~Record execution duration per middleware in Prometheus~~ — **done** |
+| ~~Wildcard path parameters~~ | ~~`{param+}` greedy capture for slash-containing values (S3 keys, CDN paths)~~ — **done** |
 
 ### Control Plane
 

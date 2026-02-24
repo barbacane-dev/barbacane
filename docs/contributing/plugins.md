@@ -372,6 +372,7 @@ Barbacane includes these official plugins in the `plugins/` directory:
 | `lambda` | Dispatcher | Invoke AWS Lambda functions |
 | `kafka` | Dispatcher | Publish messages to Kafka |
 | `nats` | Dispatcher | Publish messages to NATS |
+| `s3` | Dispatcher | S3 / S3-compatible object storage proxy with SigV4 signing |
 | `jwt-auth` | Middleware | JWT token validation |
 | `apikey-auth` | Middleware | API key authentication |
 | `oauth2-auth` | Middleware | OAuth2 token introspection |

@@ -83,6 +83,66 @@ x-barbacane-dispatch:
     subject: string   # Required. NATS subject
 ```
 
+### Dispatcher: `s3`
+
+Proxy requests to AWS S3 or any S3-compatible endpoint with AWS Signature Version 4 signing.
+
+```yaml
+x-barbacane-dispatch:
+  name: s3
+  config:
+    access_key_id: string      # Required. AWS access key ID
+    secret_access_key: string  # Required. AWS secret access key
+    region: string             # Required. AWS region (e.g. "us-east-1")
+    session_token: string      # Optional. STS/AssumeRole session token
+    endpoint: string           # Optional. Custom S3-compatible endpoint (e.g. "https://minio.internal:9000")
+                               #           Always uses path-style URLs when set.
+    force_path_style: boolean  # Optional. Use path-style URLs (default: false)
+    bucket: string             # Optional. Hard-coded bucket; ignores bucket_param when set
+    bucket_param: string       # Optional. Path param name for bucket (default: "bucket")
+    key_param: string          # Optional. Path param name for object key (default: "key")
+    timeout: number            # Optional. Timeout in seconds (default: 30.0)
+```
+
+**URL styles:**
+- **Virtual-hosted** (default): `{bucket}.s3.{region}.amazonaws.com/{key}`
+- **Path-style** (`force_path_style: true`): `s3.{region}.amazonaws.com/{bucket}/{key}`
+- **Custom endpoint**: `{endpoint}/{bucket}/{key}` (always path-style)
+
+**Multi-segment keys** require `{key+}` (wildcard) in the route and `allowReserved: true` on the parameter:
+
+```yaml
+paths:
+  /storage/{bucket}/{key+}:
+    get:
+      parameters:
+        - { name: bucket, in: path, required: true, schema: { type: string } }
+        - { name: key, in: path, required: true, allowReserved: true, schema: { type: string } }
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: env://AWS_ACCESS_KEY_ID
+          secret_access_key: env://AWS_SECRET_ACCESS_KEY
+```
+
+**Single-bucket CDN** (hard-coded bucket, public route):
+
+```yaml
+paths:
+  /assets/{key+}:
+    get:
+      parameters:
+        - { name: key, in: path, required: true, allowReserved: true, schema: { type: string } }
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          bucket: my-assets
+          region: eu-west-1
+          access_key_id: env://AWS_ACCESS_KEY_ID
+          secret_access_key: env://AWS_SECRET_ACCESS_KEY
+```
+
 ### Examples
 
 **Mock response:**

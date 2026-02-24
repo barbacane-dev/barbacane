@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### S3 Dispatcher
+- `s3` dispatcher plugin — proxy requests to AWS S3 or any S3-compatible endpoint (MinIO, RustFS, Ceph) with AWS Signature Version 4 signing
+- Virtual-hosted style (`{bucket}.s3.{region}.amazonaws.com`) and path-style URLs (`force_path_style`)
+- Custom endpoint support for S3-compatible storage (always uses path-style)
+- Single-bucket routes via `bucket` config field (e.g., `/assets/{key+}` CDN pattern)
+- Multi-bucket routing via path parameters (`bucket_param`, `key_param`)
+- Temporary credential support: `session_token` for STS / AssumeRole / IRSA
+- `barbacane-sigv4` promoted from `plugins/sigv4` to a workspace crate (`crates/barbacane-sigv4`) for reuse by future plugins
+
 #### Bot Detection Plugin
 
 - `bot-detection` middleware plugin — block requests from known bots and scrapers by User-Agent pattern matching
@@ -18,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable `status` and `message` for blocked responses
   - Returns `application/problem+json` with type `urn:barbacane:error:bot-detected`
   - 17 unit tests
+
+#### Wildcard Path Parameters
+- `{param+}` greedy path parameter syntax — captures all remaining segments including slashes
+- Useful for S3 key routing (`/files/{bucket}/{key+}`), CDN paths, and any route with slash-separated sub-paths
+- Enforced constraints: wildcard must be the last segment, at most one per path
+- Precedence: static segments > regular params > wildcard param
+- Wildcard values arrive in plugins as plain strings via `path_params`
+
+#### Playground: S3 Object Storage
+- Added RustFS (S3-compatible) service to the playground Docker Compose stack
+- `/storage/{bucket}/{key+}` — OIDC-protected multi-bucket S3 proxy
+- `/assets/{key+}` — public rate-limited CDN backed by `s3://assets`
+- Added `playground.http` with ready-to-run requests for all playground endpoints
 
 #### Web UI Improvements (Batch 1)
 - Reusable components: `EmptyState`, `SearchInput`, `Breadcrumb`, `DropZone`
