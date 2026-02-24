@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-#### Web UI Improvements
+#### Web UI Improvements (Batch 1)
 - Reusable components: `EmptyState`, `SearchInput`, `Breadcrumb`, `DropZone`
 - `useDebounce` hook and shared time formatting utilities (`formatDate`, `formatRelativeTime`)
 - Search and filtering on specs, plugins, and projects pages
@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Build logs viewer with structured log display and level filtering
 - Data plane health indicators with auto-refresh intervals
 
+#### Web UI Improvements (Batch 2)
+- Error boundaries: `RouteErrorBoundary` with React Router `errorElement` at root and project layout levels
+- Confirmation dialogs: `ConfirmDialog` component and `useConfirm` hook replacing browser `confirm()` across 12 call sites
+- Spec editor: `CodeBlock` component with `shiki` syntax highlighting for YAML/JSON in spec viewers
+- Operations page: middleware chain preview showing resolved chain with correct merge semantics (inherited vs operation-level)
+- Operations page: undo/redo support in edit dialogs (`useHistory` hook, keyboard shortcuts)
+- E2E tests: Playwright setup with smoke navigation and spec workflow tests using API mocking via `page.route()`
+
+#### CI
+- UI unit tests job (Node 22, TypeScript build, vitest)
+- UI E2E tests job (Playwright with Chromium, report upload on failure)
+
 #### `$ref` Resolution in Spec Parser
 - Local `$ref` pointers (`#/components/schemas/*`, `#/components/parameters/*`, etc.) are now resolved and inlined at parse time
 - Applies to OpenAPI parameter schemas, request body schemas, and AsyncAPI message payloads
@@ -30,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Short-circuit middleware responses now correctly run `on_response` for preceding middlewares in reverse order via `execute_on_response_partial`
 - `GET /projects/{id}/data-planes` now returns 404 when the project does not exist (previously returned 200 with an empty array)
 - Invalid plugin configs in playground specs: `correlation-id` used `header` instead of `header_name`, `cache` used unsupported `stale_if_error` property
 

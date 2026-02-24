@@ -31,6 +31,15 @@
 - [x] Build logs viewer with structured display and level filtering
 - [x] Data plane health indicators with auto-refresh
 
+### 5. UX Improvements (Batch 2) ✅
+- [x] Error boundaries with React Router `errorElement` at root and project levels
+- [x] `ConfirmDialog` component and `useConfirm` hook (12 call sites)
+- [x] `CodeBlock` with `shiki` syntax highlighting for YAML/JSON in spec viewers
+- [x] Middleware chain preview on operations page (correct merge semantics)
+- [x] Undo/redo in edit dialogs (`useHistory` hook + keyboard shortcuts)
+- [x] Playwright E2E tests (smoke navigation + spec workflow)
+- [x] CI jobs for UI unit tests and E2E tests
+
 ## Future
 
 ### Authentication (Production)
@@ -40,7 +49,6 @@
 - [ ] Add role-based access control
 
 ### Features
-- [ ] Spec editor with syntax highlighting
 - [ ] Compilation progress indicator
 - [ ] Artifact deployment workflow
 - [ ] Plugin configuration UI

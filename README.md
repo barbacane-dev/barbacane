@@ -10,9 +10,11 @@
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/unit%20tests-334%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-495%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-878%20passing-brightgreen" alt="Plugin Tests">
   <img src="https://img.shields.io/badge/integration%20tests-186%20passing-brightgreen" alt="Integration Tests">
-  <img src="https://img.shields.io/badge/cli%20tests-17%20passing-brightgreen" alt="CLI Tests">
+  <img src="https://img.shields.io/badge/cli%20tests-16%20passing-brightgreen" alt="CLI Tests">
+  <img src="https://img.shields.io/badge/ui%20tests-44%20passing-brightgreen" alt="UI Tests">
+  <img src="https://img.shields.io/badge/e2e%20tests-11%20passing-brightgreen" alt="E2E Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
