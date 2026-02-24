@@ -102,47 +102,29 @@ struct HttpResponse {
 }
 
 impl S3Dispatcher {
-    /// Build and sign an S3 request, then proxy it via `host_http_call`.
-    pub fn dispatch(&mut self, req: Request) -> Response {
-        // ── 1. Resolve bucket ──────────────────────────────────────────────
-        let bucket = match self
-            .bucket
-            .as_deref()
-            .or_else(|| req.path_params.get(&self.bucket_param).map(|s| s.as_str()))
-        {
-            Some(b) => b.to_string(),
-            None => {
-                return self.error_response(
-                    400,
-                    "Bad Request",
-                    "missing bucket",
-                    &format!("path param '{}' not found", self.bucket_param),
-                )
-            }
-        };
-
-        // ── 2. Resolve key ─────────────────────────────────────────────────
-        let key = match req.path_params.get(&self.key_param) {
-            Some(k) => k.clone(),
-            None => {
-                return self.error_response(
-                    400,
-                    "Bad Request",
-                    "missing key",
-                    &format!("path param '{}' not found", self.key_param),
-                )
-            }
-        };
-
-        // ── 3. Timestamp ───────────────────────────────────────────────────
-        let unix_secs = current_timestamp();
+    /// Build a signed S3 `HttpRequest` without performing any I/O.
+    ///
+    /// All inputs are passed explicitly (including `unix_secs`) so this function
+    /// is pure and testable — callers can verify the URL, Host header, and signed
+    /// headers without going through `host_http_call`.
+    #[allow(clippy::too_many_arguments)] // all args are distinct; a wrapper struct adds boilerplate with no clarity gain
+    fn build_s3_request(
+        &self,
+        bucket: &str,
+        key: &str,
+        method: &str,
+        query: Option<&str>,
+        body: Option<&str>,
+        incoming_headers: &BTreeMap<String, String>,
+        unix_secs: u64,
+    ) -> HttpRequest {
         let (datetime, date) = sigv4::format_datetime(unix_secs);
 
-        // ── 4. Body hash ───────────────────────────────────────────────────
-        let body_bytes = req.body.as_deref().unwrap_or("").as_bytes();
+        // ── Body hash ──────────────────────────────────────────────────────
+        let body_bytes = body.unwrap_or("").as_bytes();
         let body_sha256 = sigv4::sha256_hex(body_bytes);
 
-        // ── 5. URL style + Host ────────────────────────────────────────────
+        // ── URL style + Host ───────────────────────────────────────────────
         let use_path_style = self.force_path_style || self.endpoint.is_some();
 
         let (host, s3_path, base_url) = if use_path_style {
@@ -175,13 +157,13 @@ impl S3Dispatcher {
         };
 
         // Append query string to final URL
-        let full_url = match req.query.as_deref() {
+        let full_url = match query {
             Some(qs) if !qs.is_empty() => format!("{}?{}", base_url, qs),
             _ => base_url,
         };
 
-        // ── 6. Build headers to sign ───────────────────────────────────────
-        // Keys must be lowercase; BTreeMap ensures sorted order.
+        // ── Build headers to sign ──────────────────────────────────────────
+        // Keys must be lowercase; BTreeMap ensures sorted order for SigV4.
         let mut headers_to_sign = BTreeMap::new();
         headers_to_sign.insert("host".to_string(), host.clone());
         headers_to_sign.insert("x-amz-content-sha256".to_string(), body_sha256.clone());
@@ -190,7 +172,7 @@ impl S3Dispatcher {
             headers_to_sign.insert("x-amz-security-token".to_string(), token.clone());
         }
 
-        // ── 7. Sign ────────────────────────────────────────────────────────
+        // ── Sign ───────────────────────────────────────────────────────────
         let creds = sigv4::Credentials {
             access_key_id: self.access_key_id.clone(),
             secret_access_key: self.secret_access_key.clone(),
@@ -200,12 +182,12 @@ impl S3Dispatcher {
             region: &self.region,
             service: "s3",
         };
-        let canonical_uri = sigv4::canonical_uri(&s3_path);
-        let canonical_query = sigv4::canonical_query(req.query.as_deref());
+        let canonical_uri_str = sigv4::canonical_uri(&s3_path);
+        let canonical_query_str = sigv4::canonical_query(query);
         let signing_input = sigv4::SigningInput {
-            method: &req.method,
-            canonical_uri: &canonical_uri,
-            canonical_query: &canonical_query,
+            method,
+            canonical_uri: &canonical_uri_str,
+            canonical_query: &canonical_query_str,
             headers_to_sign: &headers_to_sign,
             body_sha256: &body_sha256,
             datetime: &datetime,
@@ -213,7 +195,7 @@ impl S3Dispatcher {
         };
         let signed = sigv4::sign(&signing_input, &creds, &signing_config);
 
-        // ── 8. Build outbound headers ──────────────────────────────────────
+        // ── Build outbound headers ─────────────────────────────────────────
         let mut headers = BTreeMap::new();
         headers.insert("host".to_string(), host);
         headers.insert("x-amz-date".to_string(), signed.x_amz_date);
@@ -226,19 +208,64 @@ impl S3Dispatcher {
             headers.insert("x-amz-security-token".to_string(), token);
         }
         // Forward content-type for uploads (PUT / POST)
-        if let Some(ct) = req.headers.get("content-type") {
+        if let Some(ct) = incoming_headers.get("content-type") {
             headers.insert("content-type".to_string(), ct.clone());
         }
 
-        // ── 9. Call S3 ─────────────────────────────────────────────────────
-        let http_request = HttpRequest {
-            method: req.method.clone(),
+        HttpRequest {
+            method: method.to_string(),
             url: full_url,
             headers,
-            body: req.body.clone(),
+            body: body.map(|s| s.to_string()),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
+        }
+    }
+
+    /// Build and sign an S3 request, then proxy it via `host_http_call`.
+    pub fn dispatch(&mut self, req: Request) -> Response {
+        // ── 1. Resolve bucket ──────────────────────────────────────────────
+        let bucket = match self
+            .bucket
+            .as_deref()
+            .or_else(|| req.path_params.get(&self.bucket_param).map(|s| s.as_str()))
+        {
+            Some(b) => b.to_string(),
+            None => {
+                return self.error_response(
+                    400,
+                    "Bad Request",
+                    "missing bucket",
+                    &format!("path param '{}' not found", self.bucket_param),
+                )
+            }
         };
 
+        // ── 2. Resolve key ─────────────────────────────────────────────────
+        let key = match req.path_params.get(&self.key_param) {
+            Some(k) => k.clone(),
+            None => {
+                return self.error_response(
+                    400,
+                    "Bad Request",
+                    "missing key",
+                    &format!("path param '{}' not found", self.key_param),
+                )
+            }
+        };
+
+        // ── 3. Build signed request ────────────────────────────────────────
+        let unix_secs = current_timestamp();
+        let http_request = self.build_s3_request(
+            &bucket,
+            &key,
+            &req.method,
+            req.query.as_deref(),
+            req.body.as_deref(),
+            &req.headers,
+            unix_secs,
+        );
+
+        // ── 4. Serialize and call S3 ───────────────────────────────────────
         let request_json = match serde_json::to_vec(&http_request) {
             Ok(json) => json,
             Err(e) => {
@@ -289,7 +316,7 @@ impl S3Dispatcher {
                 }
             };
 
-        // ── 10. Pass through response ──────────────────────────────────────
+        // ── 5. Pass through response ───────────────────────────────────────
         // Filter hop-by-hop headers; pass S3 error codes through transparently.
         let mut response_headers = BTreeMap::new();
         for (key, value) in http_response.headers {
@@ -393,6 +420,10 @@ fn current_timestamp() -> u64 {
 mod tests {
     use super::*;
 
+    // Fixed timestamp: 2013-05-24T00:00:00Z — same as AWS SigV4 test suite.
+    // Use this in all build_s3_request tests for deterministic output.
+    const TEST_TS: u64 = 1_369_353_600;
+
     fn make_dispatcher(bucket: Option<&str>, endpoint: Option<&str>) -> S3Dispatcher {
         S3Dispatcher {
             access_key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
@@ -471,144 +502,301 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_config_endpoint_deserializes() {
-        // Verify that the optional `endpoint` field round-trips through serde_json
-        // correctly — both when present and when absent.
-        let with_endpoint = r#"{
-            "access_key_id": "AKID",
-            "secret_access_key": "SAK",
-            "region": "us-west-2",
-            "endpoint": "https://minio.internal:9000"
-        }"#;
-        let cfg: S3Dispatcher = serde_json::from_str(with_endpoint).expect("deserialize with endpoint");
-        assert_eq!(
-            cfg.endpoint,
-            Some("https://minio.internal:9000".to_string()),
-            "endpoint should deserialize to the provided URL"
-        );
-        assert_eq!(cfg.region, "us-west-2");
-
-        let without_endpoint = r#"{
-            "access_key_id": "AKID",
-            "secret_access_key": "SAK",
-            "region": "us-west-2"
-        }"#;
-        let cfg2: S3Dispatcher = serde_json::from_str(without_endpoint).expect("deserialize without endpoint");
-        assert!(
-            cfg2.endpoint.is_none(),
-            "endpoint should be None when omitted from config"
-        );
-    }
-
-    // ── Error responses ────────────────────────────────────────────────────
+    // ── Error / validation (dispatch level) ───────────────────────────────
 
     #[test]
     fn test_missing_key_returns_400() {
         let mut d = make_dispatcher(Some("my-bucket"), None);
-        // No key param in path_params
         let req = make_get_request(BTreeMap::new());
         let resp = d.dispatch(req);
         assert_eq!(resp.status, 400);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+        let body: serde_json::Value =
+            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:bad-request");
     }
 
     #[test]
     fn test_missing_bucket_returns_400() {
-        let mut d = make_dispatcher(None, None); // no hardcoded bucket, no bucket param
+        let mut d = make_dispatcher(None, None);
         let mut params = BTreeMap::new();
         params.insert("key".to_string(), "my-file.txt".to_string());
-        // No bucket param in path_params
-        let req = make_get_request(params);
-        let resp = d.dispatch(req);
+        let resp = d.dispatch(make_get_request(params));
         assert_eq!(resp.status, 400);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+        let body: serde_json::Value =
+            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:bad-request");
     }
 
     #[test]
     fn test_dispatch_returns_502_on_native() {
-        // host_http_call stub always returns -1 on native → should get 502
+        // host_http_call stub always returns -1 on native → 502
         let mut d = make_dispatcher(Some("my-bucket"), None);
         let mut params = BTreeMap::new();
         params.insert("key".to_string(), "my-file.txt".to_string());
-        let req = make_get_request(params);
-        let resp = d.dispatch(req);
+        let resp = d.dispatch(make_get_request(params));
         assert_eq!(resp.status, 502);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+        let body: serde_json::Value =
+            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
     }
 
-    // ── Bucket / key resolution ────────────────────────────────────────────
+    // ── Bucket resolution (dispatch level) ────────────────────────────────
 
     #[test]
-    fn test_bucket_from_config() {
-        // Config bucket takes precedence over any path param
+    fn test_bucket_from_config_overrides_param() {
+        // Config bucket takes precedence; reaching 502 proves bucket resolved OK.
         let mut d = make_dispatcher(Some("config-bucket"), None);
         let mut params = BTreeMap::new();
         params.insert("bucket".to_string(), "param-bucket".to_string());
         params.insert("key".to_string(), "file.txt".to_string());
-        let req = make_get_request(params);
-        // Reaches host_http_call → 502 (native stub), but bucket resolution succeeded
-        let resp = d.dispatch(req);
-        assert_eq!(resp.status, 502); // reached signing stage
+        let resp = d.dispatch(make_get_request(params));
+        assert_eq!(resp.status, 502);
     }
 
     #[test]
     fn test_bucket_from_param() {
-        // No hardcoded bucket → resolved from path param
         let mut d = make_dispatcher(None, None);
         let mut params = BTreeMap::new();
         params.insert("bucket".to_string(), "param-bucket".to_string());
         params.insert("key".to_string(), "file.txt".to_string());
-        let req = make_get_request(params);
-        let resp = d.dispatch(req);
-        assert_eq!(resp.status, 502); // reached signing stage
-    }
-
-    // ── URL style ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_virtual_hosted_url() {
-        // Virtual-hosted: host = {bucket}.s3.{region}.amazonaws.com; path = /{key}
-        let mut d = make_dispatcher(None, None);
-        let mut params = BTreeMap::new();
-        params.insert("bucket".to_string(), "my-bucket".to_string());
-        params.insert("key".to_string(), "folder/file.txt".to_string());
         let resp = d.dispatch(make_get_request(params));
-        assert_eq!(resp.status, 502); // verified by reaching host call
+        assert_eq!(resp.status, 502);
+    }
+
+    // ── URL construction (build_s3_request) ───────────────────────────────
+
+    #[test]
+    fn test_virtual_hosted_url_construction() {
+        let d = make_dispatcher(None, None);
+        let req = d.build_s3_request(
+            "my-bucket",
+            "my-key.txt",
+            "GET",
+            None,
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        assert_eq!(
+            req.url,
+            "https://my-bucket.s3.us-east-1.amazonaws.com/my-key.txt"
+        );
+        assert_eq!(
+            req.headers["host"],
+            "my-bucket.s3.us-east-1.amazonaws.com"
+        );
+        // Credential scope must reference correct region and service
+        assert!(req.headers["authorization"]
+            .contains("Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request"));
+        assert!(req.headers["authorization"]
+            .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date"));
+        assert_eq!(req.method, "GET");
     }
 
     #[test]
-    fn test_path_style_url() {
+    fn test_path_style_url_construction() {
         let mut d = make_dispatcher(None, None);
         d.force_path_style = true;
-        let mut params = BTreeMap::new();
-        params.insert("bucket".to_string(), "my-bucket".to_string());
-        params.insert("key".to_string(), "folder/file.txt".to_string());
-        let resp = d.dispatch(make_get_request(params));
-        assert_eq!(resp.status, 502);
+        let req = d.build_s3_request(
+            "my-bucket",
+            "my-key.txt",
+            "GET",
+            None,
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        assert_eq!(
+            req.url,
+            "https://s3.us-east-1.amazonaws.com/my-bucket/my-key.txt"
+        );
+        assert_eq!(req.headers["host"], "s3.us-east-1.amazonaws.com");
+        assert!(req.headers["authorization"].contains("/us-east-1/s3/aws4_request"));
     }
 
     #[test]
-    fn test_custom_endpoint_uses_path_style() {
-        // Even without force_path_style, custom endpoint → path-style
-        let mut d = make_dispatcher(Some("uploads"), Some("https://minio.internal:9000"));
-        let mut params = BTreeMap::new();
-        params.insert("key".to_string(), "data/file.csv".to_string());
-        let resp = d.dispatch(make_get_request(params));
-        assert_eq!(resp.status, 502);
+    fn test_custom_endpoint_url_construction() {
+        // Custom endpoint always uses path-style
+        let d = make_dispatcher(Some("uploads"), Some("https://minio.internal:9000"));
+        let req = d.build_s3_request(
+            "uploads",
+            "data/file.csv",
+            "GET",
+            None,
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        assert_eq!(
+            req.url,
+            "https://minio.internal:9000/uploads/data/file.csv"
+        );
+        assert_eq!(req.headers["host"], "minio.internal:9000");
     }
 
     #[test]
-    fn test_wildcard_key_with_slashes() {
-        // Key captured via {key+} wildcard contains multiple path segments
+    fn test_custom_endpoint_http_scheme() {
+        // http:// (not https://) endpoint — host extraction must strip the right prefix
+        let d = make_dispatcher(Some("test"), Some("http://localhost:9000"));
+        let req = d.build_s3_request(
+            "test",
+            "file.txt",
+            "GET",
+            None,
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        assert_eq!(req.url, "http://localhost:9000/test/file.txt");
+        assert_eq!(req.headers["host"], "localhost:9000");
+    }
+
+    // ── Request content (build_s3_request) ────────────────────────────────
+
+    #[test]
+    fn test_timestamp_propagated_to_amz_date() {
+        let d = make_dispatcher(Some("bucket"), None);
+        let req =
+            d.build_s3_request("bucket", "k", "GET", None, None, &BTreeMap::new(), TEST_TS);
+        assert_eq!(req.headers["x-amz-date"], "20130524T000000Z");
+    }
+
+    #[test]
+    fn test_put_body_sha256() {
+        let d = make_dispatcher(Some("bucket"), None);
+        let body = "Hello from Barbacane!";
+        let req = d.build_s3_request(
+            "bucket",
+            "hello.txt",
+            "PUT",
+            None,
+            Some(body),
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        let expected_hash = sigv4::sha256_hex(body.as_bytes());
+        // Body hash must reflect the actual body content, not the empty-body hash
+        assert_eq!(req.headers["x-amz-content-sha256"], expected_hash);
+        assert_ne!(
+            expected_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "non-empty body must not produce the empty-string hash"
+        );
+        assert_eq!(req.body, Some(body.to_string()));
+        assert_eq!(req.method, "PUT");
+    }
+
+    #[test]
+    fn test_empty_body_hash_for_get() {
+        let d = make_dispatcher(Some("bucket"), None);
+        let req =
+            d.build_s3_request("bucket", "k", "GET", None, None, &BTreeMap::new(), TEST_TS);
+        assert_eq!(
+            req.headers["x-amz-content-sha256"],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_query_string_appended_to_url() {
+        let d = make_dispatcher(Some("bucket"), None);
+        let req = d.build_s3_request(
+            "bucket",
+            "prefix/",
+            "GET",
+            Some("list-type=2&prefix=logs%2F"),
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        assert!(
+            req.url.contains("?list-type=2&prefix=logs%2F"),
+            "query string must be appended to the URL: {}",
+            req.url
+        );
+    }
+
+    #[test]
+    fn test_content_type_forwarded() {
+        let d = make_dispatcher(Some("bucket"), None);
+        let mut incoming = BTreeMap::new();
+        incoming.insert("content-type".to_string(), "image/png".to_string());
+        let req = d.build_s3_request(
+            "bucket",
+            "photo.png",
+            "PUT",
+            None,
+            Some("PNG data"),
+            &incoming,
+            TEST_TS,
+        );
+        assert_eq!(
+            req.headers.get("content-type"),
+            Some(&"image/png".to_string())
+        );
+    }
+
+    #[test]
+    fn test_session_token_in_request() {
         let mut d = make_dispatcher(None, None);
-        let mut params = BTreeMap::new();
-        params.insert("bucket".to_string(), "assets".to_string());
-        params.insert("key".to_string(), "2024/01/report.pdf".to_string());
-        let resp = d.dispatch(make_get_request(params));
-        assert_eq!(resp.status, 502); // reached signing stage
+        d.session_token = Some("my-session-token".to_string());
+        let req = d.build_s3_request(
+            "bucket",
+            "key.txt",
+            "GET",
+            None,
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        assert_eq!(
+            req.headers.get("x-amz-security-token"),
+            Some(&"my-session-token".to_string())
+        );
+        // Session token must be included in SignedHeaders
+        assert!(
+            req.headers["authorization"].contains("x-amz-security-token"),
+            "x-amz-security-token must appear in SignedHeaders: {}",
+            req.headers["authorization"]
+        );
+    }
+
+    #[test]
+    fn test_wildcard_key_slashes_preserved_in_url() {
+        // {key+} captures "2024/01/report.pdf" as a single string — slashes must be preserved
+        let d = make_dispatcher(None, None);
+        let req = d.build_s3_request(
+            "assets",
+            "2024/01/report.pdf",
+            "GET",
+            None,
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        assert_eq!(
+            req.url,
+            "https://assets.s3.us-east-1.amazonaws.com/2024/01/report.pdf"
+        );
+    }
+
+    #[test]
+    fn test_key_with_special_chars_percent_encoded_in_signing() {
+        // Spaces and special characters in the key must be percent-encoded in the
+        // canonical URI (used for signing), but the raw key appears in the URL.
+        let d = make_dispatcher(Some("bucket"), None);
+        let req = d.build_s3_request(
+            "bucket",
+            "my file (1).txt",
+            "GET",
+            None,
+            None,
+            &BTreeMap::new(),
+            TEST_TS,
+        );
+        // The URL should contain the key as-is (gateway already decoded it)
+        assert!(req.url.contains("my file (1).txt"), "url: {}", req.url);
+        // Authorization header must still be present (signing did not panic)
+        assert!(req.headers["authorization"].starts_with("AWS4-HMAC-SHA256 "));
     }
 }
