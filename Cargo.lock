@@ -494,6 +494,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "barbacane-sigv4"
+version = "0.1.2"
+dependencies = [
+ "hex",
+ "hmac",
+ "sha2",
+]
+
+[[package]]
 name = "barbacane-telemetry"
 version = "0.1.2"
 dependencies = [
