@@ -32,9 +32,9 @@ paths:
       x-barbacane-middlewares:
         - name: oidc-auth
           config:
-            issuer: http://mock-oauth:8080/barbacane
-            audience: train-travel-api
-            required: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       x-barbacane-dispatch:
         name: s3
         config:
@@ -81,9 +81,9 @@ paths:
       x-barbacane-middlewares:
         - name: oidc-auth
           config:
-            issuer: http://mock-oauth:8080/barbacane
-            audience: train-travel-api
-            required: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       x-barbacane-dispatch:
         name: s3
         config:
@@ -116,9 +116,9 @@ paths:
       x-barbacane-middlewares:
         - name: oidc-auth
           config:
-            issuer: http://mock-oauth:8080/barbacane
-            audience: train-travel-api
-            required: true
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
       x-barbacane-dispatch:
         name: s3
         config:
@@ -152,7 +152,7 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            limit: 120
+            quota: 120
             window: 60
       x-barbacane-dispatch:
         name: s3

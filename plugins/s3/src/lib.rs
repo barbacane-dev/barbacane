@@ -471,6 +471,36 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_config_endpoint_deserializes() {
+        // Verify that the optional `endpoint` field round-trips through serde_json
+        // correctly — both when present and when absent.
+        let with_endpoint = r#"{
+            "access_key_id": "AKID",
+            "secret_access_key": "SAK",
+            "region": "us-west-2",
+            "endpoint": "https://minio.internal:9000"
+        }"#;
+        let cfg: S3Dispatcher = serde_json::from_str(with_endpoint).expect("deserialize with endpoint");
+        assert_eq!(
+            cfg.endpoint,
+            Some("https://minio.internal:9000".to_string()),
+            "endpoint should deserialize to the provided URL"
+        );
+        assert_eq!(cfg.region, "us-west-2");
+
+        let without_endpoint = r#"{
+            "access_key_id": "AKID",
+            "secret_access_key": "SAK",
+            "region": "us-west-2"
+        }"#;
+        let cfg2: S3Dispatcher = serde_json::from_str(without_endpoint).expect("deserialize without endpoint");
+        assert!(
+            cfg2.endpoint.is_none(),
+            "endpoint should be None when omitted from config"
+        );
+    }
+
     // ── Error responses ────────────────────────────────────────────────────
 
     #[test]
