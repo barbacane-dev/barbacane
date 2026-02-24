@@ -19,10 +19,14 @@ We will implement an end-to-end configuration provenance system. This will be br
 
 ### 1. Build-Time Artifact Fingerprinting
 
-The `barbacane compile` command will be updated to automatically calculate a SHA-256 hash of all input configuration files before compiling. 
+The `barbacane compile` command will be updated to automatically calculate a cryptographic hash of **all inputs** that make up the artifact. To ensure full supply chain security, this hash will cover:
+- All OpenAPI specifications and Barbacane YAML/JSON configuration files.
+- **All referenced WASM plugin binaries** bundled into the build.
+
+This will likely be implemented as a Merkle tree root or a hash of a sorted manifest of all input files to guarantee determinism.
 
 **Embedded Metadata:** The resulting `.bca` file format will be updated to include a metadata header containing:
-- `spec_hash`: The SHA-256 hash of the input configuration files.
+- `artifact_hash`: The combined SHA-256 hash of the input configuration files and WASM binaries. 
 - `build_timestamp`: UTC timestamp of the compilation.
 - Optional injected metadata via CLI flags (e.g., `--provenance-commit=a1b2c3d`, `--provenance-source=s3://bucket/config.zip`).
 
@@ -42,9 +46,9 @@ The Control Plane (`barbacane-control`) will act as the source of truth for the 
 
 ### 4. OCI Image & SBOM Supply Chain Integration
 
-When Barbacane artifacts are packaged into container images, the build tooling will extract the `spec_hash` and provenance metadata to:
+When Barbacane artifacts are packaged into container images, the build tooling will extract the `artifact_hash` and provenance metadata to:
 - Inject them as standard OCI image labels (e.g., `org.opencontainers.image.revision`).
-- Include the configuration artifact as a verified component in the container's SBOM (Software Bill of Materials).
+- Include the configuration artifact and WASM plugins as verified components in the container's SBOM (Software Bill of Materials).
 
 ## Consequences
 
@@ -52,7 +56,7 @@ When Barbacane artifacts are packaged into container images, the build tooling w
 
 - **Compliance & Auditability:** Provides cryptographic proof of what is running, satisfying strict audit requirements.
 - **Observability:** Operators can instantly see if a deployment failed to roll out properly (e.g., half the fleet running the old config).
-- **Security:** Detects unauthorized out-of-band changes or tampering with the `.bca` file directly on the server.
+- **Security:** Detects unauthorized out-of-band changes or tampering with the `.bca` file or its embedded executable plugins directly on the server.
 
 ### Negative
 
@@ -62,7 +66,7 @@ When Barbacane artifacts are packaged into container images, the build tooling w
 
 ### Alternatives Considered
 
-- **Hashing the `.bca` file directly instead of the input files:** Rejected. The compilation process might introduce non-deterministic byte ordering depending on the OS/Architecture where `barbacane compile` is run. Hashing the *source* files provides a true, reproducible representation of the user's intent.
+- **Hashing the `.bca` file directly instead of the input files:** Rejected. The compilation process might introduce non-deterministic byte ordering depending on the OS/Architecture where `barbacane compile` is run. Hashing the *source* files and binaries provides a true, reproducible representation of the user's intent.
 
 ## Related ADRs
 
