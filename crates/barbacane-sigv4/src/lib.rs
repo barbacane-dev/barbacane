@@ -225,8 +225,7 @@ pub fn sign(input: &SigningInput, creds: &Credentials, config: &SigningConfig) -
 // --- Private helpers ---
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(data);
     mac.finalize().into_bytes().to_vec()
 }
@@ -357,15 +356,15 @@ mod tests {
     #[test]
     fn test_canonical_query_sorted() {
         // AWS SigV4 requires query params sorted by key
-        assert_eq!(
-            canonical_query(Some("z=3&a=1&m=2")),
-            "a=1&m=2&z=3"
-        );
+        assert_eq!(canonical_query(Some("z=3&a=1&m=2")), "a=1&m=2&z=3");
     }
 
     #[test]
     fn test_canonical_query_encodes_values() {
-        assert_eq!(canonical_query(Some("key=hello world")), "key=hello%20world");
+        assert_eq!(
+            canonical_query(Some("key=hello world")),
+            "key=hello%20world"
+        );
     }
 
     #[test]
@@ -384,8 +383,7 @@ mod tests {
         //   Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,
         //   SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,
         //   Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41
-        let empty_body_hash =
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let empty_body_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
         // BTreeMap sorts keys: host < range < x-amz-content-sha256 < x-amz-date
         let mut headers = BTreeMap::new();
@@ -442,12 +440,17 @@ mod tests {
     #[test]
     fn test_sigv4_signing_with_session_token() {
         // Session token must appear in signed headers and in x_amz_security_token output
-        let empty_body_hash =
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let empty_body_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
         let mut headers = BTreeMap::new();
-        headers.insert("host".to_string(), "my-bucket.s3.us-east-1.amazonaws.com".to_string());
-        headers.insert("x-amz-content-sha256".to_string(), empty_body_hash.to_string());
+        headers.insert(
+            "host".to_string(),
+            "my-bucket.s3.us-east-1.amazonaws.com".to_string(),
+        );
+        headers.insert(
+            "x-amz-content-sha256".to_string(),
+            empty_body_hash.to_string(),
+        );
         headers.insert("x-amz-date".to_string(), "20130524T000000Z".to_string());
         headers.insert(
             "x-amz-security-token".to_string(),
