@@ -230,6 +230,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
 
+  /specs/{id}/compliance:
+    get:
+      tags: [Specs]
+      summary: Check spec compliance
+      description: |
+        Re-run compliance checks against the current plugin registry.
+        Returns warnings about unregistered plugins, type mismatches,
+        project enablement issues, and config schema violations.
+      operationId: getSpecCompliance
+      parameters:
+        - $ref: '#/components/parameters/specId'
+      responses:
+        '200':
+          description: Compliance warnings (empty array if fully compliant)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ComplianceWarning'
+        '404':
+          description: Spec not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
   /specs/{id}/compile:
     post:
       tags: [Compilations]
@@ -1149,6 +1176,21 @@ components:
           description: Error code (e.g., E1000)
         message:
           type: string
+
+    ComplianceWarning:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Warning code (W1001–W1004)
+          example: W1001
+        message:
+          type: string
+          description: Human-readable warning message
+        location:
+          type: string
+          description: Where in the spec the issue was found (e.g., "GET /users", "global middlewares")
 
     ProblemDetails:
       type: object

@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { FolderKanban, Plus, Trash2, RefreshCw, Settings, Sparkles } from 'lucide-react'
 import { listProjects, createProject, deleteProject } from '@/lib/api'
 import type { CreateProjectRequest } from '@/lib/api'
-import { Button, Card, CardContent, Badge } from '@/components/ui'
+import { Button, Card, CardContent, Badge, EmptyState, SearchInput } from '@/components/ui'
+import { useDebounce } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 export function ProjectsPage() {
@@ -13,6 +14,8 @@ export function ProjectsPage() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [newProjectDescription, setNewProjectDescription] = useState('')
+  const [search, setSearch] = useState('')
+  const debouncedSearch = useDebounce(search, 200)
 
   const projectsQuery = useQuery({
     queryKey: ['projects'],
@@ -54,6 +57,12 @@ export function ProjectsPage() {
   }
 
   const projects = projectsQuery.data ?? []
+  const filteredProjects = projects.filter(
+    (p) =>
+      !debouncedSearch ||
+      p.name.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+      p.description?.toLowerCase().includes(debouncedSearch.toLowerCase())
+  )
 
   return (
     <div className="p-8">
@@ -86,6 +95,17 @@ export function ProjectsPage() {
           </Button>
         </div>
       </div>
+
+      {projects.length > 0 && (
+        <div className="mb-6 max-w-sm">
+          <SearchInput
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onClear={() => setSearch('')}
+            placeholder="Search projects..."
+          />
+        </div>
+      )}
 
       {/* Create Project Dialog */}
       {showCreateDialog && (
@@ -167,25 +187,20 @@ export function ProjectsPage() {
           </Button>
         </div>
       ) : projects.length === 0 ? (
-        <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
-          <div className="text-center">
-            <FolderKanban className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h3 className="mt-4 text-lg font-medium">No projects yet</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Create a project to get started with your API gateway
-            </p>
-            <Button
-              className="mt-4"
-              onClick={() => setShowCreateDialog(true)}
-            >
+        <EmptyState
+          icon={FolderKanban}
+          title="No projects yet"
+          description="Create a project to get started with your API gateway"
+          action={
+            <Button onClick={() => setShowCreateDialog(true)}>
               <Plus className="h-4 w-4 mr-2" />
               Create Project
             </Button>
-          </div>
-        </div>
+          }
+        />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
+          {filteredProjects.map((project) => (
             <Card
               key={project.id}
               className="cursor-pointer hover:border-primary/50 transition-colors"

@@ -7,9 +7,10 @@ import {
   uploadSpecToProject,
   deleteSpec,
   downloadSpecContent,
+  getSpecCompliance,
 } from '@/lib/api'
 import type { Spec, ComplianceWarning } from '@/lib/api'
-import { Button, Card, CardContent, Badge } from '@/components/ui'
+import { Button, Card, CardContent, Badge, DropZone } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 export function ProjectSpecsPage() {
@@ -18,7 +19,9 @@ export function ProjectSpecsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [viewingSpec, setViewingSpec] = useState<Spec | null>(null)
   const [specContent, setSpecContent] = useState<string>('')
-  const [uploadWarnings, setUploadWarnings] = useState<ComplianceWarning[]>([])
+  const [complianceWarnings, setComplianceWarnings] = useState<ComplianceWarning[]>([])
+  const [checkingCompliance, setCheckingCompliance] = useState<string | null>(null)
+  const [complianceChecked, setComplianceChecked] = useState(false)
 
   const specsQuery = useQuery({
     queryKey: ['project-specs', projectId],
@@ -31,7 +34,7 @@ export function ProjectSpecsPage() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['project-specs', projectId] })
       queryClient.invalidateQueries({ queryKey: ['project-operations', projectId] })
-      setUploadWarnings(data.warnings ?? [])
+      setComplianceWarnings(data.warnings ?? [])
     },
   })
 
@@ -77,6 +80,19 @@ export function ProjectSpecsPage() {
       URL.revokeObjectURL(url)
     } catch (err) {
       console.error('Failed to download spec:', err)
+    }
+  }
+
+  const handleCheckCompliance = async (spec: Spec) => {
+    setCheckingCompliance(spec.id)
+    try {
+      const warnings = await getSpecCompliance(spec.id)
+      setComplianceWarnings(warnings)
+      setComplianceChecked(true)
+    } catch (err) {
+      console.error('Failed to check compliance:', err)
+    } finally {
+      setCheckingCompliance(null)
     }
   }
 
@@ -137,17 +153,17 @@ export function ProjectSpecsPage() {
         </div>
       )}
 
-      {uploadWarnings.length > 0 && (
+      {complianceWarnings.length > 0 && (
         <div className="mb-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 mt-0.5 text-yellow-600 dark:text-yellow-500 shrink-0" />
               <div>
                 <p className="text-sm font-medium text-yellow-800 dark:text-yellow-400">
-                  Spec uploaded with {uploadWarnings.length} compliance {uploadWarnings.length === 1 ? 'warning' : 'warnings'}
+                  {complianceWarnings.length} compliance {complianceWarnings.length === 1 ? 'warning' : 'warnings'}
                 </p>
                 <ul className="mt-1 space-y-1">
-                  {uploadWarnings.map((w, i) => (
+                  {complianceWarnings.map((w, i) => (
                     <li key={i} className="text-sm text-yellow-700 dark:text-yellow-400/80">
                       <span className="font-mono text-xs">{w.code}</span>{' '}
                       {w.message}
@@ -160,8 +176,24 @@ export function ProjectSpecsPage() {
               </div>
             </div>
             <button
-              onClick={() => setUploadWarnings([])}
+              onClick={() => { setComplianceWarnings([]); setComplianceChecked(false) }}
               className="text-yellow-600 hover:text-yellow-800 dark:text-yellow-500 dark:hover:text-yellow-300"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {complianceChecked && complianceWarnings.length === 0 && (
+        <div className="mb-4 rounded-lg border border-green-500/50 bg-green-500/10 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-green-800 dark:text-green-400">
+              No compliance warnings found
+            </p>
+            <button
+              onClick={() => setComplianceChecked(false)}
+              className="text-green-600 hover:text-green-800 dark:text-green-500 dark:hover:text-green-300"
             >
               <X className="h-4 w-4" />
             </button>
@@ -212,22 +244,14 @@ export function ProjectSpecsPage() {
           </Button>
         </div>
       ) : specs.length === 0 ? (
-        <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
-          <div className="text-center">
-            <FileCode className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h3 className="mt-4 text-lg font-medium">No specs yet</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Upload an OpenAPI or AsyncAPI specification to get started
-            </p>
-            <Button
-              className="mt-4"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Spec
-            </Button>
-          </div>
-        </div>
+        <DropZone
+          onFileDrop={(file) => uploadMutation.mutate(file)}
+          accept=".yaml,.yml,.json"
+          icon={FileCode}
+          label="Drop your API spec here or click to browse"
+          hint="OpenAPI or AsyncAPI specification (YAML or JSON)"
+          disabled={uploadMutation.isPending}
+        />
       ) : (
         <div className="space-y-4">
           {specs.map((spec) => (
@@ -267,6 +291,15 @@ export function ProjectSpecsPage() {
                       Download
                     </Button>
                     <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleCheckCompliance(spec)}
+                      disabled={checkingCompliance === spec.id}
+                    >
+                      <AlertTriangle className={cn('h-4 w-4 mr-1', checkingCompliance === spec.id && 'animate-spin')} />
+                      Check
+                    </Button>
+                    <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => {
@@ -283,6 +316,15 @@ export function ProjectSpecsPage() {
               </CardContent>
             </Card>
           ))}
+          <DropZone
+            onFileDrop={(file) => uploadMutation.mutate(file)}
+            accept=".yaml,.yml,.json"
+            icon={Upload}
+            label="Drop another spec here or click to browse"
+            hint="OpenAPI or AsyncAPI specification (YAML or JSON)"
+            disabled={uploadMutation.isPending}
+            className="p-4"
+          />
         </div>
       )}
     </div>

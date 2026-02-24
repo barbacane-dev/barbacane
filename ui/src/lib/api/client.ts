@@ -5,6 +5,7 @@ import type {
   Artifact,
   Compilation,
   CompileRequest,
+  ComplianceWarning,
   CreateApiKeyRequest,
   CreateProjectRequest,
   DataPlane,
@@ -133,6 +134,10 @@ export async function downloadSpecContent(
     throw new ApiError(response.status, problem)
   }
   return response.text()
+}
+
+export async function getSpecCompliance(id: string): Promise<ComplianceWarning[]> {
+  return request<ComplianceWarning[]>(`/specs/${id}/compliance`)
 }
 
 // Compilations

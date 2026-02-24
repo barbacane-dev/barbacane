@@ -92,6 +92,7 @@ pub fn create_router(
         .route("/specs/{id}", delete(specs::delete_spec))
         .route("/specs/{id}/history", get(specs::get_spec_history))
         .route("/specs/{id}/content", get(specs::download_spec_content))
+        .route("/specs/{id}/compliance", get(specs::get_spec_compliance))
         .route("/specs/{id}/compile", post(compilations::start_compilation))
         .route(
             "/specs/{id}/compilations",

@@ -1,9 +1,11 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileCode, Upload, Trash2, RefreshCw, Eye } from 'lucide-react'
-import { listSpecs, uploadSpec, deleteSpec, downloadSpecContent } from '@/lib/api'
-import type { Spec } from '@/lib/api'
-import { Button, Card, CardContent, Badge } from '@/components/ui'
+import { FileCode, Upload, Trash2, RefreshCw, Eye, AlertTriangle, X } from 'lucide-react'
+import { listSpecs, uploadSpec, deleteSpec, downloadSpecContent, getSpecCompliance } from '@/lib/api'
+import type { Spec, ComplianceWarning } from '@/lib/api'
+import { Button, Card, CardContent, Badge, SearchInput, Breadcrumb, DropZone } from '@/components/ui'
+import { useDebounce } from '@/hooks'
+import type { SpecType } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export function SpecsPage() {
@@ -11,10 +13,16 @@ export function SpecsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedSpec, setSelectedSpec] = useState<Spec | null>(null)
   const [specContent, setSpecContent] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState<SpecType | ''>('')
+  const debouncedSearch = useDebounce(search, 300)
+  const [complianceWarnings, setComplianceWarnings] = useState<ComplianceWarning[]>([])
+  const [checkingCompliance, setCheckingCompliance] = useState<string | null>(null)
+  const [complianceChecked, setComplianceChecked] = useState(false)
 
   const specsQuery = useQuery({
-    queryKey: ['specs'],
-    queryFn: () => listSpecs(),
+    queryKey: ['specs', { name: debouncedSearch || undefined, type: typeFilter || undefined }],
+    queryFn: () => listSpecs({ name: debouncedSearch || undefined, type: typeFilter || undefined }),
   })
 
   const uploadMutation = useMutation({
@@ -54,6 +62,19 @@ export function SpecsPage() {
     }
   }
 
+  const handleCheckCompliance = async (spec: Spec) => {
+    setCheckingCompliance(spec.id)
+    try {
+      const warnings = await getSpecCompliance(spec.id)
+      setComplianceWarnings(warnings)
+      setComplianceChecked(true)
+    } catch (err) {
+      console.error('Failed to check compliance:', err)
+    } finally {
+      setCheckingCompliance(null)
+    }
+  }
+
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -68,6 +89,13 @@ export function SpecsPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb
+        items={[
+          { label: 'Dashboard', href: '/' },
+          { label: 'API Specs' },
+        ]}
+        className="mb-4"
+      />
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">API Specs</h1>
@@ -104,11 +132,93 @@ export function SpecsPage() {
         </div>
       </div>
 
+      <div className="mb-6 flex items-center gap-3">
+        <div className="max-w-sm flex-1">
+          <SearchInput
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onClear={() => setSearch('')}
+            placeholder="Search specs..."
+          />
+        </div>
+        <div className="flex gap-1">
+          <Button
+            variant={typeFilter === '' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setTypeFilter('')}
+          >
+            All
+          </Button>
+          <Button
+            variant={typeFilter === 'openapi' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setTypeFilter('openapi')}
+          >
+            OpenAPI
+          </Button>
+          <Button
+            variant={typeFilter === 'asyncapi' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setTypeFilter('asyncapi')}
+          >
+            AsyncAPI
+          </Button>
+        </div>
+      </div>
+
       {uploadMutation.isError && (
         <div className="mb-4 rounded-lg border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
           {uploadMutation.error instanceof Error
             ? uploadMutation.error.message
             : 'Failed to upload spec'}
+        </div>
+      )}
+
+      {complianceWarnings.length > 0 && (
+        <div className="mb-4 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-yellow-600 dark:text-yellow-500 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-yellow-800 dark:text-yellow-400">
+                  {complianceWarnings.length} compliance {complianceWarnings.length === 1 ? 'warning' : 'warnings'}
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {complianceWarnings.map((w, i) => (
+                    <li key={i} className="text-sm text-yellow-700 dark:text-yellow-400/80">
+                      <span className="font-mono text-xs">{w.code}</span>{' '}
+                      {w.message}
+                      {w.location && (
+                        <span className="text-yellow-600/70 dark:text-yellow-500/60"> — {w.location}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <button
+              onClick={() => { setComplianceWarnings([]); setComplianceChecked(false) }}
+              className="text-yellow-600 hover:text-yellow-800 dark:text-yellow-500 dark:hover:text-yellow-300"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {complianceChecked && complianceWarnings.length === 0 && (
+        <div className="mb-4 rounded-lg border border-green-500/50 bg-green-500/10 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-green-800 dark:text-green-400">
+              No compliance warnings found
+            </p>
+            <button
+              onClick={() => setComplianceChecked(false)}
+              className="text-green-600 hover:text-green-800 dark:text-green-500 dark:hover:text-green-300"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -129,23 +239,16 @@ export function SpecsPage() {
           </Button>
         </div>
       ) : specs.length === 0 ? (
-        <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
-          <div className="text-center">
-            <FileCode className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h3 className="mt-4 text-lg font-medium">No specs yet</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Upload an OpenAPI or AsyncAPI spec to get started
-            </p>
-            <Button
-              onClick={() => fileInputRef.current?.click()}
-              className="mt-4"
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Spec
-            </Button>
-          </div>
-        </div>
+        <DropZone
+          onFileDrop={(file) => uploadMutation.mutate(file)}
+          accept=".yaml,.yml,.json"
+          icon={FileCode}
+          label="Drop your API spec here or click to browse"
+          hint="OpenAPI or AsyncAPI specification (YAML or JSON)"
+          disabled={uploadMutation.isPending}
+        />
       ) : (
+        <div className="space-y-4">
         <div className="grid gap-4 lg:grid-cols-2">
           {/* Specs list */}
           <div className="space-y-3">
@@ -189,6 +292,17 @@ export function SpecsPage() {
                         size="sm"
                         onClick={(e) => {
                           e.stopPropagation()
+                          handleCheckCompliance(spec)
+                        }}
+                        disabled={checkingCompliance === spec.id}
+                      >
+                        <AlertTriangle className={cn('h-4 w-4', checkingCompliance === spec.id && 'animate-spin')} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
                           if (confirm(`Delete spec "${spec.name}"?`)) {
                             deleteMutation.mutate(spec.id)
                           }
@@ -220,6 +334,16 @@ export function SpecsPage() {
               </CardContent>
             </Card>
           )}
+        </div>
+        <DropZone
+          onFileDrop={(file) => uploadMutation.mutate(file)}
+          accept=".yaml,.yml,.json"
+          icon={Upload}
+          label="Drop another spec here or click to browse"
+          hint="OpenAPI or AsyncAPI specification (YAML or JSON)"
+          disabled={uploadMutation.isPending}
+          className="p-4"
+        />
         </div>
       )}
     </div>

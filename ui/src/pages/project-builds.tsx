@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -9,6 +10,9 @@ import {
   Loader2,
   Download,
   Trash2,
+  ChevronDown,
+  ChevronRight,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   listProjectCompilations,
@@ -17,12 +21,13 @@ import {
   deleteArtifact,
 } from '@/lib/api'
 import type { Compilation, CompilationError } from '@/lib/api'
-import { Button, Card, CardContent, Badge } from '@/components/ui'
-import { cn } from '@/lib/utils'
+import { Button, Card, CardContent, Badge, EmptyState } from '@/components/ui'
+import { cn, formatDuration } from '@/lib/utils'
 
 export function ProjectBuildsPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const [expandedCompilations, setExpandedCompilations] = useState<Set<string>>(new Set())
 
   const compilationsQuery = useQuery({
     queryKey: ['project-compilations', projectId],
@@ -200,12 +205,12 @@ export function ProjectBuildsPage() {
             <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : artifacts.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border p-8 text-center">
-            <Package className="mx-auto h-10 w-10 text-muted-foreground" />
-            <p className="mt-2 text-sm text-muted-foreground">
-              No artifacts yet. Compile your project to create an artifact.
-            </p>
-          </div>
+          <EmptyState
+            icon={Package}
+            title="No artifacts yet"
+            description="Compile your project to create an artifact."
+            className="p-8"
+          />
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {artifacts.map((artifact) => (
@@ -265,53 +270,124 @@ export function ProjectBuildsPage() {
             <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : compilations.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border p-8 text-center">
-            <Clock className="mx-auto h-10 w-10 text-muted-foreground" />
-            <p className="mt-2 text-sm text-muted-foreground">
-              No compilation history yet.
-            </p>
-          </div>
+          <EmptyState
+            icon={Clock}
+            title="No compilation history"
+            description="Compile your project to see build history here."
+            className="p-8"
+          />
         ) : (
           <div className="space-y-3">
-            {compilations.map((compilation) => (
-              <Card key={compilation.id}>
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      {getStatusIcon(compilation.status)}
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm">
-                            {compilation.id.slice(0, 8)}
-                          </span>
-                          {getStatusBadge(compilation.status)}
-                          {compilation.production && (
-                            <Badge variant="outline">Production</Badge>
+            {compilations.map((compilation) => {
+              const isExpanded = expandedCompilations.has(compilation.id)
+              const hasDetails =
+                (compilation.errors && compilation.errors.length > 0) ||
+                (compilation.warnings && compilation.warnings.length > 0) ||
+                compilation.additional_specs
+              const duration = formatDuration(compilation.started_at, compilation.completed_at)
+
+              return (
+                <Card key={compilation.id}>
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div
+                        className={cn('flex items-center gap-3 flex-1 min-w-0', hasDetails && 'cursor-pointer')}
+                        onClick={() => {
+                          if (!hasDetails) return
+                          setExpandedCompilations((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(compilation.id)) {
+                              next.delete(compilation.id)
+                            } else {
+                              next.add(compilation.id)
+                            }
+                            return next
+                          })
+                        }}
+                      >
+                        {hasDetails ? (
+                          isExpanded ? (
+                            <ChevronDown className="h-5 w-5 text-muted-foreground shrink-0" />
+                          ) : (
+                            <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
+                          )
+                        ) : (
+                          getStatusIcon(compilation.status)
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {hasDetails && getStatusIcon(compilation.status)}
+                            <span className="font-mono text-sm">
+                              {compilation.id.slice(0, 8)}
+                            </span>
+                            {getStatusBadge(compilation.status)}
+                            {compilation.production && (
+                              <Badge variant="outline">Production</Badge>
+                            )}
+                            {duration && (
+                              <span className="text-xs text-muted-foreground">
+                                {duration}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Started {formatDate(compilation.started_at)}
+                            {compilation.completed_at &&
+                              ` | Completed ${formatDate(compilation.completed_at)}`}
+                          </p>
+                          {!isExpanded && compilation.errors && compilation.errors.length > 0 && (
+                            <p className="mt-1 text-xs text-destructive">
+                              {compilation.errors.length} error{compilation.errors.length !== 1 ? 's' : ''}
+                              {compilation.warnings && compilation.warnings.length > 0 &&
+                                `, ${compilation.warnings.length} warning${compilation.warnings.length !== 1 ? 's' : ''}`}
+                            </p>
                           )}
                         </div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Started {formatDate(compilation.started_at)}
-                          {compilation.completed_at &&
-                            ` | Completed ${formatDate(compilation.completed_at)}`}
-                        </p>
+                      </div>
+                      {compilation.artifact_id && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDownload(compilation.artifact_id!)}
+                        >
+                          <Download className="h-4 w-4 mr-1" />
+                          Artifact
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Expanded details */}
+                    {isExpanded && (
+                      <div className="mt-3 pt-3 border-t border-border space-y-2">
+                        {compilation.additional_specs && compilation.additional_specs.length > 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            Compiled with {compilation.additional_specs.length} additional spec{compilation.additional_specs.length !== 1 ? 's' : ''}
+                          </p>
+                        )}
                         {compilation.errors && compilation.errors.length > 0 &&
                           renderCompilationErrors(compilation.errors)}
+                        {compilation.warnings && compilation.warnings.length > 0 && (
+                          <div className="space-y-1">
+                            {compilation.warnings.map((w, i) => (
+                              <div
+                                key={i}
+                                className="rounded-md border border-yellow-500/30 bg-yellow-500/5 p-3"
+                              >
+                                <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                                  <AlertTriangle className="inline h-3 w-3 mr-1" />
+                                  <span className="font-mono font-medium">[{w.code}]</span>{' '}
+                                  {w.message}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                    {compilation.artifact_id && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDownload(compilation.artifact_id!)}
-                      >
-                        <Download className="h-4 w-4 mr-1" />
-                        Artifact
-                      </Button>
                     )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
         )}
       </div>

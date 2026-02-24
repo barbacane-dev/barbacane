@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Activity, RefreshCw, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react'
 import { listSpecs, listSpecCompilations } from '@/lib/api'
 import type { Compilation } from '@/lib/api'
-import { Button, Card, CardContent, Badge } from '@/components/ui'
+import { Button, Card, CardContent, Badge, EmptyState, Breadcrumb } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 interface CompilationWithSpec extends Compilation {
@@ -83,6 +83,13 @@ export function ActivityPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb
+        items={[
+          { label: 'Dashboard', href: '/' },
+          { label: 'Activity' },
+        ]}
+        className="mb-4"
+      />
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Activity</h1>
@@ -122,15 +129,11 @@ export function ActivityPage() {
           </Button>
         </div>
       ) : compilations.length === 0 ? (
-        <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
-          <div className="text-center">
-            <Activity className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h3 className="mt-4 text-lg font-medium">No recent activity</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Compilation jobs will appear here
-            </p>
-          </div>
-        </div>
+        <EmptyState
+          icon={Activity}
+          title="No recent activity"
+          description="Compilation jobs will appear here"
+        />
       ) : (
         <div className="space-y-4">
           {compilations.map((compilation) => (

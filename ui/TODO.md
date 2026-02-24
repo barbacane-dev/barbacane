@@ -20,6 +20,17 @@
 - [x] Add user info to sidebar
 - [x] Add logout functionality
 
+### 4. UX Improvements ✅
+- [x] Reusable `EmptyState`, `SearchInput`, `Breadcrumb`, `DropZone` components
+- [x] `useDebounce` hook and shared time formatting utilities
+- [x] Search and filtering on specs, plugins, and projects pages
+- [x] Breadcrumb navigation across all pages
+- [x] Drag-and-drop spec upload (empty state + persistent)
+- [x] Responsive sidebar with mobile close button
+- [x] On-demand spec compliance re-checking (`GET /specs/{id}/compliance`)
+- [x] Build logs viewer with structured display and level filtering
+- [x] Data plane health indicators with auto-refresh
+
 ## Future
 
 ### Authentication (Production)
@@ -29,7 +40,6 @@
 - [ ] Add role-based access control
 
 ### Features
-- [ ] Spec upload with drag & drop
 - [ ] Spec editor with syntax highlighting
 - [ ] Compilation progress indicator
 - [ ] Artifact deployment workflow

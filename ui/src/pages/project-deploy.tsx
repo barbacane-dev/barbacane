@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -26,8 +26,8 @@ import {
   listProjectArtifacts,
 } from '@/lib/api'
 import type { ApiKey, ApiKeyCreated } from '@/lib/api'
-import { Button, Card, CardContent, CardHeader, CardTitle, Badge } from '@/components/ui'
-import { cn } from '@/lib/utils'
+import { Button, Card, CardContent, CardHeader, CardTitle, Badge, EmptyState } from '@/components/ui'
+import { cn, relativeTime, formatUptime } from '@/lib/utils'
 
 export function ProjectDeployPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -37,6 +37,13 @@ export function ProjectDeployPage() {
   const [createdKey, setCreatedKey] = useState<ApiKeyCreated | null>(null)
   const [copiedKey, setCopiedKey] = useState(false)
   const [showOffline, setShowOffline] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+
+  // Update clock for health indicators
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 15_000)
+    return () => clearInterval(id)
+  }, [])
 
   // Queries
   const dataPlanes = useQuery({
@@ -148,6 +155,15 @@ export function ProjectDeployPage() {
     }
   }
 
+  const getHealthColor = (lastSeen: string | null, status: string) => {
+    if (status === 'offline') return 'bg-gray-400'
+    if (!lastSeen) return 'bg-gray-400'
+    const secondsAgo = (now - new Date(lastSeen).getTime()) / 1000
+    if (secondsAgo < 45) return 'bg-green-500'
+    if (secondsAgo < 90) return 'bg-yellow-500 animate-pulse'
+    return 'bg-red-500'
+  }
+
   const latestArtifact = artifacts.data?.[0]
   const artifactMap = new Map(artifacts.data?.map(a => [a.id, a]) ?? [])
 
@@ -222,17 +238,24 @@ export function ProjectDeployPage() {
             <Server className="h-5 w-5" />
             Connected Data Planes
           </CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => dataPlanes.refetch()}
-            disabled={dataPlanes.isFetching}
-          >
-            <RefreshCw
-              className={cn('h-4 w-4 mr-2', dataPlanes.isFetching && 'animate-spin')}
-            />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-3">
+            {dataPlanes.dataUpdatedAt && (
+              <span className="text-xs text-muted-foreground">
+                Updated {relativeTime(new Date(dataPlanes.dataUpdatedAt).toISOString())}
+              </span>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => dataPlanes.refetch()}
+              disabled={dataPlanes.isFetching}
+            >
+              <RefreshCw
+                className={cn('h-4 w-4 mr-2', dataPlanes.isFetching && 'animate-spin')}
+              />
+              Refresh
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {dataPlanes.isLoading ? (
@@ -240,27 +263,26 @@ export function ProjectDeployPage() {
               <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : dataPlanes.data?.length === 0 ? (
-            <div className="text-center py-8">
-              <Server className="h-12 w-12 mx-auto text-muted-foreground" />
-              <p className="mt-4 text-muted-foreground">
-                No data planes connected
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Start a data plane with --control-plane flag to connect
-              </p>
-            </div>
+            <EmptyState
+              icon={Server}
+              title="No data planes connected"
+              description="Start a data plane with --control-plane flag to connect"
+              className="border-0 p-8"
+            />
           ) : (
             <div className="space-y-3">
               {/* Online / deploying planes */}
               {onlinePlanes.map((dp) => {
                 const deployedArtifact = dp.artifact_id ? artifactMap.get(dp.artifact_id) : null
+                const uptimeSecs = typeof dp.metadata?.uptime_secs === 'number' ? dp.metadata.uptime_secs : null
+                const requestsTotal = typeof dp.metadata?.requests_total === 'number' ? dp.metadata.requests_total : null
                 return (
                   <div
                     key={dp.id}
                     className="flex items-center justify-between p-4 rounded-lg border border-border"
                   >
                     <div className="flex items-center gap-4">
-                      <div className="h-3 w-3 rounded-full bg-green-500" />
+                      <div className={cn('h-3 w-3 rounded-full', getHealthColor(dp.last_seen, dp.status))} />
                       <div>
                         <p className="font-medium">{dp.name || dp.id.slice(0, 8)}</p>
                         <div className="flex items-center gap-4 text-sm text-muted-foreground">
@@ -268,7 +290,17 @@ export function ProjectDeployPage() {
                           {dp.last_seen && (
                             <span className="flex items-center gap-1">
                               <Clock className="h-3 w-3" />
-                              Last seen: {formatDate(dp.last_seen)}
+                              {relativeTime(dp.last_seen)}
+                            </span>
+                          )}
+                          {uptimeSecs !== null && (
+                            <span className="text-xs">
+                              Uptime: {formatUptime(uptimeSecs)}
+                            </span>
+                          )}
+                          {requestsTotal !== null && (
+                            <span className="text-xs">
+                              Requests: {requestsTotal.toLocaleString()}
                             </span>
                           )}
                         </div>
@@ -372,7 +404,7 @@ export function ProjectDeployPage() {
                                 {dp.last_seen && (
                                   <span className="flex items-center gap-1">
                                     <Clock className="h-3 w-3" />
-                                    Last seen: {formatDate(dp.last_seen)}
+                                    {relativeTime(dp.last_seen)}
                                   </span>
                                 )}
                               </div>
@@ -419,13 +451,12 @@ export function ProjectDeployPage() {
               <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : apiKeys.data?.length === 0 ? (
-            <div className="text-center py-8">
-              <Key className="h-12 w-12 mx-auto text-muted-foreground" />
-              <p className="mt-4 text-muted-foreground">No API keys created</p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Create an API key to authenticate data planes
-              </p>
-            </div>
+            <EmptyState
+              icon={Key}
+              title="No API keys created"
+              description="Create an API key to authenticate data planes"
+              className="border-0 p-8"
+            />
           ) : (
             <div className="space-y-3">
               {apiKeys.data?.map((key: ApiKey) => (

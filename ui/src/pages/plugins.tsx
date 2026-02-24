@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Puzzle, Upload, Trash2, RefreshCw, Github, ExternalLink, AlertCircle, X, FileJson } from 'lucide-react'
 import { listPlugins, registerPlugin, deletePlugin } from '@/lib/api'
 import type { Plugin, PluginType } from '@/lib/api'
-import { Button, Card, CardContent, Badge } from '@/components/ui'
+import { Button, Card, CardContent, Badge, EmptyState, SearchInput, Breadcrumb } from '@/components/ui'
+import { useDebounce } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 interface GitHubRelease {
@@ -41,6 +42,9 @@ export function PluginsPage() {
 
   // Delete error state
   const [deleteError, setDeleteError] = useState<{ pluginKey: string; message: string } | null>(null)
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState<PluginType | ''>('')
+  const debouncedSearch = useDebounce(search, 300)
 
   // GitHub release state
   const [githubRepo, setGithubRepo] = useState('')
@@ -51,8 +55,8 @@ export function PluginsPage() {
   const [fetchError, setFetchError] = useState<string | null>(null)
 
   const pluginsQuery = useQuery({
-    queryKey: ['plugins'],
-    queryFn: () => listPlugins(),
+    queryKey: ['plugins', { name: debouncedSearch || undefined, type: typeFilter || undefined }],
+    queryFn: () => listPlugins({ name: debouncedSearch || undefined, type: typeFilter || undefined }),
   })
 
   const registerMutation = useMutation({
@@ -231,6 +235,13 @@ export function PluginsPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb
+        items={[
+          { label: 'Dashboard', href: '/' },
+          { label: 'Plugin Registry' },
+        ]}
+        className="mb-4"
+      />
       <div className="mb-8 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Plugins</h1>
@@ -587,6 +598,40 @@ export function PluginsPage() {
         </div>
       )}
 
+      <div className="mb-6 flex items-center gap-3">
+        <div className="max-w-sm flex-1">
+          <SearchInput
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onClear={() => setSearch('')}
+            placeholder="Search plugins..."
+          />
+        </div>
+        <div className="flex gap-1">
+          <Button
+            variant={typeFilter === '' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setTypeFilter('')}
+          >
+            All
+          </Button>
+          <Button
+            variant={typeFilter === 'middleware' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setTypeFilter('middleware')}
+          >
+            Middleware
+          </Button>
+          <Button
+            variant={typeFilter === 'dispatcher' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setTypeFilter('dispatcher')}
+          >
+            Dispatcher
+          </Button>
+        </div>
+      </div>
+
       {pluginsQuery.isLoading ? (
         <div className="flex items-center justify-center p-12">
           <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -604,19 +649,17 @@ export function PluginsPage() {
           </Button>
         </div>
       ) : plugins.length === 0 ? (
-        <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
-          <div className="text-center">
-            <Puzzle className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h3 className="mt-4 text-lg font-medium">No plugins registered</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Register a WASM plugin to extend gateway functionality
-            </p>
-            <Button onClick={() => setShowUploadForm(true)} className="mt-4">
+        <EmptyState
+          icon={Puzzle}
+          title="No plugins registered"
+          description="Register a WASM plugin to extend gateway functionality"
+          action={
+            <Button onClick={() => setShowUploadForm(true)}>
               <Upload className="h-4 w-4 mr-2" />
               Register Plugin
             </Button>
-          </div>
-        </div>
+          }
+        />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {plugins.map((plugin) => (

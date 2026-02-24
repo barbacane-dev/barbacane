@@ -1,9 +1,9 @@
-import { NavLink, Outlet, useParams, useOutletContext, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useParams, useOutletContext, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { FileCode, Puzzle, Package, Settings, ArrowLeft, RefreshCw, Rocket, GitBranch, Play, Loader2 } from 'lucide-react'
 import { getProject, listProjectSpecs, listProjectCompilations, startCompilation } from '@/lib/api'
 import type { Project } from '@/lib/api'
-import { Button } from '@/components/ui'
+import { Button, Breadcrumb } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 const projectTabs = [
@@ -18,6 +18,7 @@ const projectTabs = [
 export function ProjectLayout() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
 
   const projectQuery = useQuery({
@@ -94,16 +95,19 @@ export function ProjectLayout() {
     <div className="flex h-full flex-col">
       {/* Project header */}
       <div className="border-b border-border bg-card/50 px-8 py-4">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-          <NavLink
-            to="/projects"
-            className="hover:text-foreground transition-colors"
-          >
-            Projects
-          </NavLink>
-          <span>/</span>
-          <span className="text-foreground">{project.name}</span>
-        </div>
+        <Breadcrumb
+          items={[
+            { label: 'Projects', href: '/projects' },
+            { label: project.name, href: `/projects/${project.id}` },
+            ...((() => {
+              const currentTab = projectTabs.find((tab) =>
+                location.pathname.endsWith(`/${tab.href}`)
+              )
+              return currentTab ? [{ label: currentTab.name }] : []
+            })()),
+          ]}
+          className="mb-1"
+        />
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold">{project.name}</h1>

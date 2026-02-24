@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Web UI Improvements
+- Reusable components: `EmptyState`, `SearchInput`, `Breadcrumb`, `DropZone`
+- `useDebounce` hook and shared time formatting utilities (`formatDate`, `formatRelativeTime`)
+- Search and filtering on specs, plugins, and projects pages
+- Breadcrumb navigation across all pages
+- Drag-and-drop spec upload zones (empty state and persistent)
+- Responsive sidebar with mobile close button
+- On-demand spec compliance re-checking via `GET /specs/{id}/compliance`
+- Compliance check button on spec cards (global and project pages)
+- Build logs viewer with structured log display and level filtering
+- Data plane health indicators with auto-refresh intervals
+
 #### `$ref` Resolution in Spec Parser
 - Local `$ref` pointers (`#/components/schemas/*`, `#/components/parameters/*`, etc.) are now resolved and inlined at parse time
 - Applies to OpenAPI parameter schemas, request body schemas, and AsyncAPI message payloads
@@ -19,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `GET /projects/{id}/data-planes` now returns 404 when the project does not exist (previously returned 200 with an empty array)
+- Invalid plugin configs in playground specs: `correlation-id` used `header` instead of `header_name`, `cache` used unsupported `stale_if_error` property
 
 #### Request Transformer
 - `request-transformer` middleware plugin — declarative request transformations before upstream dispatch

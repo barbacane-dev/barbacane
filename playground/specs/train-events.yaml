@@ -273,7 +273,7 @@ operations:
           window: 60
       - name: correlation-id
         config:
-          header: X-Event-ID
+          header_name: X-Event-ID
           generate_if_missing: true
 
   publishTripCancelled:

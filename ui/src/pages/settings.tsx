@@ -3,7 +3,7 @@ import { RefreshCw, CheckCircle, XCircle, Server, Database, Palette } from 'luci
 import { getHealth } from '@/lib/api'
 import { useTheme } from '@/hooks'
 import { useAuth } from '@/lib/auth'
-import { Button, Card, CardContent } from '@/components/ui'
+import { Button, Card, CardContent, Breadcrumb } from '@/components/ui'
 import { cn } from '@/lib/utils'
 
 export function SettingsPage() {
@@ -20,6 +20,13 @@ export function SettingsPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb
+        items={[
+          { label: 'Dashboard', href: '/' },
+          { label: 'Settings' },
+        ]}
+        className="mb-4"
+      />
       <div className="mb-8">
         <h1 className="text-2xl font-semibold">Settings</h1>
         <p className="text-muted-foreground">Control plane configuration</p>

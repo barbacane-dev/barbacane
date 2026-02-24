@@ -38,7 +38,7 @@ x-barbacane-middlewares:
       max_age: 86400
   - name: correlation-id
     config:
-      header: X-Request-ID
+      header_name: X-Request-ID
       generate_if_missing: true
 
 tags:
@@ -163,7 +163,6 @@ paths:
         - name: cache
           config:
             ttl: 30
-            stale_if_error: 60
         - name: observability
           config:
             latency_slo_ms: 100

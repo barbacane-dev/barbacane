@@ -252,6 +252,41 @@ pub async fn delete_spec(
     }
 }
 
+/// GET /specs/:id/compliance - Re-check spec compliance
+pub async fn get_spec_compliance(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<ComplianceWarning>>, ProblemDetails> {
+    let repo = SpecsRepository::new(state.pool.clone());
+
+    let spec = repo
+        .get_by_id(id)
+        .await?
+        .ok_or_else(|| ProblemDetails::not_found(format!("Spec {} not found", id)))?;
+
+    let revision = repo
+        .get_latest_revision(id)
+        .await?
+        .ok_or_else(|| ProblemDetails::not_found(format!("Spec {} has no revisions", id)))?;
+
+    let content_str = String::from_utf8(revision.content).map_err(|_| {
+        ProblemDetails::internal_error_with_detail("Spec content is not valid UTF-8")
+    })?;
+
+    let parsed = barbacane_compiler::parse_spec(&content_str).map_err(|e| {
+        ProblemDetails::internal_error_with_detail(format!("Failed to parse spec: {}", e))
+    })?;
+
+    let check_project_id = if spec.project_id == DEFAULT_PROJECT_ID {
+        None
+    } else {
+        Some(spec.project_id)
+    };
+
+    let warnings = check_spec_compliance(&parsed, &state.pool, check_project_id).await;
+    Ok(Json(warnings))
+}
+
 // ── Spec compliance checks ──────────────────────────────────────────
 
 /// A plugin reference extracted from x-barbacane-* extensions.

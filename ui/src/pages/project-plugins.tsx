@@ -10,7 +10,7 @@ import {
   removePluginFromProject,
 } from '@/lib/api'
 import type { Plugin, ProjectPluginConfig } from '@/lib/api'
-import { Button, Card, CardContent, Badge } from '@/components/ui'
+import { Button, Card, CardContent, Badge, EmptyState } from '@/components/ui'
 import { cn } from '@/lib/utils'
 import { useJsonSchema, generateSkeletonFromSchema, type ValidationError } from '@/hooks'
 
@@ -463,19 +463,17 @@ export function ProjectPluginsPage() {
           </Button>
         </div>
       ) : configs.length === 0 ? (
-        <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-12">
-          <div className="text-center">
-            <Puzzle className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h3 className="mt-4 text-lg font-medium">No plugins configured</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Add plugins to enhance your API gateway
-            </p>
-            <Button className="mt-4" onClick={() => setShowAddSection(true)}>
+        <EmptyState
+          icon={Puzzle}
+          title="No plugins configured"
+          description="Add plugins to enhance your API gateway"
+          action={
+            <Button onClick={() => setShowAddSection(true)}>
               <Plus className="h-4 w-4 mr-2" />
               Add Plugin
             </Button>
-          </div>
-        </div>
+          }
+        />
       ) : (
         <div className="space-y-4">
           {configs.map((config) => {

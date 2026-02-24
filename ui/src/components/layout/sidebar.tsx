@@ -11,6 +11,7 @@ import {
   User,
   FileText,
   ExternalLink,
+  X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/hooks'
@@ -27,7 +28,11 @@ const globalNavigation = [
   { name: 'API Docs', href: '/api/docs', icon: FileText, external: true },
 ]
 
-export function Sidebar() {
+interface SidebarProps {
+  onClose?: () => void
+}
+
+export function Sidebar({ onClose }: SidebarProps) {
   const { theme, toggleTheme } = useTheme()
   const { user, logout } = useAuth()
 
@@ -36,6 +41,14 @@ export function Sidebar() {
       <div className="flex h-16 items-center border-b border-sidebar-border px-4">
         <img src="/logo.png" alt="Barbacane" className="h-10 w-10 mr-3" />
         <span className="text-xl font-bold text-gradient">Barbacane</span>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="ml-auto rounded-lg p-1.5 text-sidebar-foreground hover:bg-sidebar-accent md:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        )}
       </div>
       <nav className="flex-1 px-3 py-4">
         {/* Main navigation */}
