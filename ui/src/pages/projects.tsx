@@ -5,7 +5,7 @@ import { FolderKanban, Plus, Trash2, RefreshCw, Settings, Sparkles } from 'lucid
 import { listProjects, createProject, deleteProject } from '@/lib/api'
 import type { CreateProjectRequest } from '@/lib/api'
 import { Button, Card, CardContent, Badge, EmptyState, SearchInput } from '@/components/ui'
-import { useDebounce } from '@/hooks'
+import { useDebounce, useConfirm } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 export function ProjectsPage() {
@@ -16,6 +16,7 @@ export function ProjectsPage() {
   const [newProjectDescription, setNewProjectDescription] = useState('')
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounce(search, 200)
+  const { confirm, dialog } = useConfirm()
 
   const projectsQuery = useQuery({
     queryKey: ['projects'],
@@ -235,9 +236,9 @@ export function ProjectsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation()
-                        if (confirm(`Delete project "${project.name}"?`)) {
+                        if (await confirm({ title: 'Delete project', description: `Are you sure you want to delete "${project.name}"?` })) {
                           deleteMutation.mutate(project.id)
                         }
                       }}
@@ -260,6 +261,7 @@ export function ProjectsPage() {
           ))}
         </div>
       )}
+      {dialog}
     </div>
   )
 }

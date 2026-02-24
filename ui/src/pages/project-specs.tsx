@@ -10,7 +10,8 @@ import {
   getSpecCompliance,
 } from '@/lib/api'
 import type { Spec, ComplianceWarning } from '@/lib/api'
-import { Button, Card, CardContent, Badge, DropZone } from '@/components/ui'
+import { Button, Card, CardContent, Badge, DropZone, CodeBlock } from '@/components/ui'
+import { useConfirm } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 export function ProjectSpecsPage() {
@@ -22,6 +23,7 @@ export function ProjectSpecsPage() {
   const [complianceWarnings, setComplianceWarnings] = useState<ComplianceWarning[]>([])
   const [checkingCompliance, setCheckingCompliance] = useState<string | null>(null)
   const [complianceChecked, setComplianceChecked] = useState(false)
+  const { confirm, dialog } = useConfirm()
 
   const specsQuery = useQuery({
     queryKey: ['project-specs', projectId],
@@ -219,9 +221,7 @@ export function ProjectSpecsPage() {
               </div>
             </CardContent>
             <div className="flex-1 overflow-auto p-4">
-              <pre className="text-xs font-mono whitespace-pre-wrap bg-muted p-4 rounded-lg">
-                {specContent}
-              </pre>
+              <CodeBlock code={specContent} className="bg-muted p-4 rounded-lg" />
             </div>
           </Card>
         </div>
@@ -302,8 +302,8 @@ export function ProjectSpecsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        if (confirm(`Delete spec "${spec.name}"?`)) {
+                      onClick={async () => {
+                        if (await confirm({ title: 'Delete spec', description: `Are you sure you want to delete "${spec.name}"?` })) {
                           deleteMutation.mutate(spec.id)
                         }
                       }}
@@ -327,6 +327,7 @@ export function ProjectSpecsPage() {
           />
         </div>
       )}
+      {dialog}
     </div>
   )
 }

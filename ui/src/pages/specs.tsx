@@ -3,8 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { FileCode, Upload, Trash2, RefreshCw, Eye, AlertTriangle, X } from 'lucide-react'
 import { listSpecs, uploadSpec, deleteSpec, downloadSpecContent, getSpecCompliance } from '@/lib/api'
 import type { Spec, ComplianceWarning } from '@/lib/api'
-import { Button, Card, CardContent, Badge, SearchInput, Breadcrumb, DropZone } from '@/components/ui'
-import { useDebounce } from '@/hooks'
+import { Button, Card, CardContent, Badge, SearchInput, Breadcrumb, DropZone, CodeBlock } from '@/components/ui'
+import { useDebounce, useConfirm } from '@/hooks'
 import type { SpecType } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -19,6 +19,7 @@ export function SpecsPage() {
   const [complianceWarnings, setComplianceWarnings] = useState<ComplianceWarning[]>([])
   const [checkingCompliance, setCheckingCompliance] = useState<string | null>(null)
   const [complianceChecked, setComplianceChecked] = useState(false)
+  const { confirm, dialog } = useConfirm()
 
   const specsQuery = useQuery({
     queryKey: ['specs', { name: debouncedSearch || undefined, type: typeFilter || undefined }],
@@ -301,9 +302,9 @@ export function SpecsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation()
-                          if (confirm(`Delete spec "${spec.name}"?`)) {
+                          if (await confirm({ title: 'Delete spec', description: `Are you sure you want to delete "${spec.name}"?` })) {
                             deleteMutation.mutate(spec.id)
                           }
                         }}
@@ -327,9 +328,11 @@ export function SpecsPage() {
                   <Badge variant="secondary">{selectedSpec.spec_type}</Badge>
                 </div>
                 <div className="rounded-lg border border-border bg-muted/30 p-4 max-h-[600px] overflow-auto">
-                  <pre className="text-sm">
-                    <code>{specContent ?? 'Loading...'}</code>
-                  </pre>
+                  {specContent ? (
+                    <CodeBlock code={specContent} />
+                  ) : (
+                    <pre className="text-xs font-mono">Loading...</pre>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -346,6 +349,7 @@ export function SpecsPage() {
         />
         </div>
       )}
+      {dialog}
     </div>
   )
 }

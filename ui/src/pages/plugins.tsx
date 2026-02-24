@@ -4,7 +4,7 @@ import { Puzzle, Upload, Trash2, RefreshCw, Github, ExternalLink, AlertCircle, X
 import { listPlugins, registerPlugin, deletePlugin } from '@/lib/api'
 import type { Plugin, PluginType } from '@/lib/api'
 import { Button, Card, CardContent, Badge, EmptyState, SearchInput, Breadcrumb } from '@/components/ui'
-import { useDebounce } from '@/hooks'
+import { useDebounce, useConfirm } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 interface GitHubRelease {
@@ -45,6 +45,7 @@ export function PluginsPage() {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<PluginType | ''>('')
   const debouncedSearch = useDebounce(search, 300)
+  const { confirm, dialog } = useConfirm()
 
   // GitHub release state
   const [githubRepo, setGithubRepo] = useState('')
@@ -704,8 +705,8 @@ export function PluginsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        if (confirm(`Delete plugin "${plugin.name}" v${plugin.version}?`)) {
+                      onClick={async () => {
+                        if (await confirm({ title: 'Delete plugin', description: `Are you sure you want to delete "${plugin.name}" v${plugin.version}?` })) {
                           deleteMutation.mutate({
                             name: plugin.name,
                             version: plugin.version,
@@ -749,6 +750,7 @@ export function PluginsPage() {
           </Card>
         </div>
       )}
+      {dialog}
     </div>
   )
 }

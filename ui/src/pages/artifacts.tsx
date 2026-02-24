@@ -2,10 +2,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Package, Trash2, RefreshCw, Download } from 'lucide-react'
 import { listArtifacts, deleteArtifact, downloadArtifact } from '@/lib/api'
 import { Button, Card, CardContent, Badge } from '@/components/ui'
+import { useConfirm } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 export function ArtifactsPage() {
   const queryClient = useQueryClient()
+  const { confirm, dialog } = useConfirm()
 
   const artifactsQuery = useQuery({
     queryKey: ['artifacts'],
@@ -137,8 +139,8 @@ export function ArtifactsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        if (confirm('Delete this artifact?')) {
+                      onClick={async () => {
+                        if (await confirm({ title: 'Delete artifact', description: 'Are you sure you want to delete this artifact?' })) {
                           deleteMutation.mutate(artifact.id)
                         }
                       }}
@@ -153,6 +155,7 @@ export function ArtifactsPage() {
           ))}
         </div>
       )}
+      {dialog}
     </div>
   )
 }

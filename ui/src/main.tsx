@@ -6,6 +6,7 @@ import './index.css'
 
 import { AuthProvider } from '@/lib/auth'
 import { ProtectedRoute } from '@/components/auth'
+import { RouteErrorBoundary } from '@/components/error-boundary'
 import { RootLayout, ProjectLayout } from '@/components/layout'
 import {
   DashboardPage,
@@ -46,6 +47,7 @@ const router = createBrowserRouter([
         <RootLayout />
       </ProtectedRoute>
     ),
+    errorElement: <RouteErrorBoundary />,
     children: [
       { index: true, element: <DashboardPage /> },
       // Projects
@@ -53,6 +55,7 @@ const router = createBrowserRouter([
       {
         path: 'projects/:id',
         element: <ProjectLayout />,
+        errorElement: <RouteErrorBoundary />,
         children: [
           { index: true, element: <Navigate to="specs" replace /> },
           { path: 'specs', element: <ProjectSpecsPage /> },

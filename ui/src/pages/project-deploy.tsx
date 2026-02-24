@@ -27,6 +27,7 @@ import {
 } from '@/lib/api'
 import type { ApiKey, ApiKeyCreated } from '@/lib/api'
 import { Button, Card, CardContent, CardHeader, CardTitle, Badge, EmptyState } from '@/components/ui'
+import { useConfirm } from '@/hooks'
 import { cn, relativeTime, formatUptime } from '@/lib/utils'
 
 export function ProjectDeployPage() {
@@ -38,6 +39,7 @@ export function ProjectDeployPage() {
   const [copiedKey, setCopiedKey] = useState(false)
   const [showOffline, setShowOffline] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const { confirm, dialog } = useConfirm()
 
   // Update clock for health indicators
   useEffect(() => {
@@ -335,8 +337,8 @@ export function ProjectDeployPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        if (confirm('Disconnect this data plane?')) {
+                      onClick={async () => {
+                        if (await confirm({ title: 'Disconnect data plane', description: 'Are you sure you want to disconnect this data plane?' })) {
                           disconnectMutation.mutate(dp.id)
                         }
                       }}
@@ -370,8 +372,8 @@ export function ProjectDeployPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            if (confirm(`Remove all ${offlinePlanes.length} offline data plane(s)?`)) {
+                          onClick={async () => {
+                            if (await confirm({ title: 'Remove offline planes', description: `Are you sure you want to remove all ${offlinePlanes.length} offline data plane(s)?` })) {
                               cleanupMutation.mutate(offlinePlanes.map((dp) => dp.id))
                             }
                           }}
@@ -413,8 +415,8 @@ export function ProjectDeployPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => {
-                              if (confirm('Remove this data plane?')) {
+                            onClick={async () => {
+                              if (await confirm({ title: 'Remove data plane', description: 'Are you sure you want to remove this data plane?' })) {
                                 disconnectMutation.mutate(dp.id)
                               }
                             }}
@@ -484,8 +486,8 @@ export function ProjectDeployPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        if (confirm(`Revoke API key "${key.name}"?`)) {
+                      onClick={async () => {
+                        if (await confirm({ title: 'Revoke API key', description: `Are you sure you want to revoke API key "${key.name}"?` })) {
                           revokeKeyMutation.mutate(key.id)
                         }
                       }}
@@ -580,6 +582,7 @@ export function ProjectDeployPage() {
           </Card>
         </div>
       )}
+      {dialog}
     </div>
   )
 }

@@ -12,7 +12,7 @@ import {
 import type { Plugin, ProjectPluginConfig } from '@/lib/api'
 import { Button, Card, CardContent, Badge, EmptyState } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import { useJsonSchema, generateSkeletonFromSchema, type ValidationError } from '@/hooks'
+import { useJsonSchema, generateSkeletonFromSchema, useConfirm, type ValidationError } from '@/hooks'
 
 export function ProjectPluginsPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -25,6 +25,7 @@ export function ProjectPluginsPage() {
   const [configJson, setConfigJson] = useState('')
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
   const [jsonParseError, setJsonParseError] = useState<string | null>(null)
+  const { confirm, dialog } = useConfirm()
 
   const configsQuery = useQuery({
     queryKey: ['project-plugins', projectId],
@@ -561,8 +562,8 @@ export function ProjectPluginsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => {
-                          if (confirm(`Remove "${config.plugin_name}" from project?`)) {
+                        onClick={async () => {
+                          if (await confirm({ title: 'Remove plugin', description: `Are you sure you want to remove "${config.plugin_name}" from this project?` })) {
                             removeMutation.mutate(config.plugin_name)
                           }
                         }}
@@ -578,6 +579,7 @@ export function ProjectPluginsPage() {
           })}
         </div>
       )}
+      {dialog}
     </div>
   )
 }

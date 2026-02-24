@@ -4,11 +4,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Settings, Trash2, Save } from 'lucide-react'
 import { getProject, updateProject, deleteProject } from '@/lib/api'
 import { Button, Card, CardContent } from '@/components/ui'
+import { useConfirm } from '@/hooks'
 
 export function ProjectSettingsPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { confirm, dialog } = useConfirm()
 
   const projectQuery = useQuery({
     queryKey: ['project', projectId],
@@ -179,11 +181,12 @@ export function ProjectSettingsPage() {
 
             <Button
               variant="destructive"
-              onClick={() => {
+              onClick={async () => {
                 if (
-                  confirm(
-                    `Are you sure you want to delete "${projectQuery.data.name}"? This cannot be undone.`
-                  )
+                  await confirm({
+                    title: 'Delete project',
+                    description: `Are you sure you want to delete "${projectQuery.data.name}"? This cannot be undone.`,
+                  })
                 ) {
                   deleteMutation.mutate()
                 }
@@ -204,6 +207,7 @@ export function ProjectSettingsPage() {
           </CardContent>
         </Card>
       </div>
+      {dialog}
     </div>
   )
 }

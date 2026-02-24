@@ -22,12 +22,14 @@ import {
 } from '@/lib/api'
 import type { Compilation, CompilationError } from '@/lib/api'
 import { Button, Card, CardContent, Badge, EmptyState } from '@/components/ui'
+import { useConfirm } from '@/hooks'
 import { cn, formatDuration } from '@/lib/utils'
 
 export function ProjectBuildsPage() {
   const { id: projectId } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
   const [expandedCompilations, setExpandedCompilations] = useState<Set<string>>(new Set())
+  const { confirm, dialog } = useConfirm()
 
   const compilationsQuery = useQuery({
     queryKey: ['project-compilations', projectId],
@@ -241,8 +243,8 @@ export function ProjectBuildsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => {
-                          if (confirm(`Delete artifact ${artifact.id.slice(0, 8)}?`)) {
+                        onClick={async () => {
+                          if (await confirm({ title: 'Delete artifact', description: `Are you sure you want to delete artifact ${artifact.id.slice(0, 8)}?` })) {
                             deleteArtifactMutation.mutate(artifact.id)
                           }
                         }}
@@ -391,6 +393,7 @@ export function ProjectBuildsPage() {
           </div>
         )}
       </div>
+      {dialog}
     </div>
   )
 }

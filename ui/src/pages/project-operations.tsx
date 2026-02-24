@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -14,6 +14,10 @@ import {
   X,
   AlertCircle,
   Settings2,
+  Eye,
+  ArrowRight,
+  Undo2,
+  Redo2,
 } from 'lucide-react'
 import { getProjectOperations, patchSpecOperations, listPlugins } from '@/lib/api'
 import type {
@@ -25,7 +29,7 @@ import type {
 } from '@/lib/api'
 import { Button, Card, CardContent, Badge, EmptyState } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import { useJsonSchema, generateSkeletonFromSchema } from '@/hooks'
+import { useJsonSchema, generateSkeletonFromSchema, useHistory } from '@/hooks'
 
 // ============================================================================
 // Constants
@@ -361,7 +365,7 @@ function SpecSection({
                     <OperationRow
                       key={opKey}
                       operation={op}
-                      hasGlobalMiddlewares={spec.global_middlewares.length > 0}
+                      globalMiddlewares={spec.global_middlewares}
                       expanded={expandedOps.has(opKey)}
                       onToggle={() => onToggleOp(opKey)}
                       onEdit={() => onEditOperation(op)}
@@ -383,17 +387,36 @@ function SpecSection({
 
 function OperationRow({
   operation,
-  hasGlobalMiddlewares,
+  globalMiddlewares,
   expanded,
   onToggle,
   onEdit,
 }: {
   operation: OperationSummary
-  hasGlobalMiddlewares: boolean
+  globalMiddlewares: MiddlewareBinding[]
   expanded: boolean
   onToggle: () => void
   onEdit: () => void
 }) {
+  const [showPreview, setShowPreview] = useState(false)
+  const hasGlobalMiddlewares = globalMiddlewares.length > 0
+
+  const resolvedChain: MiddlewareBinding[] = useMemo(() => {
+    if (operation.middlewares === null) return globalMiddlewares
+    if (operation.middlewares.length === 0) return []
+    // Merge: globals not overridden by name are preserved, then operation middlewares
+    // override or append
+    const opNames = new Set(operation.middlewares.map((m) => m.name))
+    const preserved = globalMiddlewares.filter((g) => !opNames.has(g.name))
+    return [...preserved, ...operation.middlewares]
+  }, [operation.middlewares, globalMiddlewares])
+
+  const chainMode = operation.middlewares === null
+    ? 'inherit'
+    : operation.middlewares.length === 0
+      ? 'none'
+      : 'customize'
+
   return (
     <div>
       <button
@@ -449,7 +472,16 @@ function OperationRow({
 
       {expanded && (
         <div className="px-4 pb-3 ml-[calc(1rem+4.5rem)] space-y-2">
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn('h-6 px-2 text-xs', showPreview && 'bg-muted')}
+              onClick={() => setShowPreview((p) => !p)}
+            >
+              <Eye className="h-3 w-3 mr-1" />
+              Preview chain
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -460,6 +492,55 @@ function OperationRow({
               Edit bindings
             </Button>
           </div>
+
+          {showPreview && (() => {
+            const opNames = new Set((operation.middlewares ?? []).map((m) => m.name))
+            return (
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Resolved Chain
+                  </span>
+                  <Badge variant="outline" className="text-[10px]">{chainMode}</Badge>
+                </div>
+                {resolvedChain.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">No middlewares</p>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {resolvedChain.map((mw, i) => {
+                      const isFromGlobal = chainMode === 'customize' && !opNames.has(mw.name)
+                      return (
+                        <div key={i} className="flex items-center gap-1.5">
+                          {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />}
+                          <span
+                            className={cn(
+                              'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium',
+                              isFromGlobal
+                                ? 'bg-muted text-muted-foreground border border-border'
+                                : 'bg-blue-500/10 text-blue-700 dark:text-blue-400'
+                            )}
+                            title={isFromGlobal ? 'Inherited from global chain' : chainMode === 'customize' ? 'Defined at operation level' : undefined}
+                          >
+                            <span className={cn('font-normal', isFromGlobal ? 'text-muted-foreground/60' : 'text-blue-500/60')}>{i + 1}.</span>
+                            {mw.name}
+                          </span>
+                        </div>
+                      )
+                    })}
+                    <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                    {operation.dispatch ? (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-400">
+                        <Zap className="h-3 w-3" />
+                        {operation.dispatch.name}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">dispatch</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           {operation.dispatch?.config &&
             Object.keys(operation.dispatch.config).length > 0 && (
@@ -476,7 +557,7 @@ function OperationRow({
           {operation.middlewares && operation.middlewares.length > 0 && (
             <div>
               <div className="text-xs font-medium text-muted-foreground mb-1">
-                Middlewares (override)
+                Operation middlewares (merged with global)
               </div>
               <div className="space-y-1">
                 {operation.middlewares.map((mw, i) => (
@@ -501,7 +582,8 @@ function OperationRow({
 
           {(!operation.dispatch?.config ||
             Object.keys(operation.dispatch.config).length === 0) &&
-            (!operation.middlewares || operation.middlewares.length === 0) && (
+            (!operation.middlewares || operation.middlewares.length === 0) &&
+            !showPreview && (
               <p className="text-xs text-muted-foreground italic">
                 No additional configuration details
               </p>
@@ -535,12 +617,26 @@ function EditMiddlewaresDialog({
   onSave: (middlewares: MiddlewareBinding[]) => void
   onClose: () => void
 }) {
-  const [middlewares, setMiddlewares] = useState<MiddlewareBinding[]>(initialMiddlewares)
+  const history = useHistory<MiddlewareBinding[]>(initialMiddlewares)
+  const middlewares = history.state
   const [showPicker, setShowPicker] = useState(false)
   const [editingConfigIdx, setEditingConfigIdx] = useState<number | null>(null)
   const [configJson, setConfigJson] = useState('')
   const [jsonParseError, setJsonParseError] = useState<string | null>(null)
   const [validationErrors, setValidationErrors] = useState<{ path: string; message: string }[]>([])
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+      e.preventDefault()
+      if (e.shiftKey) history.redo()
+      else history.undo()
+    }
+  }, [history])
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleKeyDown])
 
   const editingPlugin = useMemo(() => {
     if (editingConfigIdx !== null) {
@@ -554,12 +650,12 @@ function EditMiddlewaresDialog({
 
   const handleAdd = (plugin: Plugin) => {
     const skeleton = generateSkeletonFromSchema(plugin.config_schema)
-    setMiddlewares((prev) => [...prev, { name: plugin.name, config: skeleton }])
+    history.set([...middlewares, { name: plugin.name, config: skeleton }])
     setShowPicker(false)
   }
 
   const handleRemove = (index: number) => {
-    setMiddlewares((prev) => prev.filter((_, i) => i !== index))
+    history.set(middlewares.filter((_, i) => i !== index))
   }
 
   const handleOpenConfig = (index: number) => {
@@ -598,8 +694,8 @@ function EditMiddlewaresDialog({
     if (!result.valid) return
 
     if (editingConfigIdx !== null) {
-      setMiddlewares((prev) =>
-        prev.map((m, i) => (i === editingConfigIdx ? { ...m, config: parsed } : m))
+      history.set(
+        middlewares.map((m, i) => (i === editingConfigIdx ? { ...m, config: parsed } : m))
       )
       setEditingConfigIdx(null)
     }
@@ -611,7 +707,33 @@ function EditMiddlewaresDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <Card className="w-full max-w-lg max-h-[80vh] flex flex-col">
         <CardContent className="p-6 flex flex-col gap-4 overflow-hidden">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">{title}</h2>
+            {!isEditingConfig && (
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  onClick={history.undo}
+                  disabled={!history.canUndo}
+                  title="Undo (Cmd+Z)"
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  onClick={history.redo}
+                  disabled={!history.canRedo}
+                  title="Redo (Cmd+Shift+Z)"
+                >
+                  <Redo2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
 
           {isEditingConfig ? (
             /* Inline config editor */
@@ -794,17 +916,45 @@ function EditOperationDialog({
   ) => void
   onClose: () => void
 }) {
-  type MwMode = 'inherit' | 'override' | 'none'
-  const initialMode: MwMode =
-    initialMiddlewares === null ? 'inherit' : initialMiddlewares.length === 0 ? 'none' : 'override'
+  type MwMode = 'inherit' | 'customize' | 'none'
+  type OpState = {
+    mwMode: MwMode
+    middlewares: MiddlewareBinding[]
+    dispatch: DispatchBinding | null
+  }
 
-  const [mwMode, setMwMode] = useState<MwMode>(initialMode)
-  const [middlewares, setMiddlewares] = useState<MiddlewareBinding[]>(initialMiddlewares ?? [])
-  const [dispatch, setDispatch] = useState<DispatchBinding | null>(initialDispatch)
+  const initialMode: MwMode =
+    initialMiddlewares === null ? 'inherit' : initialMiddlewares.length === 0 ? 'none' : 'customize'
+
+  const history = useHistory<OpState>({
+    mwMode: initialMode,
+    middlewares: initialMiddlewares ?? [],
+    dispatch: initialDispatch,
+  })
+
+  const { mwMode, middlewares, dispatch } = history.state
+
+  const setMwMode = (mode: MwMode) => history.set({ ...history.state, mwMode: mode })
+  const setMiddlewares = (mws: MiddlewareBinding[]) => history.set({ ...history.state, middlewares: mws })
+  const setDispatch = (d: DispatchBinding | null) => history.set({ ...history.state, dispatch: d })
+
   const [showPicker, setShowPicker] = useState(false)
   const [editingConfigIdx, setEditingConfigIdx] = useState<number | null>(null)
   const [editingDispatchConfig, setEditingDispatchConfig] = useState(false)
   const [configJson, setConfigJson] = useState('')
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+      e.preventDefault()
+      if (e.shiftKey) history.redo()
+      else history.undo()
+    }
+  }, [history])
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleKeyDown])
 
   const editingPlugin = useMemo(() => {
     if (editingConfigIdx !== null) {
@@ -824,12 +974,12 @@ function EditOperationDialog({
 
   const handleAdd = (plugin: Plugin) => {
     const skeleton = generateSkeletonFromSchema(plugin.config_schema)
-    setMiddlewares((prev) => [...prev, { name: plugin.name, config: skeleton }])
+    setMiddlewares([...middlewares, { name: plugin.name, config: skeleton }])
     setShowPicker(false)
   }
 
   const handleRemove = (index: number) => {
-    setMiddlewares((prev) => prev.filter((_, i) => i !== index))
+    setMiddlewares(middlewares.filter((_, i) => i !== index))
   }
 
   const handleOpenConfig = (index: number) => {
@@ -878,8 +1028,8 @@ function EditOperationDialog({
     if (!result.valid) return
 
     if (editingConfigIdx !== null) {
-      setMiddlewares((prev) =>
-        prev.map((m, i) => (i === editingConfigIdx ? { ...m, config: parsed } : m))
+      setMiddlewares(
+        middlewares.map((m, i) => (i === editingConfigIdx ? { ...m, config: parsed } : m))
       )
       setEditingConfigIdx(null)
     } else if (editingDispatchConfig && dispatch) {
@@ -891,7 +1041,6 @@ function EditOperationDialog({
   const handleSave = () => {
     const mwPayload: MiddlewareBinding[] | null | undefined =
       mwMode === 'inherit' ? null : mwMode === 'none' ? [] : middlewares
-    // Only send dispatch if it was changed (compare by reference isn't great, so always send)
     onSave(mwPayload, dispatch)
   }
 
@@ -901,20 +1050,46 @@ function EditOperationDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <Card className="w-full max-w-lg max-h-[80vh] flex flex-col">
         <CardContent className="p-6 flex flex-col gap-4 overflow-hidden">
-          <div>
-            <h2 className="text-lg font-semibold">Edit Operation</h2>
-            <div className="flex items-center gap-2 mt-1">
-              <span
-                className={cn(
-                  'inline-flex items-center justify-center rounded px-2 py-0.5 text-xs font-bold uppercase w-16 text-center',
-                  METHOD_COLORS[method.toUpperCase()] ?? 'bg-muted text-muted-foreground'
-                )}
-              >
-                {method}
-              </span>
-              <span className="text-sm font-mono">{path}</span>
-              <span className="text-xs text-muted-foreground">— {specName}</span>
+          <div className="flex items-start justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Edit Operation</h2>
+              <div className="flex items-center gap-2 mt-1">
+                <span
+                  className={cn(
+                    'inline-flex items-center justify-center rounded px-2 py-0.5 text-xs font-bold uppercase w-16 text-center',
+                    METHOD_COLORS[method.toUpperCase()] ?? 'bg-muted text-muted-foreground'
+                  )}
+                >
+                  {method}
+                </span>
+                <span className="text-sm font-mono">{path}</span>
+                <span className="text-xs text-muted-foreground">— {specName}</span>
+              </div>
             </div>
+            {!isEditingConfig && (
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  onClick={history.undo}
+                  disabled={!history.canUndo}
+                  title="Undo (Cmd+Z)"
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  onClick={history.redo}
+                  disabled={!history.canRedo}
+                  title="Redo (Cmd+Shift+Z)"
+                >
+                  <Redo2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
           </div>
 
           {isEditingConfig ? (
@@ -1016,7 +1191,7 @@ function EditOperationDialog({
                   Middlewares
                 </div>
                 <div className="flex gap-2 mb-3">
-                  {(['inherit', 'override', 'none'] as MwMode[]).map((mode) => (
+                  {(['inherit', 'customize', 'none'] as MwMode[]).map((mode) => (
                     <button
                       key={mode}
                       onClick={() => setMwMode(mode)}
@@ -1028,7 +1203,7 @@ function EditOperationDialog({
                       )}
                     >
                       {mode === 'inherit' && 'Inherit global'}
-                      {mode === 'override' && 'Override'}
+                      {mode === 'customize' && 'Customize'}
                       {mode === 'none' && 'No middlewares'}
                     </button>
                   ))}
@@ -1044,11 +1219,14 @@ function EditOperationDialog({
                     This operation will run with no middlewares (opt-out).
                   </p>
                 )}
-                {mwMode === 'override' && (
+                {mwMode === 'customize' && (
                   <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground italic">
+                      These middlewares are merged with the global chain. Same-name entries override global config.
+                    </p>
                     {middlewares.length === 0 && !showPicker && (
                       <p className="text-sm text-muted-foreground text-center py-2">
-                        No middlewares. Add one below.
+                        No operation-level middlewares. Global chain will apply as-is.
                       </p>
                     )}
                     {middlewares.map((mw, i) => (
