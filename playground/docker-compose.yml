@@ -286,7 +286,9 @@ services:
     volumes:
       - rustfs_data:/data
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9000/minio/health/ready"]
+      # RustFS returns 403 on all unauthenticated endpoints (server is up but requires auth).
+      # Accept both 200 and 403 as "healthy" — either means the HTTP server is responding.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/minio/health/ready | grep -qE '^(200|403)$'"]
       interval: 5s
       timeout: 3s
       retries: 10
