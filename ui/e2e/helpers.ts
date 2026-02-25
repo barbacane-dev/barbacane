@@ -1,7 +1,7 @@
 import { type Page } from '@playwright/test'
 import * as fixtures from './fixtures/data'
 
-const API_BASE = 'http://localhost:9090'
+const API_BASE = 'http://localhost:5173/api'
 
 /** Intercept all API calls with fixture data */
 export async function mockApi(page: Page) {

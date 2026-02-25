@@ -18,7 +18,7 @@ test.describe('Smoke tests', () => {
     await login(page)
     await mockApi(page)
     await page.goto('/')
-    await expect(page.getByText('Dashboard')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
   })
 
   test('navigate to Projects page', async ({ page }) => {
