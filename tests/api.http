@@ -668,6 +668,57 @@ X-Client-Id: tester-2
 GET {{baseUrl}}/unlimited
 
 ### ================================================================
+### Bot Detection (bot-detection.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/bot-detection.yaml -m tests/fixtures/barbacane.yaml -o /tmp/bot-detection.bca
+###   ./target/debug/barbacane serve --artifact /tmp/bot-detection.bca --dev
+
+### Normal browser request - allowed (200)
+GET {{baseUrl}}/denylist
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
+
+###
+
+### Scrapy bot - blocked (403)
+GET {{baseUrl}}/denylist
+User-Agent: Scrapy/2.11.1 (+https://scrapy.org)
+
+###
+
+### AhrefsBot - blocked (403)
+GET {{baseUrl}}/denylist
+User-Agent: Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)
+
+###
+
+### Googlebot - allowed despite deny:["bot"] (200)
+GET {{baseUrl}}/allow-trusted-bots
+User-Agent: Googlebot/2.1 (+http://www.google.com/bot.html)
+
+###
+
+### Generic bot - blocked (403)
+GET {{baseUrl}}/allow-trusted-bots
+User-Agent: SomeRandomBot/1.0
+
+###
+
+### Request with no User-Agent - blocked (403)
+GET {{baseUrl}}/block-empty-ua
+
+###
+
+### curl - blocked with custom 429 (429)
+GET {{baseUrl}}/custom-status
+User-Agent: curl/8.5.0
+
+###
+
+### Public endpoint - no restriction (200)
+GET {{baseUrl}}/public
+
+### ================================================================
 ### IP Restriction (ip-restriction.yaml)
 ### ================================================================
 ### Setup:

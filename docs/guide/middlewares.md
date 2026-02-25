@@ -863,6 +863,63 @@ Returns Problem JSON (RFC 7807):
 
 ---
 
+### bot-detection
+
+Blocks requests from known bots and scrapers by matching the `User-Agent` header against configurable deny patterns. An allow list lets trusted crawlers bypass the deny list.
+
+```yaml
+x-barbacane-middlewares:
+  - name: bot-detection
+    config:
+      deny:
+        - scrapy
+        - ahrefsbot
+        - semrushbot
+        - mj12bot
+        - dotbot
+      allow:
+        - Googlebot
+        - Bingbot
+      block_empty_ua: false
+      message: "Automated access is not permitted"
+      status: 403
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `deny` | array | `[]` | User-Agent substrings to block (case-insensitive substring match) |
+| `allow` | array | `[]` | User-Agent substrings that override the deny list (trusted crawlers) |
+| `block_empty_ua` | boolean | `false` | Block requests with no `User-Agent` header |
+| `message` | string | `Access denied` | Custom error message for blocked requests |
+| `status` | integer | `403` | HTTP status code for blocked requests |
+
+#### Behavior
+
+- Matching is **case-insensitive substring**: `"bot"` matches `"AhrefsBot"`, `"DotBot"`, etc.
+- The **allow list takes precedence** over deny: a UA matching both allow and deny is allowed through
+- Missing `User-Agent` is permitted by default; set `block_empty_ua: true` to block it
+- Both `deny` and `allow` are empty by default — the plugin is a no-op unless configured
+
+#### Error Response
+
+Returns Problem JSON (RFC 7807):
+
+```json
+{
+  "type": "urn:barbacane:error:bot-detected",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "Access denied",
+  "user_agent": "scrapy/2.11"
+}
+```
+
+The `user_agent` field is omitted when the request had no `User-Agent` header.
+
+---
+
 ### request-size-limit
 
 Rejects requests that exceed a configurable body size limit. Checks both `Content-Length` header and actual body size.

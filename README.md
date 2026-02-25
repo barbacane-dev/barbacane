@@ -10,7 +10,7 @@
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/unit%20tests-334%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-495%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-512%20passing-brightgreen" alt="Plugin Tests">
   <img src="https://img.shields.io/badge/integration%20tests-186%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/cli%20tests-16%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/ui%20tests-44%20passing-brightgreen" alt="UI Tests">
@@ -96,6 +96,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `correlation-id` | Middleware | Request correlation ID propagation |
 | `request-size-limit` | Middleware | Request body size limits |
 | `ip-restriction` | Middleware | IP allowlist/blocklist |
+| `bot-detection` | Middleware | Block bots by User-Agent pattern |
 | `request-transformer` | Middleware | Modify headers, query params, path, and body before upstream |
 | `observability` | Middleware | SLO monitoring and detailed logging |
 | `http-log` | Middleware | Send request/response logs to HTTP endpoint |

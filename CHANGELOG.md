@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Bot Detection Plugin
+
+- `bot-detection` middleware plugin — block requests from known bots and scrapers by User-Agent pattern matching
+  - `deny` list: block any UA containing the given substring (case-insensitive)
+  - `allow` list: explicitly allow trusted crawlers (e.g. Googlebot), overrides deny
+  - `block_empty_ua`: optionally reject requests with no User-Agent header
+  - Configurable `status` and `message` for blocked responses
+  - Returns `application/problem+json` with type `urn:barbacane:error:bot-detected`
+  - 17 unit tests
+
 #### Web UI Improvements (Batch 1)
 - Reusable components: `EmptyState`, `SearchInput`, `Breadcrumb`, `DropZone`
 - `useDebounce` hook and shared time formatting utilities (`formatDate`, `formatRelativeTime`)

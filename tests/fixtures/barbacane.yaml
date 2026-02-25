@@ -24,6 +24,8 @@ plugins:
     path: ../../plugins/request-size-limit/request-size-limit.wasm
   ip-restriction:
     path: ../../plugins/ip-restriction/ip-restriction.wasm
+  bot-detection:
+    path: ../../plugins/bot-detection/bot-detection.wasm
   nats:
     path: ../../plugins/nats/nats.wasm
   kafka:

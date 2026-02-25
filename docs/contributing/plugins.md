@@ -381,6 +381,7 @@ Barbacane includes these official plugins in the `plugins/` directory:
 | `correlation-id` | Middleware | Request correlation ID propagation |
 | `request-size-limit` | Middleware | Request body size limits |
 | `ip-restriction` | Middleware | IP allowlist/blocklist |
+| `bot-detection` | Middleware | Block bots by User-Agent pattern |
 | `observability` | Middleware | SLO monitoring and detailed logging |
 
 Use these as references for your own plugins.

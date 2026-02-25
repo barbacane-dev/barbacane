@@ -1,0 +1,105 @@
+openapi: "3.1.0"
+info:
+  title: Bot Detection Test API
+  version: "1.0.0"
+
+paths:
+  /denylist:
+    get:
+      operationId: denylistEndpoint
+      summary: Endpoint that blocks common scrapers by User-Agent
+      x-barbacane-middlewares:
+        - name: bot-detection
+          config:
+            deny:
+              - scrapy
+              - ahrefsbot
+              - semrushbot
+              - mj12bot
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /allow-trusted-bots:
+    get:
+      operationId: allowTrustedBotsEndpoint
+      summary: Blocks generic bots but allows Googlebot
+      x-barbacane-middlewares:
+        - name: bot-detection
+          config:
+            deny:
+              - bot
+            allow:
+              - Googlebot
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /block-empty-ua:
+    get:
+      operationId: blockEmptyUaEndpoint
+      summary: Blocks requests with no User-Agent header
+      x-barbacane-middlewares:
+        - name: bot-detection
+          config:
+            block_empty_ua: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /custom-status:
+    get:
+      operationId: customStatusEndpoint
+      summary: Custom status code and message for blocked bots
+      x-barbacane-middlewares:
+        - name: bot-detection
+          config:
+            deny:
+              - curl
+              - wget
+            status: 429
+            message: "Automated access is not permitted"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "429":
+          description: Too Many Requests
+
+  /public:
+    get:
+      operationId: publicEndpoint
+      summary: Endpoint without bot detection
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"public"}'
+      responses:
+        "200":
+          description: Success

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:bot-detection:config",
+  "title": "Bot Detection Middleware Configuration",
+  "type": "object",
+  "properties": {
+    "deny": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "User-Agent substrings to block (case-insensitive). A request is blocked when its User-Agent contains any of these values."
+    },
+    "allow": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "User-Agent substrings that are explicitly allowed (case-insensitive). Takes precedence over deny. Use to whitelist trusted crawlers such as Googlebot."
+    },
+    "block_empty_ua": {
+      "type": "boolean",
+      "default": false,
+      "description": "Block requests that carry no User-Agent header."
+    },
+    "message": {
+      "type": "string",
+      "default": "Access denied",
+      "description": "Custom error message returned to blocked requests."
+    },
+    "status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599,
+      "default": 403,
+      "description": "HTTP status code returned to blocked requests."
+    }
+  },
+  "additionalProperties": false
+}
