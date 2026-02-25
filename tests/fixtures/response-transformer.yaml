@@ -1,0 +1,149 @@
+openapi: "3.1.0"
+info:
+  title: Response Transformer Test API
+  version: "1.0.0"
+  description: API for testing response-transformer middleware
+
+paths:
+  /status:
+    get:
+      operationId: statusMapping
+      summary: Test status code mapping (200 → 201)
+      x-barbacane-middlewares:
+        - name: response-transformer
+          config:
+            status:
+              200: 201
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"result":"status-mapped"}'
+          content_type: application/json
+      responses:
+        "201":
+          description: Mapped from 200
+
+  /status-multi:
+    get:
+      operationId: statusMappingMulti
+      summary: Test multiple status code mappings
+      x-barbacane-middlewares:
+        - name: response-transformer
+          config:
+            status:
+              200: 201
+              400: 403
+              500: 503
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"result":"status-multi"}'
+          content_type: application/json
+      responses:
+        "201":
+          description: Mapped from 200
+
+  /headers:
+    get:
+      operationId: headerTransformations
+      summary: Test header transformations (add, set, remove, rename)
+      x-barbacane-middlewares:
+        - name: response-transformer
+          config:
+            headers:
+              add:
+                X-Gateway: "barbacane"
+                X-Frame-Options: "DENY"
+              set:
+                X-Default: "fallback"
+              remove:
+                - Server
+                - X-Powered-By
+              rename:
+                X-Old-Name: X-New-Name
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"result":"headers"}'
+          content_type: application/json
+          headers:
+            Server: "upstream/1.0"
+            X-Powered-By: "Express"
+            X-Old-Name: "rename-me"
+      responses:
+        "200":
+          description: Success
+
+  /body:
+    get:
+      operationId: bodyTransformations
+      summary: Test JSON body transformations
+      x-barbacane-middlewares:
+        - name: response-transformer
+          config:
+            body:
+              add:
+                /gateway: "barbacane"
+                /metadata/version: "1.0"
+              remove:
+                - /internal_flags
+                - /debug_info
+              rename:
+                /userName: /user_name
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"userName":"alice","internal_flags":true,"debug_info":"trace-123","data":"keep"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /combined:
+    get:
+      operationId: combinedTransformations
+      summary: Test all transformation types together
+      x-barbacane-middlewares:
+        - name: response-transformer
+          config:
+            status:
+              200: 201
+            headers:
+              add:
+                X-Gateway: "barbacane"
+              remove:
+                - Server
+            body:
+              add:
+                /gateway: "barbacane"
+              remove:
+                - /internal
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"data":"value","internal":"secret"}'
+          content_type: application/json
+          headers:
+            Server: "nginx"
+      responses:
+        "201":
+          description: All transformations applied
+
+  /passthrough:
+    get:
+      operationId: passthrough
+      summary: Endpoint without response-transformer (baseline)
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"passthrough":"no-transformations"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
