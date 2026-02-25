@@ -440,6 +440,29 @@ Supports variable interpolation: `$client_ip`, `$header.*`, `$query.*`, `$path.*
 
 See [Middlewares Guide](../guide/middlewares.md#request-transformer) for full documentation.
 
+### response-transformer
+
+Declarative response transformations before client delivery.
+
+```yaml
+- name: response-transformer
+  config:
+    status:                              # Map status codes
+      200: 201
+      400: 403
+    headers:
+      add: { X-Gateway: "barbacane" }    # Add/overwrite headers
+      set: { X-Frame-Options: "DENY" }   # Add only if absent
+      remove: ["Server"]                 # Remove by name
+      rename: { X-Old: X-New }           # Rename headers
+    body:
+      add: { /metadata/gw: "barbacane" } # JSON Pointer add
+      remove: ["/internal"]              # JSON Pointer remove
+      rename: { /userName: /user_name }  # JSON Pointer rename
+```
+
+See [Middlewares Guide](../guide/middlewares.md#response-transformer) for full documentation.
+
 ### observability
 
 Per-operation observability middleware for SLO monitoring, detailed logging, and custom metrics.

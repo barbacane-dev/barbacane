@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Response Transformer
+- `response-transformer` middleware plugin — declarative response transformations before client delivery
+  - Status code mapping: configurable mapping table (e.g., 200 → 201, 400 → 403)
+  - Header transformations: add, set (if absent), remove, rename
+  - JSON body transformations using JSON Pointer (RFC 6901): add, remove, rename fields
+
 #### S3 Dispatcher
 - `s3` dispatcher plugin — proxy requests to AWS S3 or any S3-compatible endpoint (MinIO, RustFS, Ceph) with AWS Signature Version 4 signing
 - Virtual-hosted style (`{bucket}.s3.{region}.amazonaws.com`) and path-style URLs (`force_path_style`)
