@@ -15,6 +15,16 @@ ignore = [
     # Marvin Attack in rsa crate (medium: 5.9) - via sqlx-mysql
     # We only use PostgreSQL, not MySQL. No fixed upgrade available.
     "RUSTSEC-2023-0071",
+
+    # Guest-controlled resource exhaustion in WASI implementations (medium: 6.9)
+    # Fix requires wasmtime >= 24.0.6 (we use 28.0.1)
+    # Not exploitable: Barbacane plugins target wasm32-unknown-unknown, not WASI
+    "RUSTSEC-2026-0020",
+
+    # Panic adding excessive fields to wasi:http/types.fields (medium: 6.9)
+    # Fix requires wasmtime >= 24.0.6 (we use 28.0.1)
+    # Not exploitable: Barbacane does not expose wasi:http to guest modules
+    "RUSTSEC-2026-0021",
 ]
 
 # Treat unmaintained crates as warnings, not errors
