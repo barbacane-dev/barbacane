@@ -30,117 +30,44 @@ That's it! The API specs are compiled automatically before the gateway starts.
 | **NATS** | nats://localhost:4222 | Message broker ([monitoring](http://localhost:8222)) |
 | **Mock OAuth** | http://localhost:9099 | OIDC Provider ([discovery](http://localhost:9099/barbacane/.well-known/openid-configuration)) |
 | **WireMock** | http://localhost:8081/__admin | Mock backend admin |
+| **RustFS** | http://localhost:9000 | S3-compatible object storage ([console](http://localhost:9001)) |
 
 ## API Endpoints
 
-### Stations (Public, Cached)
+All requests are in **[playground.http](playground.http)** — open it with the [JetBrains HTTP Client](https://www.jetbrains.com/help/idea/http-client-in-product-code-editor.html) or the [VS Code REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client) extension. The file handles the OIDC token exchange automatically.
 
-```bash
-# List all stations
-curl http://localhost:8080/stations
+| Endpoint group | Path | Auth |
+|---|---|---|
+| Stations | `GET /stations`, `/stations/{id}`, `/stations/{id}/departures` | Public |
+| Trips | `GET /trips`, `/trips/{id}`, `/trips/{id}/realtime` | Public |
+| Bookings | `GET/POST /bookings`, `GET /bookings/{id}` | OIDC |
+| Events | `POST /events/trips/delayed`, `/events/bookings/confirmed`, `/events/payments/succeeded` | Public |
+| S3 proxy | `PUT/GET/DELETE /storage/{bucket}/{key+}` | OIDC |
+| Asset CDN | `GET /assets/{key+}` | Public (rate-limited) |
 
-# Get station details
-curl http://localhost:8080/stations/efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
+### Bookings — OIDC flow
 
-# Get live departures
-curl http://localhost:8080/stations/efdbb9d1-02c2-4bc3-afb7-6788d8782b1e/departures
-```
+Booking endpoints require a JWT issued by the mock OAuth2 server. The gateway validates the token via OIDC Discovery + JWKS (no shared secret, full RS256 verification):
 
-### Trips (Public)
-
-```bash
-# Search for trips
-curl "http://localhost:8080/trips?origin=efdbb9d1-02c2-4bc3-afb7-6788d8782b1e&destination=b2e783e1-c824-4d63-b37a-d8ee6c0b95da&departure_date=2025-03-15"
-
-# Get trip details
-curl http://localhost:8080/trips/f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d
-
-# Get real-time status
-curl http://localhost:8080/trips/f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d/realtime
-```
-
-### Bookings (Requires OIDC Auth)
-
-The booking endpoints are protected by OpenID Connect authentication. A mock OAuth2 server issues signed JWT tokens that the gateway validates with full cryptographic verification (OIDC Discovery + JWKS).
-
-```bash
-# Get an access token from the mock OIDC provider
-TOKEN=$(curl -s -X POST http://localhost:9099/barbacane/token \
-  -d "grant_type=client_credentials&scope=openid&client_id=playground&client_secret=secret" \
-  | jq -r '.access_token')
-
-# List bookings
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/bookings
-
-# Get booking details
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/bookings/d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-
-# Create a booking
-curl -X POST http://localhost:8080/bookings \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "trip_id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
-    "passengers": [{"name": "John Doe", "email": "john@example.com"}]
-  }'
-
-# Without a token → 401 Unauthorized
-curl http://localhost:8080/bookings
-```
-
-The OIDC flow:
 1. Gateway fetches `http://mock-oauth:8080/barbacane/.well-known/openid-configuration`
 2. Discovers the JWKS endpoint and fetches signing keys
 3. Validates the JWT signature (RS256) against the provider's public key
 4. Checks `iss`, `aud`, `exp` claims
 
-### Events (NATS Dispatch)
+### Events — NATS dispatch
 
-Event endpoints publish messages to NATS subjects and return `202 Accepted`. The gateway validates the request payload against the AsyncAPI schema before publishing.
+Event endpoints publish to NATS and return `202 Accepted`. The gateway validates the request body against the AsyncAPI schema before publishing.
 
-```bash
-# Publish a train delay event
-curl -X POST http://localhost:8080/events/trips/delayed \
-  -H "Content-Type: application/json" \
-  -d '{
-    "event_type": "trip.delayed",
-    "trip_id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
-    "delay_minutes": 15,
-    "reason": "weather",
-    "timestamp": "2025-03-15T10:30:00Z"
-  }'
-# Returns: {"status":"accepted","subject":"trains.trips.delayed"}
+Available subjects: `trains.trips.delayed`, `trains.trips.cancelled`, `trains.stations.platform-changed`, `trains.bookings.confirmed`, `trains.bookings.cancelled`, `trains.payments.succeeded`, `trains.payments.failed`.
 
-# Publish a booking confirmation event
-curl -X POST http://localhost:8080/events/bookings/confirmed \
-  -H "Content-Type: application/json" \
-  -d '{
-    "event_type": "booking.confirmed",
-    "booking_id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
-    "reference": "BOOK-123",
-    "passenger_count": 2,
-    "trip_id": "f08d2c3e-8d6f-7f5f-2c1f-4e5f6a7b8c9d",
-    "timestamp": "2025-03-15T10:30:00Z"
-  }'
+### S3 Object Storage Proxy (RustFS)
 
-# Publish a payment succeeded event
-curl -X POST http://localhost:8080/events/payments/succeeded \
-  -H "Content-Type: application/json" \
-  -d '{
-    "event_type": "payment.succeeded",
-    "payment_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    "booking_id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a",
-    "amount": 49.99,
-    "currency": "EUR",
-    "method": "card",
-    "timestamp": "2025-03-15T10:30:00Z"
-  }'
+Full S3 proxy powered by the `s3` dispatcher and backed by [RustFS](https://rustfs.com) — an S3-compatible object storage written in Rust. Auth is handled by the gateway; S3 credentials never leave the server.
 
-# Check NATS server stats
-curl http://localhost:8222/varz
-```
+- `/storage/{bucket}/{key+}` — OIDC-protected multi-bucket proxy
+- `/assets/{key+}` — Public rate-limited CDN (pre-seeded with `s3://assets/welcome.txt`)
 
-Available event subjects: `trains.trips.delayed`, `trains.trips.cancelled`, `trains.stations.platform-changed`, `trains.bookings.confirmed`, `trains.bookings.cancelled`, `trains.payments.succeeded`, `trains.payments.failed`.
+RustFS console: http://localhost:9001 (credentials: `playground` / `playground-secret`)
 
 ## Feature Demonstrations
 
@@ -248,15 +175,7 @@ The Control Plane API is available at http://localhost:9091.
 
 ## WireMock Admin
 
-View and manage mock stubs:
-
-```bash
-# List all stubs
-curl http://localhost:8081/__admin/mappings
-
-# View request log
-curl http://localhost:8081/__admin/requests
-```
+View and manage mock stubs via http://localhost:8081/__admin (see `playground.http` for ready-to-run requests).
 
 ## Development
 

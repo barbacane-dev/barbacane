@@ -48,3 +48,5 @@ plugins:
     path: ../../plugins/cel/cel.wasm
   request-transformer:
     path: ../../plugins/request-transformer/request-transformer.wasm
+  s3:
+    path: ../../plugins/s3/s3.wasm

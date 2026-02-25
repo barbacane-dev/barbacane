@@ -110,7 +110,7 @@ context_get = true
 
 ```bash
 cd plugins/my-plugin
-cargo build --target wasm32-wasip1 --release
+cargo build --target wasm32-unknown-unknown --release
 ```
 
 Plugins are not part of the workspace. Run `cargo check`, `cargo test`, and `cargo clippy` from within the plugin directory.

@@ -8,6 +8,7 @@ members = [
     "crates/barbacane-wasm",
     "crates/barbacane-telemetry",
     "crates/barbacane-test",
+    "crates/barbacane-sigv4",
 ]
 exclude = [
     "plugins/mock",
@@ -54,6 +55,7 @@ anyhow = "1"
 
 # Crypto
 sha2 = "0.10"
+hmac = "0.12"
 hex = "0.4"
 ring = "0.17"
 
@@ -136,6 +138,7 @@ assert_cmd = "2"
 predicates = "3"
 
 # Workspace crates (version required for crates.io publishing)
+barbacane-sigv4 = { path = "crates/barbacane-sigv4", version = "0.1.2" }
 barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.1.2" }
 barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.1.2" }
 barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "0.1.2" }

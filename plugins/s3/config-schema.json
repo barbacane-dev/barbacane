@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:s3:config",
+  "title": "S3 Dispatcher Config",
+  "description": "Configuration for the AWS S3 / S3-compatible object storage dispatcher plugin",
+  "type": "object",
+  "required": ["access_key_id", "secret_access_key", "region"],
+  "properties": {
+    "access_key_id": {
+      "type": "string",
+      "description": "AWS access key ID. Supports env:// references (e.g. env://AWS_ACCESS_KEY_ID)."
+    },
+    "secret_access_key": {
+      "type": "string",
+      "description": "AWS secret access key. Supports env:// references (e.g. env://AWS_SECRET_ACCESS_KEY)."
+    },
+    "session_token": {
+      "type": "string",
+      "description": "Session token for temporary credentials (STS / AssumeRole / IRSA). Supports env:// references."
+    },
+    "region": {
+      "type": "string",
+      "description": "AWS region (e.g. us-east-1, eu-west-1)"
+    },
+    "endpoint": {
+      "type": "string",
+      "format": "uri",
+      "description": "Custom S3-compatible endpoint URL (e.g. https://minio.internal:9000). When set, path-style URLs are always used."
+    },
+    "force_path_style": {
+      "type": "boolean",
+      "default": false,
+      "description": "Use path-style URLs (s3.{region}.amazonaws.com/{bucket}/{key}) instead of virtual-hosted style. Automatically true when endpoint is set."
+    },
+    "bucket": {
+      "type": "string",
+      "description": "Hard-coded bucket name. When set, bucket_param is ignored. Use for single-bucket routes such as /assets/{key+}."
+    },
+    "bucket_param": {
+      "type": "string",
+      "default": "bucket",
+      "description": "Name of the path parameter that holds the bucket. Ignored when bucket is set."
+    },
+    "key_param": {
+      "type": "string",
+      "default": "key",
+      "description": "Name of the path parameter that holds the object key. Use a wildcard parameter ({key+} in the route template) to capture multi-segment keys containing slashes."
+    },
+    "timeout": {
+      "type": "number",
+      "default": 30,
+      "minimum": 0,
+      "description": "Request timeout in seconds"
+    }
+  },
+  "additionalProperties": false
+}

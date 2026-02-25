@@ -1084,3 +1084,76 @@ Authorization: Bearer token
 
 ### No request-transformer middleware (200)
 GET {{baseUrl}}/passthrough
+
+### ================================================================
+### S3 Dispatcher (s3.yaml)
+### ================================================================
+### Setup:
+###   cargo build
+###   ./target/debug/barbacane compile --spec tests/fixtures/s3.yaml -m tests/fixtures/barbacane.yaml -o /tmp/s3.bca --allow-plaintext
+###   ./target/debug/barbacane serve --artifact /tmp/s3.bca --dev --allow-plaintext-upstream
+###
+### Requires a running S3-compatible backend at http://localhost:9000
+###   docker run -d -p 9000:9000 \
+###     -e RUSTFS_ACCESS_KEY=test -e RUSTFS_SECRET_KEY=testtest \
+###     rustfs/rustfs:latest
+###
+### Pre-create buckets:
+###   export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=testtest
+###   aws --endpoint-url http://localhost:9000 s3 mb s3://my-bucket
+###   aws --endpoint-url http://localhost:9000 s3 mb s3://assets
+###   echo "hello world" | aws --endpoint-url http://localhost:9000 s3 cp - s3://my-bucket/hello.txt
+###   echo "logo data"   | aws --endpoint-url http://localhost:9000 s3 cp - s3://assets/images/logo.png
+
+### ================================
+### Multi-bucket proxy (/s3/{bucket}/{key+})
+### ================================
+
+### Download object — single-segment key (200)
+GET {{baseUrl}}/s3/my-bucket/hello.txt
+
+###
+
+### Download object — multi-segment key with slashes (200)
+# {key+} wildcard captures "folder/subfolder/document.pdf" as one param
+GET {{baseUrl}}/s3/my-bucket/folder/subfolder/document.pdf
+
+###
+
+### Upload object (200)
+PUT {{baseUrl}}/s3/my-bucket/uploads/new-file.txt
+Content-Type: text/plain
+
+Hello from Barbacane!
+
+###
+
+### Delete object (204)
+DELETE {{baseUrl}}/s3/my-bucket/uploads/new-file.txt
+
+###
+
+### Missing key segment — routing mismatch (404 from gateway, no route matched)
+# /s3/{bucket}/{key+} requires at least one key segment after the bucket
+GET {{baseUrl}}/s3/my-bucket
+
+###
+
+### ================================
+### Single-bucket asset CDN (/assets/{key+})
+### ================================
+
+### Shallow asset key (200)
+GET {{baseUrl}}/assets/logo.png
+
+###
+
+### Nested asset key with slashes (200)
+GET {{baseUrl}}/assets/images/2024/logo.png
+
+###
+
+### Access non-existent asset (404 from S3)
+GET {{baseUrl}}/assets/does-not-exist.txt
+
+###

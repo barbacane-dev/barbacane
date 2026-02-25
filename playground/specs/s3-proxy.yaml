@@ -1,0 +1,170 @@
+openapi: "3.1.0"
+info:
+  title: S3 Proxy API
+  version: "1.0.0"
+  description: |
+    S3 object storage proxy backed by RustFS.
+    Demonstrates using Barbacane as a secure S3 gateway with OIDC authentication.
+
+    Storage backend: RustFS at http://rustfs:9000 (playground-internal)
+
+paths:
+  # ── Authenticated multi-bucket proxy ──────────────────────────────────────
+  # Protected by OIDC: same token flow as the train-travel bookings endpoints.
+  # Useful for exposing customer-scoped buckets with centralized authZ.
+
+  /storage/{bucket}/{key+}:
+    get:
+      operationId: getStorageObject
+      summary: Download an object (OIDC protected)
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          config:
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: playground
+          secret_access_key: playground-secret
+          endpoint: http://rustfs:9000
+          force_path_style: true
+      responses:
+        "200":
+          description: Object content
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "404":
+          description: Object not found
+
+    put:
+      operationId: putStorageObject
+      summary: Upload an object (OIDC protected)
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          text/plain:
+            schema:
+              type: string
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          config:
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: playground
+          secret_access_key: playground-secret
+          endpoint: http://rustfs:9000
+          force_path_style: true
+      responses:
+        "200":
+          description: Object uploaded
+        "401":
+          description: Unauthorized
+
+    delete:
+      operationId: deleteStorageObject
+      summary: Delete an object (OIDC protected)
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          config:
+            issuer_url: "http://mock-oauth:8080/barbacane"
+            issuer_override: "http://localhost:9099/barbacane"
+            audience: "train-travel-api"
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: playground
+          secret_access_key: playground-secret
+          endpoint: http://rustfs:9000
+          force_path_style: true
+      responses:
+        "204":
+          description: Object deleted
+        "401":
+          description: Unauthorized
+        "404":
+          description: Object not found
+
+  # ── Public asset CDN (single-bucket, no auth) ──────────────────────────────
+  # Hard-coded to the "assets" bucket — no auth required, rate-limited.
+
+  /assets/{key+}:
+    get:
+      operationId: getAsset
+      summary: Download a public asset
+      parameters:
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 120
+            window: 60
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: playground
+          secret_access_key: playground-secret
+          endpoint: http://rustfs:9000
+          force_path_style: true
+          bucket: assets
+      responses:
+        "200":
+          description: Asset content
+        "404":
+          description: Asset not found

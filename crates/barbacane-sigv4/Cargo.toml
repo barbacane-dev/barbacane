@@ -1,0 +1,17 @@
+[package]
+name = "barbacane-sigv4"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AWS Signature Version 4 signing primitives for Barbacane API gateway plugins"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true
