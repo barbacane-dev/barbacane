@@ -50,7 +50,7 @@ Near-term items ready to be picked up:
 | Plugin | Type | Description |
 |--------|------|-------------|
 | ~~`opa-authz`~~ | ~~Middleware~~ | ~~OPA policy evaluation via REST API (`host_http_call`)~~ — **done** |
-| `bot-detection` | Middleware | Block known bots by User-Agent patterns |
+| ~~`bot-detection`~~ | ~~Middleware~~ | ~~Block known bots by User-Agent patterns~~ — **done** |
 | `idempotency` | Middleware | Idempotent request processing via `Idempotency-Key` header (requires cache capability) |
 | `redirect` | Middleware | URL redirections (301/302) |
 | ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ — **done** |

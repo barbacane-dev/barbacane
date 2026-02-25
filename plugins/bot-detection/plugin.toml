@@ -1,0 +1,9 @@
+[plugin]
+name = "bot-detection"
+version = "0.1.0"
+type = "middleware"
+description = "Block requests from known bots and scrapers by User-Agent pattern matching"
+wasm = "bot-detection.wasm"
+
+[capabilities]
+log = true
