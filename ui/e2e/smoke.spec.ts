@@ -53,19 +53,19 @@ test.describe('Smoke tests', () => {
 
     // Specs tab (default)
     await page.goto(`/projects/${projectId}/specs`)
-    await expect(page.getByText('API Specifications')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'API Specifications' })).toBeVisible()
 
     // Operations tab
     await page.goto(`/projects/${projectId}/operations`)
-    await expect(page.getByText('Operations')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Operations' })).toBeVisible()
 
     // Builds tab
     await page.goto(`/projects/${projectId}/builds`)
-    await expect(page.getByText('Builds')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Builds' })).toBeVisible()
 
     // Deploy tab
     await page.goto(`/projects/${projectId}/deploy`)
-    await expect(page.getByText('Deploy')).toBeVisible()
+    await expect(page.getByText('Deploy to Data Planes')).toBeVisible()
   })
 
   test('unauthenticated user is redirected to login', async ({ page }) => {
