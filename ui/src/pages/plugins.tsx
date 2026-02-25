@@ -245,7 +245,7 @@ export function PluginsPage() {
       />
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Plugins</h1>
+          <h1 className="text-2xl font-semibold">Plugin Registry</h1>
           <p className="text-muted-foreground">
             Manage middleware and dispatcher plugins
           </p>
