@@ -17,18 +17,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
-      '/specs': {
-        target: 'http://localhost:9090',
-        changeOrigin: true,
-      },
-      '/projects': {
-        target: 'http://localhost:9090',
-        changeOrigin: true,
-      },
-      '/plugins': {
-        target: 'http://localhost:9090',
-        changeOrigin: true,
-      },
     },
   },
 })
