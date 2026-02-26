@@ -4525,4 +4525,102 @@ paths:
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body["passthrough"], "no-transformations");
     }
+
+    // =========================================================================
+    // Response Transformer middleware integration tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_response_transformer_status_mapping() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/response-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/status").await.unwrap();
+
+        assert_eq!(resp.status(), 201);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["result"], "status-mapped");
+    }
+
+    #[tokio::test]
+    async fn test_response_transformer_status_mapping_multi() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/response-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/status-multi").await.unwrap();
+
+        assert_eq!(resp.status(), 201);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["result"], "status-multi");
+    }
+
+    #[tokio::test]
+    async fn test_response_transformer_header_transformations() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/response-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/headers").await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers().get("x-gateway").unwrap(), "barbacane");
+        assert_eq!(resp.headers().get("x-frame-options").unwrap(), "DENY");
+        assert!(resp.headers().get("server").is_none());
+        assert!(resp.headers().get("x-powered-by").is_none());
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["result"], "headers");
+    }
+
+    #[tokio::test]
+    async fn test_response_transformer_body_transformations() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/response-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/body").await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["gateway"], "barbacane");
+        assert_eq!(body["metadata"]["version"], "1.0");
+        assert_eq!(body["user_name"], "alice");
+        assert_eq!(body["data"], "keep");
+        assert!(body.get("internal_flags").is_none());
+        assert!(body.get("debug_info").is_none());
+        assert!(body.get("userName").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_response_transformer_combined() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/response-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/combined").await.unwrap();
+
+        assert_eq!(resp.status(), 201);
+        assert_eq!(resp.headers().get("x-gateway").unwrap(), "barbacane");
+        assert!(resp.headers().get("server").is_none());
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["data"], "value");
+        assert_eq!(body["gateway"], "barbacane");
+        assert!(body.get("internal").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_response_transformer_passthrough() {
+        let gateway = TestGateway::from_spec("../../tests/fixtures/response-transformer.yaml")
+            .await
+            .expect("failed to start gateway");
+
+        let resp = gateway.get("/passthrough").await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["passthrough"], "no-transformations");
+    }
 }

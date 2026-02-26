@@ -50,3 +50,5 @@ plugins:
     path: ../../plugins/request-transformer/request-transformer.wasm
   s3:
     path: ../../plugins/s3/s3.wasm
+  response-transformer:
+    path: ../../plugins/response-transformer/response-transformer.wasm

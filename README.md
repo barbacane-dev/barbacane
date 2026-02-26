@@ -99,6 +99,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `ip-restriction` | Middleware | IP allowlist/blocklist |
 | `bot-detection` | Middleware | Block bots by User-Agent pattern |
 | `request-transformer` | Middleware | Modify headers, query params, path, and body before upstream |
+| `response-transformer` | Middleware | Modify status code, headers, and body before client |
 | `observability` | Middleware | SLO monitoring and detailed logging |
 | `http-log` | Middleware | Send request/response logs to HTTP endpoint |
 

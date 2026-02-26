@@ -1220,6 +1220,150 @@ x-barbacane-middlewares:
 
 ---
 
+## Response Transformation
+
+### response-transformer
+
+Declaratively modifies responses before they return to the client. Supports status code mapping, header transformations, and JSON body transformations.
+
+```yaml
+x-barbacane-middlewares:
+  - name: response-transformer
+    config:
+      status:
+        200: 201
+        400: 403
+        500: 503
+      headers:
+        add:
+          X-Gateway: "barbacane"
+          X-Frame-Options: "DENY"
+        set:
+          X-Content-Type-Options: "nosniff"
+        remove:
+          - Server
+          - X-Powered-By
+        rename:
+          X-Old-Name: X-New-Name
+      body:
+        add:
+          /metadata/gateway: "barbacane"
+        remove:
+          - /internal_flags
+          - /debug_info
+        rename:
+          /userName: /user_name
+```
+
+#### Configuration
+
+##### status
+
+A mapping of upstream status codes to replacement status codes. Unmapped codes pass through unchanged.
+
+```yaml
+status:
+  200: 201    # Created instead of OK
+  400: 422    # Unprocessable Entity instead of Bad Request
+  500: 503    # Service Unavailable instead of Internal Server Error
+```
+
+##### headers
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `add` | object | `{}` | Add or overwrite response headers |
+| `set` | object | `{}` | Add headers only if not already present in the response |
+| `remove` | array | `[]` | Remove headers by name (case-insensitive) |
+| `rename` | object | `{}` | Rename headers (old-name to new-name) |
+
+##### body
+
+JSON body transformations use [JSON Pointer (RFC 6901)](https://tools.ietf.org/html/rfc6901) paths.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `add` | object | `{}` | Add or overwrite JSON fields |
+| `remove` | array | `[]` | Remove JSON fields by JSON Pointer path |
+| `rename` | object | `{}` | Rename JSON fields (old-pointer to new-pointer) |
+
+Body transformations only apply to responses with JSON bodies. Non-JSON bodies pass through unchanged.
+
+#### Transformation Order
+
+Transformations are applied in this order:
+
+1. **Status** — map status code
+2. **Headers** — remove, rename, set, add
+3. **Body** — remove, rename, add
+
+#### Use Cases
+
+**Strip upstream server headers:**
+```yaml
+- name: response-transformer
+  config:
+    headers:
+      remove: [Server, X-Powered-By, X-AspNet-Version]
+```
+
+**Add security headers to all responses:**
+```yaml
+- name: response-transformer
+  config:
+    headers:
+      add:
+        X-Frame-Options: "DENY"
+        X-Content-Type-Options: "nosniff"
+        Strict-Transport-Security: "max-age=31536000"
+```
+
+**Clean up internal fields from response body:**
+```yaml
+- name: response-transformer
+  config:
+    body:
+      remove:
+        - /internal_metadata
+        - /debug_trace
+        - /password_hash
+```
+
+**Map status codes for API versioning:**
+```yaml
+- name: response-transformer
+  config:
+    status:
+      200: 201
+```
+
+---
+
+## Planned Middlewares
+
+The following middlewares are planned for future milestones:
+
+### idempotency
+
+Ensures idempotent processing.
+
+```yaml
+x-barbacane-middlewares:
+  - name: idempotency
+    config:
+      header: Idempotency-Key
+      ttl: 86400
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `header` | string | `Idempotency-Key` | Header containing key |
+| `ttl` | integer | 86400 | Key expiration (seconds) |
+
+---
+
 ## Context Passing
 
 Middlewares can set context for downstream components:
@@ -1288,7 +1432,8 @@ x-barbacane-middlewares:
   - name: oidc-auth            # 7. Authenticate (OIDC/JWT)
   - name: basic-auth           # 8. Authenticate (fallback)
   - name: acl                  # 9. Authorize (after auth sets consumer headers)
-  - name: request-transformer  # 10. Transform request before dispatch
+  - name: request-transformer   # 10. Transform request before dispatch
+  - name: response-transformer  # 11. Transform response before client (runs first in reverse)
 ```
 
 ### Fail Fast
