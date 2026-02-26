@@ -6,7 +6,7 @@
   "properties": {
     "status": {
       "type": "object",
-      "additionalProperties": { "type": "integer" },
+      "additionalProperties": { "type": "integer", "minimum": 100, "maximum": 599 },
       "description": "Map upstream status codes to new status codes (e.g., 200 → 201)"
     },
     "headers": {

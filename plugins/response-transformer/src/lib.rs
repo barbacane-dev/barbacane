@@ -123,7 +123,7 @@ fn transform_headers(headers: &mut BTreeMap<String, String>, config: &HeaderConf
     for (header_name, value) in &config.set {
         headers
             .entry(header_name.to_lowercase())
-            .or_insert_with(|| value.clone());
+            .or_insert(value.clone());
     }
 
     for (header_name, value) in &config.add {
@@ -185,7 +185,11 @@ fn transform_body(body: &Option<String>, config: &BodyConfig) -> Option<String> 
             }
         };
 
-        if let Some(value) = json.pointer(old_pointer_str) {
+        if old_ptr == new_ptr {
+            continue;
+        }
+
+        if let Ok(value) = old_ptr.resolve(&json) {
             let value_clone = value.clone();
 
             if let Err(e) = json.assign(new_ptr, value_clone) {
@@ -477,6 +481,23 @@ mod tests {
         assert_eq!(headers.get("x-frame-options"), Some(&"DENY".to_string()));
     }
 
+    #[test]
+    fn test_headers_remove_and_readd_same_key() {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-token".to_string(), "old-value".to_string());
+
+        let mut config = HeaderConfig::default();
+        config.remove.push("x-token".to_string());
+        config
+            .add
+            .insert("x-token".to_string(), "new-value".to_string());
+
+        transform_headers(&mut headers, &config);
+
+        // remove runs before add — key is re-added with the new value
+        assert_eq!(headers.get("x-token"), Some(&"new-value".to_string()));
+    }
+
     // -- Body transformation tests ------------------------------------------
 
     #[test]
@@ -688,6 +709,62 @@ mod tests {
         assert_eq!(json["items"][1].get("gateway"), None);
     }
 
+    #[test]
+    fn test_body_rename_same_pointer() {
+        let body = Some(r#"{"field":"value","other":"keep"}"#.to_string());
+
+        let mut config = BodyConfig::default();
+        config
+            .rename
+            .insert("/field".to_string(), "/field".to_string());
+
+        let result = transform_body(&body, &config);
+        let json: Value =
+            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+
+        // rename with identical source and destination is a no-op — field must survive
+        assert_eq!(json["field"], "value");
+        assert_eq!(json["other"], "keep");
+    }
+
+    #[test]
+    fn test_body_rename_array_element_field() {
+        let body = Some(r#"{"items":[{"oldKey":"val1"},{"oldKey":"val2"}]}"#.to_string());
+
+        let mut config = BodyConfig::default();
+        config.rename.insert(
+            "/items/0/oldKey".to_string(),
+            "/items/0/newKey".to_string(),
+        );
+
+        let result = transform_body(&body, &config);
+        let json: Value =
+            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+
+        assert_eq!(json["items"][0]["newKey"], "val1");
+        assert_eq!(json["items"][0].get("oldKey"), None);
+        // items[1] is untouched
+        assert_eq!(json["items"][1]["oldKey"], "val2");
+    }
+
+    #[test]
+    fn test_body_remove_array_element_field() {
+        let body =
+            Some(r#"{"items":[{"id":1,"secret":"x"},{"id":2,"secret":"y"}]}"#.to_string());
+
+        let mut config = BodyConfig::default();
+        config.remove.push("/items/0/secret".to_string());
+
+        let result = transform_body(&body, &config);
+        let json: Value =
+            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+
+        assert_eq!(json["items"][0]["id"], 1);
+        assert_eq!(json["items"][0].get("secret"), None);
+        // items[1] is untouched
+        assert_eq!(json["items"][1]["secret"], "y");
+    }
+
     // -- Integration / full plugin tests ------------------------------------
 
     #[test]
@@ -797,14 +874,13 @@ mod tests {
         };
 
         let result = plugin.on_request(req.clone());
-        if let Action::Continue(modified) = result {
-            assert_eq!(modified.method, req.method);
-            assert_eq!(modified.path, req.path);
-            assert_eq!(modified.headers, req.headers);
-            assert_eq!(modified.body, req.body);
-        } else {
+        let Action::Continue(modified) = result else {
             panic!("Expected Action::Continue");
-        }
+        };
+        assert_eq!(modified.method, req.method);
+        assert_eq!(modified.path, req.path);
+        assert_eq!(modified.headers, req.headers);
+        assert_eq!(modified.body, req.body);
     }
 
     #[test]
