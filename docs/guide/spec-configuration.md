@@ -87,75 +87,11 @@ paths:
 | `name` | string | Yes | Dispatcher plugin name |
 | `config` | object | No | Plugin-specific configuration |
 
-### Built-in Dispatchers
+Built-in dispatchers: `mock`, `http-upstream`, `lambda`, `kafka`, `nats`, `s3`. See [Dispatchers](dispatchers.md) for configuration details.
 
-#### `mock` - Return Static Responses
+Config values support secret references: `env://VAR_NAME` (environment variable) or `file:///path/to/secret` (file). See [Secrets](secrets.md).
 
-For health checks, stubs, or testing:
-
-```yaml
-x-barbacane-dispatch:
-  name: mock
-  config:
-    status: 200
-    body: '{"status":"ok","version":"1.0"}'
-```
-
-| Config | Type | Default | Description |
-|--------|------|---------|-------------|
-| `status` | integer | 200 | HTTP status code |
-| `body` | string | "" | Response body |
-
-#### `http-upstream` - Proxy to HTTP Backend
-
-Forward requests to an upstream:
-
-```yaml
-x-barbacane-dispatch:
-  name: http-upstream
-  config:
-    url: "https://api.example.com"
-    path: /api/users/{id}
-    timeout: 10.0
-```
-
-| Config | Type | Default | Description |
-|--------|------|---------|-------------|
-| `url` | string | Required | Base URL of upstream (HTTPS required in production) |
-| `path` | string | Same as operation | Backend path (supports `{param}` substitution) |
-| `timeout` | number | 30.0 | Request timeout in seconds |
-
-Path parameters from the OpenAPI spec are substituted automatically:
-
-```yaml
-# OpenAPI path: /users/{userId}/orders/{orderId}
-# Request: GET /users/123/orders/456
-x-barbacane-dispatch:
-  name: http-upstream
-  config:
-    url: "https://api.example.com"
-    path: /api/v2/users/{userId}/orders/{orderId}
-    # Becomes: GET https://api.example.com/api/v2/users/123/orders/456
-```
-
-### Secret References in Config
-
-Config values can reference secrets instead of hardcoding sensitive data:
-
-```yaml
-x-barbacane-dispatch:
-  name: http-upstream
-  config:
-    url: "https://api.example.com"
-    headers:
-      Authorization: "Bearer env://UPSTREAM_API_KEY"
-```
-
-Supported formats:
-- `env://VAR_NAME` - Read from environment variable
-- `file:///path/to/secret` - Read from file
-
-Secrets are resolved at gateway startup. If any secret is missing, the gateway fails with exit code 13. See [Secrets](secrets.md) for details.
+---
 
 ## Middlewares
 
@@ -174,7 +110,8 @@ info:
 x-barbacane-middlewares:
   - name: rate-limit
     config:
-      requests_per_minute: 100
+      quota: 100
+      window: 60
   - name: cors
     config:
       allowed_origins: ["https://app.example.com"]
@@ -192,7 +129,7 @@ paths:
   /admin/users:
     get:
       x-barbacane-middlewares:
-        - name: auth-jwt
+        - name: jwt-auth
           config:
             required: true
             scopes: ["admin:read"]
@@ -211,7 +148,8 @@ Operation middlewares are **merged** with global ones. If an operation middlewar
 x-barbacane-middlewares:
   - name: rate-limit
     config:
-      requests_per_minute: 100
+      quota: 100
+      window: 60
   - name: cors
     config:
       allow_origin: "*"
@@ -223,7 +161,8 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            requests_per_minute: 1000
+            quota: 1000
+            window: 60
       # Resolved chain: cors (global) → rate-limit (operation override)
 ```
 
@@ -258,7 +197,8 @@ x-barbacane-middlewares:
       allowed_origins: ["https://shop.example.com"]
   - name: rate-limit
     config:
-      requests_per_minute: 200
+      quota: 200
+      window: 60
 
 paths:
   /health:
@@ -293,7 +233,7 @@ paths:
     post:
       operationId: createOrder
       x-barbacane-middlewares:
-        - name: auth-jwt
+        - name: jwt-auth
           config:
             required: true
         - name: idempotency
@@ -312,7 +252,7 @@ paths:
     post:
       operationId: payOrder
       x-barbacane-middlewares:
-        - name: auth-jwt
+        - name: jwt-auth
           config:
             required: true
       x-barbacane-dispatch:

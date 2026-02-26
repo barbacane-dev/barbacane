@@ -167,15 +167,16 @@ Map frontend paths to different backend paths:
 
 #### Wildcard Proxy
 
-Proxy any path to upstream:
+Proxy any path to upstream using a greedy wildcard parameter (`{param+}`):
 
 ```yaml
-/proxy/{path}:
+/proxy/{path+}:
   get:
     parameters:
       - name: path
         in: path
         required: true
+        allowReserved: true
         schema:
           type: string
     x-barbacane-dispatch:
@@ -602,7 +603,7 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            limit: 120
+            quota: 120
             window: 60
       x-barbacane-dispatch:
         name: s3
@@ -651,33 +652,6 @@ x-barbacane-dispatch:
 - **Session tokens**: Support for STS, AssumeRole, and IRSA (IAM Roles for Service Accounts) via `session_token`
 - **Signing**: All requests are signed with AWS Signature Version 4. The signed headers are `host`, `x-amz-content-sha256`, `x-amz-date`, and `x-amz-security-token` (when a session token is present)
 - **Binary objects**: The current implementation returns the response body as a UTF-8 string. Binary objects (images, archives, etc.) are not suitable for this dispatcher — use pre-signed URLs for binary downloads
-
----
-
-## Custom WASM Dispatchers
-
-Custom dispatchers can be implemented as WASM plugins using the Plugin SDK. The `mock` dispatcher is an example of a WASM-based dispatcher.
-
----
-
-## Dispatcher Development
-
-See [Plugin Development](../contributing/plugins.md) for creating custom dispatchers.
-
-### Dispatcher Interface
-
-```rust
-trait Dispatcher {
-    /// Initialize with configuration.
-    fn init(config: Value) -> Result<Self, Error>;
-
-    /// Handle a request and produce a response.
-    async fn dispatch(
-        &self,
-        ctx: &RequestContext,
-    ) -> Result<Response, Error>;
-}
-```
 
 ---
 

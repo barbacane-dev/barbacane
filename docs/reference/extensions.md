@@ -259,7 +259,8 @@ x-barbacane-middlewares:
       header: X-Request-ID
   - name: rate-limit
     config:
-      requests_per_minute: 100
+      quota: 100
+      window: 60
   - name: cors
     config:
       allowed_origins: ["https://app.example.com"]
@@ -280,7 +281,7 @@ paths:
   /admin:
     get:
       x-barbacane-middlewares:
-        - name: auth-jwt
+        - name: jwt-auth
           config:
             required: true
             scopes: ["admin:read"]
@@ -296,7 +297,8 @@ paths:
 x-barbacane-middlewares:
   - name: rate-limit
     config:
-      requests_per_minute: 100
+      quota: 100
+      window: 60
 
 paths:
   /high-traffic:
@@ -305,7 +307,8 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            requests_per_minute: 1000
+            quota: 1000
+            window: 60
       x-barbacane-dispatch:
         name: http-upstream
         config:
@@ -314,151 +317,9 @@ paths:
 
 ---
 
-## Common Middleware Configurations
+## Available Middlewares
 
-### auth-jwt
-
-```yaml
-- name: auth-jwt
-  config:
-    required: true
-    header: Authorization
-    scheme: Bearer
-    issuer: https://auth.example.com
-    audience: my-api
-    scopes: ["read"]
-```
-
-### rate-limit
-
-```yaml
-- name: rate-limit
-  config:
-    quota: 100             # Maximum requests allowed in window
-    window: 60             # Window duration in seconds
-    policy_name: "default" # Optional: name for RateLimit-Policy header
-    partition_key: "client_ip" # Options: "client_ip", "header:<name>", "context:<key>"
-```
-
-Returns IETF draft-ietf-httpapi-ratelimit-headers compliant headers:
-- `RateLimit-Policy`: Policy description (e.g., `default;q=100;w=60`)
-- `RateLimit`: Current limit status
-- `Retry-After`: Seconds until quota reset (only on 429)
-
-### cors
-
-```yaml
-- name: cors
-  config:
-    allowed_origins: ["https://app.example.com"]
-    allowed_methods: ["GET", "POST", "PUT", "DELETE"]
-    allowed_headers: ["Authorization", "Content-Type"]
-    max_age: 86400
-```
-
-### cache
-
-```yaml
-- name: cache
-  config:
-    ttl: 300                  # TTL in seconds (default: 300)
-    vary: ["Accept-Language"] # Headers that differentiate cache entries
-    methods: ["GET", "HEAD"]  # Cacheable methods (default: GET, HEAD)
-    cacheable_status: [200, 301, 404] # Cacheable status codes
-```
-
-Adds `X-Cache` header to responses:
-- `HIT`: Response served from cache
-- `MISS`: Response not in cache (will be cached if cacheable)
-
-### request-id
-
-```yaml
-- name: request-id
-  config:
-    header: X-Request-ID
-    generate_if_missing: true
-```
-
-### idempotency
-
-```yaml
-- name: idempotency
-  config:
-    header: Idempotency-Key
-    ttl: 86400
-```
-
-### acl
-
-```yaml
-- name: acl
-  config:
-    allow: ["admin", "editor"]            # Groups allowed access
-    deny: ["banned"]                       # Groups denied (precedence over allow)
-    allow_consumers: ["superadmin"]        # Consumer IDs allowed (bypass groups)
-    deny_consumers: ["attacker"]           # Consumer IDs denied (highest precedence)
-    consumer_groups:                        # Static consumer→groups supplement
-      free_user: ["premium"]
-    message: "Access denied by ACL policy" # Custom 403 message
-    hide_consumer_in_errors: false         # Show consumer in error body
-```
-
-Reads `x-auth-consumer` and `x-auth-consumer-groups` headers set by upstream auth plugins. Must run after an authentication middleware (basic-auth, jwt-auth, oidc-auth, oauth2-auth, apikey-auth).
-
-Returns RFC 9457 Problem JSON on 403 with `"type": "urn:barbacane:error:acl-denied"`.
-
-### request-transformer
-
-Declarative request transformations before upstream dispatch.
-
-```yaml
-- name: request-transformer
-  config:
-    headers:
-      add: { X-Gateway: "barbacane" }   # Add/overwrite headers
-      set: { X-Source: "external" }      # Add only if absent
-      remove: ["Authorization"]          # Remove by name
-      rename: { X-Old: X-New }           # Rename headers
-    querystring:
-      add: { version: "1.0" }           # Add/overwrite params
-      remove: ["internal"]              # Remove params
-      rename: { old: new }              # Rename params
-    path:
-      strip_prefix: "/api/v1"           # Remove path prefix
-      add_prefix: "/internal"           # Add path prefix
-      replace:                          # Regex replace
-        pattern: "/v1/(.*)"
-        replacement: "/v2/$1"
-    body:
-      add: { /metadata/gw: "barbacane" }  # JSON Pointer add
-      remove: ["/password"]               # JSON Pointer remove
-      rename: { /userName: /user_name }   # JSON Pointer rename
-```
-
-Supports variable interpolation: `$client_ip`, `$header.*`, `$query.*`, `$path.*`, `context:*`. Variables resolve against the original request.
-
-See [Middlewares Guide](../guide/middlewares.md#request-transformer) for full documentation.
-
-### observability
-
-Per-operation observability middleware for SLO monitoring, detailed logging, and custom metrics.
-
-```yaml
-- name: observability
-  config:
-    latency_slo_ms: 200           # Emit SLO violation metric if exceeded
-    detailed_request_logs: true   # Log request details (method, path, headers, body size)
-    detailed_response_logs: true  # Log response details (status, duration, body size)
-    emit_latency_histogram: true  # Emit per-operation latency histogram
-```
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `latency_slo_ms` | integer | - | Latency threshold in ms; emits `barbacane_plugin_observability_slo_violation` counter when exceeded |
-| `detailed_request_logs` | boolean | `false` | Log incoming request details |
-| `detailed_response_logs` | boolean | `false` | Log outgoing response details including duration |
-| `emit_latency_histogram` | boolean | `false` | Emit `barbacane_plugin_observability_latency_ms` histogram |
+See [Middlewares Guide](../guide/middlewares.md) for all available middleware plugins and their configuration options.
 
 ---
 
@@ -468,96 +329,3 @@ Per-operation observability middleware for SLO monitoring, detailed logging, and
 |------|---------|-------|
 | E1010 | Routing conflict | Same path+method in multiple specs |
 | E1020 | Missing dispatch | Operation has no `x-barbacane-dispatch` |
-
----
-
-## Complete Example
-
-```yaml
-openapi: "3.1.0"
-info:
-  title: Complete Example API
-  version: "1.0.0"
-
-x-barbacane-middlewares:
-  - name: request-id
-    config:
-      header: X-Request-ID
-  - name: cors
-    config:
-      allowed_origins: ["*"]
-  - name: rate-limit
-    config:
-      quota: 100
-      window: 60
-      partition_key: "client_ip"
-
-paths:
-  /health:
-    get:
-      operationId: healthCheck
-      x-barbacane-dispatch:
-        name: mock
-        config:
-          status: 200
-          body: '{"status":"healthy"}'
-      responses:
-        "200":
-          description: OK
-
-  /users:
-    get:
-      operationId: listUsers
-      x-barbacane-middlewares:
-        - name: cache
-          config:
-            ttl: 60
-      x-barbacane-dispatch:
-        name: http-upstream
-        config:
-          url: "https://api.example.com"
-          path: /api/users
-      responses:
-        "200":
-          description: User list
-
-  /users/{id}:
-    get:
-      operationId: getUser
-      x-barbacane-dispatch:
-        name: http-upstream
-        config:
-          url: "https://api.example.com"
-          path: /api/users/{id}
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: User details
-
-  /admin/users:
-    get:
-      operationId: adminListUsers
-      x-barbacane-middlewares:
-        - name: auth-jwt
-          config:
-            required: true
-            scopes: ["admin:read"]
-        - name: rate-limit
-          config:
-            quota: 50
-            window: 60
-      x-barbacane-dispatch:
-        name: http-upstream
-        config:
-          url: "https://api.example.com"
-          path: /api/admin/users
-      responses:
-        "200":
-          description: Admin user list
-```

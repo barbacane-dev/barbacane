@@ -49,9 +49,9 @@ paths:
     get:
       # Inherits global middlewares
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
 ```
 
 ### Operation Middlewares
@@ -63,14 +63,14 @@ paths:
   /admin/users:
     get:
       x-barbacane-middlewares:
-        - name: auth-jwt
+        - name: jwt-auth
           config:
             required: true
             scopes: ["admin:read"]
       x-barbacane-dispatch:
-        name: http
+        name: http-upstream
         config:
-          upstream: backend
+          url: "https://api.example.com"
 ```
 
 ### Merging with Global Middlewares
@@ -86,7 +86,8 @@ When an operation declares its own middlewares, they are **merged** with the glo
 x-barbacane-middlewares:
   - name: rate-limit
     config:
-      requests_per_minute: 100
+      quota: 100
+      window: 60
   - name: cors
     config:
       allow_origin: "*"
@@ -98,7 +99,8 @@ paths:
       x-barbacane-middlewares:
         - name: rate-limit
           config:
-            requests_per_minute: 1000
+            quota: 1000
+            window: 60
       # Resolved chain: cors (global) → rate-limit (operation override)
 ```
 
@@ -144,30 +146,25 @@ Validates JWT tokens with RS256/HS256 signatures.
 x-barbacane-middlewares:
   - name: jwt-auth
     config:
-      secret: "your-hs256-secret"  # For HS256
-      # OR
-      public_key: |                 # For RS256
-        -----BEGIN PUBLIC KEY-----
-        ...
-        -----END PUBLIC KEY-----
-      issuer: https://auth.example.com
-      audience: my-api
-      required_claims:
-        - sub
-        - email
+      issuer: "https://auth.example.com"  # Optional: validate iss claim
+      audience: "my-api"                  # Optional: validate aud claim
+      groups_claim: "roles"               # Optional: claim name for consumer groups
+      skip_signature_validation: true     # Required until JWKS support is implemented
 ```
+
+Accepted algorithms: RS256, RS384, RS512, ES256, ES384, ES512. HS256/HS512 and `none` are rejected.
+
+**Note:** Cryptographic signature validation is not yet implemented. Set `skip_signature_validation: true` in production until JWKS support lands. Without it, all tokens are rejected with 401 at the signature step.
 
 #### Configuration
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `secret` | string | - | HS256 secret key |
-| `public_key` | string | - | RS256 public key (PEM format) |
-| `issuer` | string | - | Expected `iss` claim |
-| `audience` | string | - | Expected `aud` claim |
-| `required_claims` | array | `[]` | Claims that must be present |
-| `leeway` | integer | `0` | Seconds of clock skew tolerance |
-| `groups_claim` | string | - | Claim name to extract groups from (e.g., `"roles"`, `"groups"`). Value is set as `x-auth-consumer-groups` |
+| `issuer` | string | - | Expected `iss` claim. Tokens not matching are rejected |
+| `audience` | string | - | Expected `aud` claim. Tokens not matching are rejected |
+| `clock_skew_seconds` | integer | `60` | Tolerance in seconds for `exp`/`nbf` validation |
+| `groups_claim` | string | - | Claim name to extract consumer groups from (e.g., `"roles"`, `"groups"`). Value is set as `x-auth-consumer-groups` |
+| `skip_signature_validation` | boolean | `false` | Skip cryptographic signature check. Required until JWKS support is implemented |
 
 #### Context Headers
 
@@ -473,7 +470,7 @@ x-barbacane-middlewares:
   - name: jwt-auth
     config:
       issuer: "https://auth.example.com"
-      jwks_url: "https://auth.example.com/.well-known/jwks.json"
+      skip_signature_validation: true
   - name: opa-authz
     config:
       opa_url: "http://opa:8181/v1/data/authz/allow"
@@ -578,7 +575,6 @@ x-barbacane-middlewares:
   - name: jwt-auth
     config:
       issuer: "https://auth.example.com"
-      jwks_url: "https://auth.example.com/.well-known/jwks.json"
   - name: cel
     config:
       expression: >
@@ -1234,39 +1230,7 @@ x-barbacane-middlewares:
 # Rate limit uses auth context
   - name: rate-limit
     config:
-      key: context:auth.sub  # Rate limit per user
-```
-
----
-
-## Middleware Development (Future)
-
-See [Plugin Development](../contributing/plugins.md) for creating custom middlewares.
-
-### Middleware Interface
-
-```rust
-trait Middleware {
-    /// Initialize with configuration.
-    fn init(config: Value) -> Result<Self, Error>;
-
-    /// Process incoming request.
-    async fn on_request(
-        &self,
-        ctx: &mut RequestContext,
-    ) -> Result<MiddlewareAction, Error>;
-
-    /// Process outgoing response.
-    async fn on_response(
-        &self,
-        ctx: &mut ResponseContext,
-    ) -> Result<(), Error>;
-}
-
-enum MiddlewareAction {
-    Continue,           // Pass to next middleware
-    Respond(Response),  // Short-circuit with response
-}
+      partition_key: context:auth.sub  # Rate limit per user
 ```
 
 ---
@@ -1300,7 +1264,7 @@ x-barbacane-middlewares:
   - name: ip-restriction      # Block banned IPs immediately
   - name: request-size-limit  # Reject large payloads early
   - name: rate-limit          # Reject over-limit immediately
-  - name: auth-jwt            # Reject unauthorized before processing
+  - name: jwt-auth            # Reject unauthorized before processing
 ```
 
 ### Use Global for Common Concerns
