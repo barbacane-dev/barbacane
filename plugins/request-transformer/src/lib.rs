@@ -410,7 +410,11 @@ fn transform_body(
             }
         };
 
-        if let Some(value) = json.pointer(old_pointer_str) {
+        if old_ptr == new_ptr {
+            continue;
+        }
+
+        if let Ok(value) = old_ptr.resolve(&json) {
             let value_clone = value.clone();
 
             if let Err(e) = json.assign(new_ptr, value_clone) {
@@ -1250,6 +1254,46 @@ mod tests {
 
         assert_eq!(json["metadata"]["newName"], "value");
         assert_eq!(json["metadata"].get("oldName"), None);
+    }
+
+    #[test]
+    fn test_body_rename_same_pointer() {
+        let req = create_post_request();
+        let body = Some(r#"{"field":"value","other":"keep"}"#.to_string());
+
+        let mut config = BodyConfig::default();
+        config
+            .rename
+            .insert("/field".to_string(), "/field".to_string());
+
+        let result = transform_body(&body, &config, &req);
+        let json: Value =
+            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+
+        // rename with identical source and destination is a no-op — field must survive
+        assert_eq!(json["field"], "value");
+        assert_eq!(json["other"], "keep");
+    }
+
+    #[test]
+    fn test_body_rename_array_element_field() {
+        let req = create_post_request();
+        let body = Some(r#"{"items":[{"oldKey":"val1"},{"oldKey":"val2"}]}"#.to_string());
+
+        let mut config = BodyConfig::default();
+        config.rename.insert(
+            "/items/0/oldKey".to_string(),
+            "/items/0/newKey".to_string(),
+        );
+
+        let result = transform_body(&body, &config, &req);
+        let json: Value =
+            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+
+        assert_eq!(json["items"][0]["newKey"], "val1");
+        assert_eq!(json["items"][0].get("oldKey"), None);
+        // items[1] is untouched
+        assert_eq!(json["items"][1]["oldKey"], "val2");
     }
 
     #[test]
