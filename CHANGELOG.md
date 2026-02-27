@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-02-27
+
+### Fixed
+
+- **Playground gateway**: switched from `barbacane` to `barbacane-standalone` image so the gateway binary includes the wildcard path parameter fix; `barbacane:latest` on GHCR was built from a stale builder layer missing PR #35, causing single-segment `{param+}` wildcards (e.g. `/assets/welcome.txt`) to return 400 instead of routing correctly
+- **Playground healthcheck**: replaced `wget` (unavailable in the distroless `barbacane` image) with `bash /dev/tcp` so the container reaches healthy status
+- **Router test coverage**: added missing test case for `/{static}/{param}/{wildcard+}` with a single-segment wildcard value
+
 ## [0.2.0] - 2026-02-27
 
 ### Added
@@ -375,7 +383,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.1.0...v0.1.1
