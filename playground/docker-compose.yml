@@ -33,7 +33,7 @@ services:
   # API Gateway (Data Plane)
   # ==========================================================================
   barbacane:
-    image: ghcr.io/barbacane-dev/barbacane:${BARBACANE_VERSION:-latest}
+    image: ghcr.io/barbacane-dev/barbacane-standalone:${BARBACANE_VERSION:-latest}
     command: ["serve", "--artifact", "/config/api.bca", "--allow-plaintext-upstream"]
     ports:
       - "8080:8080"
@@ -56,7 +56,7 @@ services:
       rustfs:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/__barbacane/health"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8080"]
       interval: 5s
       timeout: 3s
       retries: 5

@@ -484,6 +484,7 @@ mod tests {
             RouteEntry { operation_index: 0 },
         );
 
+        // Multi-segment wildcard value
         match router.lookup("/files/my-bucket/folder/sub/file.txt", "GET") {
             RouteMatch::Found { entry, params } => {
                 assert_eq!(entry.operation_index, 0);
@@ -495,7 +496,22 @@ mod tests {
                     ]
                 );
             }
-            _ => panic!("expected Found"),
+            _ => panic!("expected Found for multi-segment"),
+        }
+
+        // Single-segment wildcard value — this is the S3 proxy case
+        match router.lookup("/files/my-bucket/file.txt", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(
+                    params,
+                    vec![
+                        ("bucket".to_string(), "my-bucket".to_string()),
+                        ("key".to_string(), "file.txt".to_string()),
+                    ]
+                );
+            }
+            _ => panic!("expected Found for single-segment"),
         }
     }
 
