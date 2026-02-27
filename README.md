@@ -60,9 +60,10 @@ Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane
 
 ## Playground
 
-Try Barbacane locally with the full-featured playground:
+Try Barbacane locally with the full-featured playground — now in its own repo:
 
 ```bash
+git clone https://github.com/barbacane-dev/playground
 cd playground
 docker-compose up -d
 
@@ -71,7 +72,7 @@ docker-compose up -d
 # Control Plane: http://localhost:3001
 ```
 
-The playground includes a Train Travel API demo with WireMock backend, full observability stack (Prometheus, Loki, Tempo, Grafana), and the control plane UI.
+The playground includes a Train Travel API demo with WireMock backend, full observability stack (Prometheus, Loki, Tempo, Grafana), and the control plane UI. See [barbacane-dev/playground](https://github.com/barbacane-dev/playground) for details.
 
 ## Official Plugins
 
