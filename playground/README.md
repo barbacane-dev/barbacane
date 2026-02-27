@@ -5,12 +5,10 @@ A complete demonstration environment for the Barbacane API Gateway featuring a r
 ## Quick Start
 
 ```bash
-cd playground
-
 # Start all services (specs are compiled automatically)
 docker compose up -d
 
-# Wait for services to be healthy (about 60 seconds for first build)
+# Wait for services to be healthy (~30 seconds on first run for image pulls)
 docker compose ps
 
 # Test the gateway
@@ -18,6 +16,17 @@ curl http://localhost:8080/stations
 ```
 
 That's it! The API specs are compiled automatically before the gateway starts.
+
+## Version
+
+By default the playground pulls the `latest` images from [GitHub Container Registry](https://github.com/orgs/barbacane-dev/packages). To pin a specific release, copy `.env.example` and set the version:
+
+```bash
+cp .env.example .env
+# Edit .env and set BARBACANE_VERSION=0.2.0 (or any release tag)
+docker compose pull
+docker compose up -d
+```
 
 ## Services
 
@@ -185,16 +194,6 @@ Edit `specs/train-travel-api.yaml` and restart to recompile:
 
 ```bash
 docker compose up -d --force-recreate compiler barbacane
-```
-
-### Rebuilding from Source
-
-```bash
-# Rebuild all images
-docker compose build
-
-# Restart services
-docker compose up -d
 ```
 
 ### Modifying Mock Responses

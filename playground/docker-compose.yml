@@ -20,14 +20,11 @@ services:
   # Spec Compiler (init container - compiles specs before gateway starts)
   # ==========================================================================
   compiler:
-    build:
-      context: ..
-      dockerfile: playground/Dockerfile.compile
+    image: ghcr.io/barbacane-dev/barbacane-standalone:${BARBACANE_VERSION:-latest}
     command: ["compile", "--spec", "/specs/train-travel-api.yaml", "--spec", "/specs/train-events.yaml", "--spec", "/specs/s3-proxy.yaml", "--manifest", "/manifest/barbacane.yaml", "--output", "/output/api.bca", "--allow-plaintext"]
     volumes:
       - ./specs:/specs:ro
       - ./barbacane.yaml:/manifest/barbacane.yaml:ro
-      - ../plugins:/plugins:ro
       - artifact_data:/output
     # Only run once, then exit
     restart: "no"
@@ -36,9 +33,7 @@ services:
   # API Gateway (Data Plane)
   # ==========================================================================
   barbacane:
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    image: ghcr.io/barbacane-dev/barbacane:${BARBACANE_VERSION:-latest}
     command: ["serve", "--artifact", "/config/api.bca", "--allow-plaintext-upstream"]
     ports:
       - "8080:8080"
@@ -72,9 +67,7 @@ services:
   # Control Plane (Web UI + API)
   # ==========================================================================
   control-plane:
-    build:
-      context: ..
-      dockerfile: Dockerfile.control
+    image: ghcr.io/barbacane-dev/barbacane-control:${BARBACANE_VERSION:-latest}
     ports:
       - "3001:80"    # Web UI
       - "9091:9090"  # Control Plane API

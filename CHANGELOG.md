@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-27
+
 ### Added
 
 #### S3 Dispatcher
@@ -40,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/storage/{bucket}/{key+}` — OIDC-protected multi-bucket S3 proxy
 - `/assets/{key+}` — public rate-limited CDN backed by `s3://assets`
 - Added `playground.http` with ready-to-run requests for all playground endpoints
+
+#### Playground: Pre-built Images
+- Playground now pulls `ghcr.io/barbacane-dev/barbacane-standalone` and `ghcr.io/barbacane-dev/barbacane-control` from GHCR — no local source build required
+- Version pinnable via `BARBACANE_VERSION` environment variable (defaults to `latest`)
+- Ready to be extracted as a standalone repository
 
 #### Web UI Improvements (Batch 1)
 - Reusable components: `EmptyState`, `SearchInput`, `Breadcrumb`, `DropZone`
@@ -368,7 +375,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane/barbacane/compare/v0.1.2...HEAD
-[0.1.2]: https://github.com/barbacane/barbacane/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/barbacane/barbacane/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/barbacane/barbacane/releases/tag/v0.1.0
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/barbacane-dev/Barbacane/releases/tag/v0.1.0

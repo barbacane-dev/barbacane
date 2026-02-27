@@ -48,3 +48,5 @@ plugins:
     path: /plugins/nats/nats.wasm
   lambda:
     path: /plugins/lambda/lambda.wasm
+  s3:
+    path: /plugins/s3/s3.wasm

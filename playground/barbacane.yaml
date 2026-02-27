@@ -1,6 +1,6 @@
 # Barbacane Playground Manifest
 # Declares plugins used by the playground API specs
-# Paths are relative to the manifest file location
+# Paths match the layout in the barbacane-standalone image
 
 plugins:
   mock:
