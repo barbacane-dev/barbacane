@@ -146,6 +146,16 @@ Near-term items ready to be picked up:
 | Homebrew formula | macOS package manager support | P3 |
 | APT/RPM packages | Linux package manager support | P3 |
 
+### Security & Config provenance: Trusted Spec-to-Run Pipeline
+
+To guarantee that the running gateway is executing the exact specification intended, we will implement a verifiable spec-to-run trust chain. This ensures no unauthorized configuration drift can occur between the source repository and the production edge.
+
+- [ ] **Artifact fingerprinting:** Automatically calculate and embed a cryptographic hash (along with optional metadata like Git commit SHA or S3 Object ID) into the `.bca` artifact during the `barbacane compile` step.
+- [ ] **Provenance API endpoint:** Add a dedicated, authenticated endpoint to the Data Plane to interrogate the currently loaded configuration fingerprint.
+- [ ] **Control Plane drift detection:** Implement a background worker in `barbacane-control` that periodically polls connected Data Planes to ensure the running artifact hash matches the authorized version, triggering alerts upon drift.
+- [ ] **OCI / SBOM integration:** Surface the specification fingerprint in the software bill of materials (SBOM) and container labels when packaging the Data Plane as an OCI image, completing the end-to-end supply chain verification.
+
+
 ---
 
 ## Technical Debt
