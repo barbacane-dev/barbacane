@@ -11,7 +11,7 @@ pub mod spec_parser;
 pub use artifact::{
     compile, compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs,
     BundledPlugin, CompileOptions, CompileResult, CompiledOperation, CompiledRoutes, Manifest,
-    PluginBundle, SourceSpec, ARTIFACT_VERSION, COMPILER_VERSION,
+    PluginBundle, Provenance, SourceSpec, ARTIFACT_VERSION, COMPILER_VERSION,
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{

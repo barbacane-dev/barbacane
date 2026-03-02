@@ -144,4 +144,61 @@ impl DataPlanesRepository {
         .await?;
         Ok(result.rows_affected())
     }
+
+    /// Update the artifact hash reported by a data plane and reset drift status.
+    pub async fn update_artifact_hash(
+        &self,
+        id: Uuid,
+        artifact_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE data_planes
+            SET artifact_hash = $2, drift_detected = false, last_seen = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(artifact_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Set the drift detection status for a data plane.
+    pub async fn set_drift_status(&self, id: Uuid, detected: bool) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE data_planes
+            SET drift_detected = $2
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(detected)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get the expected artifact hash for a data plane by looking up the
+    /// artifact it should be running (via artifact_id → artifacts.manifest).
+    pub async fn get_expected_artifact_hash(
+        &self,
+        data_plane_id: Uuid,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let result: Option<(Option<String>,)> = sqlx::query_as(
+            r#"
+            SELECT a.manifest->>'artifact_hash' as artifact_hash
+            FROM data_planes dp
+            JOIN artifacts a ON a.id = dp.artifact_id
+            WHERE dp.id = $1
+            "#,
+        )
+        .bind(data_plane_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(result.and_then(|(hash,)| hash))
+    }
 }

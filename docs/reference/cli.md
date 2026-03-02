@@ -124,6 +124,8 @@ barbacane compile --spec <FILES>... --manifest <PATH> --output <PATH>
 | `--output`, `-o` | Yes | - | Output artifact path |
 | `--manifest`, `-m` | Yes | - | Path to `barbacane.yaml` manifest |
 | `--allow-plaintext` | No | `false` | Allow `http://` upstream URLs during compilation |
+| `--provenance-commit` | No | - | Git commit SHA to embed in artifact provenance metadata |
+| `--provenance-source` | No | - | Build source identifier (e.g., `ci/github-actions`) to embed in artifact provenance |
 
 ### Examples
 
@@ -136,6 +138,11 @@ barbacane compile -s users.yaml -s orders.yaml -m barbacane.yaml -o combined.bca
 
 # Short form
 barbacane compile -s api.yaml -m barbacane.yaml -o api.bca
+
+# With provenance metadata (CI/CD)
+barbacane compile -s api.yaml -m barbacane.yaml -o api.bca \
+  --provenance-commit $(git rev-parse HEAD) \
+  --provenance-source ci/github-actions
 ```
 
 ### Exit Codes
@@ -265,6 +272,7 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--tls-min-version` | No | `1.2` | Minimum TLS version (`1.2` or `1.3`) |
 | `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
+| `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address for health, metrics, and provenance endpoints. Set to `off` to disable |
 
 **Connected mode** (optional — connect to a control plane for centralized management):
 
@@ -519,10 +527,10 @@ barbacane serve --artifact api.bca --log-format pretty --log-level debug
 
 ### Metrics
 
-Prometheus metrics are exposed at `/__barbacane/metrics`:
+Prometheus metrics are exposed on the admin API port (default `127.0.0.1:8081`):
 
 ```bash
-curl http://localhost:8080/__barbacane/metrics
+curl http://localhost:8081/metrics
 ```
 
 Key metrics include:
@@ -598,12 +606,14 @@ set -e
 # Validate all specs
 barbacane validate --spec specs/*.yaml --format json > validation.json
 
-# Compile artifact with manifest
+# Compile artifact with provenance
 barbacane compile \
   --spec specs/users.yaml \
   --spec specs/orders.yaml \
   --manifest barbacane.yaml \
-  --output dist/gateway.bca
+  --output dist/gateway.bca \
+  --provenance-commit "$(git rev-parse HEAD)" \
+  --provenance-source ci/github-actions
 
 echo "Artifact built: dist/gateway.bca"
 ```

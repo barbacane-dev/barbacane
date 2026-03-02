@@ -2,7 +2,7 @@
 //!
 //! Compiles OpenAPI specs into artifacts and runs the data plane server.
 
-use barbacane_lib::{control_plane, hot_reload};
+use barbacane_lib::{admin, control_plane, hot_reload};
 
 use std::convert::Infallible;
 use std::fs::File;
@@ -435,6 +435,14 @@ enum Commands {
         /// Allow plaintext HTTP upstream URLs (development only).
         #[arg(long)]
         allow_plaintext: bool,
+
+        /// Git commit SHA for build provenance tracking.
+        #[arg(long)]
+        provenance_commit: Option<String>,
+
+        /// Build source identifier for provenance (e.g., "ci/github-actions").
+        #[arg(long)]
+        provenance_source: Option<String>,
     },
 
     /// Validate OpenAPI spec(s) without compiling.
@@ -565,6 +573,11 @@ enum Commands {
         /// Data plane name for identification in control plane.
         #[arg(long)]
         data_plane_name: Option<String>,
+
+        /// Admin API listen address (health, metrics, provenance).
+        /// Set to "off" to disable.
+        #[arg(long, default_value = "127.0.0.1:8081")]
+        admin_bind: String,
     },
 }
 
@@ -1441,7 +1454,6 @@ impl Gateway {
 
         match path {
             "/__barbacane/health" => self.health_response(),
-            "/__barbacane/metrics" => self.metrics_response(),
             "/__barbacane/specs" => self.specs_index_response(),
             "/__barbacane/specs/openapi" => self.merged_openapi_response(format),
             "/__barbacane/specs/asyncapi" => self.merged_asyncapi_response(format),
@@ -1601,17 +1613,6 @@ impl Gateway {
             .status(StatusCode::OK)
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body.to_string())))
-            .expect("valid response")
-    }
-
-    /// Build the Prometheus metrics response.
-    fn metrics_response(&self) -> Response<Full<Bytes>> {
-        let body = barbacane_telemetry::prometheus::render_metrics(&self.metrics);
-
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", barbacane_telemetry::PROMETHEUS_CONTENT_TYPE)
-            .body(Full::new(Bytes::from(body)))
             .expect("valid response")
     }
 
@@ -2462,6 +2463,8 @@ fn run_compile(
     output: &str,
     manifest_file: &str,
     allow_plaintext: bool,
+    provenance_commit: Option<String>,
+    provenance_source: Option<String>,
 ) -> ExitCode {
     let spec_paths: Vec<&Path> = specs.iter().map(Path::new).collect();
     let output_path = Path::new(output);
@@ -2476,6 +2479,8 @@ fn run_compile(
 
     let options = CompileOptions {
         allow_plaintext,
+        provenance_commit,
+        provenance_source,
         ..Default::default()
     };
 
@@ -2654,6 +2659,7 @@ async fn run_serve(
     keepalive_timeout: u64,
     shutdown_timeout: u64,
     connected_mode: Option<ConnectedModeConfig>,
+    admin_bind: &str,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
@@ -2741,6 +2747,17 @@ async fn run_serve(
         let _ = shutdown_tx_clone.send(true);
     });
 
+    // Artifact hash watch channel for drift detection
+    let initial_hash = gateway.load().manifest.artifact_hash.clone();
+    let (artifact_hash_tx, artifact_hash_rx) = watch::channel(Some(initial_hash));
+
+    // Shared manifest for admin API (updated on hot-reload)
+    let admin_manifest: Arc<ArcSwap<barbacane_compiler::Manifest>> = {
+        let gw = gateway.load();
+        Arc::new(ArcSwap::new(Arc::new(gw.manifest.clone())))
+    };
+    let drift_detected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Start control plane client if in connected mode
     let (mut artifact_rx, response_tx, control_plane_http_base) = if let Some(config) =
         connected_mode
@@ -2757,11 +2774,46 @@ async fn run_serve(
             data_plane_name: config.data_plane_name,
             initial_artifact_id: config.initial_artifact_id,
         });
-        let (rx, tx) = client.start(shutdown_rx.clone());
+        let (rx, tx) = client.start(
+            shutdown_rx.clone(),
+            artifact_hash_rx,
+            drift_detected.clone(),
+        );
         (Some(rx), Some(tx), Some(http_base))
     } else {
         (None, None, None)
     };
+
+    // Start admin API server if enabled
+    if admin_bind != "off" {
+        let admin_addr: SocketAddr = match admin_bind.parse() {
+            Ok(addr) => addr,
+            Err(e) => {
+                eprintln!(
+                    "error: invalid --admin-bind address '{}': {}",
+                    admin_bind, e
+                );
+                return ExitCode::from(1);
+            }
+        };
+
+        let admin_state = Arc::new(admin::AdminState {
+            manifest: admin_manifest.clone(),
+            metrics: metrics.clone(),
+            drift_detected: drift_detected.clone(),
+            started_at: Instant::now(),
+        });
+
+        let admin_shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                admin::start_admin_server(admin_addr, admin_state, admin_shutdown_rx).await
+            {
+                tracing::error!(error = %e, "Admin server failed");
+            }
+        });
+        eprintln!("barbacane: admin API on http://{}", admin_addr);
+    }
 
     // Keep-alive timeout (currently used for documentation; HTTP/1.1 uses internal defaults)
     let _keepalive_duration = Duration::from_secs(keepalive_timeout);
@@ -2804,6 +2856,8 @@ async fn run_serve(
                 let limits_clone = limits.clone();
                 let metrics_clone = metrics.clone();
                 let response_tx_clone = response_tx.clone();
+                let artifact_hash_tx_clone = artifact_hash_tx.clone();
+                let admin_manifest_clone = admin_manifest.clone();
 
                 tokio::spawn(async move {
                     let result = perform_hot_reload(
@@ -2824,6 +2878,13 @@ async fn run_serve(
                                 "barbacane: hot-reload successful for artifact {}",
                                 artifact_id
                             );
+                            // Update artifact hash for drift detection
+                            let gw = gateway_clone.load();
+                            let _ =
+                                artifact_hash_tx_clone.send(Some(gw.manifest.artifact_hash.clone()));
+                            // Update admin API manifest
+                            admin_manifest_clone.store(Arc::new(gw.manifest.clone()));
+
                             control_plane::ArtifactDownloadedResponse {
                                 artifact_id: *artifact_id,
                                 success: true,
@@ -3026,7 +3087,16 @@ async fn main() -> ExitCode {
             output,
             manifest,
             allow_plaintext,
-        } => run_compile(&spec, &output, &manifest, allow_plaintext),
+            provenance_commit,
+            provenance_source,
+        } => run_compile(
+            &spec,
+            &output,
+            &manifest,
+            allow_plaintext,
+            provenance_commit,
+            provenance_source,
+        ),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
         Commands::Init {
             name,
@@ -3055,6 +3125,7 @@ async fn main() -> ExitCode {
             project_id,
             api_key,
             data_plane_name,
+            admin_bind,
         } => {
             // Initialize telemetry
             let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
@@ -3152,6 +3223,7 @@ async fn main() -> ExitCode {
                 keepalive_timeout,
                 shutdown_timeout,
                 connected_mode,
+                &admin_bind,
             )
             .await
         }

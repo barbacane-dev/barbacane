@@ -5,6 +5,8 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -29,6 +31,8 @@ pub enum DataPlaneMessage {
     Heartbeat {
         #[serde(skip_serializing_if = "Option::is_none")]
         artifact_id: Option<Uuid>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact_hash: Option<String>,
         uptime_secs: u64,
         requests_total: u64,
     },
@@ -58,8 +62,8 @@ pub enum ControlPlaneMessage {
         download_url: String,
         sha256: String,
     },
-    /// Heartbeat acknowledgment.
-    HeartbeatAck,
+    /// Heartbeat acknowledgment with drift detection status.
+    HeartbeatAck { drift_detected: bool },
     /// Request disconnect.
     Disconnect { reason: String },
     /// Error message.
@@ -118,6 +122,8 @@ impl ControlPlaneClient {
     pub fn start(
         self,
         shutdown_rx: watch::Receiver<bool>,
+        artifact_hash_rx: watch::Receiver<Option<String>>,
+        drift_flag: Arc<AtomicBool>,
     ) -> (
         mpsc::Receiver<ArtifactNotification>,
         mpsc::Sender<ArtifactDownloadedResponse>,
@@ -126,8 +132,14 @@ impl ControlPlaneClient {
         let (response_tx, response_rx) = mpsc::channel::<ArtifactDownloadedResponse>(16);
 
         tokio::spawn(async move {
-            self.connection_loop(shutdown_rx, artifact_tx, response_rx)
-                .await;
+            self.connection_loop(
+                shutdown_rx,
+                artifact_tx,
+                response_rx,
+                artifact_hash_rx,
+                drift_flag,
+            )
+            .await;
         });
 
         (artifact_rx, response_tx)
@@ -139,6 +151,8 @@ impl ControlPlaneClient {
         mut shutdown_rx: watch::Receiver<bool>,
         artifact_tx: mpsc::Sender<ArtifactNotification>,
         mut response_rx: mpsc::Receiver<ArtifactDownloadedResponse>,
+        artifact_hash_rx: watch::Receiver<Option<String>>,
+        drift_flag: Arc<AtomicBool>,
     ) {
         const INITIAL_BACKOFF_MS: u64 = 1000;
         const MAX_BACKOFF_MS: u64 = 60000;
@@ -156,7 +170,13 @@ impl ControlPlaneClient {
             tracing::info!(url = %self.config.control_plane_url, "Connecting to control plane");
 
             match self
-                .try_connect(&mut shutdown_rx, &artifact_tx, &mut response_rx)
+                .try_connect(
+                    &mut shutdown_rx,
+                    &artifact_tx,
+                    &mut response_rx,
+                    &artifact_hash_rx,
+                    &drift_flag,
+                )
                 .await
             {
                 ConnectOutcome::Shutdown => {
@@ -201,6 +221,8 @@ impl ControlPlaneClient {
         shutdown_rx: &mut watch::Receiver<bool>,
         artifact_tx: &mpsc::Sender<ArtifactNotification>,
         response_rx: &mut mpsc::Receiver<ArtifactDownloadedResponse>,
+        artifact_hash_rx: &watch::Receiver<Option<String>>,
+        drift_flag: &Arc<AtomicBool>,
     ) -> ConnectOutcome {
         // Connect to WebSocket
         let (ws_stream, _response) = match connect_async(&self.config.control_plane_url).await {
@@ -326,6 +348,7 @@ impl ControlPlaneClient {
                 _ = heartbeat_interval.tick() => {
                     let heartbeat = DataPlaneMessage::Heartbeat {
                         artifact_id: None, // TODO: pass current artifact ID
+                        artifact_hash: artifact_hash_rx.borrow().clone(),
                         uptime_secs: start_time.elapsed().as_secs(),
                         requests_total: 0, // TODO: pass actual metrics
                     };
@@ -380,7 +403,7 @@ impl ControlPlaneClient {
                         Some(Ok(Message::Text(text))) => {
                             match serde_json::from_str::<ControlPlaneMessage>(&text) {
                                 Ok(msg) => {
-                                    if let Err(e) = self.handle_message(msg, artifact_tx, &mut sender).await {
+                                    if let Err(e) = self.handle_message(msg, artifact_tx, &mut sender, drift_flag).await {
                                         tracing::warn!(error = %e, "Error handling control plane message");
                                     }
                                 }
@@ -420,10 +443,15 @@ impl ControlPlaneClient {
             >,
             Message,
         >,
+        drift_flag: &Arc<AtomicBool>,
     ) -> Result<(), String> {
         match msg {
-            ControlPlaneMessage::HeartbeatAck => {
-                tracing::debug!("Heartbeat acknowledged");
+            ControlPlaneMessage::HeartbeatAck { drift_detected } => {
+                drift_flag.store(drift_detected, Ordering::Relaxed);
+                if drift_detected {
+                    tracing::warn!("Control plane detected configuration drift");
+                }
+                tracing::debug!(drift_detected, "Heartbeat acknowledged");
             }
             ControlPlaneMessage::ArtifactAvailable {
                 artifact_id,
@@ -491,6 +519,7 @@ mod tests {
     fn test_data_plane_message_heartbeat_serialization() {
         let msg = DataPlaneMessage::Heartbeat {
             artifact_id: Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()),
+            artifact_hash: Some("sha256:abc123".to_string()),
             uptime_secs: 3600,
             requests_total: 1000,
         };
@@ -499,6 +528,7 @@ mod tests {
         assert!(json.contains("\"type\":\"heartbeat\""));
         assert!(json.contains("\"uptime_secs\":3600"));
         assert!(json.contains("\"requests_total\":1000"));
+        assert!(json.contains("\"artifact_hash\":\"sha256:abc123\""));
     }
 
     #[test]
@@ -644,5 +674,86 @@ mod tests {
         assert!(config.control_plane_url.starts_with("ws://"));
         assert_eq!(config.api_key, "test-api-key");
         assert_eq!(config.data_plane_name.as_deref(), Some("test-plane"));
+    }
+
+    #[test]
+    fn test_heartbeat_ack_with_drift_serialization() {
+        let json = r#"{"type":"heartbeat_ack","drift_detected":true}"#;
+        let msg: ControlPlaneMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ControlPlaneMessage::HeartbeatAck { drift_detected } => {
+                assert!(drift_detected);
+            }
+            _ => panic!("Expected HeartbeatAck message"),
+        }
+    }
+
+    #[test]
+    fn test_heartbeat_ack_without_drift_serialization() {
+        let json = r#"{"type":"heartbeat_ack","drift_detected":false}"#;
+        let msg: ControlPlaneMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ControlPlaneMessage::HeartbeatAck { drift_detected } => {
+                assert!(!drift_detected);
+            }
+            _ => panic!("Expected HeartbeatAck message"),
+        }
+    }
+
+    #[test]
+    fn test_heartbeat_with_artifact_hash_serialization() {
+        let msg = DataPlaneMessage::Heartbeat {
+            artifact_id: None,
+            artifact_hash: Some("sha256:abc123def".to_string()),
+            uptime_secs: 120,
+            requests_total: 50,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"artifact_hash\":\"sha256:abc123def\""));
+
+        // Round-trip
+        let deserialized: DataPlaneMessage = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            DataPlaneMessage::Heartbeat {
+                artifact_hash,
+                uptime_secs,
+                ..
+            } => {
+                assert_eq!(artifact_hash, Some("sha256:abc123def".to_string()));
+                assert_eq!(uptime_secs, 120);
+            }
+            _ => panic!("Expected Heartbeat message"),
+        }
+    }
+
+    #[test]
+    fn test_heartbeat_without_artifact_hash() {
+        let msg = DataPlaneMessage::Heartbeat {
+            artifact_id: None,
+            artifact_hash: None,
+            uptime_secs: 0,
+            requests_total: 0,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        // artifact_hash should be omitted when None (skip_serializing_if)
+        assert!(
+            !json.contains("artifact_hash"),
+            "artifact_hash should be omitted when None"
+        );
+    }
+
+    #[test]
+    fn test_drift_flag_updated_by_heartbeat_ack() {
+        let drift_flag = Arc::new(AtomicBool::new(false));
+
+        // Simulate receiving drift_detected = true
+        drift_flag.store(true, Ordering::Relaxed);
+        assert!(drift_flag.load(Ordering::Relaxed));
+
+        // Simulate receiving drift_detected = false
+        drift_flag.store(false, Ordering::Relaxed);
+        assert!(!drift_flag.load(Ordering::Relaxed));
     }
 }

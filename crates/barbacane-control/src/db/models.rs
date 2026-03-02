@@ -210,6 +210,8 @@ pub struct DataPlane {
     pub connected_at: Option<DateTime<Utc>>,
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
+    pub artifact_hash: Option<String>,
+    pub drift_detected: bool,
 }
 
 /// Input for registering a data plane.

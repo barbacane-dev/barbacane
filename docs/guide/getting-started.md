@@ -288,10 +288,10 @@ barbacane serve --artifact api.bca \
   --otlp-endpoint http://otel-collector:4317
 ```
 
-Prometheus metrics are available at `/__barbacane/metrics`:
+Prometheus metrics are available on the admin API port (default `127.0.0.1:8081`):
 
 ```bash
-curl http://127.0.0.1:8080/__barbacane/metrics
+curl http://127.0.0.1:8081/metrics
 ```
 
 See the [Observability Guide](observability.md) for full details.

@@ -54,10 +54,10 @@ RUST_LOG=debug barbacane serve --artifact api.bca
 
 ## Metrics
 
-Prometheus metrics are exposed at `/__barbacane/metrics`:
+Prometheus metrics are exposed on the dedicated admin API port (default `127.0.0.1:8081`):
 
 ```bash
-curl http://localhost:8080/__barbacane/metrics
+curl http://localhost:8081/metrics
 ```
 
 ### Available Metrics
@@ -84,8 +84,8 @@ Configure Prometheus to scrape metrics:
 scrape_configs:
   - job_name: 'barbacane'
     static_configs:
-      - targets: ['barbacane:8080']
-    metrics_path: '/__barbacane/metrics'
+      - targets: ['barbacane:8081']
+    metrics_path: '/metrics'
     scrape_interval: 15s
 ```
 
@@ -188,7 +188,7 @@ barbacane serve --artifact api.bca \
 ```
 
 Combined with:
-- **Prometheus** scraping `/__barbacane/metrics`
+- **Prometheus** scraping `/metrics` on the admin port (default 8081)
 - **OpenTelemetry Collector** receiving OTLP traces
 - **Grafana** for dashboards and alerting
 - **Log aggregation** (Loki, Elasticsearch) ingesting stdout

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Config Provenance & Drift Detection (ADR-0021)
+- **Artifact fingerprinting**: combined SHA-256 hash of all artifact inputs (`artifact_hash`) embedded in manifest at compile time; hash-of-hashes approach using sorted source spec hashes and BTreeMap checksums
+- **Build provenance metadata**: optional `--provenance-commit` and `--provenance-source` CLI flags on `barbacane compile` to embed Git commit SHA and build source (e.g., `ci/github-actions`) into the artifact
+- **Drift detection via heartbeat**: data plane reports `artifact_hash` in WebSocket heartbeats; control plane compares against expected hash and flags drift
+- **`Provenance` struct**: new type in `barbacane-compiler` with optional `commit` and `source` fields
+- **Bumped artifact version to 2**: `artifact_hash` and `provenance` are required fields in the manifest
+
+#### Admin API Listener (ADR-0022)
+- **Dedicated admin HTTP port**: new `--admin-bind` flag (default `127.0.0.1:8081`, `off` to disable) serving operational endpoints separate from user traffic
+- **`GET /health`**: gateway health with uptime on admin port
+- **`GET /metrics`**: Prometheus metrics moved from `/__barbacane/metrics` (main port) to `/metrics` (admin port)
+- **`GET /provenance`**: full artifact provenance including `artifact_hash`, `compiled_at`, `compiler_version`, source specs, bundled plugins, and `drift_detected` status
+
+#### Control Plane
+- **Drift detection columns**: `artifact_hash` and `drift_detected` columns added to `data_planes` table (migration 004)
+- **Heartbeat drift comparison**: control plane compares reported hash against expected artifact hash from artifacts table and updates drift status
+- **`HeartbeatAck` with drift status**: data planes receive `drift_detected` flag in heartbeat acknowledgements and log warnings when drift is detected
+
+#### Web UI
+- **Drift detection badge**: data planes with config drift show an amber warning on the Deploy page
+- **Updated `DataPlane` type**: added `artifact_hash` and `drift_detected` fields
+
+### Changed
+- Metrics endpoint moved from `/__barbacane/metrics` on the main traffic port to `/metrics` on the dedicated admin port (default 8081)
+
 ## [0.2.1] - 2026-02-27
 
 ### Fixed

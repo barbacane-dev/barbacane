@@ -251,12 +251,14 @@ async fn handle_message(
     match msg {
         DataPlaneMessage::Heartbeat {
             artifact_id,
+            artifact_hash,
             uptime_secs,
             requests_total,
         } => {
             tracing::debug!(
                 data_plane_id = %data_plane_id,
                 ?artifact_id,
+                ?artifact_hash,
                 uptime_secs,
                 requests_total,
                 "Heartbeat received"
@@ -269,7 +271,38 @@ async fn handle_message(
                 data_planes_repo.update_last_seen(data_plane_id).await?;
             }
 
-            let ack = ControlPlaneMessage::HeartbeatAck;
+            // Drift detection: compare reported hash against expected
+            let drift_detected = if let Some(ref reported_hash) = artifact_hash {
+                data_planes_repo
+                    .update_artifact_hash(data_plane_id, reported_hash)
+                    .await?;
+
+                let expected = data_planes_repo
+                    .get_expected_artifact_hash(data_plane_id)
+                    .await?;
+
+                let drifted = expected
+                    .as_ref()
+                    .is_some_and(|expected| expected != reported_hash);
+
+                if drifted {
+                    data_planes_repo
+                        .set_drift_status(data_plane_id, true)
+                        .await?;
+                    tracing::warn!(
+                        data_plane_id = %data_plane_id,
+                        reported = %reported_hash,
+                        expected = ?expected,
+                        "Configuration drift detected"
+                    );
+                }
+
+                drifted
+            } else {
+                false
+            };
+
+            let ack = ControlPlaneMessage::HeartbeatAck { drift_detected };
             sender
                 .send(Message::Text(serde_json::to_string(&ack)?.into()))
                 .await?;
