@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/img/barbacane-icon_black.png" alt="Barbacane" width="200">
+  <img src="assets/img/barbacane_logo_transparent_bg.png" alt="Barbacane" width="200">
 </p>
 
 <h1 align="center">Barbacane</h1>
