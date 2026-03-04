@@ -8,7 +8,6 @@
 The current dispatch contract requires plugins to return a fully buffered `Response` (status + headers + `Option<String>` body). This works for typical API proxying but breaks down for use cases that require streaming responses to clients:
 
 - **LLM completions** — Chat APIs (OpenAI, Anthropic) stream tokens via SSE, often taking 10–60 seconds. Buffering the entire response before sending it to the client defeats the purpose of streaming and creates unacceptable latency.
-- **Large file proxying** — S3 objects, report downloads, export APIs.
 - **Event streams** — Server-Sent Events, webhook relays.
 
 Barbacane's middleware pipeline (SPEC-002) currently assumes a complete response is available before the on_response chain runs:
@@ -86,9 +85,9 @@ pub fn streamed_response() -> Response {
 
 ## Consequences
 
-- **Easier:** Dispatcher plugins can stream SSE, chunked, and large responses to clients without buffering-induced latency. This unblocks the AI gateway plugin (ADR-0024) and future streaming use cases (file proxy, event relay).
+- **Easier:** Dispatcher plugins can stream SSE, chunked, and large responses to clients without buffering-induced latency. This unblocks the AI gateway plugin (ADR-0024) and future streaming use cases (event relay).
 - **Harder:** On_response middlewares cannot modify streamed responses (headers/body are already sent). Debugging mid-stream errors is harder since the status code is already committed. The host must manage concurrent streaming + buffering.
-- **Trade-offs:** The "buffer everything" approach means memory usage equals response size even during streaming. This is acceptable for LLM responses (typically <100KB of text) but could be problematic for very large file streams. A future enhancement could add a "fire-and-forget" stream mode that skips buffering.
+- **Trade-offs:** The "buffer everything" approach means memory usage equals response size even during streaming. This is acceptable for LLM responses (typically <100KB of text) but not for large file proxying (multi-GB S3 objects, report downloads). Large file proxying is explicitly **out of scope** for this design — it requires a future "fire-and-forget" stream mode that skips host buffering entirely. On the request side, the data plane already enforces `--max-body-size` (default 1 MB) and the `request-size-limit` middleware plugin provides per-operation control. A similar `response-size-limit` middleware could act as a safety net for unexpectedly large upstream responses, but the fundamental solution for GB-scale proxying is the non-buffering mode.
 
 ## Alternatives considered
 
