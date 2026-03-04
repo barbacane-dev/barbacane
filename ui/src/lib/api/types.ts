@@ -183,6 +183,8 @@ export interface DataPlane {
   last_seen: string | null
   connected_at: string | null
   metadata: Record<string, unknown>
+  artifact_hash: string | null
+  drift_detected: boolean
   created_at: string
 }
 

@@ -20,7 +20,7 @@ use crate::error::{CompileError, CompileWarning};
 use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
-pub const ARTIFACT_VERSION: u32 = 1;
+pub const ARTIFACT_VERSION: u32 = 2;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
@@ -32,6 +32,10 @@ pub struct CompileOptions {
     pub max_schema_depth: usize,
     /// Maximum total properties in a schema (default: 256).
     pub max_schema_properties: usize,
+    /// Git commit SHA for build provenance tracking.
+    pub provenance_commit: Option<String>,
+    /// Source identifier for build provenance (e.g., "ci/github-actions").
+    pub provenance_source: Option<String>,
 }
 
 impl Default for CompileOptions {
@@ -40,6 +44,8 @@ impl Default for CompileOptions {
             allow_plaintext: false,
             max_schema_depth: 32,
             max_schema_properties: 256,
+            provenance_commit: None,
+            provenance_source: None,
         }
     }
 }
@@ -78,8 +84,20 @@ pub struct Manifest {
     /// Checksums use BTreeMap for deterministic JSON serialization order.
     pub checksums: BTreeMap<String, String>,
     /// Bundled plugins (empty if no plugins bundled).
-    #[serde(default)]
     pub plugins: Vec<BundledPlugin>,
+    /// Combined SHA-256 fingerprint of all artifact inputs (specs + routes + plugins).
+    pub artifact_hash: String,
+    /// Build provenance metadata (git commit, CI source, etc.).
+    pub provenance: Provenance,
+}
+
+/// Build provenance metadata embedded in the manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Provenance {
+    /// Git commit SHA at build time.
+    pub commit: Option<String>,
+    /// Build source identifier (e.g., "ci/github-actions").
+    pub source: Option<String>,
 }
 
 /// Metadata about a bundled plugin.
@@ -591,6 +609,13 @@ fn compile_inner(
     // Sort source_specs by filename for deterministic output
     source_specs.sort_by(|a, b| a.file.cmp(&b.file));
 
+    let artifact_hash = compute_artifact_hash(&source_specs, &checksums);
+
+    let provenance = Provenance {
+        commit: options.provenance_commit.clone(),
+        source: options.provenance_source.clone(),
+    };
+
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
         compiled_at: now_utc_iso8601(),
@@ -599,6 +624,8 @@ fn compile_inner(
         routes_count: routes.operations.len(),
         checksums,
         plugins: bundled_plugins,
+        artifact_hash,
+        provenance,
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
@@ -645,6 +672,27 @@ fn compile_inner(
 /// Compute SHA-256 hash of bytes.
 fn compute_sha256(content: &[u8]) -> String {
     hex::encode(Sha256::new().chain_update(content).finalize())
+}
+
+/// Compute a combined artifact hash from all individual input checksums.
+///
+/// Produces a single SHA-256 that represents the entire artifact content by
+/// hashing all source spec hashes and all checksums (routes + plugins) in
+/// deterministic sorted order.
+fn compute_artifact_hash(
+    source_specs: &[SourceSpec],
+    checksums: &BTreeMap<String, String>,
+) -> String {
+    let mut hasher = Sha256::new();
+    // Source spec hashes (already sorted by filename before this call)
+    for spec in source_specs {
+        hasher.update(format!("source_spec:{}={}\n", spec.file, spec.sha256).as_bytes());
+    }
+    // Routes + plugin checksums (BTreeMap is sorted by key)
+    for (key, value) in checksums {
+        hasher.update(format!("{}={}\n", key, value).as_bytes());
+    }
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 /// Add a file to a tar archive from bytes.
@@ -2060,5 +2108,333 @@ paths:
         assert_eq!(op.middlewares.len(), 1);
         assert_eq!(op.middlewares[0].name, "rate-limit");
         assert_eq!(result.manifest.plugins.len(), 0);
+    }
+
+    #[test]
+    fn artifact_hash_is_deterministic() {
+        let source_specs = vec![
+            SourceSpec {
+                file: "api.yaml".to_string(),
+                sha256: "aaa".to_string(),
+                spec_type: "openapi".to_string(),
+                version: "3.1.0".to_string(),
+            },
+            SourceSpec {
+                file: "events.yaml".to_string(),
+                sha256: "bbb".to_string(),
+                spec_type: "asyncapi".to_string(),
+                version: "3.0.0".to_string(),
+            },
+        ];
+        let mut checksums = BTreeMap::new();
+        checksums.insert("routes.json".to_string(), "ccc".to_string());
+        checksums.insert("plugins/mock.wasm".to_string(), "ddd".to_string());
+
+        let hash1 = compute_artifact_hash(&source_specs, &checksums);
+        let hash2 = compute_artifact_hash(&source_specs, &checksums);
+
+        assert_eq!(hash1, hash2, "Same inputs must produce same hash");
+        assert!(
+            hash1.starts_with("sha256:"),
+            "Hash must have sha256: prefix"
+        );
+    }
+
+    #[test]
+    fn artifact_hash_differs_with_different_specs() {
+        let specs_a = vec![SourceSpec {
+            file: "api.yaml".to_string(),
+            sha256: "aaa".to_string(),
+            spec_type: "openapi".to_string(),
+            version: "3.1.0".to_string(),
+        }];
+        let specs_b = vec![SourceSpec {
+            file: "api.yaml".to_string(),
+            sha256: "bbb".to_string(),
+            spec_type: "openapi".to_string(),
+            version: "3.1.0".to_string(),
+        }];
+        let checksums = BTreeMap::new();
+
+        let hash_a = compute_artifact_hash(&specs_a, &checksums);
+        let hash_b = compute_artifact_hash(&specs_b, &checksums);
+
+        assert_ne!(
+            hash_a, hash_b,
+            "Different spec hashes must produce different artifact hashes"
+        );
+    }
+
+    #[test]
+    fn artifact_hash_differs_with_different_checksums() {
+        let specs = vec![SourceSpec {
+            file: "api.yaml".to_string(),
+            sha256: "aaa".to_string(),
+            spec_type: "openapi".to_string(),
+            version: "3.1.0".to_string(),
+        }];
+        let mut checksums_a = BTreeMap::new();
+        checksums_a.insert("routes.json".to_string(), "v1".to_string());
+        let mut checksums_b = BTreeMap::new();
+        checksums_b.insert("routes.json".to_string(), "v2".to_string());
+
+        let hash_a = compute_artifact_hash(&specs, &checksums_a);
+        let hash_b = compute_artifact_hash(&specs, &checksums_b);
+
+        assert_ne!(
+            hash_a, hash_b,
+            "Different route checksums must produce different artifact hashes"
+        );
+    }
+
+    #[test]
+    fn provenance_serialization_round_trip() {
+        let prov = Provenance {
+            commit: Some("abc123".to_string()),
+            source: Some("ci/github-actions".to_string()),
+        };
+
+        let json = serde_json::to_string(&prov).unwrap();
+        let deserialized: Provenance = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.commit, Some("abc123".to_string()));
+        assert_eq!(deserialized.source, Some("ci/github-actions".to_string()));
+    }
+
+    #[test]
+    fn provenance_defaults_to_none() {
+        let prov = Provenance::default();
+
+        assert!(prov.commit.is_none());
+        assert!(prov.source.is_none());
+
+        // Round-trip with nulls
+        let json = serde_json::to_string(&prov).unwrap();
+        let deserialized: Provenance = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.commit.is_none());
+        assert!(deserialized.source.is_none());
+    }
+
+    #[test]
+    fn compile_produces_artifact_hash_and_provenance() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions {
+                provenance_commit: Some("deadbeef".to_string()),
+                provenance_source: Some("test".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Artifact hash is present and well-formed
+        assert!(result.manifest.artifact_hash.starts_with("sha256:"));
+        assert!(result.manifest.artifact_hash.len() > 10);
+
+        // Provenance is present
+        assert_eq!(
+            result.manifest.provenance.commit,
+            Some("deadbeef".to_string())
+        );
+        assert_eq!(result.manifest.provenance.source, Some("test".to_string()));
+
+        // Round-trip: load manifest and verify
+        let loaded = load_manifest(&output_path).unwrap();
+        assert_eq!(loaded.artifact_hash, result.manifest.artifact_hash);
+        assert_eq!(loaded.provenance.commit, Some("deadbeef".to_string()));
+        assert_eq!(loaded.provenance.source, Some("test".to_string()));
+    }
+
+    #[test]
+    fn compile_without_provenance_has_none_fields() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .unwrap();
+
+        // Hash is always present
+        assert!(result.manifest.artifact_hash.starts_with("sha256:"));
+
+        // Provenance fields are None when not provided
+        assert!(result.manifest.provenance.commit.is_none());
+        assert!(result.manifest.provenance.source.is_none());
+    }
+
+    #[test]
+    fn same_spec_produces_same_artifact_hash() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+
+        let out1 = temp.path().join("artifact1.bca");
+        let out2 = temp.path().join("artifact2.bca");
+
+        let r1 = compile(
+            &[spec_path.as_path()],
+            &[],
+            &out1,
+            &CompileOptions::default(),
+        )
+        .unwrap();
+        let r2 = compile(
+            &[spec_path.as_path()],
+            &[],
+            &out2,
+            &CompileOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            r1.manifest.artifact_hash, r2.manifest.artifact_hash,
+            "Compiling the same spec twice must produce the same artifact hash"
+        );
+    }
+
+    #[test]
+    fn different_specs_produce_different_artifact_hashes() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_a = r#"
+openapi: "3.1.0"
+info:
+  title: API A
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+"#;
+        let spec_b = r#"
+openapi: "3.1.0"
+info:
+  title: API B
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+"#;
+        let path_a = create_test_spec(temp.path(), "a.yaml", spec_a);
+        let path_b = create_test_spec(temp.path(), "b.yaml", spec_b);
+        let out_a = temp.path().join("a.bca");
+        let out_b = temp.path().join("b.bca");
+
+        let ra = compile(&[path_a.as_path()], &[], &out_a, &CompileOptions::default()).unwrap();
+        let rb = compile(&[path_b.as_path()], &[], &out_b, &CompileOptions::default()).unwrap();
+
+        assert_ne!(
+            ra.manifest.artifact_hash, rb.manifest.artifact_hash,
+            "Different specs must produce different artifact hashes"
+        );
+    }
+
+    #[test]
+    fn provenance_does_not_affect_artifact_hash() {
+        let temp = TempDir::new().unwrap();
+
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let out1 = temp.path().join("a.bca");
+        let out2 = temp.path().join("b.bca");
+
+        let r1 = compile(
+            &[spec_path.as_path()],
+            &[],
+            &out1,
+            &CompileOptions {
+                provenance_commit: Some("commit-a".to_string()),
+                provenance_source: Some("source-a".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let r2 = compile(
+            &[spec_path.as_path()],
+            &[],
+            &out2,
+            &CompileOptions {
+                provenance_commit: Some("commit-b".to_string()),
+                provenance_source: Some("source-b".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            r1.manifest.artifact_hash, r2.manifest.artifact_hash,
+            "Provenance metadata must not affect artifact hash"
+        );
     }
 }

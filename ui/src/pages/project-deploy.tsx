@@ -11,6 +11,7 @@ import {
   Plus,
   Check,
   AlertCircle,
+  AlertTriangle,
   Clock,
   Package,
   ChevronDown,
@@ -331,6 +332,14 @@ export function ProjectDeployPage() {
                           <p className="mt-1 text-xs text-muted-foreground italic">
                             No artifact deployed
                           </p>
+                        )}
+                        {dp.drift_detected && (
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                            <span className="text-xs font-medium text-amber-500">
+                              Config drift detected — running artifact does not match expected version
+                            </span>
+                          </div>
                         )}
                       </div>
                     </div>

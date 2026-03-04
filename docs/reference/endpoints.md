@@ -153,15 +153,39 @@ paths:
 
 ---
 
-## Prometheus Metrics
+## Admin API (Dedicated Port)
+
+Starting with v0.3.0, operational endpoints (metrics, provenance) are served on a dedicated admin port (default `127.0.0.1:8081`), separate from user traffic. This follows ADR-0022 and keeps operational data off the public-facing port.
+
+Configure with `--admin-bind` (default: `127.0.0.1:8081`). Set to `off` to disable.
+
+### Health Check (Admin)
 
 ```
-GET /__barbacane/metrics
+GET /health
+```
+
+Returns the gateway health status with uptime.
+
+```json
+{
+  "status": "healthy",
+  "artifact_version": 2,
+  "compiler_version": "0.2.1",
+  "routes_count": 12,
+  "uptime_secs": 3600
+}
+```
+
+### Prometheus Metrics
+
+```
+GET /metrics
 ```
 
 Returns gateway metrics in Prometheus text exposition format.
 
-### Response
+#### Response
 
 ```
 # HELP barbacane_requests_total Total number of HTTP requests processed
@@ -178,7 +202,7 @@ barbacane_request_duration_seconds_bucket{method="GET",path="/users",status="200
 barbacane_active_connections 5
 ```
 
-### Available Metrics
+#### Available Metrics
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
@@ -193,11 +217,11 @@ barbacane_active_connections 5
 | `barbacane_dispatch_duration_seconds` | histogram | dispatcher, upstream | Dispatcher execution time |
 | `barbacane_wasm_execution_duration_seconds` | histogram | plugin, function | WASM plugin execution time |
 
-### Usage
+#### Usage
 
 ```bash
-# Scrape metrics
-curl http://localhost:8080/__barbacane/metrics
+# Scrape metrics from admin port
+curl http://localhost:8081/metrics
 ```
 
 ```yaml
@@ -205,25 +229,85 @@ curl http://localhost:8080/__barbacane/metrics
 scrape_configs:
   - job_name: 'barbacane'
     static_configs:
-      - targets: ['barbacane:8080']
-    metrics_path: '/__barbacane/metrics'
+      - targets: ['barbacane:8081']
+    metrics_path: '/metrics'
+```
+
+### Provenance
+
+```
+GET /provenance
+```
+
+Returns full artifact provenance data: cryptographic fingerprint, build metadata, source specs, bundled plugins, and drift detection status.
+
+#### Response
+
+```json
+{
+  "artifact_hash": "sha256:a1b2c3d4e5f6...",
+  "compiled_at": "2026-03-01T10:30:00Z",
+  "compiler_version": "0.2.1",
+  "artifact_version": 2,
+  "provenance": {
+    "commit": "abc123def456",
+    "source": "ci/github-actions"
+  },
+  "source_specs": [
+    { "file": "api.yaml", "sha256": "abc123...", "type": "openapi" }
+  ],
+  "plugins": [
+    { "name": "rate-limit", "version": "1.0.0", "sha256": "789abc..." }
+  ],
+  "drift_detected": false
+}
+```
+
+#### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `artifact_hash` | string | Combined SHA-256 fingerprint of all artifact inputs |
+| `compiled_at` | string | ISO 8601 compilation timestamp |
+| `compiler_version` | string | Barbacane compiler version |
+| `provenance.commit` | string? | Git commit SHA (if provided at compile time) |
+| `provenance.source` | string? | Build source identifier |
+| `source_specs` | array | Source specifications with individual hashes |
+| `plugins` | array | Bundled plugins with versions and hashes |
+| `drift_detected` | boolean | `true` if control plane detected a hash mismatch |
+
+#### Usage
+
+```bash
+# Check what's running
+curl http://localhost:8081/provenance
+
+# Verify artifact hash
+curl -s http://localhost:8081/provenance | jq -r '.artifact_hash'
+
+# Check for drift
+curl -s http://localhost:8081/provenance | jq '.drift_detected'
 ```
 
 ---
 
 ## Security Considerations
 
-Reserved endpoints are public by default. In production, consider:
+The `/__barbacane/*` endpoints on the main traffic port (8080) serve **health checks** and **API specs** — both are typically safe to expose publicly. Health checks are standard for load balancers and Kubernetes probes. API specs are designed for API consumers (Swagger UI, client generation).
 
-1. **Network segmentation**: Only expose port 8080 to your load balancer
-2. **Firewall rules**: Block `/__barbacane/*` from public access
-3. **Reverse proxy**: Strip or restrict access to reserved paths
+Operational endpoints (metrics, provenance) are served on the **admin port** (default `127.0.0.1:8081`), which binds to localhost only by default.
+
+In production, consider:
+
+1. **Keep admin port internal**: The default `127.0.0.1:8081` binding is already safe; if you change it to `0.0.0.0:8081`, ensure firewall rules restrict access
+2. **Network segmentation**: Only expose port 8080 to your load balancer
+3. **Spec access control**: If your API specs contain sensitive information, restrict `/__barbacane/specs` via reverse proxy
 
 Example nginx configuration:
 
 ```nginx
-location /__barbacane/ {
-    # Only allow from internal network
+location /__barbacane/specs {
+    # Restrict spec access to internal network if needed
     allow 10.0.0.0/8;
     deny all;
 

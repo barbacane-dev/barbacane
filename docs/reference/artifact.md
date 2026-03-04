@@ -26,9 +26,9 @@ Metadata about the artifact.
 
 ```json
 {
-  "barbacane_artifact_version": 1,
-  "compiled_at": "2025-01-29T10:30:00Z",
-  "compiler_version": "0.1.0",
+  "barbacane_artifact_version": 2,
+  "compiled_at": "2026-03-01T10:30:00Z",
+  "compiler_version": "0.2.1",
   "source_specs": [
     {
       "file": "api.yaml",
@@ -49,6 +49,11 @@ Metadata about the artifact.
   "routes_count": 12,
   "checksums": {
     "routes.json": "sha256:def456..."
+  },
+  "artifact_hash": "sha256:a1b2c3d4e5f6...",
+  "provenance": {
+    "commit": "abc123def456",
+    "source": "ci/github-actions"
   }
 }
 ```
@@ -57,13 +62,17 @@ Metadata about the artifact.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `barbacane_artifact_version` | integer | Format version (currently `1`) |
+| `barbacane_artifact_version` | integer | Format version (currently `2`) |
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
 | `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
 | `bundled_plugins` | array | List of bundled WASM plugins (optional) |
 | `routes_count` | integer | Number of compiled routes |
 | `checksums` | object | SHA-256 checksums for integrity |
+| `artifact_hash` | string | Combined SHA-256 fingerprint of all artifact inputs (hash-of-hashes) |
+| `provenance` | object | Build provenance metadata |
+| `provenance.commit` | string? | Git commit SHA (if provided via `--provenance-commit`) |
+| `provenance.source` | string? | Build source identifier (if provided via `--provenance-source`) |
 
 #### source_specs entry
 
@@ -145,6 +154,7 @@ Files retain their original names.
 
 | Version | Changes |
 |---------|---------|
+| 2 | Added `artifact_hash` (combined SHA-256 fingerprint) and `provenance` (build metadata) fields |
 | 1 | Initial format |
 
 ## Inspecting Artifacts
@@ -195,6 +205,8 @@ sha256sum extracted/routes.json
 
 - All embedded files have SHA-256 checksums in the manifest
 - The gateway verifies checksums on load
+- The `artifact_hash` provides a single combined fingerprint of all inputs for drift detection
+- When connected to a control plane, hash mismatches trigger drift alerts
 
 ### Contents
 
@@ -255,15 +267,20 @@ Don't commit `.bca` files to git. Instead:
 ### CI/CD Pipeline
 
 ```bash
-# Compile in CI
+# Compile in CI with provenance
 barbacane compile \
   --spec specs/*.yaml \
   --manifest barbacane.yaml \
-  --output dist/gateway-${VERSION}.bca
+  --output dist/gateway-${VERSION}.bca \
+  --provenance-commit "$(git rev-parse HEAD)" \
+  --provenance-source ci/github-actions
 
 # Upload to registry
 aws s3 cp dist/gateway-${VERSION}.bca s3://artifacts/
 
 # Deploy
 ssh prod "barbacane serve --artifact /opt/barbacane/gateway.bca"
+
+# Verify provenance on running gateway
+curl -s http://gateway:8081/provenance | jq '.artifact_hash'
 ```

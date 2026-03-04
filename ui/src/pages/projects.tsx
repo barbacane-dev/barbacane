@@ -61,6 +61,7 @@ export function ProjectsPage() {
   const filteredProjects = projects.filter(
     (p) =>
       !debouncedSearch ||
+      p.id.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
       p.name.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
       p.description?.toLowerCase().includes(debouncedSearch.toLowerCase())
   )

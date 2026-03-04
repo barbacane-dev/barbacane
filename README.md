@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/img/barbacane-icon_black.png" alt="Barbacane" width="200">
+  <img src="assets/img/barbacane_logo_transparent_bg.png" alt="Barbacane" width="200">
 </p>
 
 <h1 align="center">Barbacane</h1>
@@ -9,9 +9,9 @@
 <p align="center">
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/unit%20tests-353%20passing-brightgreen" alt="Unit Tests">
+  <img src="https://img.shields.io/badge/unit%20tests-382%20passing-brightgreen" alt="Unit Tests">
   <img src="https://img.shields.io/badge/plugin%20tests-534%20passing-brightgreen" alt="Plugin Tests">
-  <img src="https://img.shields.io/badge/integration%20tests-186%20passing-brightgreen" alt="Integration Tests">
+  <img src="https://img.shields.io/badge/integration%20tests-192%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/cli%20tests-16%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/ui%20tests-44%20passing-brightgreen" alt="UI Tests">
   <img src="https://img.shields.io/badge/e2e%20tests-11%20passing-brightgreen" alt="E2E Tests">
