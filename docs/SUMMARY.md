@@ -12,6 +12,7 @@
 - [Observability](guide/observability.md)
 - [Control Plane](guide/control-plane.md)
 - [Web UI](guide/web-ui.md)
+- [FIPS 140-3 Compliance](guide/fips.md)
 
 # Reference
 

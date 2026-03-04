@@ -44,6 +44,9 @@ arc-swap = "1.7"
 sha2 = { workspace = true }
 hex = { workspace = true }
 
+[features]
+fips = ["rustls/fips"]
+
 [lints]
 workspace = true
 
