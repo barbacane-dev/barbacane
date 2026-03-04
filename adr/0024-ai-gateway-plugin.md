@@ -43,6 +43,8 @@ This leverages the middleware pipeline: each concern is independently ordered, c
 
 The gateway exposes a **unified OpenAI-compatible API**. Clients always send OpenAI format; the dispatcher translates for non-OpenAI providers internally.
 
+**OpenAI-compatible inference servers** (vLLM, TGI, LocalAI, etc.) work out of the box via the `openai` provider with a custom `base_url` — no dedicated adapter needed. For example, a vLLM deployment is just `provider: openai` + `base_url: http://vllm:8000`.
+
 ### Provider API Contracts (Contract-First)
 
 Each provider adapter is built against a **pinned API version**. This ensures deterministic behavior and makes breaking changes from upstream providers a conscious, tested upgrade.
