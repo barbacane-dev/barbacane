@@ -967,21 +967,25 @@ openapi: "3.1.0"
 info:
   title: Test API
   version: "1.0.0"
-x-barbacane-observability:
-  trace_sampling: 0.5
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      requests_per_second: 100
 paths:
   /health:
     get:
       x-barbacane-dispatch:
         name: mock
-      x-barbacane-cache:
-        ttl: "60s"
+      x-barbacane-middlewares:
+        - name: cache
+          config:
+            ttl: 60
 "#;
         let spec = parse_spec(yaml).unwrap();
-        assert!(spec.extensions.contains_key("x-barbacane-observability"));
+        assert!(spec.extensions.contains_key("x-barbacane-middlewares"));
 
         let op = &spec.operations[0];
-        assert!(op.extensions.contains_key("x-barbacane-cache"));
+        assert!(op.extensions.contains_key("x-barbacane-middlewares"));
     }
 
     #[test]

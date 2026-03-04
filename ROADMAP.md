@@ -21,7 +21,7 @@ What's actively being worked on:
 Near-term items ready to be picked up:
 
 - [ ] `tcp-log` plugin — send logs to TCP endpoint
-- [ ] Security plugins documentation
+- [x] Security plugins documentation — **done** (documented in `docs/guide/middlewares.md`)
 - [ ] Structured log format documentation
 - [ ] Integration guides (Datadog, Splunk, ELK)
 - [ ] `barbacane dev` — local dev server with file watching
@@ -123,9 +123,9 @@ Near-term items ready to be picked up:
 | OpenAPI diff | Show changes between spec versions | P2 |
 | Improved error messages | More actionable validation and compilation errors | P2 |
 | Compile-time error catalog | Document all E-codes with examples and remediation | P2 |
-| Extension documentation | Complete `x-barbacane-*` extension reference (ratelimit, cache, sunset) | P1 |
+| ~~Extension documentation~~ | ~~Complete `x-barbacane-dispatch` and `x-barbacane-middlewares` reference~~ — **done** (`docs/reference/extensions.md`) | ~~P1~~ |
 | Middleware ordering guide | Best practices for middleware execution order | P2 |
-| ~~Playground environment~~ | ~~Docker Compose with Prometheus, Grafana, Loki, WireMock~~ — **done** |
+| ~~Playground environment~~ | ~~Docker Compose development environment~~ — **done** (moved to [barbacane-dev/playground](https://github.com/barbacane-dev/playground)) |
 
 ### Integrations
 

@@ -266,10 +266,10 @@ These defaults are enforced unless explicitly overridden:
 | TLS mandatory to upstreams | `http://` upstreams rejected | `--allow-plaintext-upstream` (dev only) |
 | No CORS | Cross-origin requests receive no CORS headers | Add CORS middleware plugin |
 | No wildcard routes | Every route must be in the spec | Cannot be disabled |
-| Request body size limit | 1 MB | `requestBody.x-barbacane-max-size` |
-| Header count limit | 100 | `x-barbacane-limits.max_headers` |
-| Header size limit | 8 KB per header | `x-barbacane-limits.max_header_size` |
-| URI length limit | 8 KB | `x-barbacane-limits.max_uri_length` |
+| Request body size limit | 1 MB | `--max-body-size` CLI flag or `request-size-limit` middleware plugin |
+| Header count limit | 100 | `--max-headers` CLI flag |
+| Header size limit | 8 KB per header | `--max-header-size` CLI flag |
+| URI length limit | 8 KB | `--max-uri-length` CLI flag |
 | Request timeout | 30 seconds | `x-barbacane-dispatch.config.timeout` |
 | No `Server` header leaking | Upstream `Server` header replaced with `barbacane/<version>` | Cannot be disabled |
 | Error detail suppression | Production errors contain no internal details | `--dev` flag |

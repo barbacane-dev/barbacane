@@ -124,10 +124,10 @@ Before any routing or validation, hard limits are enforced:
 
 | Limit | Default | Configurable |
 |-------|---------|-------------|
-| Max request body size | 1 MB | Per-operation via `requestBody.x-barbacane-max-size` |
-| Max header count | 100 | Global via `x-barbacane-limits.max_headers` |
-| Max header size | 8 KB per header | Global via `x-barbacane-limits.max_header_size` |
-| Max URI length | 8 KB | Global via `x-barbacane-limits.max_uri_length` |
+| Max request body size | 1 MB | `--max-body-size` CLI flag or `request-size-limit` middleware plugin |
+| Max header count | 100 | `--max-headers` CLI flag |
+| Max header size | 8 KB per header | `--max-header-size` CLI flag |
+| Max URI length | 8 KB | `--max-uri-length` CLI flag |
 | Request timeout | 30s | Per-operation via `x-barbacane-dispatch.config.timeout` |
 
 Exceeding a limit returns:

@@ -21,16 +21,7 @@ Describe the solution you'd like to see implemented.
 Show how this feature would be used in practice.
 
 ```yaml
-# Example OpenAPI spec or configuration
-openapi: 3.1.0
-info:
-  title: Example
-  version: 1.0.0
-paths:
-  /example:
-    get:
-      x-barbacane-new-feature:
-        # Show how your feature would be configured
+# Example: show how your feature would look in an OpenAPI spec or CLI usage
 ```
 
 ## Alternatives Considered
