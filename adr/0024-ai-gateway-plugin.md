@@ -409,7 +409,7 @@ Barbacane's differentiators: spec-driven configuration, contract-first provider 
 
 ## Open questions
 
-- **MCP support:** Model Context Protocol is gaining traction (KrakenD EE v2.12, LiteLLM). Should Barbacane support MCP as a dispatcher type? This is likely its own ADR given the protocol complexity.
+- **MCP support:** Model Context Protocol is gaining traction (KrakenD EE v2.12, LiteLLM). See [ADR-0025](0025-mcp-server.md) for Barbacane's MCP server design — complementary to the AI proxy (agents calling APIs vs. proxying LLM calls).
 - **Semantic caching:** Embedding-based response deduplication (Portkey). Requires a vector store — scope for a future `ai-cache` middleware backed by an external vector DB via `host_http_call`.
 - **Multi-modal:** Vision and audio model support. The OpenAI-compatible format already supports image URLs in messages. Evaluate demand before adding explicit support.
 
@@ -419,3 +419,4 @@ Barbacane's differentiators: spec-driven configuration, contract-first provider 
 - [ADR-0006: WASM Plugin Architecture](0006-wasm-plugin-architecture.md)
 - [ADR-0008: Dispatch Plugin Interface](0008-dispatch-plugin-interface.md)
 - [ADR-0016: Plugin Development Contract](0016-plugin-development-contract.md)
+- [ADR-0025: MCP Server Support](0025-mcp-server.md)
