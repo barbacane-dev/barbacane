@@ -38,19 +38,15 @@ On macOS:
 brew install cmake go
 ```
 
-### 2. Enable the Feature Flag
+### 2. Build with the FIPS Feature Flag
 
-In the workspace root `Cargo.toml`, replace the `aws-lc-rs` feature with `fips`:
+The `barbacane` crate exposes a `fips` Cargo feature. Pass it at build time:
 
-```toml
-# Before (default)
-rustls = { version = "0.23", features = ["aws-lc-rs"] }
-
-# After (FIPS-compliant)
-rustls = { version = "0.23", features = ["fips"] }
+```bash
+cargo build -p barbacane --release --features fips
 ```
 
-That's it for dependencies. The `fips` feature on rustls transitively pulls in `aws-lc-fips-sys` instead of `aws-lc-sys`.
+This enables `rustls/fips`, which transitively pulls in `aws-lc-fips-sys` instead of `aws-lc-sys`. No source edits required.
 
 ### 3. Use the FIPS Crypto Provider
 
@@ -82,7 +78,7 @@ if !tls_config.fips() {
 ### 5. Build
 
 ```bash
-cargo build --release
+cargo build -p barbacane --release --features fips
 ```
 
 The first FIPS build takes longer because `aws-lc-fips-sys` compiles AWS-LC from source with FIPS self-tests enabled.
