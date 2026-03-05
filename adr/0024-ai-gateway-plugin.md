@@ -1,6 +1,6 @@
 # ADR-0024: AI Gateway Plugin
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-03
 
 ## Context
