@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Documentation
+- **FIPS 140-3 compliance guide**: step-by-step instructions for enabling FIPS mode via the `rustls` `fips` feature flag and `aws-lc-fips-sys`
+- **`fips` Cargo feature flag**: `cargo build -p barbacane --features fips` enables FIPS 140-3 compliant cryptography without manual `Cargo.toml` edits
+
 #### Config Provenance & Drift Detection (ADR-0021)
 - **Artifact fingerprinting**: combined SHA-256 hash of all artifact inputs (`artifact_hash`) embedded in manifest at compile time; hash-of-hashes approach using sorted source spec hashes and BTreeMap checksums
 - **Build provenance metadata**: optional `--provenance-commit` and `--provenance-source` CLI flags on `barbacane compile` to embed Git commit SHA and build source (e.g., `ci/github-actions`) into the artifact
