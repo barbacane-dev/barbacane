@@ -123,6 +123,27 @@ pub mod http {
     pub const READ_RESULT_FUNCTION: &str = "host_http_read_result";
 }
 
+/// Host function for streaming HTTP calls (ADR-0023).
+///
+/// ```text
+/// host_http_stream(req_ptr: i32, req_len: i32) -> i32
+/// ```
+///
+/// Same request format as `host_http_call`. The host immediately begins
+/// forwarding response chunks to the client while buffering the complete body.
+/// Returns the length of the buffered response (readable via `host_http_read_result`),
+/// or -1 on error.
+///
+/// Plugins declaring `http_stream` also implicitly get `http_call` access
+/// (`host_http_call` and `host_http_read_result` are both available).
+pub mod http_stream {
+    /// The capability name.
+    pub const CAPABILITY: &str = "http_stream";
+
+    /// The streaming function name.
+    pub const STREAM_FUNCTION: &str = "host_http_stream";
+}
+
 /// Host functions for Kafka publishing.
 ///
 /// ```text

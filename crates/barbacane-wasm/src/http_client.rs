@@ -198,6 +198,69 @@ impl HttpClient {
         self.call_with_tls(request, None).await
     }
 
+    /// Send a streaming HTTP request and return the raw upstream response.
+    ///
+    /// Applies the same URL validation, plaintext checks, and circuit breaker
+    /// as `call`, but returns the `reqwest::Response` directly so the caller
+    /// can stream the response body chunk by chunk (e.g. via `bytes_stream()`).
+    ///
+    /// The circuit breaker is only updated on connection-level errors; success
+    /// recording is left to the caller after streaming completes.
+    pub async fn stream_raw(
+        &self,
+        request: HttpRequest,
+    ) -> Result<reqwest::Response, HttpClientError> {
+        let url = request
+            .url
+            .parse::<reqwest::Url>()
+            .map_err(|e| HttpClientError::InvalidUrl(e.to_string()))?;
+
+        if url.scheme() == "http" && !self.allow_plaintext {
+            return Err(HttpClientError::PlaintextNotAllowed);
+        }
+
+        let host = url
+            .host_str()
+            .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?
+            .to_string();
+
+        let circuit_state = self.get_circuit_state(&host);
+        if circuit_state == crate::circuit_breaker::CircuitState::Open {
+            return Err(HttpClientError::CircuitOpen(host));
+        }
+
+        let method = request
+            .method
+            .parse::<reqwest::Method>()
+            .map_err(|e| HttpClientError::InvalidMethod(e.to_string()))?;
+
+        let timeout = request.timeout.unwrap_or(self.default_timeout);
+
+        let mut req_builder = self.client.request(method, url).timeout(timeout);
+
+        for (key, value) in &request.headers {
+            req_builder = req_builder.header(key.as_str(), value.as_str());
+        }
+
+        if let Some(body) = request.body {
+            req_builder = req_builder.body(body);
+        }
+
+        match req_builder.send().await {
+            Ok(response) => Ok(response),
+            Err(e) => {
+                self.record_failure(&host);
+                if e.is_timeout() {
+                    Err(HttpClientError::Timeout)
+                } else if e.is_connect() {
+                    Err(HttpClientError::ConnectionFailed(e.to_string()))
+                } else {
+                    Err(HttpClientError::RequestFailed(e.to_string()))
+                }
+            }
+        }
+    }
+
     /// Make an HTTP request with optional TLS configuration for mTLS.
     pub async fn call_with_tls(
         &self,
@@ -584,6 +647,90 @@ mod tests {
         assert!(tls.client_cert.is_none());
         assert!(tls.client_key.is_none());
         assert_eq!(tls.ca, Some(PathBuf::from("/etc/certs/ca.crt")));
+    }
+
+    // ── stream_raw validation ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn stream_raw_rejects_invalid_url() {
+        let client = HttpClient::new(HttpClientConfig::default()).expect("client");
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: "not a url".into(),
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+        assert!(matches!(
+            client.stream_raw(req).await,
+            Err(HttpClientError::InvalidUrl(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_raw_rejects_plaintext_when_disallowed() {
+        let config = HttpClientConfig {
+            allow_plaintext: false,
+            ..Default::default()
+        };
+        let client = HttpClient::new(config).expect("client");
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: "http://example.com/api".into(),
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+        assert!(matches!(
+            client.stream_raw(req).await,
+            Err(HttpClientError::PlaintextNotAllowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_raw_rejects_invalid_method() {
+        let config = HttpClientConfig {
+            allow_plaintext: true,
+            ..Default::default()
+        };
+        let client = HttpClient::new(config).expect("client");
+        let req = HttpRequest {
+            method: "NOT A METHOD!!!".into(),
+            url: "http://127.0.0.1:1/".into(),
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+        assert!(matches!(
+            client.stream_raw(req).await,
+            Err(HttpClientError::InvalidMethod(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_raw_allows_plaintext_when_enabled() {
+        // With allow_plaintext=true the request should proceed past the guard
+        // and fail at the network layer (connection refused), not at validation.
+        let config = HttpClientConfig {
+            allow_plaintext: true,
+            ..Default::default()
+        };
+        let client = HttpClient::new(config).expect("client");
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: "http://127.0.0.1:1/".into(), // port 1: connection refused
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+        let err = client.stream_raw(req).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                HttpClientError::ConnectionFailed(_) | HttpClientError::RequestFailed(_)
+            ),
+            "expected network error, got: {err:?}"
+        );
     }
 
     #[test]
