@@ -1,0 +1,10 @@
+[plugin]
+name = "streaming-echo"
+version = "0.1.0"
+type = "dispatcher"
+description = "Test fixture: proxies to upstream via host_http_stream (ADR-0023 integration tests)"
+wasm = "streaming_echo.wasm"
+
+[capabilities]
+http_stream = true
+log = true
