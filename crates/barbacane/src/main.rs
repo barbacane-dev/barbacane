@@ -18,11 +18,20 @@ use arc_swap::ArcSwap;
 
 use bytes::Bytes;
 use clap::{Parser, Subcommand};
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Body, Incoming};
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Body, Frame, Incoming};
 use hyper::header::HeaderValue;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
+
+/// Boxed response body type that works for both buffered and streaming responses.
+type AnyBody = BoxBody<Bytes, Infallible>;
+
+/// Convert a buffered `Response<Full<Bytes>>` to the unified `Response<AnyBody>`.
+fn box_full(r: Response<Full<Bytes>>) -> Response<AnyBody> {
+    r.map(BoxBody::new)
+}
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -820,11 +829,11 @@ impl Gateway {
     /// - Server version
     /// - Request/trace IDs for observability
     /// - Security headers (X-Content-Type-Options, X-Frame-Options)
-    fn add_standard_headers(
-        mut response: Response<Full<Bytes>>,
+    fn add_standard_headers<B>(
+        mut response: Response<B>,
         request_id: &str,
         trace_id: &str,
-    ) -> Response<Full<Bytes>> {
+    ) -> Response<B> {
         let headers = response.headers_mut();
 
         // Observability headers
@@ -850,10 +859,10 @@ impl Gateway {
 
     /// Add deprecation headers to a response if the operation is deprecated.
     /// Implements RFC 8594 (Sunset header) and draft-ietf-httpapi-deprecation-header.
-    fn add_deprecation_headers(
-        mut response: Response<Full<Bytes>>,
+    fn add_deprecation_headers<B>(
+        mut response: Response<B>,
         operation: &CompiledOperation,
-    ) -> Response<Full<Bytes>> {
+    ) -> Response<B> {
         if operation.deprecated {
             let headers = response.headers_mut();
             // Deprecation header per draft-ietf-httpapi-deprecation-header
@@ -875,7 +884,7 @@ impl Gateway {
         &self,
         req: Request<Incoming>,
         client_addr: Option<SocketAddr>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
+    ) -> Result<Response<AnyBody>, Infallible> {
         let start_time = Instant::now();
         let uri_string = req.uri().to_string();
         let path = req.uri().path().to_string();
@@ -918,13 +927,21 @@ impl Gateway {
                 0,
                 start_time,
             );
-            return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
+            return Ok(box_full(Self::add_standard_headers(
+                response,
+                &request_id,
+                &trace_id,
+            )));
         }
 
         // Reserved /__barbacane/* endpoints (skip other limits for internal endpoints)
         if path.starts_with("/__barbacane/") {
             let response = self.handle_barbacane_endpoint(&path, &method, query_string.as_deref());
-            return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
+            return Ok(box_full(Self::add_standard_headers(
+                response,
+                &request_id,
+                &trace_id,
+            )));
         }
 
         // Extract headers for validation
@@ -945,7 +962,11 @@ impl Gateway {
                 0,
                 start_time,
             );
-            return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
+            return Ok(box_full(Self::add_standard_headers(
+                response,
+                &request_id,
+                &trace_id,
+            )));
         }
 
         // Check content-length before reading body (if present)
@@ -961,7 +982,11 @@ impl Gateway {
                         0,
                         start_time,
                     );
-                    return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
+                    return Ok(box_full(Self::add_standard_headers(
+                        response,
+                        &request_id,
+                        &trace_id,
+                    )));
                 }
             }
         }
@@ -988,7 +1013,11 @@ impl Gateway {
                             0,
                             start_time,
                         );
-                        return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
+                        return Ok(box_full(Self::add_standard_headers(
+                            response,
+                            &request_id,
+                            &trace_id,
+                        )));
                     }
                 };
 
@@ -1010,7 +1039,11 @@ impl Gateway {
                         0,
                         start_time,
                     );
-                    return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
+                    return Ok(box_full(Self::add_standard_headers(
+                        response,
+                        &request_id,
+                        &trace_id,
+                    )));
                 }
 
                 // Validate request against OpenAPI spec
@@ -1036,10 +1069,14 @@ impl Gateway {
                         0,
                         start_time,
                     );
-                    return Ok(Self::add_standard_headers(response, &request_id, &trace_id));
+                    return Ok(box_full(Self::add_standard_headers(
+                        response,
+                        &request_id,
+                        &trace_id,
+                    )));
                 }
 
-                let response = self
+                let response: Response<AnyBody> = self
                     .dispatch(
                         operation,
                         params,
@@ -1053,7 +1090,7 @@ impl Gateway {
                 // Add deprecation headers if the operation is deprecated
                 let response = Self::add_deprecation_headers(response, operation);
 
-                let response_size = response.body().size_hint().exact().unwrap_or(0);
+                let response_size = response.body().size_hint().upper().unwrap_or(0);
                 self.record_request_metrics(
                     &method_str,
                     &route_path,
@@ -1100,7 +1137,7 @@ impl Gateway {
                                     0,
                                     start_time,
                                 );
-                                return Ok(response);
+                                return Ok(box_full(response));
                             }
                         }
                     }
@@ -1116,7 +1153,11 @@ impl Gateway {
                     0,
                     start_time,
                 );
-                Ok(Self::add_standard_headers(response, &request_id, &trace_id))
+                Ok(box_full(Self::add_standard_headers(
+                    response,
+                    &request_id,
+                    &trace_id,
+                )))
             }
             RouteMatch::NotFound => {
                 let response = self.not_found_response();
@@ -1128,7 +1169,11 @@ impl Gateway {
                     0,
                     start_time,
                 );
-                Ok(Self::add_standard_headers(response, &request_id, &trace_id))
+                Ok(box_full(Self::add_standard_headers(
+                    response,
+                    &request_id,
+                    &trace_id,
+                )))
             }
         }
     }
@@ -1164,7 +1209,7 @@ impl Gateway {
         request_body: &[u8],
         headers: &HashMap<String, String>,
         client_addr: Option<SocketAddr>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
+    ) -> Result<Response<AnyBody>, Infallible> {
         let dispatch = &operation.dispatch;
 
         // Build the Request object for plugins (using BTreeMap for WASM compatibility)
@@ -1192,9 +1237,10 @@ impl Gateway {
         let request_json = match serde_json::to_vec(&plugin_request) {
             Ok(j) => j,
             Err(e) => {
-                return Ok(
-                    self.dev_error_response(format_args!("failed to serialize request: {}", e))
-                );
+                return Ok(box_full(self.dev_error_response(format_args!(
+                    "failed to serialize request: {}",
+                    e
+                ))));
             }
         };
 
@@ -1203,7 +1249,7 @@ impl Gateway {
             if !operation.middlewares.is_empty() {
                 match self.execute_middleware_on_request(&operation.middlewares, &request_json) {
                     Ok((req, instances, ctx)) => (req, instances, ctx),
-                    Err(resp) => return Ok(resp), // Short-circuit response
+                    Err(resp) => return Ok(box_full(resp)), // Short-circuit response
                 }
             } else {
                 (
@@ -1215,33 +1261,29 @@ impl Gateway {
 
         // All dispatchers must be WASM plugins loaded from the artifact
         if !self.plugin_pool.has_plugin(&dispatch.name) {
-            return Ok(self.dev_error_response(format_args!(
+            return Ok(box_full(self.dev_error_response(format_args!(
                 "unknown dispatcher '{}' - not found in artifact plugins",
                 dispatch.name
-            )));
+            ))));
         }
 
-        // Dispatch to the plugin (returns raw plugin response for middleware chain)
-        let plugin_response = match self
-            .dispatch_wasm_plugin_inner(&dispatch.name, &dispatch.config, &final_request_json)
+        // Dispatch to the plugin.
+        // Returns either a buffered response or a streaming response (ADR-0023).
+        let dispatch_outcome = match self
+            .dispatch_wasm_plugin_inner(
+                &dispatch.name,
+                &dispatch.config,
+                final_request_json,
+                middleware_instances,
+                middleware_context,
+            )
             .await
         {
             Ok(r) => r,
-            Err(e) => return Ok(e),
+            Err(e) => return Ok(box_full(e)),
         };
 
-        // Execute middleware on_response chain (reverse order)
-        let final_response = if !middleware_instances.is_empty() {
-            self.execute_middleware_on_response(
-                middleware_instances,
-                plugin_response,
-                middleware_context,
-            )
-        } else {
-            plugin_response
-        };
-
-        Ok(self.build_response_from_plugin(&final_response))
+        Ok(dispatch_outcome)
     }
 
     /// Execute middleware on_request chain.
@@ -1391,17 +1433,25 @@ impl Gateway {
     }
 
     /// Dispatch via a WASM plugin (inner function taking pre-serialized request).
-    /// Returns the raw plugin response for middleware chain processing.
+    ///
+    /// Handles both buffered and streaming (ADR-0023) dispatch paths:
+    /// - **Buffered**: WASM returns a `Response` directly; on_response middleware runs synchronously.
+    /// - **Streaming**: WASM calls `host_http_stream`; headers arrive via channel before WASM
+    ///   returns, body streams via `StreamBody`. on_response runs in a background task for
+    ///   observability only (modifications are discarded since the response is already sent).
     async fn dispatch_wasm_plugin_inner(
         &self,
         plugin_name: &str,
         config: &serde_json::Value,
-        request_json: &[u8],
-    ) -> Result<barbacane_wasm::Response, Response<Full<Bytes>>> {
+        request_json: Vec<u8>,
+        middleware_instances: Vec<barbacane_wasm::PluginInstance>,
+        middleware_context: barbacane_wasm::RequestContext,
+    ) -> Result<Response<AnyBody>, Response<Full<Bytes>>> {
+        use barbacane_wasm::StreamEvent;
+        use futures_util::stream;
+
         // Create instance key for this (plugin, config) pair
         let instance_key = barbacane_wasm::InstanceKey::new(plugin_name, config);
-
-        // Register config if not already registered
         let config_json = serde_json::to_vec(config).unwrap_or_default();
         self.plugin_pool
             .register_config(instance_key.clone(), config_json);
@@ -1416,22 +1466,168 @@ impl Gateway {
             }
         };
 
-        // Call the dispatch function
-        if let Err(e) = instance.dispatch(request_json) {
-            return Err(self.dev_error_response(format_args!("plugin dispatch failed: {}", e)));
+        // Set up streaming channel (ADR-0023). The sender is injected into the instance so that
+        // `host_http_stream` can push `StreamEvent::Headers` then `StreamEvent::Chunk` events
+        // before `dispatch()` returns.
+        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+        instance.set_stream_sender(Arc::new(stream_tx));
+
+        // Run WASM dispatch on a blocking thread (WASM execution is synchronous).
+        let mut wasm_handle = tokio::task::spawn_blocking(move || {
+            let result = instance.dispatch(&request_json);
+            let output = instance.take_output();
+            let last_http = instance.take_last_http_result();
+            (result, output, last_http)
+        });
+
+        // Race: first stream event vs. WASM completion.
+        // In the streaming path `host_http_stream` sends `StreamEvent::Headers` before
+        // `dispatch()` returns, so `stream_rx.recv()` always wins the race in that case.
+        let mut maybe_wasm_result = None;
+        let first_event: Option<StreamEvent>;
+        tokio::select! {
+            biased;
+            e = stream_rx.recv() => first_event = e,
+            r = &mut wasm_handle => {
+                maybe_wasm_result = Some(r);
+                first_event = None;
+            }
         }
 
-        // Get the output
-        let output = instance.take_output();
-        if output.is_empty() {
-            return Err(self.dev_error_response("plugin returned empty output"));
-        }
+        match first_event {
+            // ── Streaming path ──────────────────────────────────────────────────────────
+            Some(StreamEvent::Headers { status, headers }) => {
+                let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
+                let mut builder = Response::builder().status(status_code);
+                for (k, v) in &headers {
+                    builder = builder.header(k.as_str(), v.as_str());
+                }
 
-        // Parse the response
-        match serde_json::from_slice(&output) {
-            Ok(r) => Ok(r),
-            Err(e) => {
-                Err(self.dev_error_response(format_args!("failed to parse plugin response: {}", e)))
+                // Convert remaining Chunk events into HTTP body frames.
+                let chunk_stream = stream::unfold(stream_rx, |mut rx| async move {
+                    loop {
+                        match rx.recv().await {
+                            Some(StreamEvent::Chunk(bytes)) => {
+                                return Some((
+                                    Ok::<Frame<Bytes>, Infallible>(Frame::data(bytes)),
+                                    rx,
+                                ));
+                            }
+                            // Skip unexpected extra Headers events.
+                            Some(StreamEvent::Headers { .. }) => continue,
+                            // Sender dropped — stream complete.
+                            None => return None,
+                        }
+                    }
+                });
+
+                let response = builder
+                    .body(BoxBody::new(StreamBody::new(chunk_stream)))
+                    .expect("valid response");
+
+                // Background task: wait for WASM to finish, then run on_response for
+                // observability. Modifications are discarded (response already sent).
+                let wh = wasm_handle;
+                let metrics = Arc::clone(&self.metrics);
+                tokio::spawn(async move {
+                    match wh.await {
+                        Ok((Ok(_), _, Some(last_http))) if !middleware_instances.is_empty() => {
+                            if let Ok(plugin_resp) =
+                                serde_json::from_slice::<barbacane_wasm::Response>(&last_http)
+                            {
+                                let mut instances = middleware_instances;
+                                let resp_json =
+                                    serde_json::to_vec(&plugin_resp).unwrap_or_default();
+                                let cb = |name: &str, phase: &str, dur: f64, sc: bool| {
+                                    metrics.record_middleware(name, phase, dur, sc);
+                                };
+                                barbacane_wasm::execute_on_response_with_metrics(
+                                    &mut instances,
+                                    &resp_json,
+                                    middleware_context,
+                                    Some(&cb),
+                                );
+                            }
+                        }
+                        Ok((Err(e), _, _)) => {
+                            tracing::warn!(
+                                error = %e,
+                                "streaming dispatch error (response already sent)"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "streaming WASM task panicked (response already sent)"
+                            );
+                        }
+                        _ => {}
+                    }
+                });
+
+                Ok(response)
+            }
+
+            // ── Buffered path ────────────────────────────────────────────────────────────
+            _ => {
+                // Retrieve the WASM result. In the normal buffered case `maybe_wasm_result` is
+                // already set. The fallback await handles the rare case where recv() returned
+                // `None` (channel closed) and won the race just as WASM completed.
+                let wasm_result = match maybe_wasm_result {
+                    Some(r) => r,
+                    None => wasm_handle.await,
+                };
+
+                let (dispatch_result, output, _) = match wasm_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(
+                            self.dev_error_response(format_args!("plugin task panicked: {}", e))
+                        );
+                    }
+                };
+
+                if let Err(e) = dispatch_result {
+                    return Err(
+                        self.dev_error_response(format_args!("plugin dispatch failed: {}", e))
+                    );
+                }
+
+                if output.is_empty() {
+                    return Err(self.dev_error_response("plugin returned empty output"));
+                }
+
+                let plugin_response: barbacane_wasm::Response =
+                    match serde_json::from_slice(&output) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return Err(self.dev_error_response(format_args!(
+                                "failed to parse plugin response: {}",
+                                e
+                            )));
+                        }
+                    };
+
+                // status=0 is the streamed_response() sentinel. If WASM returned it without
+                // sending stream events, that is a plugin bug.
+                if plugin_response.status == 0 {
+                    return Err(self.dev_error_response(
+                        "plugin returned streaming sentinel without stream events",
+                    ));
+                }
+
+                // Run on_response middleware chain.
+                let final_response = if !middleware_instances.is_empty() {
+                    self.execute_middleware_on_response(
+                        middleware_instances,
+                        plugin_response,
+                        middleware_context,
+                    )
+                } else {
+                    plugin_response
+                };
+
+                Ok(box_full(self.build_response_from_plugin(&final_response)))
             }
         }
     }

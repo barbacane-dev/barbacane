@@ -38,6 +38,9 @@ tracing.workspace = true
 # HTTP client (for host_http_call)
 reqwest.workspace = true
 
+# Stream utilities (for host_http_stream body iteration)
+futures-util.workspace = true
+
 # NATS client (for host_nats_publish)
 async-nats.workspace = true
 bytes.workspace = true

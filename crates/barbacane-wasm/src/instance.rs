@@ -19,6 +19,22 @@ use crate::http_client::{
 };
 use crate::limits::PluginLimits;
 
+/// Events sent through the streaming channel by `host_http_stream` (ADR-0023).
+///
+/// The host function sends `Headers` once (before any chunks), then zero or
+/// more `Chunk` events. The sender is dropped when the upstream stream ends,
+/// signalling the receiver that the body is complete.
+#[derive(Debug)]
+pub enum StreamEvent {
+    /// Response status and headers from the upstream (sent before body chunks).
+    Headers {
+        status: u16,
+        headers: BTreeMap<String, String>,
+    },
+    /// Body chunk forwarded from the upstream streaming response.
+    Chunk(bytes::Bytes),
+}
+
 /// HTTP request format from WASM plugins.
 /// This matches the format used by http-upstream plugin.
 #[derive(Debug, Deserialize)]
@@ -113,6 +129,13 @@ pub struct PluginState {
 
     /// Result buffer for host_uuid_read_result.
     pub last_uuid_result: Option<Vec<u8>>,
+
+    /// Channel sender for host_http_stream (ADR-0023).
+    ///
+    /// Set by the host before calling a streaming-capable dispatcher. The host
+    /// function sends `StreamEvent::Headers` once, then `StreamEvent::Chunk` for
+    /// each body chunk, then drops the sender to signal end-of-stream.
+    pub stream_sender: Option<Arc<tokio::sync::mpsc::UnboundedSender<StreamEvent>>>,
 }
 
 #[allow(dead_code)] // Constructors used by different pool configurations
@@ -137,6 +160,7 @@ impl PluginState {
             nats_publisher: None,
             last_broker_result: None,
             last_uuid_result: None,
+            stream_sender: None,
         }
     }
 
@@ -164,6 +188,7 @@ impl PluginState {
             nats_publisher: None,
             last_broker_result: None,
             last_uuid_result: None,
+            stream_sender: None,
         }
     }
 
@@ -192,6 +217,7 @@ impl PluginState {
             nats_publisher: None,
             last_broker_result: None,
             last_uuid_result: None,
+            stream_sender: None,
         }
     }
 
@@ -225,6 +251,7 @@ impl PluginState {
             nats_publisher,
             last_broker_result: None,
             last_uuid_result: None,
+            stream_sender: None,
         }
     }
 
@@ -259,6 +286,7 @@ impl PluginState {
             nats_publisher,
             last_broker_result: None,
             last_uuid_result: None,
+            stream_sender: None,
         }
     }
 
@@ -270,6 +298,14 @@ impl PluginState {
     /// Set the request context for this call.
     pub fn set_context(&mut self, context: RequestContext) {
         self.context = context;
+    }
+
+    /// Set the stream sender for host_http_stream (ADR-0023).
+    pub fn set_stream_sender(
+        &mut self,
+        sender: Arc<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
+    ) {
+        self.stream_sender = Some(sender);
     }
 }
 
@@ -548,6 +584,24 @@ impl PluginInstance {
     /// Get the current request context (after modifications by host functions).
     pub fn get_context(&self) -> RequestContext {
         self.store.data().context.clone()
+    }
+
+    /// Take the last HTTP result buffer (from `host_http_call` or `host_http_stream`).
+    ///
+    /// Returns `None` if no HTTP call was made or the result was already taken.
+    pub fn take_last_http_result(&mut self) -> Option<Vec<u8>> {
+        self.store.data_mut().last_http_result.take()
+    }
+
+    /// Inject a stream sender for `host_http_stream` before calling `dispatch`.
+    ///
+    /// The sender is wrapped in an `Arc` so host functions can clone it for
+    /// use inside `std::thread::scope` without lifetime conflicts.
+    pub fn set_stream_sender(
+        &mut self,
+        sender: Arc<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
+    ) {
+        self.store.data_mut().set_stream_sender(sender);
     }
 }
 
@@ -921,10 +975,165 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_http_call: {}", e)))?;
 
-    // host_http_read_result - read HTTP response
+    // host_http_read_result - read HTTP response (works for both host_http_call and host_http_stream)
     add_read_result_fn(linker, "host_http_read_result", |state| {
         state.last_http_result.take()
     })?;
+
+    // host_http_stream - streaming HTTP request (ADR-0023)
+    //
+    // Same request format as host_http_call. The host immediately begins
+    // forwarding response chunks to the client via the stream_sender channel
+    // while buffering the complete body in last_http_result.
+    // Returns the length of the buffered response, or -1 on error.
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_http_stream",
+            |mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+
+                let start = req_ptr as usize;
+                let end = start + req_len as usize;
+                let data = memory.data(&caller);
+
+                if end > data.len() {
+                    return -1;
+                }
+
+                let plugin_request: PluginHttpRequest =
+                    match serde_json::from_slice(&data[start..end]) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!("host_http_stream: failed to parse request: {}", e);
+                            return -1;
+                        }
+                    };
+
+                let request = HttpClientRequest {
+                    method: plugin_request.method,
+                    url: plugin_request.url,
+                    headers: plugin_request.headers.into_iter().collect(),
+                    body: plugin_request.body.map(|s| s.into_bytes()),
+                    timeout: plugin_request
+                        .timeout_ms
+                        .map(std::time::Duration::from_millis),
+                };
+
+                let http_client = match caller.data().http_client.clone() {
+                    Some(c) => c,
+                    None => {
+                        tracing::error!("host_http_stream: HTTP client not available");
+                        return -1;
+                    }
+                };
+
+                // Clone the stream sender (Arc makes this cheap).
+                let stream_sender = caller.data().stream_sender.clone();
+
+                let response_json = std::thread::scope(|s| {
+                    let handle = s.spawn(|| {
+                        let rt = match tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            Ok(rt) => rt,
+                            Err(e) => {
+                                tracing::error!(
+                                    "host_http_stream: failed to create runtime: {}",
+                                    e
+                                );
+                                return None;
+                            }
+                        };
+
+                        rt.block_on(async {
+                            use futures_util::StreamExt;
+
+                            match http_client.stream_raw(request).await {
+                                Ok(upstream) => {
+                                    let status = upstream.status().as_u16();
+                                    let upstream_headers: BTreeMap<String, String> = upstream
+                                        .headers()
+                                        .iter()
+                                        .filter_map(|(k, v)| {
+                                            v.to_str()
+                                                .ok()
+                                                .map(|v| (k.as_str().to_lowercase(), v.to_string()))
+                                        })
+                                        .collect();
+
+                                    // Send headers through the streaming channel.
+                                    if let Some(tx) = &stream_sender {
+                                        let _ = tx.send(StreamEvent::Headers {
+                                            status,
+                                            headers: upstream_headers.clone(),
+                                        });
+                                    }
+
+                                    // Stream body chunks, sending each through the channel
+                                    // while building the complete buffer for last_http_result.
+                                    let mut buffer: Vec<u8> = Vec::new();
+                                    let mut byte_stream = upstream.bytes_stream();
+
+                                    while let Some(chunk_result) = byte_stream.next().await {
+                                        match chunk_result {
+                                            Ok(chunk) => {
+                                                if let Some(tx) = &stream_sender {
+                                                    let _ =
+                                                        tx.send(StreamEvent::Chunk(chunk.clone()));
+                                                }
+                                                buffer.extend_from_slice(&chunk);
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "host_http_stream: upstream read error: {}",
+                                                    e
+                                                );
+                                                return None;
+                                            }
+                                        }
+                                    }
+
+                                    // Serialize the complete buffered response for host_http_read_result.
+                                    let complete = HttpClientResponse {
+                                        status,
+                                        headers: upstream_headers.into_iter().collect(),
+                                        body: Some(buffer),
+                                    };
+                                    serde_json::to_vec(&complete).ok()
+                                }
+                                Err(e) => {
+                                    tracing::error!("host_http_stream: request failed: {}", e);
+                                    None
+                                }
+                            }
+                        })
+                    });
+
+                    match handle.join() {
+                        Ok(result) => result,
+                        Err(e) => {
+                            tracing::error!("host_http_stream: worker thread panicked: {:?}", e);
+                            None
+                        }
+                    }
+                });
+
+                match response_json {
+                    Some(json) => {
+                        let len = json.len() as i32;
+                        caller.data_mut().last_http_result = Some(json);
+                        len
+                    }
+                    None => -1,
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_http_stream: {}", e)))?;
 
     // host_verify_signature - verify a cryptographic signature using a JWK
     linker
@@ -1805,6 +2014,73 @@ mod tests {
         let limits = PluginLimits::default();
         let state = PluginState::new("test".into(), &limits);
         assert!(state.kafka_publisher.is_none());
+    }
+
+    // ── streaming (ADR-0023) ──────────────────────────────────────────────────
+
+    #[test]
+    fn plugin_state_stream_sender_default_is_none() {
+        let limits = PluginLimits::default();
+        let state = PluginState::new("test".into(), &limits);
+        assert!(state.stream_sender.is_none());
+    }
+
+    #[test]
+    fn plugin_state_set_stream_sender() {
+        let limits = PluginLimits::default();
+        let mut state = PluginState::new("test".into(), &limits);
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<crate::instance::StreamEvent>();
+        state.set_stream_sender(Arc::new(tx));
+        assert!(state.stream_sender.is_some());
+    }
+
+    #[test]
+    fn plugin_state_take_last_http_result_default_is_none() {
+        let limits = PluginLimits::default();
+        let state = PluginState::new("test".into(), &limits);
+        assert!(state.last_http_result.is_none());
+    }
+
+    #[test]
+    fn plugin_state_take_last_http_result_takes_value() {
+        let limits = PluginLimits::default();
+        let mut state = PluginState::new("test".into(), &limits);
+        state.last_http_result = Some(vec![1, 2, 3]);
+
+        let taken = state.last_http_result.take();
+        assert_eq!(taken, Some(vec![1, 2, 3]));
+        assert!(state.last_http_result.is_none());
+    }
+
+    #[test]
+    fn stream_event_headers_fields() {
+        let event = StreamEvent::Headers {
+            status: 200,
+            headers: std::collections::BTreeMap::from([(
+                "content-type".to_string(),
+                "text/event-stream".to_string(),
+            )]),
+        };
+        if let StreamEvent::Headers { status, headers } = event {
+            assert_eq!(status, 200);
+            assert_eq!(
+                headers.get("content-type").map(String::as_str),
+                Some("text/event-stream")
+            );
+        } else {
+            panic!("expected Headers variant");
+        }
+    }
+
+    #[test]
+    fn stream_event_chunk_contains_bytes() {
+        let data = bytes::Bytes::from_static(b"data: hello\n\n");
+        let event = StreamEvent::Chunk(data.clone());
+        if let StreamEvent::Chunk(b) = event {
+            assert_eq!(b, data);
+        } else {
+            panic!("expected Chunk variant");
+        }
     }
 
     #[test]

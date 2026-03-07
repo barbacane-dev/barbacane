@@ -40,10 +40,12 @@ for p in "$ROOT"/plugins/*/; do
 done
 echo -e "  Plugin tests:      ${bold}${PLUGIN_TOTAL}${reset}"
 
-# 3. Integration tests (gateway module from barbacane-test)
+# 3. Integration tests (tests/ directory in barbacane-test)
 echo -e "${dim}Running integration tests...${reset}"
 TEST_OUTPUT=$(cargo test -p barbacane-test 2>&1)
-INTEGRATION=$(echo "$TEST_OUTPUT" | grep "^test gateway::" | grep -c " ok$" || true)
+# Integration tests are top-level functions in tests/*.rs — no module prefix.
+# CLI tests are unit tests in src/cli.rs — they appear as "test cli::*".
+INTEGRATION=$(echo "$TEST_OUTPUT" | grep "^test " | grep -v "^test cli::" | grep -c " ok$" || true)
 echo -e "  Integration tests: ${bold}${INTEGRATION}${reset}"
 
 # 4. CLI tests (cli module from barbacane-test)

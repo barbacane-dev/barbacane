@@ -32,7 +32,7 @@ pub use chain::{
 };
 pub use engine::WasmEngine;
 pub use error::WasmError;
-pub use instance::{PluginInstance, RequestContext};
+pub use instance::{PluginInstance, RequestContext, StreamEvent};
 pub use limits::PluginLimits;
 pub use manifest::{Capabilities, PluginManifest, PluginMeta, PluginType};
 pub use pool::{InstanceKey, InstancePool};

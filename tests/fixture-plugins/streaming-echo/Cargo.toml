@@ -1,0 +1,21 @@
+[package]
+name = "streaming-echo"
+version = "0.1.0"
+edition = "2021"
+description = "Fixture plugin for streaming integration tests — proxies to upstream via host_http_stream"
+license = "MIT"
+
+# Standalone crate excluded from the workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+barbacane-plugin-sdk = { path = "../../../crates/barbacane-plugin-sdk" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
