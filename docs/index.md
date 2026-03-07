@@ -98,6 +98,7 @@ make plugins
 | OpenAPI | 3.1.x | Supported |
 | OpenAPI | 3.2.x | Supported |
 | AsyncAPI | 3.0.x | Supported |
+| AsyncAPI | 3.1.x | Supported |
 
 ### AsyncAPI Support
 

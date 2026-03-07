@@ -1338,6 +1338,39 @@ operations:
     }
 
     #[test]
+    fn parse_asyncapi_3_1() {
+        let yaml = r#"
+asyncapi: "3.1.0"
+info:
+  title: User Events API
+  version: "1.0.0"
+channels:
+  userSignedUp:
+    address: user/signedup
+    messages:
+      UserSignedUpMessage:
+        payload:
+          type: object
+          properties:
+            userId:
+              type: string
+operations:
+  processUserSignup:
+    action: send
+    channel:
+      $ref: '#/channels/userSignedUp'
+    x-barbacane-dispatch:
+      name: kafka
+      config:
+        topic: user-events
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        assert_eq!(spec.format, SpecFormat::AsyncApi);
+        assert_eq!(spec.version, "3.1.0");
+        assert_eq!(spec.operations.len(), 1);
+    }
+
+    #[test]
     fn reject_asyncapi_2() {
         let yaml = r#"
 asyncapi: "2.6.0"
