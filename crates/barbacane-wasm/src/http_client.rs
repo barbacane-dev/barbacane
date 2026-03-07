@@ -708,9 +708,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_raw_allows_plaintext_when_enabled() {
-        // With allow_plaintext=true the request should proceed past the guard
-        // and fail at the network layer (connection refused), not at validation.
+    async fn stream_raw_connection_refused() {
         let config = HttpClientConfig {
             allow_plaintext: true,
             ..Default::default()
@@ -731,6 +729,74 @@ mod tests {
             ),
             "expected network error, got: {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn stream_raw_timeout() {
+        use tokio::net::TcpListener;
+
+        // Bind a listener but never accept — the client will time out.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
+        let config = HttpClientConfig {
+            allow_plaintext: true,
+            ..Default::default()
+        };
+        let client = HttpClient::new(config).expect("client");
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: format!("http://{addr}/slow"),
+            headers: Default::default(),
+            body: None,
+            timeout: Some(Duration::from_millis(50)),
+        };
+        let err = client.stream_raw(req).await.unwrap_err();
+        assert!(
+            matches!(err, HttpClientError::Timeout),
+            "expected Timeout, got: {err:?}"
+        );
+
+        drop(listener);
+    }
+
+    #[tokio::test]
+    async fn stream_raw_successful_request() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
+        // Spawn a minimal HTTP server that returns a 200.
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+            let response = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok";
+            socket.write_all(response.as_bytes()).await.expect("write");
+            socket.shutdown().await.expect("shutdown");
+        });
+
+        let config = HttpClientConfig {
+            allow_plaintext: true,
+            ..Default::default()
+        };
+        let client = HttpClient::new(config).expect("client");
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: format!("http://{addr}/"),
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+        let resp = client
+            .stream_raw(req)
+            .await
+            .expect("stream_raw should succeed");
+        assert_eq!(resp.status(), 200);
+        let body = resp.text().await.expect("body");
+        assert_eq!(body, "ok");
     }
 
     #[test]
