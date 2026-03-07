@@ -3,7 +3,7 @@ name = "barbacane-cel"
 version = "0.1.0"
 edition = "2021"
 description = "CEL policy evaluation middleware plugin for Barbacane API gateway"
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace]
 

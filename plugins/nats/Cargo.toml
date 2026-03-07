@@ -3,7 +3,7 @@ name = "barbacane-nats-dispatcher"
 version = "0.1.0"
 edition = "2021"
 description = "NATS dispatcher plugin for Barbacane API gateway"
-license = "MIT"
+license = "Apache-2.0"
 
 # Mark as standalone crate (not part of any workspace)
 [workspace]

@@ -3,7 +3,7 @@ name = "streaming-echo"
 version = "0.1.0"
 edition = "2021"
 description = "Fixture plugin for streaming integration tests — proxies to upstream via host_http_stream"
-license = "MIT"
+license = "Apache-2.0"
 
 # Standalone crate excluded from the workspace.
 [workspace]

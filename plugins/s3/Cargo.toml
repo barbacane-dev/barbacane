@@ -3,7 +3,7 @@ name = "barbacane-s3-dispatcher"
 version = "0.1.0"
 edition = "2021"
 description = "AWS S3 / S3-compatible object storage dispatcher plugin for Barbacane API gateway"
-license = "MIT"
+license = "Apache-2.0"
 
 # Mark as standalone crate (not part of any workspace)
 [workspace]
