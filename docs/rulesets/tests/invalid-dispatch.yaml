@@ -1,0 +1,74 @@
+openapi: "3.1.0"
+info:
+  title: Invalid Dispatch Spec
+  version: "1.0.0"
+  description: Tests dispatch validation rules.
+
+servers:
+  - url: https://api.example.com
+
+paths:
+  /no-dispatch:
+    get:
+      operationId: noDispatch
+      summary: Missing dispatch
+      description: This operation has no x-barbacane-dispatch.
+      tags: [test]
+      responses:
+        "200":
+          description: OK
+
+  /bad-plugin:
+    get:
+      operationId: badPlugin
+      summary: Unknown plugin
+      description: This operation uses an unknown dispatcher plugin.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: unknown-plugin
+        config:
+          url: "https://example.com"
+      responses:
+        "200":
+          description: OK
+
+  /missing-config:
+    get:
+      operationId: missingConfig
+      summary: No config
+      description: This dispatch has no config object.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: mock
+      responses:
+        "200":
+          description: OK
+
+  /bad-config:
+    get:
+      operationId: badConfig
+      summary: Invalid config
+      description: http-upstream missing required url field.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          timeout: 30
+      responses:
+        "200":
+          description: OK
+
+  /extra-config-field:
+    get:
+      operationId: extraConfigField
+      summary: Unknown field in config
+      description: http-upstream with unknown config field.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://example.com"
+          unknown_field: true
+      responses:
+        "200":
+          description: OK

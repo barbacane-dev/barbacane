@@ -1,0 +1,223 @@
+extends: [[spectral:oas, recommended]]
+
+documentationUrl: https://docs.barbacane.dev/guide/vacuum.html
+
+rules:
+  # ---------------------------------------------------------------------------
+  # Dispatch validation
+  # ---------------------------------------------------------------------------
+
+  barbacane-dispatch-required:
+    description: Every operation must declare an x-barbacane-dispatch block.
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-dispatch
+    severity: error
+    given: "$.paths[*][*]"
+    then:
+      field: x-barbacane-dispatch
+      function: truthy
+
+  barbacane-dispatch-has-name:
+    description: x-barbacane-dispatch must include a "name" field.
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-dispatch
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-dispatch']"
+    then:
+      field: name
+      function: truthy
+
+  barbacane-dispatch-known-plugin:
+    description: "Dispatcher plugin must be one of: mock, http-upstream, kafka, nats, s3, lambda."
+    documentationUrl: https://docs.barbacane.dev/guide/dispatchers.html
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-dispatch'].name"
+    then:
+      function: enumeration
+      functionOptions:
+        values:
+          - mock
+          - http-upstream
+          - kafka
+          - nats
+          - s3
+          - lambda
+
+  barbacane-dispatch-has-config:
+    description: x-barbacane-dispatch must include a "config" object.
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-dispatch
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-dispatch']"
+    then:
+      field: config
+      function: truthy
+
+  barbacane-dispatch-config-valid:
+    description: Dispatch config must validate against the plugin's JSON Schema.
+    documentationUrl: https://docs.barbacane.dev/guide/dispatchers.html
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-dispatch']"
+    then:
+      function: barbacane-validate-dispatch-config
+
+  # ---------------------------------------------------------------------------
+  # Middleware validation
+  # ---------------------------------------------------------------------------
+
+  barbacane-middleware-has-name:
+    description: Each middleware entry must include a "name" field.
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
+    severity: error
+    given: "$['x-barbacane-middlewares'][*]"
+    then:
+      field: name
+      function: truthy
+
+  barbacane-middleware-known-plugin:
+    description: Middleware name must be a known Barbacane middleware plugin.
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    severity: warn
+    given: "$['x-barbacane-middlewares'][*].name"
+    then:
+      function: enumeration
+      functionOptions:
+        values:
+          - acl
+          - apikey-auth
+          - basic-auth
+          - bot-detection
+          - cache
+          - cel
+          - correlation-id
+          - cors
+          - http-log
+          - ip-restriction
+          - jwt-auth
+          - oauth2-auth
+          - observability
+          - oidc-auth
+          - opa-authz
+          - rate-limit
+          - request-size-limit
+          - request-transformer
+
+  barbacane-middleware-config-valid:
+    description: Middleware config must validate against the plugin's JSON Schema.
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    severity: error
+    given: "$['x-barbacane-middlewares'][*]"
+    then:
+      function: barbacane-validate-middleware-config
+
+  barbacane-middleware-no-duplicate:
+    description: Root middleware chain must not contain duplicate plugin names.
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
+    severity: warn
+    given: "$['x-barbacane-middlewares']"
+    then:
+      function: barbacane-no-duplicate-middlewares
+
+  # Operation-level middleware rules (same checks)
+
+  barbacane-op-middleware-has-name:
+    description: Each operation-level middleware entry must include a "name" field.
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-middlewares'][*]"
+    then:
+      field: name
+      function: truthy
+
+  barbacane-op-middleware-known-plugin:
+    description: Operation-level middleware name must be a known Barbacane middleware plugin.
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    severity: warn
+    given: "$.paths[*][*]['x-barbacane-middlewares'][*].name"
+    then:
+      function: enumeration
+      functionOptions:
+        values:
+          - acl
+          - apikey-auth
+          - basic-auth
+          - bot-detection
+          - cache
+          - cel
+          - correlation-id
+          - cors
+          - http-log
+          - ip-restriction
+          - jwt-auth
+          - oauth2-auth
+          - observability
+          - oidc-auth
+          - opa-authz
+          - rate-limit
+          - request-size-limit
+          - request-transformer
+
+  barbacane-op-middleware-config-valid:
+    description: Operation-level middleware config must validate against the plugin's JSON Schema.
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-middlewares'][*]"
+    then:
+      function: barbacane-validate-middleware-config
+
+  barbacane-op-middleware-no-duplicate:
+    description: Operation-level middleware chain must not contain duplicate plugin names.
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
+    severity: warn
+    given: "$.paths[*][*]['x-barbacane-middlewares']"
+    then:
+      function: barbacane-no-duplicate-middlewares
+
+  # ---------------------------------------------------------------------------
+  # Extension hygiene
+  # ---------------------------------------------------------------------------
+
+  barbacane-no-unknown-extension:
+    description: "Only x-barbacane-dispatch and x-barbacane-middlewares are recognized Barbacane extensions."
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html
+    severity: warn
+    given: "$"
+    then:
+      function: barbacane-no-unknown-extensions
+
+  # ---------------------------------------------------------------------------
+  # Upstream & secrets
+  # ---------------------------------------------------------------------------
+
+  barbacane-no-plaintext-upstream:
+    description: "http-upstream URLs should use HTTPS; plaintext HTTP is insecure."
+    documentationUrl: https://docs.barbacane.dev/guide/dispatchers.html#http-upstream
+    severity: warn
+    given: "$.paths[*][*]['x-barbacane-dispatch']"
+    then:
+      function: barbacane-no-plaintext-upstream
+
+  barbacane-secret-ref-format:
+    description: "Secret references must use env://VAR_NAME or file:///path format."
+    documentationUrl: https://docs.barbacane.dev/guide/secrets.html
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-dispatch'].config"
+    then:
+      function: barbacane-valid-secret-refs
+
+  barbacane-middleware-secret-ref-format:
+    description: "Secret references in middleware config must use env://VAR_NAME or file:///path format."
+    documentationUrl: https://docs.barbacane.dev/guide/secrets.html
+    severity: error
+    given: "$['x-barbacane-middlewares'][*].config"
+    then:
+      function: barbacane-valid-secret-refs
+
+  # ---------------------------------------------------------------------------
+  # Auth safety
+  # ---------------------------------------------------------------------------
+
+  barbacane-auth-opt-out-explicit:
+    description: "When global auth middleware is set, operations without it should explicitly opt out with x-barbacane-middlewares: []."
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    severity: info
+    given: "$"
+    then:
+      function: barbacane-auth-opt-out
