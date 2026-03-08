@@ -2,6 +2,8 @@
 
 Barbacane provides a [vacuum](https://quobix.com/vacuum/) ruleset that validates your OpenAPI specs against Barbacane-specific conventions. Catch plugin configuration errors, missing dispatch blocks, and security misconfigurations **at lint time** — before `barbacane compile` or runtime.
 
+> **Note:** The ruleset currently supports **OpenAPI** specs only. Vacuum does not yet support AsyncAPI 3.x linting ([tracking issue](https://github.com/daveshanley/vacuum/issues/241)). AsyncAPI specs are validated at compile time by `barbacane compile`.
+
 ## Quick Start
 
 ### 1. Install vacuum

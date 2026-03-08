@@ -2,6 +2,10 @@ extends: [[spectral:oas, recommended]]
 
 documentationUrl: https://docs.barbacane.dev/guide/vacuum.html
 
+# NOTE: Rules target OpenAPI specs only ($.paths[*][*] for operations).
+# Vacuum does not yet support AsyncAPI 3.x. When it does, add
+# $.operations[*] paths alongside $.paths[*][*] to cover AsyncAPI operations.
+
 rules:
   # ---------------------------------------------------------------------------
   # Dispatch validation
