@@ -14,11 +14,15 @@ PASS=0
 FAIL=0
 
 # Count barbacane-specific violations using spectral-report JSON output.
+# vacuum outputs `null` (not `[]`) when there are no violations, so jq receives
+# empty input and exits 0 with no output — handle that with ${count:-0}.
 count_barbacane_violations() {
   local spec="$1"
-  vacuum spectral-report -r "$RULESET" --functions "$FUNCTIONS_DIR" -o "$spec" 2>/dev/null \
+  local count
+  count=$(vacuum spectral-report -r "$RULESET" --functions "$FUNCTIONS_DIR" -o "$spec" 2>/dev/null \
     | sed -n '/^\[/,$p' \
-    | jq '[.[] | select(.code | startswith("barbacane-"))] | length' 2>/dev/null || echo "0"
+    | jq '[.[] | select(.code | startswith("barbacane-"))] | length' 2>/dev/null)
+  echo "${count:-0}"
 }
 
 assert_zero_violations() {
