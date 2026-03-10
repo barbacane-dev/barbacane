@@ -33,6 +33,8 @@ oras push ghcr.io/my-org/my-api:1.0.0 \
 
 **In Kubernetes (Helm chart):** The data plane Deployment includes an init container running the official `oras` image that pulls the artifact into a shared `emptyDir` volume. The main container mounts the same volume.
 
+> **Note:** ADR-0019 deferred Helm chart creation until deployment patterns stabilized. This ADR describes the init container pattern that informed the Helm chart design; the chart itself now lives in `barbacane-helm-chart/`.
+
 ```yaml
 initContainers:
   - name: artifact-fetcher
@@ -42,21 +44,46 @@ initContainers:
       - $(ARTIFACT_REF)
       - --output
       - /artifact
+      - --registry-config
+      - /registry-config/.dockerconfigjson
+    env:
+      - name: ARTIFACT_REF
+        value: ghcr.io/my-org/my-api@sha256:abc123...  # set via Helm values
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
     volumeMounts:
       - name: artifact
         mountPath: /artifact
+      - name: registry-config
+        mountPath: /registry-config
+        readOnly: true
 containers:
   - name: barbacane
     args: ["serve", "--artifact", "/artifact/api.bca"]
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
     volumeMounts:
       - name: artifact
         mountPath: /artifact
+        readOnly: true
 volumes:
   - name: artifact
-    emptyDir: {}
+    emptyDir:
+      sizeLimit: 100Mi  # tune via Helm values for largest expected artifact
+  - name: registry-config
+    secret:
+      secretName: artifact-registry-credentials  # Docker config secret for oras pull
 ```
 
-Registry credentials are provided via `imagePullSecrets`, reusing the existing Kubernetes mechanism.
+**Registry credentials:** `imagePullSecrets` on the Pod spec covers pulling the `oras` init container image itself. For artifact pulls, the `oras` CLI needs credentials injected separately — here via a mounted Docker config secret (`--registry-config`). Both the init container and the main container run as UID 65532 (`nonroot`) per ADR-0019, ensuring the artifact file is readable by both.
 
 ### Security
 
@@ -64,7 +91,9 @@ The init container image must be pinned to a **minimum version of `v1.2.0`** in 
 - Verified digest-based pulls (preventing tag mutation attacks)
 - Improved TLS certificate validation
 
-In production, the Helm chart defaults to a pinned digest (`ghcr.io/oras-project/oras@sha256:...`) rather than a floating tag, with the tag kept as a human-readable comment. Users overriding the image are responsible for maintaining this guarantee.
+In production, the Helm chart defaults to a pinned digest (`ghcr.io/oras-project/oras@sha256:...`) rather than a floating tag, with the tag kept as a human-readable comment. The chart maintainers are responsible for updating the pinned digest when upgrading the `oras` image version. Users overriding the image are responsible for maintaining this guarantee in their own values.
+
+Digest-pinned artifact pulls also provide an integrity guarantee that complements ADR-0021's provenance requirements: the pull is content-addressed, ensuring the artifact bytes match what was originally pushed.
 
 ### Future: `barbacane compile --push`
 
@@ -82,7 +111,7 @@ As a convenience, a future `barbacane compile --push <registry-ref>` subcommand 
 - **Versioning:** Artifact versions are explicit OCI tags, not filesystem paths
 - **Reuse:** Same registry, same auth, same tooling as container images
 - **Auditability:** Registry logs artifact pulls alongside image pulls
-- **Provenance:** Artifact hash and metadata can be attached as OCI annotations, tying back to the artifact fingerprinting work (ADR-0021)
+- **Provenance:** Digest-pinned pulls are content-addressed, providing integrity guarantees that tie directly into ADR-0021's provenance chain. Artifact hash and metadata can be attached as OCI annotations
 
 ### Harder
 
