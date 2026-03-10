@@ -1,6 +1,6 @@
 # ADR-0023: WASM Plugin Streaming Support
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-03-03
 
 ## Context
