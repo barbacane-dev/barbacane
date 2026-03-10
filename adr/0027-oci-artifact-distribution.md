@@ -21,14 +21,14 @@ Barbacane already uses OCI registries for container images (ADR-0019). Using the
 `.bca` artifacts will be distributed as OCI artifacts using the [ORAS](https://oras.land) project tooling, with a dedicated media type:
 
 ```
-application/vnd.barbacane.artifact.v1+bca
+application/vnd.barbacane.bca.v1
 ```
 
 **Pushing an artifact:**
 ```bash
 oras push ghcr.io/my-org/my-api:1.0.0 \
-  --artifact-type application/vnd.barbacane.artifact.v1+bca \
-  api.bca:application/vnd.barbacane.artifact.v1+bca
+  --artifact-type application/vnd.barbacane.bca.v1 \
+  api.bca:application/vnd.barbacane.bca.v1
 ```
 
 **In Kubernetes (Helm chart):** The data plane Deployment includes an init container running the official `oras` image that pulls the artifact into a shared `emptyDir` volume. The main container mounts the same volume.
