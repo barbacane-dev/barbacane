@@ -1,4 +1,4 @@
-# ADR-0026: OCI Artifact Distribution for .bca Artifacts
+# ADR-0027: OCI Artifact Distribution for .bca Artifacts
 
 **Status:** Proposed
 **Date:** 2026-03-09
