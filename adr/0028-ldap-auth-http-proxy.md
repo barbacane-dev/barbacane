@@ -1,6 +1,6 @@
 # ADR-0028: LDAP Auth via HTTP Proxy Instead of Native Host Functions
 
-**Status:** Accepted
+**Status:** Rejected
 **Date:** 2026-03-10
 
 ## Context
@@ -24,13 +24,11 @@
 
 **New host function surface.** At minimum: `host_ldap_bind`, `host_ldap_search`, `host_ldap_unbind`, and a result-reading function — all of which must be versioned and supported indefinitely.
 
-### Why Option B fits Barbacane's model
+### Why Option B dissolves the problem it was trying to solve
 
-LDAP is a custom binary protocol — the same is true of Kafka and NATS, which Barbacane does implement natively. The difference is that `rskafka` and `async-nats` are pure-Rust, FFI-free, and self-contained. No equivalent exists for LDAP today: the only production-grade Rust LDAP client (`ldap3`) carries the `cross-krb5` C FFI dependency described above. The HTTP proxy approach is a pragmatic workaround for this specific constraint, not a statement about LDAP's nature.
+LDAP is a custom binary protocol — the same is true of Kafka and NATS, which Barbacane implements natively. The difference is that `rskafka` and `async-nats` are pure-Rust, FFI-free, and self-contained. The HTTP proxy was proposed as a pragmatic workaround for the C FFI constraint, not as a statement about LDAP's nature.
 
-In practice, enterprise LDAP/AD is a central directory service, never co-located with the gateway. An HTTP call to a credential-validation endpoint is network-equivalent to a direct LDAP bind.
-
-**The contract the plugin targets** is intentionally minimal — any HTTP service that satisfies it can be used:
+On closer inspection, the minimal HTTP contract required for Option B reduces to:
 
 ```
 POST {validate_url}
@@ -41,28 +39,24 @@ Content-Type: application/json
 → 401 Unauthorized    # credentials invalid
 ```
 
-Barbacane does not prescribe which LDAP server or adapter the user runs. The playground ships a reference setup using a lightweight self-hosted LDAP server to demonstrate the full stack end-to-end with pre-seeded users and groups.
+This is not LDAP. It is "Basic Auth delegated to a remote HTTP endpoint" — which is already covered by the existing plugin set:
 
-> **Future revisit:** if a pure-Rust, FFI-free LDAP client matures, this decision should be reconsidered in favour of native host functions (following the Kafka/NATS pattern).
+- **`basic-auth`** handles Basic Auth credential extraction
+- **`oauth2-auth`** covers credential delegation via the OAuth2 ROPC flow (RFC 6749 §4.3), which most LDAP-backed identity providers expose
+- **`oidc-auth`** covers LDAP-backed IdPs that surface OIDC endpoints
 
-The plugin already has `host_http_call` available. No new capabilities, no new host functions, no new dependencies in the runtime binary.
+What genuinely distinguishes LDAP auth — direct LDAP bind, DN-based user resolution, `memberOf` group checks — requires native LDAP operations that the HTTP abstraction cannot express without replicating a proprietary bridge API.
 
 ## Decision
 
-Implement `ldap-auth` as a WASM middleware plugin that authenticates by calling an external LDAP-over-HTTP bridge via `host_http_call`. The plugin accepts a configurable `bridge_url` and performs a credential validation request on each incoming request.
+**Do not implement `ldap-auth` at this time.**
 
-No new host functions or capabilities are added to `barbacane-wasm`.
+Option A (native host functions) is blocked by the `cross-krb5` C FFI dependency in the only production-grade Rust LDAP client. Option B (HTTP bridge) reduces to functionality already covered by `basic-auth`, `oauth2-auth`, and `oidc-auth`, and strips out the LDAP-specific semantics that would justify a dedicated plugin.
+
+The item is parked until a pure-Rust, FFI-free LDAP client exists. At that point it should be revisited as native host functions following the Kafka/NATS pattern.
 
 ## Consequences
 
-**Easier:**
-- `ldap-auth` ships with zero runtime changes — it is a pure plugin
-- Barbacane's binary remains self-contained and edge-deployable
-- The bridge can be upgraded, swapped, or replaced independently of Barbacane
-- Any LDAP service that exposes the minimal validate contract works — no specific vendor required
-- The playground provides a ready-to-run reference stack for local development and demos
-
-**Harder:**
-- Users must run an LDAP-over-HTTP bridge alongside Barbacane (one extra service)
-- The plugin cannot do raw LDAP operations (e.g., group membership tree walks) beyond what the bridge exposes; complex LDAP queries depend on bridge capabilities
-- Latency adds one extra HTTP hop compared to a native LDAP connection (negligible in most enterprise deployments given LDAP is always remote)
+- No new plugin or host functions are introduced
+- Users needing LDAP/AD authentication today should front their directory with an OIDC-capable IdP and use `oidc-auth`
+- The roadmap item is marked as blocked pending Rust ecosystem maturity
