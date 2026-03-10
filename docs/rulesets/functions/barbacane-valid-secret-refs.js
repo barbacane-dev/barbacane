@@ -12,9 +12,9 @@ function getSchema() {
 }
 
 function runRule(input) {
-  const results = [];
-  if (!input || typeof input !== "object") return results;
+  if (!input || typeof input !== "object") return [];
 
+  const results = [];
   checkValues(input, results);
   return results;
 }
@@ -27,14 +27,19 @@ function checkValues(obj, results) {
       const isSecretRef = SECRET_PREFIXES.some((p) => value.startsWith(p));
       if (!isSecretRef) continue;
 
-      if (value.startsWith("env://") && !ENV_REF_RE.test(value)) {
-        results.push({
-          message: `Invalid secret reference "${value}" in field "${key}". env:// must be followed by a valid environment variable name (e.g., env://MY_SECRET).`,
-        });
-      } else if (value.startsWith("file://") && !FILE_REF_RE.test(value)) {
-        results.push({
-          message: `Invalid secret reference "${value}" in field "${key}". file:// must use an absolute path (e.g., file:///run/secrets/my-secret).`,
-        });
+      if (value.startsWith("env://")) {
+        if (!ENV_REF_RE.test(value)) {
+          results.push({
+            message: `Invalid secret reference "${value}" in field "${key}". env:// must be followed by a valid environment variable name (e.g., env://MY_SECRET).`,
+          });
+        }
+      } else {
+        // file:// — isSecretRef guarantees this branch
+        if (!FILE_REF_RE.test(value)) {
+          results.push({
+            message: `Invalid secret reference "${value}" in field "${key}". file:// must use an absolute path (e.g., file:///run/secrets/my-secret).`,
+          });
+        }
       }
     } else if (typeof value === "object") {
       checkValues(value, results);

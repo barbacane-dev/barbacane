@@ -12,7 +12,7 @@ Barbacane provides a [vacuum](https://quobix.com/vacuum/) ruleset that validates
 # macOS
 brew install daveshanley/vacuum/vacuum
 
-# or download from https://github.com/daveshanley/vacuum/releases
+# Linux, Windows, Docker: https://quobix.com/vacuum/installing/
 ```
 
 ### 2. Create a `.vacuum.yml` in your project

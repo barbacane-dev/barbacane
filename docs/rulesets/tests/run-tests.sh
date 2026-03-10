@@ -6,23 +6,19 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+SCRIPT_DIR="$(cd -P "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd -P "$SCRIPT_DIR/../../.." && pwd)"
 RULESET="$SCRIPT_DIR/../barbacane.yaml"
-FUNCTIONS="$SCRIPT_DIR/../functions"
+FUNCTIONS_DIR="$SCRIPT_DIR/../functions"
 PASS=0
 FAIL=0
 
 # Count barbacane-specific violations using spectral-report JSON output.
 count_barbacane_violations() {
   local spec="$1"
-  vacuum spectral-report -r "$RULESET" --functions "$FUNCTIONS" -o "$spec" 2>/dev/null \
+  vacuum spectral-report -r "$RULESET" --functions "$FUNCTIONS_DIR" -o "$spec" 2>/dev/null \
     | sed -n '/^\[/,$p' \
-    | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-print(sum(1 for r in data if r.get('code','').startswith('barbacane-')))
-" 2>/dev/null || echo "0"
+    | jq '[.[] | select(.code | startswith("barbacane-"))] | length' 2>/dev/null || echo "0"
 }
 
 assert_zero_violations() {

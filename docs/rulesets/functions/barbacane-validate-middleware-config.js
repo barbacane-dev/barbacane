@@ -207,28 +207,27 @@ function getSchema() {
 }
 
 function runRule(input) {
-  const results = [];
-  if (!input || typeof input !== "object") return results;
+  if (!input || typeof input !== "object") return [];
 
   const pluginName = input.name;
   const config = input.config;
 
-  if (!pluginName) return results;
+  if (!pluginName) return [];
 
   const schema = schemas[pluginName];
-  if (!schema) return results; // unknown plugin handled by enumeration rule
+  if (!schema) return []; // unknown plugin handled by enumeration rule
 
   // config is optional for plugins with no required fields
-  if (!config && schema.required.length === 0) return results;
+  if (!config && schema.required.length === 0) return [];
   if (!config && schema.required.length > 0) {
-    results.push({
+    return [{
       message: `Middleware "${pluginName}" requires a config object with fields: ${schema.required.join(", ")}.`,
-    });
-    return results;
+    }];
   }
 
-  if (!config) return results;
+  if (!config) return [];
 
+  const results = [];
   // Check required fields
   for (const field of schema.required) {
     if (config[field] === undefined || config[field] === null) {
@@ -300,6 +299,6 @@ function checkType(value, expectedType) {
     case "array":
       return Array.isArray(value);
     default:
-      return true;
+      return false; // unknown type: fail explicitly rather than silently pass
   }
 }

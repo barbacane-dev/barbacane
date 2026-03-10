@@ -25,22 +25,22 @@ function getSchema() {
 }
 
 function runRule(input) {
-  const results = [];
-  if (!input || typeof input !== "object") return results;
+  if (!input || typeof input !== "object") return [];
 
   // Check if global middlewares include an auth plugin
   const globalMiddlewares = input["x-barbacane-middlewares"];
-  if (!Array.isArray(globalMiddlewares)) return results;
+  if (!Array.isArray(globalMiddlewares)) return [];
 
   const hasGlobalAuth = globalMiddlewares.some(
     (m) => m && AUTH_PLUGINS.has(m.name)
   );
-  if (!hasGlobalAuth) return results;
+  if (!hasGlobalAuth) return [];
 
   // Scan all operations
   const paths = input.paths;
-  if (!paths || typeof paths !== "object") return results;
+  if (!paths || typeof paths !== "object") return [];
 
+  const results = [];
   for (const [path, pathItem] of Object.entries(paths)) {
     if (!pathItem || typeof pathItem !== "object") continue;
 

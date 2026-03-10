@@ -88,17 +88,17 @@ function getSchema() {
 }
 
 function runRule(input) {
-  const results = [];
-  if (!input || typeof input !== "object") return results;
+  if (!input || typeof input !== "object") return [];
 
   const pluginName = input.name;
   const config = input.config;
 
-  if (!pluginName || !config) return results;
+  if (!pluginName || !config) return [];
 
   const schema = schemas[pluginName];
-  if (!schema) return results; // unknown plugin handled by enumeration rule
+  if (!schema) return []; // unknown plugin handled by enumeration rule
 
+  const results = [];
   // Check required fields
   if (schema.required) {
     for (const field of schema.required) {
@@ -167,6 +167,6 @@ function checkType(value, expectedType) {
     case "array":
       return Array.isArray(value);
     default:
-      return true;
+      return false; // unknown type: fail explicitly rather than silently pass
   }
 }
