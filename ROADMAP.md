@@ -64,7 +64,7 @@ Near-term items ready to be picked up:
 
 | Plugin | Type | Description |
 |--------|------|-------------|
-| `ldap-auth` | Middleware | LDAP/Active Directory authentication (requires LDAP host functions or HTTP proxy) |
+| `ldap-auth` | Middleware | LDAP/Active Directory authentication — blocked pending a pure-Rust FFI-free LDAP client; HTTP bridge approach rejected as it reduces to existing auth plugins (ADR-0028) |
 | `hmac-auth` | Middleware | Signature-based auth (AWS SigV4 style) |
 | `grpc-web` | Middleware | gRPC-Web to gRPC translation |
 | `websocket` | Dispatcher | WebSocket proxy support |
