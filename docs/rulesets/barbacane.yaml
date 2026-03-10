@@ -1,5 +1,3 @@
-extends: [[spectral:oas, recommended]]
-
 documentationUrl: https://docs.barbacane.dev/guide/vacuum.html
 
 # NOTE: Rules target OpenAPI specs only ($.paths[*][*] for operations).
