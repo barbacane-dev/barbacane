@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### AI Gateway (ADR-0024)
+- **`ai-proxy` dispatcher plugin**: unified OpenAI-compatible API routing to OpenAI, Anthropic, and Ollama
+  - Automatic request/response translation for Anthropic Messages API (system message extraction, stop reason mapping, usage token remapping)
+  - Named targets via `targets` map + `default_target`; active target selected by `ai.target` context key written by `cel` middleware
+  - Provider fallback: tries `fallback` list in order on 5xx or connection errors; 4xx returned directly to client
+  - Token count propagation: writes `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens` into request context for downstream middlewares
+  - Metrics: `requests_total`, `request_duration_seconds`, `fallback_total`, `tokens_total` (all labelled by provider)
+  - WASM streaming passthrough for OpenAI/Ollama; Anthropic buffered (SSE translation deferred)
+- **`cel` routing mode**: backwards-compatible extension enabling policy-driven model routing
+  - New `on_match.set_context` config: on `true`, writes specified key-value pairs into request context (e.g. `ai.target: premium`) and continues
+  - On `false` in routing mode: continues without 403 (no-op); stack multiple `cel` instances for multi-rule routing
+  - Access-control mode (no `on_match`) unchanged: `false` still returns 403 Forbidden
+
 #### Documentation
 - **FIPS 140-3 compliance guide**: step-by-step instructions for enabling FIPS mode via the `rustls` `fips` feature flag and `aws-lc-fips-sys`
 - **`fips` Cargo feature flag**: `cargo build -p barbacane --features fips` enables FIPS 140-3 compliant cryptography without manual `Cargo.toml` edits
