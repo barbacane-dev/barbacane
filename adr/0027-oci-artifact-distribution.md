@@ -1,6 +1,6 @@
 # ADR-0027: OCI Artifact Distribution for .bca Artifacts
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-09
 
 ## Context
