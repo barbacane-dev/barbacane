@@ -25,11 +25,13 @@ LLM chat completions use Server-Sent Events for token-by-token streaming. This r
 
 Following Barbacane's plugin architecture, the AI gateway is composed of:
 
-1. **`ai-proxy` dispatcher** — routes requests to LLM providers, handles format translation, provider fallback, and streaming
+1. **`ai-proxy` dispatcher** — routes requests to LLM providers, handles format translation, provider fallback, and streaming; supports named targets for policy-driven routing
 2. **`ai-token-limit` middleware** — token-based rate limiting (per consumer, per model, per time window)
 3. **`ai-cost-tracker` middleware** — records cost metrics per provider/model
 4. **`ai-prompt-guard` middleware** — validate and constrain prompts (max length, blocked patterns, prompt templates)
 5. **`ai-response-guard` middleware** — inspect and redact LLM responses (PII patterns, content safety)
+
+Policy-driven routing reuses the existing **`cel` middleware** (extended with `context_set` capability) — no dedicated routing plugin required.
 
 This leverages the middleware pipeline: each concern is independently ordered, configured, and optional. Users who only need proxying skip the middlewares. Users who need cost tracking add it. Users who need guardrails compose them in the chain.
 
@@ -94,7 +96,7 @@ This is the same pattern as the S3 dispatcher's SigV4 signing — the plugin own
 x-barbacane-dispatch:
   name: ai-proxy
   config:
-    # Primary provider
+    # Simple single-provider config (no routing needed)
     provider: openai            # openai | anthropic | ollama
     model: gpt-4o
     api_key: "${OPENAI_API_KEY}"
@@ -112,6 +114,20 @@ x-barbacane-dispatch:
       - provider: ollama
         model: llama3
         base_url: http://ollama:11434
+
+    # --- Named targets for policy-driven routing (optional) ---
+    # Selected by setting `ai.target` in context (e.g., via cel middleware).
+    # When present, `provider`/`model` above become the fallback for unknown targets.
+    targets:
+      local:
+        provider: ollama
+        model: mistral
+        base_url: http://ollama:11434
+      premium:
+        provider: anthropic
+        model: claude-opus-4-6
+        api_key: "${ANTHROPIC_API_KEY}"
+    default_target: local
 ```
 
 ### Fallback behavior
@@ -123,6 +139,137 @@ When the primary provider returns a 5xx, times out, or is unreachable:
 3. If all providers fail, return the last error as a 502
 
 Fallback is **not** triggered on 4xx responses (client errors like invalid model, content policy violations). These are returned directly to the client.
+
+### Policy-Driven Model Routing
+
+Beyond technical fallback, operators often need to route to different providers based on **business policy** — not failure. The distinction matters:
+
+| | `fallback` | policy routing |
+|---|---|---|
+| **Trigger** | Technical failure (5xx, timeout, unreachable) | Business rule (consumer tier, request size, explicit preference) |
+| **Direction** | Primary → cheaper alternative | Intentional target, resolved before dispatch |
+| **Added latency** | At least one failed attempt | Zero — target selected before the first call |
+
+A typical pattern: default to a locally-hosted small model for cost efficiency, but route premium consumers or high-complexity requests directly to a capable remote model like Anthropic Opus.
+
+#### Approach: named targets in `ai-proxy` + extended `cel` middleware
+
+Rather than a dedicated routing plugin, policy-driven routing is composed from two existing building blocks:
+
+1. **`ai-proxy`** gains a `targets` map — named provider profiles with all connection details. Credentials stay in the dispatcher config, never in context.
+2. **`cel` middleware** (extended with `context_set` capability) writes `ai.target` — a logical name — into the request context before dispatch.
+
+The `cel` middleware is extended with an optional `on_match` field:
+
+```yaml
+x-barbacane-middlewares:
+  - name: cel
+    config:
+      expression: "request.claims.tier == 'premium'"
+      on_match:
+        set_context:
+          ai.target: "premium"
+      # When on_match is set, a false result is a no-op (not a 403).
+      # Omit on_match entirely to keep the original access-control behavior.
+```
+
+Multiple `cel` instances can be stacked for multiple routing rules — this is the normal middleware composition pattern:
+
+```yaml
+x-barbacane-middlewares:
+  - name: cel
+    config:
+      expression: "request.claims.tier == 'premium'"
+      on_match:
+        set_context:
+          ai.target: "premium"
+  - name: cel
+    config:
+      expression: "'ai:premium' in request.claims.scopes"
+      on_match:
+        set_context:
+          ai.target: "premium"
+  - name: cel
+    config:
+      expression: "request.headers['x-ai-model-tier'] == 'best'"
+      on_match:
+        set_context:
+          ai.target: "premium"
+```
+
+The full [CEL](https://cel.dev/) expression model applies — the same syntax already used by the `cel` middleware for access control:
+
+| Variable | Type | Example |
+|----------|------|---------|
+| `request.method` | string | `"POST"` |
+| `request.path` | string | `"/v1/chat/completions"` |
+| `request.headers` | map | `request.headers['x-ai-model-tier']` |
+| `request.consumer` | string | consumer identity from auth |
+| `request.claims` | map | JWT claims set by auth middleware |
+| `request.body` | string | raw request body (for advanced cases) |
+
+#### Dispatcher target resolution order
+
+The `ai-proxy` dispatcher resolves its target with this priority:
+
+1. **`ai.target` context key** — logical name set by any upstream middleware (typically `cel`)
+2. **`default_target`** — the named target to use when no `ai.target` is in context
+3. **Flat `provider`/`model` config** — the dispatcher's own static config (no `targets` map)
+4. **`fallback` chain** — only triggered on technical failure of the resolved target (unchanged behavior)
+
+Credentials (`api_key`, `base_url`) are resolved entirely within `ai-proxy` from the `targets` map — they never pass through context.
+
+#### `cel` plugin changes required
+
+The `cel` plugin gains:
+- `context_set` capability in `plugin.toml`
+- Optional `on_match.set_context: map<string, string>` config field
+- When `on_match` is present: `true` → set context keys and continue, `false` → continue unchanged (no 403)
+- When `on_match` is absent: existing behavior unchanged (`true` → continue, `false` → 403)
+
+#### Example: tiered routing with cost tracking
+
+```yaml
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: https://auth.example.com
+  - name: cel
+    config:
+      expression: "request.claims.tier == 'premium'"
+      on_match:
+        set_context:
+          ai.target: "premium"
+  - name: ai-cost-tracker
+    config:
+      prices:
+        ollama/mistral:
+          prompt: 0
+          completion: 0
+        anthropic/claude-opus-4-6:
+          prompt: 0.015
+          completion: 0.075
+
+paths:
+  /v1/chat/completions:
+    post:
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          targets:
+            local:
+              provider: ollama
+              model: mistral
+              base_url: http://ollama:11434
+            premium:
+              provider: anthropic
+              model: claude-opus-4-6
+              api_key: "${ANTHROPIC_API_KEY}"
+          default_target: local
+          timeout: 120
+```
+
+The `ai-cost-tracker` middleware reads `ai.provider` and `ai.model` from context (set by `ai-proxy` after dispatch) — cost is tracked correctly regardless of which target was selected.
 
 ### Streaming flow (uses ADR-0023)
 
@@ -378,15 +525,16 @@ paths:
 
 ## Consequences
 
-- **Easier:** Teams adopt Barbacane as their AI gateway with familiar OpenAI-compatible API. Provider switching is a config change, not a code change. Cost visibility is built-in via Prometheus metrics. Spec-driven approach gives compile-time validation of AI routes alongside regular API routes. Guardrails are composable — add prompt validation, PII redaction, or cost tracking independently. Contract-first approach means provider API changes are deliberate, tested upgrades.
-- **Harder:** Anthropic format translation adds complexity and must be maintained as their API evolves. Token counting from streamed responses requires buffering. Adding new providers requires a new translation adapter in the plugin. Response guardrails can't redact already-streamed content (streaming + PII compliance are in tension).
-- **Trade-offs:** The unified OpenAI format means Anthropic-specific features (e.g., extended thinking, prompt caching) are not directly accessible — users needing those must talk to Anthropic directly. This is acceptable for the gateway use case where portability matters more than provider-specific features. Regex-based PII detection is best-effort — organizations with strict compliance needs should use dedicated DLP services upstream.
+- **Easier:** Teams adopt Barbacane as their AI gateway with familiar OpenAI-compatible API. Provider switching is a config change, not a code change. Cost visibility is built-in via Prometheus metrics. Spec-driven approach gives compile-time validation of AI routes alongside regular API routes. Guardrails are composable — add prompt validation, PII redaction, or cost tracking independently. Contract-first approach means provider API changes are deliberate, tested upgrades. Policy-driven routing lets operators encode business decisions (consumer tiers, cost thresholds, model quality preferences) declaratively — no code changes required when routing strategy evolves.
+- **Harder:** Anthropic format translation adds complexity and must be maintained as their API evolves. Token counting from streamed responses requires buffering. Adding new providers requires a new translation adapter in the plugin. Response guardrails can't redact already-streamed content (streaming + PII compliance are in tension). The `cel` plugin requires a small extension (`on_match.set_context` + `context_set` capability) — a backwards-compatible change that does not affect existing `cel` users. ML-based routing (e.g., route by prompt intent) still requires a custom WASM middleware that sets `ai.target` directly.
+- **Trade-offs:** The unified OpenAI format means Anthropic-specific features (e.g., extended thinking, prompt caching) are not directly accessible — users needing those must talk to Anthropic directly. This is acceptable for the gateway use case where portability matters more than provider-specific features. Regex-based PII detection is best-effort — organizations with strict compliance needs should use dedicated DLP services upstream. Policy routing and technical fallback are orthogonal — a premium consumer routed to Opus can still fall back to a secondary provider if Opus is down.
 
 ## Alternatives considered
 
 - **Single monolithic plugin:** One `ai-proxy` plugin handling routing, token limits, cost tracking, and guardrails. Rejected — violates Barbacane's composable middleware philosophy. Users can't independently order, configure, or omit concerns.
 - **Native provider SDKs in WASM:** Compile the OpenAI/Anthropic SDKs to WASM. Rejected — these SDKs bring HTTP client dependencies that conflict with Barbacane's host function model. The translation layer is simpler and more maintainable.
 - **OpenAI-compatible only (no Anthropic translation):** Only proxy to OpenAI-format endpoints. Rejected — Anthropic is too significant to exclude, and Anthropic's own OpenAI-compatible endpoint has limitations.
+- **Dedicated `ai-router` middleware:** A standalone plugin owning both the target profiles (with credentials) and the CEL routing rules. Rejected — credentials in a routing middleware are architecturally wrong (they belong in the dispatcher), and a dedicated plugin duplicates the CEL evaluation engine already in the `cel` plugin. The composed approach (named targets in `ai-proxy` + `cel` for condition evaluation) achieves the same result with no new plugin and no credential duplication.
 
 ## Competitive comparison
 
@@ -396,6 +544,7 @@ paths:
 | Multi-provider routing | Yes | Yes | Yes | Yes (EE) | Yes |
 | Streaming (SSE) | Yes | Yes | Yes | Yes | Yes (ADR-0023) |
 | Provider fallback | Yes | Yes | Yes | Yes | Yes |
+| Policy-driven model routing | Partial (EE, config fan-out) | Partial | Partial | No | **Yes** |
 | Token rate limiting | Yes (EE) | Yes | Yes | Yes (EE) | Yes |
 | Cost tracking | Yes (EE) | Yes | Yes | Yes (EE) | Yes |
 | Prompt validation | No | No | Yes | Yes (EE) | Yes |
@@ -414,6 +563,7 @@ Barbacane's differentiators: spec-driven configuration, contract-first provider 
 - **MCP support:** Model Context Protocol is gaining traction (KrakenD EE v2.12, LiteLLM). See [ADR-0025](0025-mcp-server.md) for Barbacane's MCP server design — complementary to the AI proxy (agents calling APIs vs. proxying LLM calls).
 - **Semantic caching:** Embedding-based response deduplication (Portkey). Requires a vector store — scope for a future `ai-cache` middleware backed by an external vector DB via `host_http_call`.
 - **Multi-modal:** Vision and audio model support. The OpenAI-compatible format already supports image URLs in messages. Evaluate demand before adding explicit support.
+- **Semantic routing:** Kong AI Proxy Advanced supports routing by cosine similarity between the request prompt and per-target descriptions (e.g., route "code questions" to a code-specialist model). This is orthogonal to policy routing — it routes by *what is being asked*, not *who is asking*. Could be implemented as a future `ai-semantic-router` middleware backed by an embedding service via `host_http_call`, without changes to `ai-proxy`.
 
 ## Related ADRs
 
