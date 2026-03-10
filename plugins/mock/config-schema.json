@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:mock-config",
+  "$id": "urn:barbacane:plugin:mock:config",
   "title": "Mock Dispatcher Config",
   "description": "Configuration for the mock dispatcher plugin",
   "type": "object",

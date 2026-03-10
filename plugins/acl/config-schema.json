@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:acl-config",
+  "$id": "urn:barbacane:plugin:acl:config",
   "title": "Access Control List Middleware Config",
   "description": "Configuration for the ACL middleware plugin. Reads x-auth-consumer and x-auth-consumer-groups headers set by upstream auth plugins.",
   "type": "object",

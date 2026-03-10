@@ -11,6 +11,15 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Context keys to set when the expression matches.
+/// Used by `on_match` to route requests to named AI targets or set other context.
+#[derive(Deserialize, Default)]
+struct OnMatch {
+    /// Context key-value pairs to write via `host_context_set` when expression is true.
+    #[serde(default)]
+    set_context: BTreeMap<String, String>,
+}
+
 /// CEL policy evaluation middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
@@ -19,12 +28,23 @@ pub struct CelPolicy {
     expression: String,
 
     /// Custom message returned in the 403 response when the expression is false.
+    /// Ignored when `on_match` is set (false is a no-op in routing mode).
     #[serde(default = "default_deny_message")]
     deny_message: String,
 
     /// Pre-compiled CEL program (lazy-initialized on first request).
     #[serde(skip)]
     compiled: Option<cel::Program>,
+
+    /// When present, switches from access-control mode to context-routing mode:
+    /// - true  → write `set_context` keys into request context, then continue
+    /// - false → continue unchanged (no 403)
+    ///
+    /// When absent (default), the original access-control behaviour applies:
+    /// - true  → continue
+    /// - false → 403 Forbidden
+    #[serde(default)]
+    on_match: Option<OnMatch>,
 }
 
 fn default_deny_message() -> String {
@@ -49,8 +69,23 @@ impl CelPolicy {
 
         // Execute the CEL program
         match program.execute(&context) {
-            Ok(cel::Value::Bool(true)) => Action::Continue(req),
-            Ok(cel::Value::Bool(false)) => Action::ShortCircuit(self.denied_response()),
+            Ok(cel::Value::Bool(true)) => {
+                if let Some(on_match) = &self.on_match {
+                    for (key, value) in &on_match.set_context {
+                        host::context_set(key, value);
+                    }
+                }
+                Action::Continue(req)
+            }
+            Ok(cel::Value::Bool(false)) => {
+                if self.on_match.is_some() {
+                    // Routing mode: false is a no-op, let the request pass through
+                    Action::Continue(req)
+                } else {
+                    // Access-control mode: false → 403
+                    Action::ShortCircuit(self.denied_response())
+                }
+            }
             Ok(other) => Action::ShortCircuit(self.eval_error_response(&format!(
                 "expression returned {}, expected bool",
                 value_type_name(&other)
@@ -250,6 +285,54 @@ fn value_type_name(value: &cel::Value) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// Host functions
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+mod host {
+    pub fn context_set(key: &str, value: &str) {
+        #[link(wasm_import_module = "barbacane")]
+        extern "C" {
+            fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
+        }
+        unsafe {
+            host_context_set(
+                key.as_ptr() as i32,
+                key.len() as i32,
+                value.as_ptr() as i32,
+                value.len() as i32,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod host {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    thread_local! {
+        static CONTEXT: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
+    }
+
+    pub fn context_set(key: &str, value: &str) {
+        CONTEXT.with(|ctx| {
+            ctx.borrow_mut().insert(key.to_string(), value.to_string());
+        });
+    }
+
+    #[cfg(test)]
+    pub fn get_context() -> BTreeMap<String, String> {
+        CONTEXT.with(|ctx| ctx.borrow().clone())
+    }
+
+    #[cfg(test)]
+    pub fn reset_context() {
+        CONTEXT.with(|ctx| ctx.borrow_mut().clear());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -262,6 +345,16 @@ mod tests {
             expression: expression.to_string(),
             deny_message: default_deny_message(),
             compiled: None,
+            on_match: None,
+        }
+    }
+
+    fn create_config_with_on_match(expression: &str, set_context: BTreeMap<String, String>) -> CelPolicy {
+        CelPolicy {
+            expression: expression.to_string(),
+            deny_message: default_deny_message(),
+            compiled: None,
+            on_match: Some(OnMatch { set_context }),
         }
     }
 
@@ -665,7 +758,7 @@ mod tests {
         let json = serde_json::json!({
             "string": "hello",
             "int": 42,
-            "float": 3.14,
+            "float": 1.5,
             "bool": true,
             "null": null,
             "array": [1, 2, 3],
@@ -701,5 +794,84 @@ mod tests {
     #[test]
     fn default_deny_message_value() {
         assert_eq!(default_deny_message(), "Access denied by policy");
+    }
+
+    // --- on_match routing mode ---
+
+    #[test]
+    fn on_match_true_sets_context_and_continues() {
+        host::reset_context();
+        let mut ctx_map = BTreeMap::new();
+        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        let mut config = create_config_with_on_match("request.consumer == 'alice'", ctx_map);
+        let req = create_request();
+
+        match config.on_request(req) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+
+        let context = host::get_context();
+        assert_eq!(context.get("ai.target").map(|s| s.as_str()), Some("premium"));
+    }
+
+    #[test]
+    fn on_match_false_continues_without_403() {
+        host::reset_context();
+        let mut ctx_map = BTreeMap::new();
+        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        let mut config = create_config_with_on_match("request.consumer == 'bob'", ctx_map);
+        let req = create_request(); // consumer = alice, not bob
+
+        match config.on_request(req) {
+            Action::Continue(_) => {} // no 403 — routing mode
+            Action::ShortCircuit(resp) => panic!("expected continue in routing mode, got {}", resp.status),
+        }
+
+        // Context was NOT set (expression was false)
+        let context = host::get_context();
+        assert!(!context.contains_key("ai.target"));
+    }
+
+    #[test]
+    fn on_match_sets_multiple_context_keys() {
+        host::reset_context();
+        let mut ctx_map = BTreeMap::new();
+        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        ctx_map.insert("ai.priority".to_string(), "high".to_string());
+        let mut config = create_config_with_on_match("true", ctx_map);
+        let req = create_request();
+
+        let _ = config.on_request(req);
+
+        let context = host::get_context();
+        assert_eq!(context.get("ai.target").map(|s| s.as_str()), Some("premium"));
+        assert_eq!(context.get("ai.priority").map(|s| s.as_str()), Some("high"));
+    }
+
+    #[test]
+    fn on_match_deserializes_from_json() {
+        let json = r#"{
+            "expression": "request.claims.tier == 'premium'",
+            "on_match": {
+                "set_context": {
+                    "ai.target": "premium"
+                }
+            }
+        }"#;
+        let config: CelPolicy = serde_json::from_str(json).expect("should parse");
+        assert!(config.on_match.is_some());
+        let on_match = config.on_match.unwrap();
+        assert_eq!(on_match.set_context.get("ai.target").map(|s| s.as_str()), Some("premium"));
+    }
+
+    #[test]
+    fn without_on_match_false_still_returns_403() {
+        let mut config = create_config("false");
+        let req = create_request();
+        match config.on_request(req) {
+            Action::Continue(_) => panic!("expected 403"),
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+        }
     }
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:basic-auth-config",
+  "$id": "urn:barbacane:plugin:basic-auth:config",
   "title": "HTTP Basic Authentication Middleware Config",
   "description": "Configuration for the HTTP Basic authentication middleware plugin (RFC 7617)",
   "type": "object",

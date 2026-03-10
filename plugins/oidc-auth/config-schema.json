@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:oidc-auth-config",
+  "$id": "urn:barbacane:plugin:oidc-auth:config",
   "title": "OIDC Authentication Middleware Config",
   "description": "Configuration for the OIDC authentication middleware plugin",
   "type": "object",

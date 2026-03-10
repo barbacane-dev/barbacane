@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:oauth2-auth-config",
+  "$id": "urn:barbacane:plugin:oauth2-auth:config",
   "title": "OAuth2 Token Introspection Middleware Config",
   "description": "Configuration for the OAuth2 token introspection middleware plugin (RFC 7662)",
   "type": "object",
