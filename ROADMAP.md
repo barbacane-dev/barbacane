@@ -81,11 +81,12 @@ Near-term items ready to be picked up:
 
 ### AI & LLM (ADR-0024)
 
-Prerequisite: the `ai-proxy` dispatcher requires a small backwards-compatible extension to the `cel` plugin (`on_match.set_context` + `context_set` capability) to enable policy-driven model routing. WASM plugin streaming (ADR-0023) is already implemented.
+~~Prerequisite: the `ai-proxy` dispatcher requires a small backwards-compatible extension to the `cel` plugin (`on_match.set_context` + `context_set` capability) to enable policy-driven model routing. WASM plugin streaming (ADR-0023) is already implemented.~~
 
 | Plugin | Type | Priority | Description |
 |--------|------|----------|-------------|
-| `ai-proxy` | Dispatcher | P0 | Route requests to LLM providers (OpenAI, Anthropic, Ollama); unified OpenAI-compatible API; format translation; provider fallback; policy-driven routing via named targets; token count context propagation |
+| ~~`cel` routing extension~~ | ~~Middleware~~ | ~~P0~~ | ~~`on_match.set_context` + `context_set` capability for policy-driven model routing~~ — **done** |
+| ~~`ai-proxy`~~ | ~~Dispatcher~~ | ~~P0~~ | ~~Route requests to LLM providers (OpenAI, Anthropic, Ollama); unified OpenAI-compatible API; format translation; provider fallback; policy-driven routing via named targets; token count context propagation~~ — **done** |
 | `ai-token-limit` | Middleware | P1 | Token-based rate limiting per consumer/model/time window (runs on_response, reads token counts from context set by `ai-proxy`) |
 | `ai-cost-tracker` | Middleware | P1 | Records cost metrics per provider/model via configurable price table; emits Prometheus counter for spend dashboards |
 | `ai-prompt-guard` | Middleware | P1 | Validate and constrain prompts: length limits, regex-based prompt injection detection, managed system template injection |
