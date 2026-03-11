@@ -6,8 +6,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -P "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd -P "$SCRIPT_DIR/../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 RULESET="$SCRIPT_DIR/../barbacane.yaml"
 FUNCTIONS_DIR="$SCRIPT_DIR/../functions"
 PASS=0
