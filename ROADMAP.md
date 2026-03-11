@@ -8,11 +8,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Current Focus
 
-What's actively being worked on:
-
-- [x] `request-transformer` plugin — modify headers, query params, path, body before upstream
-- [x] `response-transformer` plugin — modify response status code, headers, body before client
-- [ ] Documentation for transformation plugins
+- [ ] `ws-upstream` dispatcher plugin — WebSocket transparent proxy (ADR-0026)
 
 ---
 
@@ -21,7 +17,6 @@ What's actively being worked on:
 Near-term items ready to be picked up:
 
 - [ ] `tcp-log` plugin — send logs to TCP endpoint
-- [x] Security plugins documentation — **done** (documented in `docs/guide/middlewares.md`)
 - [ ] Structured log format documentation
 - [ ] Integration guides (Datadog, Splunk, ELK)
 - [ ] `barbacane dev` — local dev server with file watching
