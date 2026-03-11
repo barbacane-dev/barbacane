@@ -313,3 +313,48 @@ async fn test_cel_public_endpoint_bypasses() {
     let resp = gateway.get("/public").await.unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+// -----------------------------------------------------------------------
+// CEL routing mode tests (on_match)
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_cel_routing_match_continues() {
+    // on_match + true expression → sets context key and continues (no 403)
+    let gateway = TestGateway::from_spec(&fixture("cel.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway.get("/cel-routing-match").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["area"], "routing-match");
+}
+
+#[tokio::test]
+async fn test_cel_routing_no_match_still_continues() {
+    // on_match + false expression → no 403; request passes through unchanged
+    let gateway = TestGateway::from_spec(&fixture("cel.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway.get("/cel-routing-no-match").await.unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "routing mode must not return 403 on false"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["area"], "routing-no-match");
+}
+
+#[tokio::test]
+async fn test_cel_routing_stacked_instances_both_continue() {
+    // Two stacked CEL routing instances: first matches (GET), second doesn't (POST).
+    // Both must continue — request should reach the mock dispatcher.
+    let gateway = TestGateway::from_spec(&fixture("cel.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway.get("/cel-routing-stacked").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["area"], "routing-stacked");
+}

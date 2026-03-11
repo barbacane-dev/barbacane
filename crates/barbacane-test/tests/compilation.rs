@@ -86,3 +86,12 @@ async fn test_fixture_compiles_correlation_id() {
     let resp = gateway.get("/__barbacane/health").await.unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+#[tokio::test]
+async fn test_fixture_compiles_ai_proxy() {
+    let gateway = TestGateway::from_spec(&fixture("ai-proxy.yaml"))
+        .await
+        .expect("ai-proxy fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
