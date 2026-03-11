@@ -1157,3 +1157,69 @@ GET {{baseUrl}}/assets/images/2024/logo.png
 GET {{baseUrl}}/assets/does-not-exist.txt
 
 ###
+
+### ================================================================
+### Response Transformer (response-transformer.yaml)
+### ================================================================
+### Setup:
+###   ./target/debug/barbacane compile --spec tests/fixtures/response-transformer.yaml -m tests/fixtures/barbacane.yaml -o /tmp/response-transformer.bca
+###   ./target/debug/barbacane serve --artifact /tmp/response-transformer.bca --dev
+
+### ================================
+### Status Code Mapping
+### ================================
+
+### Map 200 → 201 (201)
+# Upstream returns 200, plugin maps to 201
+GET {{baseUrl}}/status
+
+###
+
+### Multiple status code mappings (201)
+# 200→201, 400→403, 500→503
+GET {{baseUrl}}/status-multi
+
+###
+
+### ================================
+### Header Transformations
+### ================================
+
+### Add/remove/rename response headers (200)
+# X-Gateway and X-Frame-Options headers are added
+# Server and X-Powered-By headers are removed
+# X-Old-Name header is renamed to X-New-Name
+GET {{baseUrl}}/headers
+
+###
+
+### ================================
+### JSON Body Transformations
+### ================================
+
+### Add/remove/rename body fields (200)
+# Adds /gateway and /metadata/version fields
+# Removes /internal_flags and /debug_info
+# Renames /userName → /user_name
+GET {{baseUrl}}/body
+
+###
+
+### ================================
+### Combined Transformations
+### ================================
+
+### All transformation types together (201)
+# Status: 200 → 201
+# Headers: add X-Gateway, remove Server
+# Body: add /gateway, remove /internal
+GET {{baseUrl}}/combined
+
+###
+
+### ================================
+### Passthrough (baseline)
+### ================================
+
+### No response-transformer middleware (200)
+GET {{baseUrl}}/passthrough

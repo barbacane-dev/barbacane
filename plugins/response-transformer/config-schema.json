@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:response-transformer:config",
+  "title": "Response Transformer Configuration",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "object",
+      "additionalProperties": { "type": "integer" },
+      "description": "Map upstream status codes to new status codes (e.g., 200 → 201)"
+    },
+    "headers": {
+      "type": "object",
+      "description": "Response header transformations",
+      "properties": {
+        "add": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Add or overwrite response headers"
+        },
+        "set": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Add response headers only if not already present"
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Remove response headers by name (case-insensitive)"
+        },
+        "rename": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Rename response headers (old-name → new-name)"
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "description": "JSON body transformations using JSON Pointer (RFC 6901)",
+      "properties": {
+        "add": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Add or overwrite JSON fields using JSON Pointer paths. Only works on JSON bodies."
+        },
+        "remove": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Remove JSON fields using JSON Pointer paths. Only works on JSON bodies."
+        },
+        "rename": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Rename JSON fields (old-pointer → new-pointer). Only works on JSON bodies."
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

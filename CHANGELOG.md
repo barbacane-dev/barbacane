@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Response Transformer
+- `response-transformer` middleware plugin — declarative response transformations before client delivery
+  - Status code mapping: configurable mapping table (e.g., 200 → 201, 400 → 403)
+  - Header transformations: add, set (if absent), remove, rename
+  - JSON body transformations using JSON Pointer (RFC 6901): add, remove, rename fields
+
 #### AI Gateway (ADR-0024)
 - **`ai-proxy` dispatcher plugin**: unified OpenAI-compatible API routing to OpenAI, Anthropic, and Ollama
   - Automatic request/response translation for Anthropic Messages API (system message extraction, stop reason mapping, usage token remapping)
