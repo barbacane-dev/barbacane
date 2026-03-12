@@ -28,7 +28,7 @@ rules:
       function: truthy
 
   barbacane-dispatch-known-plugin:
-    description: "Dispatcher plugin must be one of: mock, http-upstream, kafka, nats, s3, lambda."
+    description: "Dispatcher plugin must be one of: ai-proxy, http-upstream, kafka, lambda, mock, nats, s3, ws-upstream."
     documentationUrl: https://docs.barbacane.dev/guide/dispatchers.html
     severity: error
     given: "$.paths[*][*]['x-barbacane-dispatch'].name"
@@ -36,12 +36,14 @@ rules:
       function: enumeration
       functionOptions:
         values:
-          - mock
+          - ai-proxy
           - http-upstream
           - kafka
+          - lambda
+          - mock
           - nats
           - s3
-          - lambda
+          - ws-upstream
 
   barbacane-dispatch-has-config:
     description: x-barbacane-dispatch must include a "config" object.
@@ -100,6 +102,7 @@ rules:
           - rate-limit
           - request-size-limit
           - request-transformer
+          - response-transformer
 
   barbacane-middleware-config-valid:
     description: Middleware config must validate against the plugin's JSON Schema.
@@ -155,6 +158,7 @@ rules:
           - rate-limit
           - request-size-limit
           - request-transformer
+          - response-transformer
 
   barbacane-op-middleware-config-valid:
     description: Operation-level middleware config must validate against the plugin's JSON Schema.
@@ -189,7 +193,7 @@ rules:
   # ---------------------------------------------------------------------------
 
   barbacane-no-plaintext-upstream:
-    description: "http-upstream URLs should use HTTPS; plaintext HTTP is insecure."
+    description: "Upstream URLs should use HTTPS/WSS; plaintext HTTP/WS is insecure."
     documentationUrl: https://docs.barbacane.dev/guide/dispatchers.html#http-upstream
     severity: warn
     given: "$.paths[*][*]['x-barbacane-dispatch']"

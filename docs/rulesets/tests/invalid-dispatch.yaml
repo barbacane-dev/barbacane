@@ -72,3 +72,48 @@ paths:
       responses:
         "200":
           description: OK
+
+  /ws-missing-url:
+    get:
+      operationId: wsMissingUrl
+      summary: ws-upstream missing required url
+      description: ws-upstream without the required url field.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: ws-upstream
+        config:
+          connect_timeout: 5
+      responses:
+        "101":
+          description: Switching Protocols
+
+  /ws-bad-field:
+    get:
+      operationId: wsBadField
+      summary: ws-upstream unknown field
+      description: ws-upstream with unknown config field.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: ws-upstream
+        config:
+          url: "wss://example.com"
+          unknown_option: true
+      responses:
+        "101":
+          description: Switching Protocols
+
+  /ai-bad-field:
+    post:
+      operationId: aiBadField
+      summary: ai-proxy unknown field
+      description: ai-proxy with unknown config field.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          provider: "openai"
+          model: "gpt-4o"
+          unknown_option: true
+      responses:
+        "200":
+          description: OK

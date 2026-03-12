@@ -16,6 +16,13 @@ x-barbacane-middlewares:
     config:
       quota: 100
       window: 60
+  - name: response-transformer
+    config:
+      headers:
+        add:
+          x-request-id: "abc"
+        remove:
+          - x-internal-trace
 
 paths:
   /health:
@@ -49,3 +56,39 @@ paths:
       responses:
         "200":
           description: User list
+
+  /ws:
+    get:
+      operationId: wsProxy
+      summary: WebSocket proxy
+      description: Proxies WebSocket connections to upstream.
+      tags: [websocket]
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: ws-upstream
+        config:
+          url: "wss://ws.internal.example.com"
+          connect_timeout: 10
+          path: "/v1/stream"
+      responses:
+        "101":
+          description: Switching Protocols
+
+  /chat/completions:
+    post:
+      operationId: chatCompletions
+      summary: AI chat completions
+      description: Proxies chat completion requests to LLM providers.
+      tags: [ai]
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          provider: "openai"
+          model: "gpt-4o"
+          api_key: "env://OPENAI_API_KEY"
+          timeout: 120
+          max_tokens: 4096
+      responses:
+        "200":
+          description: Chat completion response

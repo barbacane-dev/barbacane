@@ -1,10 +1,8 @@
-// Validates middleware config against the plugin's JSON Schema.
-//
-// Each middleware plugin ships a config-schema.json.  This function loads the
-// matching schema by plugin name and checks the config object against it.
+// AUTO-GENERATED from plugins/*/config-schema.json — do not edit by hand.
+// Regenerate: node docs/rulesets/generate.mjs
 
 const schemas = {
-  acl: {
+  "acl": {
     required: [],
     properties: {
       allow: { type: "array" },
@@ -17,6 +15,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "apikey-auth": {
     required: [],
     properties: {
@@ -27,6 +26,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "basic-auth": {
     required: [],
     properties: {
@@ -36,6 +36,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "bot-detection": {
     required: [],
     properties: {
@@ -47,7 +48,8 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  cache: {
+
+  "cache": {
     required: [],
     properties: {
       ttl: { type: "integer", minimum: 1, maximum: 86400 },
@@ -57,14 +59,17 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  cel: {
+
+  "cel": {
     required: ["expression"],
     properties: {
       expression: { type: "string" },
       deny_message: { type: "string" },
+      on_match: { type: "object" },
     },
     additionalProperties: false,
   },
+
   "correlation-id": {
     required: [],
     properties: {
@@ -75,7 +80,8 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  cors: {
+
+  "cors": {
     required: ["allowed_origins"],
     properties: {
       allowed_origins: { type: "array" },
@@ -87,6 +93,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "http-log": {
     required: ["endpoint"],
     properties: {
@@ -100,6 +107,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "ip-restriction": {
     required: [],
     properties: {
@@ -110,6 +118,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "jwt-auth": {
     required: [],
     properties: {
@@ -123,8 +132,9 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "oauth2-auth": {
-    required: ["introspection_endpoint", "client_id", "client_secret"],
+    required: ["introspection_endpoint","client_id","client_secret"],
     properties: {
       introspection_endpoint: { type: "string" },
       client_id: { type: "string" },
@@ -134,7 +144,8 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  observability: {
+
+  "observability": {
     required: [],
     properties: {
       latency_slo_ms: { type: "integer", minimum: 1 },
@@ -144,6 +155,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "oidc-auth": {
     required: ["issuer_url"],
     properties: {
@@ -157,6 +169,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "opa-authz": {
     required: ["opa_url"],
     properties: {
@@ -168,8 +181,9 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "rate-limit": {
-    required: ["quota", "window"],
+    required: ["quota","window"],
     properties: {
       quota: { type: "integer", minimum: 1 },
       window: { type: "integer", minimum: 1 },
@@ -178,6 +192,7 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "request-size-limit": {
     required: [],
     properties: {
@@ -186,12 +201,23 @@ const schemas = {
     },
     additionalProperties: false,
   },
+
   "request-transformer": {
     required: [],
     properties: {
       headers: { type: "object" },
       querystring: { type: "object" },
       path: { type: "object" },
+      body: { type: "object" },
+    },
+    additionalProperties: false,
+  },
+
+  "response-transformer": {
+    required: [],
+    properties: {
+      status: { type: "object" },
+      headers: { type: "object" },
       body: { type: "object" },
     },
     additionalProperties: false,
@@ -217,7 +243,6 @@ function runRule(input) {
   const schema = schemas[pluginName];
   if (!schema) return []; // unknown plugin handled by enumeration rule
 
-  // config is optional for plugins with no required fields
   if (!config && schema.required.length === 0) return [];
   if (!config && schema.required.length > 0) {
     return [{
@@ -228,7 +253,6 @@ function runRule(input) {
   if (!config) return [];
 
   const results = [];
-  // Check required fields
   for (const field of schema.required) {
     if (config[field] === undefined || config[field] === null) {
       results.push({
@@ -237,7 +261,6 @@ function runRule(input) {
     }
   }
 
-  // Check for unknown fields
   if (schema.additionalProperties === false && schema.properties) {
     const allowed = Object.keys(schema.properties);
     for (const key of Object.keys(config)) {
@@ -249,13 +272,11 @@ function runRule(input) {
     }
   }
 
-  // Check field types
   if (schema.properties) {
     for (const [key, prop] of Object.entries(schema.properties)) {
       const value = config[key];
       if (value === undefined || value === null) continue;
 
-      // Skip type checking for secret references (env://, file://)
       if (typeof value === "string" && (value.startsWith("env://") || value.startsWith("file://"))) {
         continue;
       }
@@ -299,6 +320,6 @@ function checkType(value, expectedType) {
     case "array":
       return Array.isArray(value);
     default:
-      return false; // unknown type: fail explicitly rather than silently pass
+      return false;
   }
 }
