@@ -1482,6 +1482,15 @@ impl Gateway {
             }
         };
 
+        // Pre-compute Sec-WebSocket-Accept for WebSocket upgrades (RFC 6455 §4.2.2).
+        // Extract the key from request_json before it's moved into the dispatch closure.
+        let ws_accept = serde_json::from_slice::<serde_json::Value>(&request_json)
+            .ok()
+            .and_then(|v| v["headers"]["sec-websocket-key"].as_str().map(String::from))
+            .map(|key| {
+                tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes())
+            });
+
         // Set up streaming channel (ADR-0023). The sender is injected into the instance so that
         // `host_http_stream` can push `StreamEvent::Headers` then `StreamEvent::Chunk` events
         // before `dispatch()` returns.
@@ -1699,10 +1708,14 @@ impl Gateway {
 
                     // Return 101 Switching Protocols to the client.
                     // hyper will handle the actual protocol switch.
-                    let response = Response::builder()
+                    let mut builder = Response::builder()
                         .status(StatusCode::SWITCHING_PROTOCOLS)
                         .header("upgrade", "websocket")
-                        .header("connection", "Upgrade")
+                        .header("connection", "Upgrade");
+                    if let Some(accept) = &ws_accept {
+                        builder = builder.header("sec-websocket-accept", accept.as_str());
+                    }
+                    let response = builder
                         .body(BoxBody::new(Full::new(Bytes::new())))
                         .expect("valid 101 response");
 
