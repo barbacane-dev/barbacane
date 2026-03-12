@@ -5,7 +5,7 @@ Barbacane is dual-licensed:
 | License | When it applies |
 |---------|----------------|
 | [GNU Affero General Public License v3](LICENSE) (AGPLv3) | Default for everyone |
-| [Commercial License](LICENSE-COMMERCIAL) | When you cannot or do not want to comply with AGPLv3 |
+| [Commercial License](COMMERCIAL-LICENSE) | When you cannot or do not want to comply with AGPLv3 |
 
 ---
 
@@ -33,7 +33,7 @@ A commercial license is **free of charge** for:
 - **Small startups** — annual revenue (ARR) ≤ €1 M *and* ≤ 10 employees.
 - **Non-profits, academic institutions, and open-source projects** whose output is itself open-source.
 
-See [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for the full terms.
+See [COMMERCIAL-LICENSE](COMMERCIAL-LICENSE) for the full terms.
 
 ---
 
