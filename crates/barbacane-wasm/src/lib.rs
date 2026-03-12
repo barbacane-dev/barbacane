@@ -24,6 +24,7 @@ pub mod secrets;
 mod trap;
 mod validate;
 pub mod version;
+pub mod ws_client;
 
 pub use chain::{
     execute_on_request, execute_on_request_with_metrics, execute_on_response,
@@ -65,6 +66,9 @@ pub use kafka_client::KafkaPublisher;
 
 // NATS publisher for host_nats_publish
 pub use nats_client::NatsPublisher;
+
+// WebSocket client for host_ws_upgrade
+pub use ws_client::UpstreamWsStream;
 
 /// Re-export plugin SDK types for convenience.
 pub use barbacane_plugin_sdk::prelude::{Action, Request, Response};

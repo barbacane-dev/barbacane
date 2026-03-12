@@ -143,6 +143,19 @@ paths:
           secret_access_key: env://AWS_SECRET_ACCESS_KEY
 ```
 
+### Dispatcher: `ws-upstream`
+
+Transparent WebSocket proxy. Upgrades the connection and relays frames bidirectionally.
+
+```yaml
+x-barbacane-dispatch:
+  name: ws-upstream
+  config:
+    url: string             # Required. Upstream WebSocket URL (ws:// or wss://)
+    connect_timeout: number # Optional. Connection timeout in seconds (default: 5)
+    path: string            # Optional. Upstream path template with {param} substitution
+```
+
 ### Examples
 
 **Mock response:**

@@ -148,6 +148,7 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "telemetry",
     "generate_uuid",
     "verify_signature",
+    "ws_upgrade",
 ];
 
 /// Check if a capability name is known.
@@ -175,6 +176,7 @@ pub fn capability_to_imports(capability: &str) -> &'static [&'static str] {
         ],
         "generate_uuid" => &["host_uuid_generate", "host_uuid_read_result"],
         "verify_signature" => &["host_verify_signature"],
+        "ws_upgrade" => &["host_ws_upgrade", "host_http_read_result"],
         _ => &[],
     }
 }
@@ -290,6 +292,27 @@ host_functions = ["unknown_function"]
         assert!(exports.contains(&"init"));
         assert!(exports.contains(&"on_request"));
         assert!(exports.contains(&"on_response"));
+    }
+
+    #[test]
+    fn parse_ws_upgrade_capability() {
+        let manifest_str = r#"
+[plugin]
+name = "ws-upstream"
+version = "0.1.0"
+type = "dispatcher"
+wasm = "ws_upstream.wasm"
+
+[capabilities]
+host_functions = ["ws_upgrade", "log"]
+"#;
+        let manifest = PluginManifest::from_toml(manifest_str).unwrap();
+        assert!(manifest.has_capability("ws_upgrade"));
+        assert!(manifest.has_capability("log"));
+        assert_eq!(
+            capability_to_imports("ws_upgrade"),
+            &["host_ws_upgrade", "host_http_read_result"]
+        );
     }
 
     #[test]

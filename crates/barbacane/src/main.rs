@@ -1000,24 +1000,34 @@ impl Gateway {
 
                 let content_type = headers.get("content-type").map(|s| s.as_str());
 
-                // Collect body bytes
-                let body_bytes = match req.collect().await {
-                    Ok(collected) => collected.to_bytes(),
-                    Err(_) => {
-                        let response = self.bad_request_response("failed to read request body");
-                        self.record_request_metrics(
-                            &method_str,
-                            &route_path,
-                            response.status().as_u16(),
-                            0,
-                            0,
-                            start_time,
-                        );
-                        return Ok(box_full(Self::add_standard_headers(
-                            response,
-                            &request_id,
-                            &trace_id,
-                        )));
+                // For WebSocket upgrade requests (ADR-0026), extract the upgrade
+                // handle before consuming the body. The body is empty for GET
+                // upgrade requests, so we skip collection.
+                let is_ws_upgrade = headers
+                    .get("upgrade")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+
+                let (body_bytes, upgrade_handle) = if is_ws_upgrade {
+                    (Bytes::new(), Some(hyper::upgrade::on(req)))
+                } else {
+                    match req.collect().await {
+                        Ok(collected) => (collected.to_bytes(), None),
+                        Err(_) => {
+                            let response = self.bad_request_response("failed to read request body");
+                            self.record_request_metrics(
+                                &method_str,
+                                &route_path,
+                                response.status().as_u16(),
+                                0,
+                                0,
+                                start_time,
+                            );
+                            return Ok(box_full(Self::add_standard_headers(
+                                response,
+                                &request_id,
+                                &trace_id,
+                            )));
+                        }
                     }
                 };
 
@@ -1084,6 +1094,7 @@ impl Gateway {
                         &body_bytes,
                         &headers,
                         client_addr,
+                        upgrade_handle,
                     )
                     .await?;
 
@@ -1201,6 +1212,7 @@ impl Gateway {
     }
 
     /// Dispatch a request to the appropriate handler.
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch(
         &self,
         operation: &CompiledOperation,
@@ -1209,6 +1221,7 @@ impl Gateway {
         request_body: &[u8],
         headers: &HashMap<String, String>,
         client_addr: Option<SocketAddr>,
+        upgrade_handle: Option<hyper::upgrade::OnUpgrade>,
     ) -> Result<Response<AnyBody>, Infallible> {
         let dispatch = &operation.dispatch;
 
@@ -1268,7 +1281,8 @@ impl Gateway {
         }
 
         // Dispatch to the plugin.
-        // Returns either a buffered response or a streaming response (ADR-0023).
+        // Returns either a buffered response, streaming response (ADR-0023),
+        // or WebSocket upgrade response (ADR-0026).
         let dispatch_outcome = match self
             .dispatch_wasm_plugin_inner(
                 &dispatch.name,
@@ -1276,6 +1290,7 @@ impl Gateway {
                 final_request_json,
                 middleware_instances,
                 middleware_context,
+                upgrade_handle,
             )
             .await
         {
@@ -1446,6 +1461,7 @@ impl Gateway {
         request_json: Vec<u8>,
         middleware_instances: Vec<barbacane_wasm::PluginInstance>,
         middleware_context: barbacane_wasm::RequestContext,
+        upgrade_handle: Option<hyper::upgrade::OnUpgrade>,
     ) -> Result<Response<AnyBody>, Response<Full<Bytes>>> {
         use barbacane_wasm::StreamEvent;
         use futures_util::stream;
@@ -1466,6 +1482,15 @@ impl Gateway {
             }
         };
 
+        // Pre-compute Sec-WebSocket-Accept for WebSocket upgrades (RFC 6455 §4.2.2).
+        // Extract the key from request_json before it's moved into the dispatch closure.
+        let ws_accept = serde_json::from_slice::<serde_json::Value>(&request_json)
+            .ok()
+            .and_then(|v| v["headers"]["sec-websocket-key"].as_str().map(String::from))
+            .map(|key| {
+                tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes())
+            });
+
         // Set up streaming channel (ADR-0023). The sender is injected into the instance so that
         // `host_http_stream` can push `StreamEvent::Headers` then `StreamEvent::Chunk` events
         // before `dispatch()` returns.
@@ -1477,7 +1502,8 @@ impl Gateway {
             let result = instance.dispatch(&request_json);
             let output = instance.take_output();
             let last_http = instance.take_last_http_result();
-            (result, output, last_http)
+            let ws_upstream = instance.take_ws_upstream();
+            (result, output, last_http, ws_upstream)
         });
 
         // Race: first stream event vs. WASM completion.
@@ -1531,7 +1557,7 @@ impl Gateway {
                 let metrics = Arc::clone(&self.metrics);
                 tokio::spawn(async move {
                     match wh.await {
-                        Ok((Ok(_), _, Some(last_http))) if !middleware_instances.is_empty() => {
+                        Ok((Ok(_), _, Some(last_http), _)) if !middleware_instances.is_empty() => {
                             if let Ok(plugin_resp) =
                                 serde_json::from_slice::<barbacane_wasm::Response>(&last_http)
                             {
@@ -1549,7 +1575,7 @@ impl Gateway {
                                 );
                             }
                         }
-                        Ok((Err(e), _, _)) => {
+                        Ok((Err(e), _, _, _)) => {
                             tracing::warn!(
                                 error = %e,
                                 "streaming dispatch error (response already sent)"
@@ -1578,7 +1604,7 @@ impl Gateway {
                     None => wasm_handle.await,
                 };
 
-                let (dispatch_result, output, _) = match wasm_result {
+                let (dispatch_result, output, _, ws_upstream) = match wasm_result {
                     Ok(r) => r,
                     Err(e) => {
                         return Err(
@@ -1614,6 +1640,86 @@ impl Gateway {
                     return Err(self.dev_error_response(
                         "plugin returned streaming sentinel without stream events",
                     ));
+                }
+
+                // ── WebSocket upgrade path (ADR-0026) ──────────────────────────────────
+                // status=101 with a ws_upstream connection means the dispatcher called
+                // host_ws_upgrade successfully. Complete the client-side upgrade and
+                // spawn bidirectional frame relay.
+                if plugin_response.status == 101 {
+                    let ws_upstream = match ws_upstream {
+                        Some(ws) => ws,
+                        None => {
+                            return Err(self.dev_error_response(
+                                "plugin returned 101 without calling host_ws_upgrade",
+                            ));
+                        }
+                    };
+
+                    let upgrade_handle = match upgrade_handle {
+                        Some(h) => h,
+                        None => {
+                            return Err(self.dev_error_response(
+                                "plugin returned 101 but request is not an HTTP upgrade",
+                            ));
+                        }
+                    };
+
+                    // Run on_response for observability (modifications discarded).
+                    if !middleware_instances.is_empty() {
+                        let sentinel_response = barbacane_wasm::Response {
+                            status: 101,
+                            headers: std::collections::BTreeMap::new(),
+                            body: None,
+                        };
+                        let _ = self.execute_middleware_on_response(
+                            middleware_instances,
+                            sentinel_response,
+                            middleware_context,
+                        );
+                    }
+
+                    // Spawn the WebSocket relay as a background task.
+                    // The client-side upgrade completes when we return the 101 response.
+                    tokio::spawn(async move {
+                        // Wait for hyper to complete the HTTP upgrade.
+                        let upgraded = match upgrade_handle.await {
+                            Ok(u) => u,
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "WebSocket client upgrade failed"
+                                );
+                                return;
+                            }
+                        };
+
+                        // Wrap the upgraded client connection as a WebSocket.
+                        let client_ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+                            TokioIo::new(upgraded),
+                            tokio_tungstenite::tungstenite::protocol::Role::Server,
+                            None,
+                        )
+                        .await;
+
+                        // Relay frames bidirectionally.
+                        Self::relay_websocket(client_ws, ws_upstream).await;
+                    });
+
+                    // Return 101 Switching Protocols to the client.
+                    // hyper will handle the actual protocol switch.
+                    let mut builder = Response::builder()
+                        .status(StatusCode::SWITCHING_PROTOCOLS)
+                        .header("upgrade", "websocket")
+                        .header("connection", "Upgrade");
+                    if let Some(accept) = &ws_accept {
+                        builder = builder.header("sec-websocket-accept", accept.as_str());
+                    }
+                    let response = builder
+                        .body(BoxBody::new(Full::new(Bytes::new())))
+                        .expect("valid 101 response");
+
+                    return Ok(response);
                 }
 
                 // Run on_response middleware chain.
@@ -1955,6 +2061,83 @@ impl Gateway {
             None
         };
         self.internal_error_response(detail.as_deref())
+    }
+
+    /// Relay WebSocket frames bidirectionally between client and upstream (ADR-0026).
+    ///
+    /// Runs until either side closes or an error occurs. Frames are forwarded
+    /// as-is with no inspection or transformation.
+    async fn relay_websocket<C, U>(client_ws: C, upstream_ws: U)
+    where
+        C: futures_util::Sink<
+                tokio_tungstenite::tungstenite::Message,
+                Error = tokio_tungstenite::tungstenite::Error,
+            > + futures_util::Stream<
+                Item = Result<
+                    tokio_tungstenite::tungstenite::Message,
+                    tokio_tungstenite::tungstenite::Error,
+                >,
+            > + Send
+            + 'static,
+        U: futures_util::Sink<
+                tokio_tungstenite::tungstenite::Message,
+                Error = tokio_tungstenite::tungstenite::Error,
+            > + futures_util::Stream<
+                Item = Result<
+                    tokio_tungstenite::tungstenite::Message,
+                    tokio_tungstenite::tungstenite::Error,
+                >,
+            > + Send
+            + 'static,
+    {
+        use futures_util::{SinkExt, StreamExt};
+
+        let (mut client_tx, mut client_rx) = client_ws.split();
+        let (mut upstream_tx, mut upstream_rx) = upstream_ws.split();
+
+        // Client → Upstream
+        let client_to_upstream = async move {
+            while let Some(msg) = client_rx.next().await {
+                match msg {
+                    Ok(m) if m.is_close() => {
+                        let _ = upstream_tx.close().await;
+                        break;
+                    }
+                    Ok(m) => {
+                        if upstream_tx.send(m).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        };
+
+        // Upstream → Client
+        let upstream_to_client = async move {
+            while let Some(msg) = upstream_rx.next().await {
+                match msg {
+                    Ok(m) if m.is_close() => {
+                        let _ = client_tx.close().await;
+                        break;
+                    }
+                    Ok(m) => {
+                        if client_tx.send(m).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        };
+
+        // Run both directions concurrently; when one ends, drop the other.
+        tokio::select! {
+            () = client_to_upstream => {},
+            () = upstream_to_client => {},
+        }
+
+        tracing::debug!("WebSocket relay closed");
     }
 }
 

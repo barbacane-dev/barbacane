@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ws-upstream",
+  "description": "Transparent WebSocket proxy dispatcher configuration",
+  "type": "object",
+  "required": ["url"],
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Upstream WebSocket URL (ws:// or wss://)",
+      "pattern": "^wss?://"
+    },
+    "connect_timeout": {
+      "type": "number",
+      "description": "Connection timeout in seconds",
+      "default": 5,
+      "minimum": 0.1,
+      "maximum": 300
+    },
+    "path": {
+      "type": "string",
+      "description": "Path template with {param} substitution (uses original path if not set)"
+    }
+  },
+  "additionalProperties": false
+}
