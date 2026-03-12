@@ -1,0 +1,14 @@
+[plugin]
+name = "ai-proxy"
+version = "0.1.0"
+type = "dispatcher"
+description = "AI gateway dispatcher — routes to LLM providers (OpenAI, Anthropic, Ollama) with unified OpenAI-compatible API, provider fallback, and policy-driven routing via named targets"
+wasm = "ai-proxy.wasm"
+
+[capabilities]
+log = true
+context_get = true
+context_set = true
+http_call = true
+telemetry = true
+clock_now = true

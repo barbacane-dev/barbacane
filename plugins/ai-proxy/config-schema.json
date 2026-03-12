@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:ai-proxy:config",
+  "title": "AI Proxy Dispatcher Config",
+  "description": "Configuration for the AI proxy dispatcher plugin. Exposes a unified OpenAI-compatible API and routes to LLM providers (OpenAI, Anthropic, Ollama). Supports named targets for policy-driven routing (via the `cel` middleware), provider fallback on 5xx, and token count propagation into context for downstream middlewares.\n\nTwo configuration modes:\n- **Flat**: set `provider` + `model` (+ optional `api_key`, `base_url`) for a single provider.\n- **Targets map**: define named `targets` and optionally a `default_target`; the `cel` middleware selects the active target by writing `ai.target` into context.\n\nThe `fallback` list is tried in order when the resolved target returns a 5xx or a connection error.",
+  "type": "object",
+  "$defs": {
+    "TargetConfig": {
+      "type": "object",
+      "description": "A named provider target: provider type, model, credentials, and optional custom endpoint.",
+      "required": ["provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["openai", "anthropic", "ollama"],
+          "description": "LLM provider. `openai` and `ollama` are OpenAI-compatible (passthrough). `anthropic` uses the Messages API with automatic request/response translation."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier sent to the provider (e.g. `gpt-4o`, `claude-opus-4-6`, `mistral`)."
+        },
+        "api_key": {
+          "type": "string",
+          "description": "Provider API key. Supports `${ENV_VAR}` substitution. Omit for Ollama (unauthenticated local endpoint)."
+        },
+        "base_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Custom provider base URL. Defaults: OpenAI → `https://api.openai.com`, Anthropic → `https://api.anthropic.com`, Ollama → `http://localhost:11434`. Use this for Azure OpenAI, self-hosted vLLM, remote Ollama, etc."
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["openai", "anthropic", "ollama"],
+      "description": "Provider for the flat single-provider config. Required when `targets` is not defined."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier for the flat config (e.g. `gpt-4o`, `claude-opus-4-6`, `llama3`)."
+    },
+    "api_key": {
+      "type": "string",
+      "description": "API key for the flat config. Supports `${ENV_VAR}` substitution."
+    },
+    "base_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Custom base URL for the flat config. Overrides the provider default."
+    },
+    "timeout": {
+      "type": "integer",
+      "description": "Request timeout in seconds. LLM calls can take 10–60 s; set higher for long-running completions.",
+      "default": 120,
+      "minimum": 1
+    },
+    "max_tokens": {
+      "type": "integer",
+      "description": "Default `max_tokens` injected into the request when the client omits it. Required for Anthropic (enforced by the API). Acts as a cost guardrail for OpenAI/Ollama.",
+      "minimum": 1
+    },
+    "fallback": {
+      "type": "array",
+      "description": "Ordered list of fallback providers. Tried in sequence when the primary target returns a 5xx or a connection error. 4xx responses are returned directly to the client without fallback.",
+      "items": { "$ref": "#/$defs/TargetConfig" },
+      "default": []
+    },
+    "targets": {
+      "type": "object",
+      "description": "Named provider targets for policy-driven routing. The `cel` middleware selects the active target by writing `ai.target` into context before this dispatcher runs. Example: `cel` sets `ai.target: premium` → dispatcher uses the `premium` target config.",
+      "additionalProperties": { "$ref": "#/$defs/TargetConfig" }
+    },
+    "default_target": {
+      "type": "string",
+      "description": "Name of the target to use when no `ai.target` context key is present. Must match a key in `targets`. When omitted and no context target is set, falls back to the flat `provider`/`model` config."
+    }
+  }
+}

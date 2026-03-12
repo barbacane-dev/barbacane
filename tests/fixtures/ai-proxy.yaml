@@ -1,0 +1,65 @@
+openapi: "3.0.3"
+info:
+  title: AI Proxy Dispatcher Test API
+  version: "1.0.0"
+  description: API for testing the ai-proxy dispatcher plugin
+
+paths:
+  /v1/chat/completions:
+    post:
+      summary: OpenAI-compatible chat completions endpoint (flat config)
+      operationId: chatCompletionsFlat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          provider: ollama
+          model: llama3
+          base_url: "http://localhost:11434"
+          timeout: 30
+          max_tokens: 512
+      responses:
+        "200":
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /ai/premium/chat/completions:
+    post:
+      summary: Chat completions via named target (targets map + default_target)
+      operationId: chatCompletionsNamedTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          default_target: local
+          targets:
+            local:
+              provider: ollama
+              model: llama3
+              base_url: "http://localhost:11434"
+            openai:
+              provider: openai
+              model: gpt-4o
+              api_key: "sk-placeholder"
+          timeout: 30
+          max_tokens: 512
+      responses:
+        "200":
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                type: object

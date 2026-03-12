@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:http-log-config",
+  "$id": "urn:barbacane:plugin:http-log:config",
   "title": "HTTP Log Middleware Config",
   "description": "Configuration for the HTTP logging middleware plugin",
   "type": "object",

@@ -89,3 +89,72 @@ paths:
       responses:
         "200":
           description: Public access
+
+  /cel-routing-match:
+    get:
+      summary: CEL routing mode — expression true, sets context key, request continues
+      operationId: getCelRoutingMatch
+      x-barbacane-middlewares:
+        - name: cel
+          config:
+            expression: "request.method == 'GET'"
+            on_match:
+              set_context:
+                ai.target: premium
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "routing-match"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Request continued (context key set)
+
+  /cel-routing-no-match:
+    get:
+      summary: CEL routing mode — expression false, request still continues (no 403)
+      operationId: getCelRoutingNoMatch
+      x-barbacane-middlewares:
+        - name: cel
+          config:
+            expression: "false"
+            on_match:
+              set_context:
+                ai.target: premium
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "routing-no-match"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Request continued (no 403 in routing mode)
+
+  /cel-routing-stacked:
+    get:
+      summary: Stacked CEL routing — first rule matches, second does not; both continue
+      operationId: getCelRoutingStacked
+      x-barbacane-middlewares:
+        - name: cel
+          config:
+            expression: "request.method == 'GET'"
+            on_match:
+              set_context:
+                ai.target: standard
+        - name: cel
+          config:
+            expression: "request.method == 'POST'"
+            on_match:
+              set_context:
+                ai.target: premium
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "routing-stacked"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Request continued through both routing CEL instances

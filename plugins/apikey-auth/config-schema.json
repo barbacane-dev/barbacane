@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:apikey-auth-config",
+  "$id": "urn:barbacane:plugin:apikey-auth:config",
   "title": "API Key Authentication Middleware Config",
   "description": "Configuration for the API key authentication middleware plugin",
   "type": "object",

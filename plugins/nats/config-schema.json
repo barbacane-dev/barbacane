@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:nats-config",
+  "$id": "urn:barbacane:plugin:nats:config",
   "title": "NATS Dispatcher Config",
   "description": "Configuration for the NATS dispatcher plugin",
   "type": "object",

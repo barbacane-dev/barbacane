@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:kafka-config",
+  "$id": "urn:barbacane:plugin:kafka:config",
   "title": "Kafka Dispatcher Config",
   "description": "Configuration for the Kafka dispatcher plugin",
   "type": "object",

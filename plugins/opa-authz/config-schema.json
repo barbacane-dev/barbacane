@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:opa-authz-config",
+  "$id": "urn:barbacane:plugin:opa-authz:config",
   "title": "OPA Authorization Middleware Config",
   "description": "Configuration for the OPA authorization middleware plugin. Evaluates access control policies via the OPA REST API.",
   "type": "object",

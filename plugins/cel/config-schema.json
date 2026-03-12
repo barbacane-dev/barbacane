@@ -1,20 +1,34 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:barbacane:schema:cel-config",
+  "$id": "urn:barbacane:plugin:cel:config",
   "title": "CEL Policy Evaluation Middleware Config",
-  "description": "Configuration for the CEL policy evaluation middleware plugin. Evaluates inline CEL expressions against request context for access control decisions.",
+  "description": "Configuration for the CEL policy evaluation middleware plugin. Evaluates inline CEL expressions against request context.\n\nTwo modes:\n- **Access-control** (default, no `on_match`): `true` → continue, `false` → 403 Forbidden.\n- **Routing** (`on_match` present): `true` → write context keys and continue, `false` → continue unchanged (no 403). Used with the `ai-proxy` dispatcher to implement policy-driven model routing.",
   "type": "object",
   "required": ["expression"],
+  "additionalProperties": false,
   "properties": {
     "expression": {
       "type": "string",
-      "description": "CEL expression that must evaluate to a boolean. Has access to a `request` object with fields: method, path, query, headers, body, client_ip, path_params, consumer, claims."
+      "description": "CEL expression that must evaluate to a boolean. Has access to a `request` object with fields: `method`, `path`, `query`, `headers`, `body`, `client_ip`, `path_params`, `consumer`, `claims`."
     },
     "deny_message": {
       "type": "string",
-      "description": "Custom message returned in the 403 Forbidden response body when the expression evaluates to false.",
+      "description": "Custom message returned in the 403 Forbidden response body when the expression evaluates to false (access-control mode only; ignored when `on_match` is set).",
       "default": "Access denied by policy"
+    },
+    "on_match": {
+      "type": "object",
+      "description": "When present, switches from access-control mode to routing mode. On a `true` result, the configured context keys are written and the request continues. On a `false` result, the request continues unchanged (no 403). Stack multiple `cel` instances to implement multiple routing rules.",
+      "additionalProperties": false,
+      "properties": {
+        "set_context": {
+          "type": "object",
+          "description": "Key-value pairs written into the request context when the expression is true. The `ai-proxy` dispatcher reads `ai.target` to select the active provider target.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
     }
-  },
-  "additionalProperties": false
+  }
 }

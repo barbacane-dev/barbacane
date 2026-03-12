@@ -11,7 +11,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 What's actively being worked on:
 
 - [x] `request-transformer` plugin — modify headers, query params, path, body before upstream
-- [ ] `response-transformer` plugin — modify response headers/body before client
+- [x] `response-transformer` plugin — modify response status code, headers, body before client
 - [ ] Documentation for transformation plugins
 
 ---
@@ -39,7 +39,7 @@ Near-term items ready to be picked up:
 | Plugin | Type | Description |
 |--------|------|-------------|
 | ~~`request-transformer`~~ | ~~Middleware~~ | ~~Modify headers, query params, path, body before upstream~~ — **done** |
-| ~~`response-transformer`~~ | Middleware | Modify response headers/body before client — **in progress** |
+| ~~`response-transformer`~~ | ~~Middleware~~ | ~~Modify response status code, headers, body before client~~ — **done** |
 | ~~`ip-restriction`~~ | ~~Middleware~~ | ~~Allow/deny by IP or CIDR range~~ — **done** |
 | ~~`basic-auth`~~ | ~~Middleware~~ | ~~Username/password authentication~~ — **done** |
 | ~~`http-log`~~ | ~~Middleware~~ | ~~Send request/response logs to HTTP endpoint~~ — **done** |
@@ -64,10 +64,10 @@ Near-term items ready to be picked up:
 
 | Plugin | Type | Description |
 |--------|------|-------------|
-| `ldap-auth` | Middleware | LDAP/Active Directory authentication (requires LDAP host functions or HTTP proxy) |
+| `ldap-auth` | Middleware | LDAP/Active Directory authentication — blocked pending a pure-Rust FFI-free LDAP client; HTTP bridge approach rejected as it reduces to existing auth plugins (ADR-0028) |
 | `hmac-auth` | Middleware | Signature-based auth (AWS SigV4 style) |
 | `grpc-web` | Middleware | gRPC-Web to gRPC translation |
-| `websocket` | Dispatcher | WebSocket proxy support |
+| `ws-upstream` | Dispatcher | WebSocket transparent proxy (ADR-0026): thin WASM plugin calls `host_ws_upgrade`; middleware chain runs on the HTTP Upgrade request (auth, rate-limit, logging); host runtime handles bidirectional frame relay via tokio |
 
 ### P3 — Specialized / Enterprise
 
@@ -79,6 +79,19 @@ Near-term items ready to be picked up:
 | `saml-auth` | Middleware | SAML authentication (most enterprise SSO covered by `oidc-auth`) |
 | `vault-auth` | Middleware | HashiCorp Vault integration for auth |
 
+### AI & LLM (ADR-0024)
+
+~~Prerequisite: the `ai-proxy` dispatcher requires a small backwards-compatible extension to the `cel` plugin (`on_match.set_context` + `context_set` capability) to enable policy-driven model routing. WASM plugin streaming (ADR-0023) is already implemented.~~
+
+| Plugin | Type | Priority | Description |
+|--------|------|----------|-------------|
+| ~~`cel` routing extension~~ | ~~Middleware~~ | ~~P0~~ | ~~`on_match.set_context` + `context_set` capability for policy-driven model routing~~ — **done** |
+| ~~`ai-proxy`~~ | ~~Dispatcher~~ | ~~P0~~ | ~~Route requests to LLM providers (OpenAI, Anthropic, Ollama); unified OpenAI-compatible API; format translation; provider fallback; policy-driven routing via named targets; token count context propagation~~ — **done** |
+| `ai-token-limit` | Middleware | P1 | Token-based rate limiting per consumer/model/time window (runs on_response, reads token counts from context set by `ai-proxy`) |
+| `ai-cost-tracker` | Middleware | P1 | Records cost metrics per provider/model via configurable price table; emits Prometheus counter for spend dashboards |
+| `ai-prompt-guard` | Middleware | P1 | Validate and constrain prompts: length limits, regex-based prompt injection detection, managed system template injection |
+| `ai-response-guard` | Middleware | P1 | Inspect LLM responses: PII redaction, blocked pattern detection; logs warnings when redaction is needed on already-streamed responses |
+
 ---
 
 ## Feature Backlog
@@ -89,7 +102,7 @@ Near-term items ready to be picked up:
 |---------|-------------|----------|
 | HTTP/3 support | QUIC-based HTTP/3 ingress via `quinn` crate | P3 |
 | gRPC support | Native gRPC proxying | P2 |
-| Response streaming | Stream large responses without buffering | P2 |
+| ~~Response streaming~~ | ~~Stream large responses without buffering; WASM plugin streaming via `host_http_stream` (ADR-0023)~~ — **done** |
 | Connection pooling tuning | Configurable pool sizes and health checks | P2 |
 | Certificate hot-reload | Reload TLS certs without restart | P2 |
 | ~~Hot-reload~~ | ~~Download and swap artifact at runtime without restart~~ — **done** |
@@ -111,6 +124,7 @@ Near-term items ready to be picked up:
 | Plugin registry | Central registry for discovering and versioning plugins | P2 |
 | Multi-tenancy | Organization/team isolation with SNI-based routing | P3 |
 | Health metrics collection | Aggregate CPU, memory, request rates from data planes | P2 |
+| MCP server | Native data plane MCP server (ADR-0025): auto-generate MCP tools from compiled `.bca` artifact; tool calls route through the full middleware pipeline (auth, rate limiting, validation); Streamable HTTP transport; `x-barbacane-mcp` spec extension to opt in/out per operation | P1 |
 
 ### Developer Experience
 
@@ -124,6 +138,7 @@ Near-term items ready to be picked up:
 | OpenAPI diff | Show changes between spec versions | P2 |
 | Improved error messages | More actionable validation and compilation errors | P2 |
 | Compile-time error catalog | Document all E-codes with examples and remediation | P2 |
+| MCP compile-time validation | Warn on missing `operationId` (required for tool naming); warn on schema constructs that don't map cleanly to MCP; embed MCP tool manifest in `.bca` so `tools/list` requires no runtime schema computation (ADR-0025) | P1 |
 | ~~Extension documentation~~ | ~~Complete `x-barbacane-dispatch` and `x-barbacane-middlewares` reference~~ — **done** (`docs/reference/extensions.md`) | ~~P1~~ |
 | Middleware ordering guide | Best practices for middleware execution order | P2 |
 | ~~Playground environment~~ | ~~Docker Compose development environment~~ — **done** (moved to [barbacane-dev/playground](https://github.com/barbacane-dev/playground)) |
@@ -224,7 +239,7 @@ To guarantee that the running gateway is executing the exact specification inten
 
 | Feature | Competitors | Notes |
 |---------|-------------|-------|
-| AI Gateway | Kong AI Proxy, APISIX AI plugins | LLM request/response handling, token counting |
+| AI Gateway | Kong AI Proxy, APISIX AI plugins | LLM request/response handling, token counting — **planned** (ADR-0024, ADR-0025) |
 | Service Mesh integration | Istio, Linkerd | Sidecar mode for mesh environments |
 | Multi-cluster routing | Kong, Traefik | Route across Kubernetes clusters |
 | API Analytics | Kong, Tyk | Built-in analytics dashboard |

@@ -1,0 +1,20 @@
+[package]
+name = "barbacane-ai-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "AI proxy dispatcher plugin for Barbacane API gateway"
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+barbacane-plugin-sdk = { path = "../../crates/barbacane-plugin-sdk" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
