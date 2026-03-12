@@ -67,7 +67,7 @@ Near-term items ready to be picked up:
 | `ldap-auth` | Middleware | LDAP/Active Directory authentication — blocked pending a pure-Rust FFI-free LDAP client; HTTP bridge approach rejected as it reduces to existing auth plugins (ADR-0028) |
 | `hmac-auth` | Middleware | Signature-based auth (AWS SigV4 style) |
 | `grpc-web` | Middleware | gRPC-Web to gRPC translation |
-| `ws-upstream` | Dispatcher | WebSocket transparent proxy (ADR-0026): thin WASM plugin calls `host_ws_upgrade`; middleware chain runs on the HTTP Upgrade request (auth, rate-limit, logging); host runtime handles bidirectional frame relay via tokio |
+| ~~`ws-upstream`~~ | ~~Dispatcher~~ | ~~WebSocket transparent proxy (ADR-0026): thin WASM plugin calls `host_ws_upgrade`; middleware chain runs on the HTTP Upgrade request (auth, rate-limit, logging); host runtime handles bidirectional frame relay via tokio~~ — **done** |
 
 ### P3 — Specialized / Enterprise
 

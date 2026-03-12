@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### WebSocket Transparent Proxy (ADR-0026)
+- `ws-upstream` dispatcher plugin — WebSocket transparent proxy via thin WASM plugin
+  - HTTP Upgrade request runs through the full middleware chain (auth, rate-limit, logging)
+  - Host runtime handles bidirectional frame relay via tokio
+  - Correct `Sec-WebSocket-Accept` header in 101 response per RFC 6455 §4.2.2
+
+#### WASM Streaming Dispatch (ADR-0023)
+- `host_http_stream` host function — streaming HTTP dispatch for large or chunked responses
+  - Responses streamed directly to client without full buffering in WASM memory
+  - Used by `ai-proxy` for OpenAI/Ollama SSE passthrough
+
+#### Vacuum Ruleset
+- `barbacane.yaml` ruleset for [vacuum](https://quobix.com/vacuum/) linter — validates `x-barbacane-*` extensions at lint time
+  - Catches upstream refs, plugin config errors, and missing auth opt-outs before compile/runtime
+  - Scoped to Barbacane extensions only (no `spectral:oas` extends)
+
+#### AsyncAPI 3.1
+- AsyncAPI 3.1 spec support added alongside existing 3.0 support
+
 #### Response Transformer
 - `response-transformer` middleware plugin — declarative response transformations before client delivery
   - Status code mapping: configurable mapping table (e.g., 200 → 201, 400 → 403)
@@ -56,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Metrics endpoint moved from `/__barbacane/metrics` on the main traffic port to `/metrics` on the dedicated admin port (default 8081)
+- License changed from Apache-2.0 to AGPLv3 + commercial dual-license (free tier for ≤€1M ARR / ≤10 employees, non-profit, academic, and OSS)
 
 ## [0.2.1] - 2026-02-27
 
