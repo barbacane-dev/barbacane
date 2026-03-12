@@ -130,7 +130,7 @@ Near-term items ready to be picked up:
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
-| Vacuum ruleset | Publish `vacuum:barbacane` ruleset validating `x-barbacane-*` extensions against plugin JSON schemas — catch upstream refs, plugin config errors, and missing auth opt-outs at lint time instead of compile/runtime | P0 |
+| ~~Vacuum ruleset~~ | ~~Publish `vacuum:barbacane` ruleset validating `x-barbacane-*` extensions against plugin JSON schemas — catch upstream refs, plugin config errors, and missing auth opt-outs at lint time instead of compile/runtime~~ — **done** (`docs/rulesets/barbacane.yaml`) | ~~P0~~ |
 | `barbacane dev` | Local development server with file watching | P1 |
 | `barbacane plugin init` | Scaffold new plugin projects from template | P1 |
 | Plugin template repo | `barbacane-plugin-template` repository with minimal scaffolding | P1 |

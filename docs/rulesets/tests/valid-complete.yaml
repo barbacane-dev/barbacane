@@ -1,0 +1,51 @@
+openapi: "3.1.0"
+info:
+  title: Valid Complete Spec
+  version: "1.0.0"
+  description: A fully valid spec that should produce zero Barbacane violations.
+
+servers:
+  - url: https://api.example.com
+
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "https://auth.example.com"
+      audience: "my-api"
+  - name: rate-limit
+    config:
+      quota: 100
+      window: 60
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: Returns API health status.
+      tags: [health]
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      responses:
+        "200":
+          description: OK
+
+  /users:
+    get:
+      operationId: listUsers
+      summary: List users
+      description: Returns a list of users.
+      tags: [users]
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.internal.example.com"
+          path: "/v1/users"
+          timeout: 15
+      responses:
+        "200":
+          description: User list

@@ -1,0 +1,55 @@
+openapi: "3.1.0"
+info:
+  title: Invalid Middleware Spec
+  version: "1.0.0"
+  description: Tests middleware validation rules.
+
+servers:
+  - url: https://api.example.com
+
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      quota: 100
+      window: 60
+  - config:
+      expression: "true"
+  - name: rate-limit
+    config:
+      quota: 50
+      window: 30
+  - name: unknown-middleware
+    config: {}
+
+paths:
+  /test:
+    get:
+      operationId: getTest
+      summary: Test endpoint
+      description: Test endpoint for middleware validation.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK
+
+  /bad-middleware-config:
+    get:
+      operationId: badMwConfig
+      summary: Bad middleware config
+      description: Operation with invalid middleware config.
+      tags: [test]
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            window: 60
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK

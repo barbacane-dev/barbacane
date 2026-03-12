@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'plugins/*/config-schema.json'
       - 'book.toml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
@@ -32,6 +33,15 @@ jobs:
 
       - name: Build documentation
         run: mdbook build
+
+      - name: Copy vacuum ruleset and plugin schemas to output
+        run: |
+          cp -r docs/rulesets book/rulesets
+          mkdir -p book/rulesets/schemas
+          for schema in plugins/*/config-schema.json; do
+            name=$(basename "$(dirname "$schema")")
+            cp "$schema" "book/rulesets/schemas/${name}.json"
+          done
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
