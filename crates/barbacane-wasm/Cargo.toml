@@ -41,6 +41,9 @@ reqwest.workspace = true
 # Stream utilities (for host_http_stream body iteration)
 futures-util.workspace = true
 
+# WebSocket client (for host_ws_upgrade)
+tokio-tungstenite.workspace = true
+
 # NATS client (for host_nats_publish)
 async-nats.workspace = true
 bytes.workspace = true

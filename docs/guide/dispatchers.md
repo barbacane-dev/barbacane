@@ -653,6 +653,122 @@ x-barbacane-dispatch:
 - **Signing**: All requests are signed with AWS Signature Version 4. The signed headers are `host`, `x-amz-content-sha256`, `x-amz-date`, and `x-amz-security-token` (when a session token is present)
 - **Binary objects**: The current implementation returns the response body as a UTF-8 string. Binary objects (images, archives, etc.) are not suitable for this dispatcher — use pre-signed URLs for binary downloads
 
+### ws-upstream
+
+Transparent WebSocket proxy. Upgrades the client connection to WebSocket and relays frames bidirectionally to an upstream WebSocket server. The gateway handles the full lifecycle: handshake, frame relay, and connection teardown.
+
+```yaml
+x-barbacane-dispatch:
+  name: ws-upstream
+  config:
+    url: "ws://echo.internal:8080"
+```
+
+#### Configuration
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `url` | string | Yes | - | Upstream WebSocket URL (`ws://` or `wss://`) |
+| `connect_timeout` | number | No | 5 | Connection timeout in seconds (0.1–300) |
+| `path` | string | No | Same as operation path | Upstream path template with `{param}` substitution |
+
+#### How It Works
+
+1. Client sends an HTTP request with `Upgrade: websocket`
+2. The plugin validates the upgrade header and connects to the upstream WebSocket server
+3. On success, the gateway returns `101 Switching Protocols` to the client
+4. Frames are relayed bidirectionally between client and upstream until either side closes
+
+The middleware chain (`x-barbacane-middlewares`) runs on the initial HTTP request and can inspect/modify headers, enforce authentication, apply rate limiting, etc. Once the connection is upgraded, middleware is bypassed for individual frames.
+
+#### Path Parameters
+
+Path parameters from the OpenAPI spec are substituted in the `path` template:
+
+```yaml
+/ws/{room}:
+  get:
+    parameters:
+      - name: room
+        in: path
+        required: true
+        schema:
+          type: string
+    x-barbacane-dispatch:
+      name: ws-upstream
+      config:
+        url: "ws://chat.internal:8080"
+        path: "/rooms/{room}"
+
+# Request: GET /ws/general → Upstream: ws://chat.internal:8080/rooms/general
+```
+
+#### Query String Forwarding
+
+Query parameters from the client request are automatically forwarded to the upstream URL:
+
+```
+Client: GET /ws/echo?token=abc → Upstream: ws://echo.internal:8080/?token=abc
+```
+
+#### Examples
+
+**Basic WebSocket proxy:**
+```yaml
+/ws:
+  get:
+    x-barbacane-dispatch:
+      name: ws-upstream
+      config:
+        url: "ws://backend.internal:8080"
+```
+
+**With authentication and path routing:**
+```yaml
+/ws/{room}:
+  get:
+    parameters:
+      - name: room
+        in: path
+        required: true
+        schema:
+          type: string
+    x-barbacane-middlewares:
+      - name: jwt-auth
+        config:
+          required: true
+    x-barbacane-dispatch:
+      name: ws-upstream
+      config:
+        url: "wss://realtime.internal"
+        path: "/rooms/{room}"
+        connect_timeout: 10
+```
+
+**Secure upstream (WSS):**
+```yaml
+/live:
+  get:
+    x-barbacane-dispatch:
+      name: ws-upstream
+      config:
+        url: "wss://stream.example.com"
+        connect_timeout: 15
+```
+
+#### Error Handling
+
+| Status | Condition |
+|--------|-----------|
+| 400 Bad Request | Missing `Upgrade: websocket` header |
+| 502 Bad Gateway | Upstream connection failed or timed out |
+
+#### Security
+
+- **WSS in production**: Use `wss://` for encrypted upstream connections
+- **Development mode**: `ws://` URLs are allowed with `--allow-plaintext-upstream`
+- **Authentication**: Apply auth middleware (jwt-auth, oidc-auth, etc.) to protect WebSocket endpoints — middleware runs on the initial upgrade request
+
 ---
 
 ## Best Practices

@@ -1,0 +1,9 @@
+[plugin]
+name = "ws-upstream"
+version = "0.1.0"
+type = "dispatcher"
+description = "Transparent WebSocket proxy"
+wasm = "ws-upstream.wasm"
+
+[capabilities]
+host_functions = ["ws_upgrade", "log"]

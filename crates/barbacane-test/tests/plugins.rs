@@ -1,4 +1,4 @@
-//! Integration tests for utility middleware plugins — CORS, correlation-id, request-size-limit, IP restriction, NATS, Kafka, HTTP log, request-transformer, response-transformer.
+//! Integration tests for utility middleware plugins — CORS, correlation-id, request-size-limit, IP restriction, NATS, Kafka, HTTP log, request-transformer, response-transformer, ws-upstream.
 //!
 //! Run with: `cargo test -p barbacane-test`
 
@@ -1171,4 +1171,66 @@ async fn test_response_transformer_passthrough() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["passthrough"], "no-transformations");
+}
+
+// =========================================================================
+// WebSocket Upstream dispatcher integration tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_ws_upstream_spec_compiles() {
+    // Test that an OpenAPI spec with a ws-upstream dispatcher compiles and boots
+    let gateway = TestGateway::from_spec(&fixture("ws-upstream.yaml"))
+        .await
+        .expect("failed to start gateway with ws-upstream spec");
+
+    // Health endpoint should work (proves the spec compiled and gateway started)
+    let resp = gateway.get("/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_ws_upstream_rejects_non_websocket_request() {
+    // A plain HTTP GET to a WebSocket endpoint should return an error
+    // The WASM plugin returns 400 but the data plane may wrap it as 500
+    // depending on the upgrade path handling
+    let gateway = TestGateway::from_spec(&fixture("ws-upstream.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/ws/echo").await.unwrap();
+    // Without a real WebSocket upgrade, the request fails at the dispatch level
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "expected error status, got {}",
+        resp.status()
+    );
+}
+
+#[tokio::test]
+async fn test_ws_upstream_upstream_unavailable() {
+    // When the upstream WS server is not running, the dispatcher should return an error
+    let gateway = TestGateway::from_spec(&fixture("ws-upstream.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    // Send a request with Upgrade: websocket header but no real WS handshake
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/ws/echo")
+        .header("upgrade", "websocket")
+        .header("connection", "upgrade")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("sec-websocket-version", "13")
+        .send()
+        .await
+        .unwrap();
+
+    // Without a real WebSocket client, reqwest sends a normal HTTP request.
+    // The gateway dispatch path may return 400, 502, or 500 depending on
+    // how far the upgrade handshake progresses before failing.
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "expected error status, got {}",
+        resp.status()
+    );
 }

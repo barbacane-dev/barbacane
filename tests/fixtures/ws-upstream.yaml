@@ -1,0 +1,52 @@
+openapi: "3.1.0"
+info:
+  title: WebSocket Upstream Test API
+  version: "1.0.0"
+  description: Tests ws-upstream dispatcher for transparent WebSocket proxying
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      responses:
+        "200":
+          description: OK
+
+  /ws/echo:
+    get:
+      summary: WebSocket echo proxy
+      operationId: wsEcho
+      x-barbacane-dispatch:
+        name: ws-upstream
+        config:
+          url: "ws://127.0.0.1:19876"
+          connect_timeout: 5
+      responses:
+        "101":
+          description: Switching Protocols
+
+  /ws/{room}:
+    get:
+      summary: WebSocket proxy with path parameter
+      operationId: wsRoom
+      parameters:
+        - name: room
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: ws-upstream
+        config:
+          url: "ws://127.0.0.1:19876"
+          path: "/rooms/{room}"
+          connect_timeout: 3
+      responses:
+        "101":
+          description: Switching Protocols
