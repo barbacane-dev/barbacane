@@ -15,18 +15,34 @@ brew install daveshanley/vacuum/vacuum
 # Linux, Windows, Docker: https://quobix.com/vacuum/installing/
 ```
 
-### 2. Create a `.vacuum.yml` in your project
+### 2. Download the Barbacane ruleset
+
+Several rules use custom JavaScript functions (config schema validation, duplicate detection, etc.). Vacuum requires custom functions on the local filesystem, so download the ruleset and its functions:
+
+```bash
+mkdir -p .barbacane/rulesets/functions .barbacane/rulesets/schemas
+curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
+for f in barbacane-auth-opt-out barbacane-no-duplicate-middlewares barbacane-no-plaintext-upstream \
+         barbacane-no-unknown-extensions barbacane-valid-secret-refs barbacane-validate-dispatch-config \
+         barbacane-validate-middleware-config; do
+  curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
+done
+```
+
+This creates a `.barbacane/rulesets/` directory with the ruleset YAML and custom functions. You may want to add `.barbacane/` to your `.gitignore`.
+
+### 3. Create a `.vacuum.yml` in your project
 
 ```yaml
 extends:
-  - - https://docs.barbacane.dev/rulesets/barbacane.yaml
+  - - .barbacane/rulesets/barbacane.yaml
     - recommended
 ```
 
-### 3. Lint your spec
+### 4. Lint your spec
 
 ```bash
-vacuum lint my-api.yaml
+vacuum lint -f .barbacane/rulesets/functions my-api.yaml
 ```
 
 ## Rules
@@ -79,7 +95,7 @@ You can override individual rules in your `.vacuum.yml`:
 
 ```yaml
 extends:
-  - - https://docs.barbacane.dev/rulesets/barbacane.yaml
+  - - .barbacane/rulesets/barbacane.yaml
     - recommended
 
 rules:
@@ -100,14 +116,43 @@ rules:
     curl -fsSL https://github.com/daveshanley/vacuum/releases/latest/download/vacuum_linux_amd64 -o vacuum
     chmod +x vacuum
 
+- name: Download Barbacane ruleset
+  run: |
+    mkdir -p .barbacane/rulesets/functions
+    curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
+    for f in barbacane-auth-opt-out barbacane-no-duplicate-middlewares barbacane-no-plaintext-upstream \
+             barbacane-no-unknown-extensions barbacane-valid-secret-refs barbacane-validate-dispatch-config \
+             barbacane-validate-middleware-config; do
+      curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
+    done
+
 - name: Lint OpenAPI spec
-  run: ./vacuum lint -r .vacuum.yml my-api.yaml
+  run: ./vacuum lint -f .barbacane/rulesets/functions my-api.yaml
 ```
 
 ### Pre-commit
 
 ```bash
-vacuum lint -r .vacuum.yml my-api.yaml
+vacuum lint -f .barbacane/rulesets/functions my-api.yaml
+```
+
+## Custom Functions
+
+Several rules use custom JavaScript functions for validations that go beyond what built-in vacuum functions can express (config schema validation, duplicate detection, secret reference format, etc.). Vacuum requires custom functions to be on the local filesystem — it does not fetch them from remote URLs.
+
+The download steps above place these functions into `.barbacane/rulesets/functions/`. The `-f` flag in the `vacuum lint` command tells vacuum where to find them.
+
+If you cloned the Barbacane repository, you can also point directly at the source:
+
+```yaml
+# .vacuum.yml
+extends:
+  - - path/to/Barbacane/docs/rulesets/barbacane.yaml
+    - recommended
+```
+
+```bash
+vacuum lint -f path/to/Barbacane/docs/rulesets/functions my-api.yaml
 ```
 
 ## Plugin Config Schemas
