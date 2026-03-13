@@ -53,3 +53,24 @@ paths:
       responses:
         "200":
           description: OK
+
+  /bad-response-transformer:
+    get:
+      operationId: badResponseTransformer
+      summary: Bad response-transformer config
+      description: Operation with unknown field in response-transformer config.
+      tags: [test]
+      x-barbacane-middlewares:
+        - name: response-transformer
+          config:
+            headers:
+              add:
+                x-foo: "bar"
+            unknown_field: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK

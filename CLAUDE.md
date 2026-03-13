@@ -115,6 +115,13 @@ cargo build --target wasm32-unknown-unknown --release
 
 Plugins are not part of the workspace. Run `cargo check`, `cargo test`, and `cargo clippy` from within the plugin directory.
 
+After adding or modifying a plugin's `config-schema.json`, regenerate the vacuum ruleset validators:
+
+```bash
+docs/rulesets/generate.mjs
+docs/rulesets/tests/run-tests.sh
+```
+
 ## Testing
 
 - **Workspace unit tests**: `cargo test --workspace --exclude barbacane-test`

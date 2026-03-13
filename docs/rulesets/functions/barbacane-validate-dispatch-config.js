@@ -1,23 +1,24 @@
-// Validates x-barbacane-dispatch.config against the plugin's JSON Schema.
-//
-// Each dispatcher plugin ships a config-schema.json that defines required
-// fields, types, and constraints.  This function loads the matching schema
-// by plugin name and checks the config object against it.
+// AUTO-GENERATED from plugins/*/config-schema.json — do not edit by hand.
+// Regenerate: node docs/rulesets/generate.mjs
 
 const schemas = {
-  mock: {
-    type: "object",
+  "ai-proxy": {
     required: [],
     properties: {
-      status: { type: "integer", minimum: 100, maximum: 599 },
-      body: { type: "string" },
-      headers: { type: "object" },
-      content_type: { type: "string" },
+      provider: { type: "string" },
+      model: { type: "string" },
+      api_key: { type: "string" },
+      base_url: { type: "string" },
+      timeout: { type: "integer", minimum: 1 },
+      max_tokens: { type: "integer", minimum: 1 },
+      fallback: { type: "array" },
+      targets: { type: "object" },
+      default_target: { type: "string" },
     },
     additionalProperties: false,
   },
+
   "http-upstream": {
-    type: "object",
     required: ["url"],
     properties: {
       url: { type: "string" },
@@ -26,9 +27,9 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  kafka: {
-    type: "object",
-    required: ["brokers", "topic"],
+
+  "kafka": {
+    required: ["brokers","topic"],
     properties: {
       brokers: { type: "string" },
       topic: { type: "string" },
@@ -39,9 +40,30 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  nats: {
-    type: "object",
-    required: ["url", "subject"],
+
+  "lambda": {
+    required: ["url"],
+    properties: {
+      url: { type: "string" },
+      timeout: { type: "number", minimum: 1, maximum: 900 },
+      pass_through_headers: { type: "boolean" },
+    },
+    additionalProperties: false,
+  },
+
+  "mock": {
+    required: [],
+    properties: {
+      status: { type: "integer", minimum: 100, maximum: 599 },
+      body: { type: "string" },
+      headers: { type: "object" },
+      content_type: { type: "string" },
+    },
+    additionalProperties: false,
+  },
+
+  "nats": {
+    required: ["url","subject"],
     properties: {
       url: { type: "string" },
       subject: { type: "string" },
@@ -50,9 +72,9 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  s3: {
-    type: "object",
-    required: ["access_key_id", "secret_access_key", "region"],
+
+  "s3": {
+    required: ["access_key_id","secret_access_key","region"],
     properties: {
       access_key_id: { type: "string" },
       secret_access_key: { type: "string" },
@@ -67,13 +89,13 @@ const schemas = {
     },
     additionalProperties: false,
   },
-  lambda: {
-    type: "object",
+
+  "ws-upstream": {
     required: ["url"],
     properties: {
       url: { type: "string" },
-      timeout: { type: "number", minimum: 1, maximum: 900 },
-      pass_through_headers: { type: "boolean" },
+      connect_timeout: { type: "number", minimum: 0.1, maximum: 300 },
+      path: { type: "string" },
     },
     additionalProperties: false,
   },
@@ -93,24 +115,29 @@ function runRule(input) {
   const pluginName = input.name;
   const config = input.config;
 
-  if (!pluginName || !config) return [];
+  if (!pluginName) return [];
 
   const schema = schemas[pluginName];
   if (!schema) return []; // unknown plugin handled by enumeration rule
 
+  if (!config && schema.required.length === 0) return [];
+  if (!config && schema.required.length > 0) {
+    return [{
+      message: `Dispatcher "${pluginName}" requires a config object with fields: ${schema.required.join(", ")}.`,
+    }];
+  }
+
+  if (!config) return [];
+
   const results = [];
-  // Check required fields
-  if (schema.required) {
-    for (const field of schema.required) {
-      if (config[field] === undefined || config[field] === null) {
-        results.push({
-          message: `Dispatcher "${pluginName}" requires config field "${field}".`,
-        });
-      }
+  for (const field of schema.required) {
+    if (config[field] === undefined || config[field] === null) {
+      results.push({
+        message: `Dispatcher "${pluginName}" requires config field "${field}".`,
+      });
     }
   }
 
-  // Check for unknown fields
   if (schema.additionalProperties === false && schema.properties) {
     const allowed = Object.keys(schema.properties);
     for (const key of Object.keys(config)) {
@@ -122,11 +149,14 @@ function runRule(input) {
     }
   }
 
-  // Check field types
   if (schema.properties) {
     for (const [key, prop] of Object.entries(schema.properties)) {
       const value = config[key];
       if (value === undefined || value === null) continue;
+
+      if (typeof value === "string" && (value.startsWith("env://") || value.startsWith("file://"))) {
+        continue;
+      }
 
       if (!checkType(value, prop.type)) {
         results.push({
@@ -167,6 +197,6 @@ function checkType(value, expectedType) {
     case "array":
       return Array.isArray(value);
     default:
-      return false; // unknown type: fail explicitly rather than silently pass
+      return false;
   }
 }
