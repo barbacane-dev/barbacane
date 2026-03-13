@@ -41,6 +41,11 @@
       "description": "HTTP timeout for discovery and JWKS calls (seconds)",
       "default": 5,
       "minimum": 0
+    },
+    "allow_query_token": {
+      "type": "boolean",
+      "description": "Allow token extraction from the access_token query parameter (RFC 6750 §2.3). Disabled by default — tokens in URLs risk leaking via logs and referer headers.",
+      "default": false
     }
   },
   "additionalProperties": false

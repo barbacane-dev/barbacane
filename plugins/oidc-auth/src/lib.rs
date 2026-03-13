@@ -42,6 +42,12 @@ pub struct OidcAuth {
     #[serde(default = "default_timeout")]
     timeout: f64,
 
+    /// Allow token extraction from the `access_token` query parameter
+    /// (RFC 6750 §2.3). Disabled by default — tokens in URLs risk leaking
+    /// via logs, referer headers, and browser history.
+    #[serde(default)]
+    allow_query_token: bool,
+
     /// Cached OIDC discovery document.
     #[serde(skip)]
     discovery: Option<DiscoveryDoc>,
@@ -61,6 +67,28 @@ fn default_jwks_refresh() -> u64 {
 
 fn default_timeout() -> f64 {
     5.0
+}
+
+/// Minimal percent-decoding for query parameter values (RFC 3986).
+fn percent_decode(input: &str) -> String {
+    let mut out = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(
+                &input[i + 1..i + 3],
+                16,
+            ) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // --- Internal types ---
@@ -354,19 +382,36 @@ impl OidcAuth {
         Ok(parsed.claims)
     }
 
-    /// Extract Bearer token from Authorization header.
+    /// Extract Bearer token from Authorization header, falling back to the
+    /// `access_token` query parameter when `allow_query_token` is enabled
+    /// (RFC 6750 §2.3).
     fn extract_token(&self, req: &Request) -> Result<String, OidcError> {
-        let auth_header = req
+        if let Some(auth_header) = req
             .headers
             .get("authorization")
             .or_else(|| req.headers.get("Authorization"))
-            .ok_or(OidcError::MissingToken)?;
-
-        if !auth_header.starts_with("Bearer ") && !auth_header.starts_with("bearer ") {
-            return Err(OidcError::InvalidAuthHeader);
+        {
+            if !auth_header.starts_with("Bearer ") && !auth_header.starts_with("bearer ") {
+                return Err(OidcError::InvalidAuthHeader);
+            }
+            return Ok(auth_header[7..].trim().to_string());
         }
 
-        Ok(auth_header[7..].trim().to_string())
+        // RFC 6750 §2.3 — query parameter fallback
+        if self.allow_query_token {
+            if let Some(query) = &req.query {
+                for pair in query.split('&') {
+                    if let Some(value) = pair.strip_prefix("access_token=") {
+                        let token = percent_decode(value);
+                        if !token.is_empty() {
+                            return Ok(token);
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(OidcError::MissingToken)
     }
 
     /// Parse a JWT token into its components.
@@ -774,6 +819,7 @@ mod tests {
             jwks_refresh_seconds: 300,
             issuer_override: None,
             timeout: 5.0,
+            allow_query_token: false,
             discovery: None,
             jwks_cache: None,
         }
@@ -890,6 +936,95 @@ mod tests {
         };
         let token = config.extract_token(&req).unwrap();
         assert_eq!(token, "cap.token.here");
+    }
+
+    // --- Query parameter token tests (RFC 6750 §2.3) ---
+
+    fn create_query_request(query: Option<&str>) -> Request {
+        Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: query.map(|q| q.to_string()),
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    #[test]
+    fn extract_token_query_param_when_enabled() {
+        let mut config = create_test_config();
+        config.allow_query_token = true;
+        let req = create_query_request(Some("access_token=my.jwt.token&foo=bar"));
+        let token = config.extract_token(&req).unwrap();
+        assert_eq!(token, "my.jwt.token");
+    }
+
+    #[test]
+    fn extract_token_query_param_disabled_by_default() {
+        let config = create_test_config();
+        let req = create_query_request(Some("access_token=my.jwt.token"));
+        let result = config.extract_token(&req);
+        assert!(matches!(result, Err(OidcError::MissingToken)));
+    }
+
+    #[test]
+    fn extract_token_header_takes_precedence_over_query() {
+        let mut config = create_test_config();
+        config.allow_query_token = true;
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            "Bearer header.token.here".to_string(),
+        );
+        let req = Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers,
+            body: None,
+            query: Some("access_token=query.token.here".to_string()),
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        };
+        let token = config.extract_token(&req).unwrap();
+        assert_eq!(token, "header.token.here");
+    }
+
+    #[test]
+    fn extract_token_query_param_percent_encoded() {
+        let mut config = create_test_config();
+        config.allow_query_token = true;
+        let req = create_query_request(Some("access_token=eyJ%2Btoken%3D"));
+        let token = config.extract_token(&req).unwrap();
+        assert_eq!(token, "eyJ+token=");
+    }
+
+    #[test]
+    fn extract_token_query_param_empty_value() {
+        let mut config = create_test_config();
+        config.allow_query_token = true;
+        let req = create_query_request(Some("access_token="));
+        let result = config.extract_token(&req);
+        assert!(matches!(result, Err(OidcError::MissingToken)));
+    }
+
+    #[test]
+    fn extract_token_query_param_missing() {
+        let mut config = create_test_config();
+        config.allow_query_token = true;
+        let req = create_query_request(Some("foo=bar&baz=qux"));
+        let result = config.extract_token(&req);
+        assert!(matches!(result, Err(OidcError::MissingToken)));
+    }
+
+    #[test]
+    fn extract_token_query_param_no_query_string() {
+        let mut config = create_test_config();
+        config.allow_query_token = true;
+        let req = create_query_request(None);
+        let result = config.extract_token(&req);
+        assert!(matches!(result, Err(OidcError::MissingToken)));
     }
 
     // --- JWT parsing tests ---

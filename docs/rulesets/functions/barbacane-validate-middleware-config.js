@@ -166,6 +166,7 @@ const schemas = {
       clock_skew_seconds: { type: "integer", minimum: 0 },
       jwks_refresh_seconds: { type: "integer", minimum: 10 },
       timeout: { type: "number", minimum: 0 },
+      allow_query_token: { type: "boolean" },
     },
     additionalProperties: false,
   },
