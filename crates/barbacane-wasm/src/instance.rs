@@ -137,11 +137,13 @@ pub struct PluginState {
     /// each body chunk, then drops the sender to signal end-of-stream.
     pub stream_sender: Option<Arc<tokio::sync::mpsc::UnboundedSender<StreamEvent>>>,
 
-    /// Upstream WebSocket connection established by `host_ws_upgrade` (ADR-0026).
+    /// Upstream WebSocket upgrade request from `host_ws_upgrade` (ADR-0026).
     ///
-    /// After a successful `host_ws_upgrade`, the connected stream is stored here
-    /// for the data plane to pick up and relay frames bidirectionally.
-    pub ws_upstream: Option<crate::ws_client::UpstreamWsStream>,
+    /// After a successful `host_ws_upgrade`, the request params are stored here.
+    /// The actual connection is deferred to the async relay task on the main
+    /// runtime, because the TcpStream must be created on the runtime that will
+    /// drive it (a temporary runtime's I/O driver dies when the runtime drops).
+    pub ws_upgrade_request: Option<crate::ws_client::WsUpgradeRequest>,
 }
 
 #[allow(dead_code)] // Constructors used by different pool configurations
@@ -167,7 +169,7 @@ impl PluginState {
             last_broker_result: None,
             last_uuid_result: None,
             stream_sender: None,
-            ws_upstream: None,
+            ws_upgrade_request: None,
         }
     }
 
@@ -196,7 +198,7 @@ impl PluginState {
             last_broker_result: None,
             last_uuid_result: None,
             stream_sender: None,
-            ws_upstream: None,
+            ws_upgrade_request: None,
         }
     }
 
@@ -226,7 +228,7 @@ impl PluginState {
             last_broker_result: None,
             last_uuid_result: None,
             stream_sender: None,
-            ws_upstream: None,
+            ws_upgrade_request: None,
         }
     }
 
@@ -261,7 +263,7 @@ impl PluginState {
             last_broker_result: None,
             last_uuid_result: None,
             stream_sender: None,
-            ws_upstream: None,
+            ws_upgrade_request: None,
         }
     }
 
@@ -297,7 +299,7 @@ impl PluginState {
             last_broker_result: None,
             last_uuid_result: None,
             stream_sender: None,
-            ws_upstream: None,
+            ws_upgrade_request: None,
         }
     }
 
@@ -319,9 +321,9 @@ impl PluginState {
         self.stream_sender = Some(sender);
     }
 
-    /// Take the upstream WebSocket connection established by host_ws_upgrade (ADR-0026).
-    pub fn take_ws_upstream(&mut self) -> Option<crate::ws_client::UpstreamWsStream> {
-        self.ws_upstream.take()
+    /// Take the upstream WebSocket upgrade request from host_ws_upgrade (ADR-0026).
+    pub fn take_ws_upgrade_request(&mut self) -> Option<crate::ws_client::WsUpgradeRequest> {
+        self.ws_upgrade_request.take()
     }
 }
 
@@ -620,12 +622,12 @@ impl PluginInstance {
         self.store.data_mut().set_stream_sender(sender);
     }
 
-    /// Take the upstream WebSocket connection established by `host_ws_upgrade` (ADR-0026).
+    /// Take the upstream WebSocket upgrade request from `host_ws_upgrade` (ADR-0026).
     ///
-    /// Returns `None` if no WebSocket upgrade was performed or the connection
+    /// Returns `None` if no WebSocket upgrade was requested or the request
     /// was already taken.
-    pub fn take_ws_upstream(&mut self) -> Option<crate::ws_client::UpstreamWsStream> {
-        self.store.data_mut().take_ws_upstream()
+    pub fn take_ws_upgrade_request(&mut self) -> Option<crate::ws_client::WsUpgradeRequest> {
+        self.store.data_mut().take_ws_upgrade_request()
     }
 }
 
@@ -1159,13 +1161,14 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_http_stream: {}", e)))?;
 
-    // host_ws_upgrade - connect to an upstream WebSocket endpoint (ADR-0026)
+    // host_ws_upgrade - request an upstream WebSocket connection (ADR-0026)
     //
     // The plugin sends a JSON payload: { url, connect_timeout_ms, headers }.
-    // On success: the upstream WebSocket connection is stored in PluginState
-    // for the data plane to pick up, and returns 0.
-    // On failure: the error string is stored in last_http_result (readable via
-    // host_http_read_result), and returns -1.
+    // The request is validated and stored in PluginState. The actual TCP
+    // connection is deferred to the async relay task on the main tokio runtime,
+    // because a TcpStream must be created on the runtime that will drive it
+    // (a temporary runtime's I/O driver dies when the runtime drops).
+    // Returns 0 on success (valid request), -1 on parse failure.
     linker
         .func_wrap(
             "barbacane",
@@ -1199,54 +1202,13 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 tracing::debug!(
                     plugin = %plugin_name,
                     url = %ws_request.url,
-                    "host_ws_upgrade: connecting to upstream"
+                    "host_ws_upgrade: storing request for deferred connection"
                 );
 
-                // Connect to upstream WebSocket on a dedicated tokio runtime
-                let result = std::thread::scope(|s| {
-                    let handle = s.spawn(|| {
-                        let rt = match tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            Ok(rt) => rt,
-                            Err(e) => {
-                                tracing::error!("host_ws_upgrade: failed to create runtime: {}", e);
-                                return Err(format!("runtime error: {}", e));
-                            }
-                        };
-
-                        rt.block_on(crate::ws_client::connect_upstream(ws_request))
-                    });
-
-                    match handle.join() {
-                        Ok(result) => result,
-                        Err(e) => {
-                            tracing::error!("host_ws_upgrade: worker thread panicked: {:?}", e);
-                            Err("internal error: worker thread panicked".to_string())
-                        }
-                    }
-                });
-
-                match result {
-                    Ok(ws_stream) => {
-                        tracing::debug!(
-                            plugin = %plugin_name,
-                            "host_ws_upgrade: upstream connection established"
-                        );
-                        caller.data_mut().ws_upstream = Some(ws_stream);
-                        0
-                    }
-                    Err(err_msg) => {
-                        tracing::warn!(
-                            plugin = %plugin_name,
-                            error = %err_msg,
-                            "host_ws_upgrade: upstream connection failed"
-                        );
-                        caller.data_mut().last_http_result = Some(err_msg.into_bytes());
-                        -1
-                    }
-                }
+                // Store the request; the actual connection happens on the main
+                // runtime inside the relay task (see relay_websocket).
+                caller.data_mut().ws_upgrade_request = Some(ws_request);
+                0
             },
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_ws_upgrade: {}", e)))?;

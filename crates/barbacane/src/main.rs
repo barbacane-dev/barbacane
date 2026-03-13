@@ -1502,8 +1502,8 @@ impl Gateway {
             let result = instance.dispatch(&request_json);
             let output = instance.take_output();
             let last_http = instance.take_last_http_result();
-            let ws_upstream = instance.take_ws_upstream();
-            (result, output, last_http, ws_upstream)
+            let ws_upgrade_request = instance.take_ws_upgrade_request();
+            (result, output, last_http, ws_upgrade_request)
         });
 
         // Race: first stream event vs. WASM completion.
@@ -1604,7 +1604,7 @@ impl Gateway {
                     None => wasm_handle.await,
                 };
 
-                let (dispatch_result, output, _, ws_upstream) = match wasm_result {
+                let (dispatch_result, output, _, ws_upgrade_request) = match wasm_result {
                     Ok(r) => r,
                     Err(e) => {
                         return Err(
@@ -1643,12 +1643,13 @@ impl Gateway {
                 }
 
                 // ── WebSocket upgrade path (ADR-0026) ──────────────────────────────────
-                // status=101 with a ws_upstream connection means the dispatcher called
-                // host_ws_upgrade successfully. Complete the client-side upgrade and
-                // spawn bidirectional frame relay.
+                // status=101 with a ws_upgrade_request means the dispatcher called
+                // host_ws_upgrade successfully. Connect to the upstream on the main
+                // runtime (so the TcpStream's I/O driver stays alive), complete the
+                // client-side upgrade, and spawn bidirectional frame relay.
                 if plugin_response.status == 101 {
-                    let ws_upstream = match ws_upstream {
-                        Some(ws) => ws,
+                    let ws_request = match ws_upgrade_request {
+                        Some(req) => req,
                         None => {
                             return Err(self.dev_error_response(
                                 "plugin returned 101 without calling host_ws_upgrade",
@@ -1664,6 +1665,25 @@ impl Gateway {
                             ));
                         }
                     };
+
+                    // Connect to the upstream WebSocket on the main runtime.
+                    // This MUST happen here (not in a temporary runtime) so the
+                    // TcpStream is registered with the I/O driver that will drive
+                    // the relay task.
+                    let ws_upstream =
+                        match barbacane_wasm::ws_client::connect_upstream(ws_request).await {
+                            Ok(stream) => stream,
+                            Err(err) => {
+                                tracing::warn!(
+                                    error = %err,
+                                    "WebSocket upstream connection failed"
+                                );
+                                return Err(self.dev_error_response(format_args!(
+                                    "WebSocket upstream connection failed: {}",
+                                    err
+                                )));
+                            }
+                        };
 
                     // Run on_response for observability (modifications discarded).
                     if !middleware_instances.is_empty() {

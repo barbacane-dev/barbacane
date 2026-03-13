@@ -18,6 +18,8 @@ rcgen = { workspace = true }
 rustls = { workspace = true }
 base64 = { workspace = true }
 wiremock = "0.6"
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 

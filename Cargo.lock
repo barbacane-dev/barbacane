@@ -538,6 +538,7 @@ dependencies = [
  "assert_cmd",
  "barbacane-compiler",
  "base64 0.22.1",
+ "futures-util",
  "predicates",
  "rcgen",
  "reqwest",
@@ -547,6 +548,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite",
  "wiremock",
 ]
 

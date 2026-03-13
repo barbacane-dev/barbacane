@@ -1234,3 +1234,195 @@ async fn test_ws_upstream_upstream_unavailable() {
         resp.status()
     );
 }
+
+/// Start a simple WebSocket echo server on a random port.
+/// Returns the `(join_handle, "ws://127.0.0.1:PORT")`.
+fn start_ws_echo_server() -> (tokio::task::JoinHandle<()>, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    // Convert to a tokio TcpListener inside the spawned task
+    listener.set_nonblocking(true).unwrap();
+
+    let handle = tokio::spawn(async move {
+        use futures_util::{SinkExt, StreamExt};
+
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                let (mut tx, mut rx) = ws.split();
+                while let Some(Ok(msg)) = rx.next().await {
+                    if msg.is_close() {
+                        break;
+                    }
+                    if msg.is_text() || msg.is_binary() {
+                        if tx.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    (handle, url)
+}
+
+/// Create a temporary spec + manifest for ws-upstream relay tests.
+fn create_ws_spec(upstream_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+    let spec_path = temp_dir.path().join("ws-relay.yaml");
+
+    let ws_wasm = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("plugins/ws-upstream/ws-upstream.wasm");
+    let mock_wasm = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("plugins/mock/mock.wasm");
+
+    let manifest = format!(
+        "plugins:\n  ws-upstream:\n    path: {ws}\n  mock:\n    path: {mock}\n",
+        ws = ws_wasm.display(),
+        mock = mock_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).expect("write manifest");
+
+    let spec = format!(
+        r#"openapi: "3.1.0"
+info:
+  title: WS Relay Test
+  version: "1.0.0"
+
+paths:
+  /health:
+    get:
+      operationId: health
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"ok":true}}'
+      responses:
+        "200":
+          description: OK
+
+  /ws/echo:
+    get:
+      operationId: wsEcho
+      x-barbacane-dispatch:
+        name: ws-upstream
+        config:
+          url: "{upstream}"
+      responses:
+        "101":
+          description: Switching Protocols
+"#,
+        upstream = upstream_url,
+    );
+    std::fs::write(&spec_path, spec).expect("write spec");
+
+    (temp_dir, spec_path)
+}
+
+#[tokio::test]
+async fn test_ws_relay_stays_alive_and_echoes_frames() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Start a WS echo server
+    let (_echo_handle, echo_url) = start_ws_echo_server();
+
+    // Create spec pointing to the echo server and boot the gateway
+    let (_temp_dir, spec_path) = create_ws_spec(&echo_url);
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // Connect through the gateway
+    let ws_url = format!("ws://127.0.0.1:{}/ws/echo", gateway.port());
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("WebSocket connection through gateway failed");
+
+    // Send multiple text frames and verify each echoes back
+    for i in 0..5 {
+        let msg = format!("hello {}", i);
+        ws.send(Message::Text(msg.clone().into()))
+            .await
+            .expect("send failed");
+
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+            .await
+            .expect("timed out waiting for echo")
+            .expect("stream ended")
+            .expect("read error");
+
+        assert_eq!(reply, Message::Text(msg.into()), "frame {} did not echo", i);
+    }
+
+    // Send a binary frame too
+    ws.send(Message::Binary(vec![1, 2, 3].into()))
+        .await
+        .expect("binary send failed");
+
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+        .await
+        .expect("timed out waiting for binary echo")
+        .expect("stream ended")
+        .expect("read error");
+
+    assert_eq!(reply, Message::Binary(vec![1, 2, 3].into()));
+
+    // Clean close
+    ws.close(None).await.expect("close failed");
+}
+
+#[tokio::test]
+async fn test_ws_relay_upstream_close_propagates_to_client() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (_echo_handle, echo_url) = start_ws_echo_server();
+    let (_temp_dir, spec_path) = create_ws_spec(&echo_url);
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let ws_url = format!("ws://127.0.0.1:{}/ws/echo", gateway.port());
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("WebSocket connection through gateway failed");
+
+    // Verify the connection works
+    ws.send(Message::Text("ping".into()))
+        .await
+        .expect("send failed");
+
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+        .await
+        .expect("timed out")
+        .expect("stream ended")
+        .expect("read error");
+
+    assert_eq!(reply, Message::Text("ping".into()));
+
+    // Send close and verify the stream ends cleanly
+    ws.send(Message::Close(None)).await.expect("close failed");
+
+    // The next read should be a close frame, end-of-stream, or a reset
+    // (the proxy may drop the connection without a close handshake).
+    let final_msg = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next()).await;
+    match final_msg {
+        Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {} // Clean close
+        Ok(Some(Err(_))) => {}                           // Reset (proxy dropped connection)
+        other => panic!("expected close or end-of-stream, got {:?}", other),
+    }
+}
