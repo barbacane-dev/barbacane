@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-03-13
+
+### Fixed
+- **ws-upstream**: defer upstream WebSocket connection to main tokio runtime (fixes panic when relay runs on WASM thread)
+
+### Changed
+- **docs**: vacuum guide now documents custom function download steps (vacuum requires local `-f` flag for JS functions)
+
 ## [0.3.0] - 2026-03-13
 
 ### Added
