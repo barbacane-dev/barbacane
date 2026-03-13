@@ -118,8 +118,8 @@ Plugins are not part of the workspace. Run `cargo check`, `cargo test`, and `car
 After adding or modifying a plugin's `config-schema.json`, regenerate the vacuum ruleset validators:
 
 ```bash
-node docs/rulesets/generate.mjs
-bash docs/rulesets/tests/run-tests.sh
+docs/rulesets/generate.mjs
+docs/rulesets/tests/run-tests.sh
 ```
 
 ## Testing

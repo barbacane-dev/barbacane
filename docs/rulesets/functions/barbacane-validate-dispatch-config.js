@@ -115,19 +115,26 @@ function runRule(input) {
   const pluginName = input.name;
   const config = input.config;
 
-  if (!pluginName || !config) return [];
+  if (!pluginName) return [];
 
   const schema = schemas[pluginName];
   if (!schema) return []; // unknown plugin handled by enumeration rule
 
+  if (!config && schema.required.length === 0) return [];
+  if (!config && schema.required.length > 0) {
+    return [{
+      message: `Dispatcher "${pluginName}" requires a config object with fields: ${schema.required.join(", ")}.`,
+    }];
+  }
+
+  if (!config) return [];
+
   const results = [];
-  if (schema.required) {
-    for (const field of schema.required) {
-      if (config[field] === undefined || config[field] === null) {
-        results.push({
-          message: `Dispatcher "${pluginName}" requires config field "${field}".`,
-        });
-      }
+  for (const field of schema.required) {
+    if (config[field] === undefined || config[field] === null) {
+      results.push({
+        message: `Dispatcher "${pluginName}" requires config field "${field}".`,
+      });
     }
   }
 
