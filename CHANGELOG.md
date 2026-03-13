@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-13
+
 ### Added
 
 #### WebSocket Transparent Proxy (ADR-0026)
@@ -72,6 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Web UI
 - **Drift detection badge**: data planes with config drift show an amber warning on the Deploy page
 - **Updated `DataPlane` type**: added `artifact_hash` and `drift_detected` fields
+
+#### OIDC Auth
+- **RFC 6750 §2.3 query parameter token support**: `allow_query_token` config option enables fallback token extraction from the `access_token` query parameter (disabled by default for security)
 
 ### Changed
 - Metrics endpoint moved from `/__barbacane/metrics` on the main traffic port to `/metrics` on the dedicated admin port (default 8081)
