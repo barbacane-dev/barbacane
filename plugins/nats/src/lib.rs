@@ -74,7 +74,7 @@ impl NatsDispatcher {
         let message = BrokerMessage {
             url: self.url.clone(),
             topic: self.subject.clone(),
-            payload: req.body.clone().unwrap_or_default(),
+            payload: req.body_string().unwrap_or_default(),
             headers: msg_headers,
         };
 
@@ -158,7 +158,7 @@ impl NatsDispatcher {
         Response {
             status: 202,
             headers,
-            body: Some(body),
+            body: Some(body.into_bytes()),
         }
     }
 
@@ -195,7 +195,7 @@ impl NatsDispatcher {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         }
     }
 }
@@ -240,7 +240,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers: BTreeMap::new(),
-            body: Some("test body".to_string()),
+            body: Some(b"test body".to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -264,7 +264,7 @@ mod tests {
             "application/json"
         );
 
-        let body = response.body.unwrap();
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(
             body.contains("\"status\":\"accepted\"") || body.contains("\"status\": \"accepted\"")
         );
@@ -307,7 +307,7 @@ mod tests {
         );
         assert_eq!(response.headers.get("x-correlation-id").unwrap(), "abc123");
 
-        let body = response.body.unwrap();
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(
             body.contains("\"custom\":\"response\"") || body.contains("\"custom\": \"response\"")
         );
@@ -342,7 +342,7 @@ mod tests {
         );
 
         let body = response.body.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(parsed["type"], "urn:barbacane:error:nats-publish-failed");
         assert_eq!(parsed["title"], "NATS publish failed");
@@ -362,7 +362,7 @@ mod tests {
         );
 
         let body = response.body.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(parsed["type"], "urn:barbacane:error:nats-unavailable");
         assert_eq!(parsed["title"], "NATS unavailable");
@@ -419,7 +419,7 @@ mod tests {
         );
 
         let body = response.body.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(parsed["type"], "urn:barbacane:error:nats-publish-failed");
         assert_eq!(parsed["status"], 502);
@@ -480,7 +480,7 @@ mod tests {
 
         // The fact we got a proper error response means the headers were processed correctly
         let body = response.body.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["type"], "urn:barbacane:error:nats-publish-failed");
     }
 

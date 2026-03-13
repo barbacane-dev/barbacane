@@ -81,7 +81,7 @@ impl RequestSizeLimit {
         Response {
             status: 413,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -104,7 +104,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.as_bytes().to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -159,7 +159,7 @@ mod tests {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 413);
                 let body: serde_json::Value =
-                    serde_json::from_str(r.body.as_ref().unwrap()).unwrap();
+                    serde_json::from_slice(r.body.as_ref().unwrap()).unwrap();
                 assert_eq!(body["type"], "urn:barbacane:error:payload-too-large");
             }
             _ => panic!("expected ShortCircuit"),
@@ -204,7 +204,7 @@ mod tests {
         let plugin = test_plugin();
         let resp = plugin.payload_too_large_response(2048);
         assert_eq!(resp.status, 413);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["status"], 413);
         assert!(body["detail"].as_str().unwrap().contains("2048"));
         assert!(body["detail"].as_str().unwrap().contains("1024"));
@@ -216,7 +216,7 @@ mod tests {
         let resp = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("ok".to_string()),
+            body: Some(b"ok".to_vec()),
         };
         let result = plugin.on_response(resp);
         assert_eq!(result.status, 200);

@@ -1239,7 +1239,7 @@ impl Gateway {
             body: if request_body.is_empty() {
                 None
             } else {
-                String::from_utf8(request_body.to_vec()).ok()
+                Some(request_body.to_vec())
             },
             client_ip: client_addr
                 .map(|addr| addr.ip().to_string())

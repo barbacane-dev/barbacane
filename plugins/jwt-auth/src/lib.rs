@@ -383,7 +383,7 @@ impl JwtAuth {
         Response {
             status: 401,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -879,7 +879,7 @@ mod tests {
         assert!(www_auth.contains("error_description=\"Bearer token required\""));
 
         let body = response.body.unwrap();
-        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], 401);
         assert_eq!(json["title"], "Authentication failed");
         assert_eq!(json["type"], "urn:barbacane:error:authentication-failed");
@@ -992,7 +992,7 @@ mod tests {
         match config.on_request(req) {
             Action::ShortCircuit(response) => {
                 assert_eq!(response.status, 401);
-                let body = response.body.unwrap();
+                let body = String::from_utf8(response.body.unwrap()).unwrap();
                 assert!(body.contains("Token has expired"));
             }
             Action::Continue(_) => panic!("Expected expired token to be rejected"),
@@ -1014,7 +1014,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test body".to_string()),
+            body: Some(b"test body".to_vec()),
         };
 
         let result = config.on_response(response.clone());

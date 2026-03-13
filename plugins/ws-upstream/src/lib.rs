@@ -188,7 +188,7 @@ impl WsUpstreamDispatcher {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         }
     }
 }
@@ -296,7 +296,7 @@ mod tests {
 
         assert_eq!(response.status, 400);
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:bad-request");
         assert!(body["detail"].as_str().unwrap().contains("Upgrade header"));
     }
@@ -332,7 +332,7 @@ mod tests {
 
         assert_eq!(response.status, 502);
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
         assert!(body["detail"]
             .as_str()
@@ -447,7 +447,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:bad-request");
     }
 
@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(response.status, 502);
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
         assert_eq!(body["detail"], "connection failed: timeout");
     }
@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(response.status, 500);
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:internal");
     }
 

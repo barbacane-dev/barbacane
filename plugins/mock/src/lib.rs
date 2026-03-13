@@ -48,7 +48,7 @@ impl MockDispatcher {
             body: if self.body.is_empty() {
                 None
             } else {
-                Some(self.body.clone())
+                Some(self.body.as_bytes().to_vec())
             },
         }
     }
@@ -98,7 +98,7 @@ mod tests {
         }))
         .unwrap();
         let resp = plugin.dispatch(test_request());
-        assert_eq!(resp.body.as_deref(), Some("{\"message\":\"hello\"}"));
+        assert_eq!(resp.body_str(), Some("{\"message\":\"hello\"}"));
     }
 
     #[test]
@@ -146,9 +146,9 @@ mod tests {
         .unwrap();
         let mut req = test_request();
         req.method = "POST".to_string();
-        req.body = Some("request body".to_string());
+        req.body = Some(b"request body".to_vec());
         let resp = plugin.dispatch(req);
-        assert_eq!(resp.body.as_deref(), Some("static"));
+        assert_eq!(resp.body_str(), Some("static"));
     }
 
     #[test]

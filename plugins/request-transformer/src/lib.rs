@@ -360,16 +360,16 @@ fn transform_path(path: &str, config: &PathConfig, compiled_re: Option<&Regex>) 
 ///
 /// Non-JSON bodies are returned unchanged.
 fn transform_body(
-    body: &Option<String>,
+    body: &Option<Vec<u8>>,
     config: &BodyConfig,
     original: &Request,
-) -> Option<String> {
-    let body_str = match body {
+) -> Option<Vec<u8>> {
+    let body_bytes = match body {
         Some(b) if !b.is_empty() => b,
         _ => return body.clone(),
     };
 
-    let mut json: Value = match serde_json::from_str(body_str) {
+    let mut json: Value = match serde_json::from_slice(body_bytes) {
         Ok(v) => v,
         Err(_) => {
             log_message(1, "Body is not valid JSON, skipping body transformations");
@@ -455,8 +455,8 @@ fn transform_body(
         }
     }
 
-    match serde_json::to_string(&json) {
-        Ok(s) => Some(s),
+    match serde_json::to_vec(&json) {
+        Ok(v) => Some(v),
         Err(e) => {
             log_message(
                 0,
@@ -1111,7 +1111,7 @@ mod tests {
             path: "/users/123".to_string(),
             query: Some("page=2".to_string()),
             headers: BTreeMap::new(),
-            body: Some(r#"{"user":"john","age":30}"#.to_string()),
+            body: Some(br#"{"user":"john","age":30}"#.to_vec()),
             client_ip: "192.168.1.1".to_string(),
             path_params,
         }
@@ -1120,7 +1120,7 @@ mod tests {
     #[test]
     fn test_body_add_simple_field() {
         let req = create_post_request();
-        let body = Some(r#"{"user":"john"}"#.to_string());
+        let body = Some(br#"{"user":"john"}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config
@@ -1129,7 +1129,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["user"], "john");
         assert_eq!(json["gateway"], "barbacane");
@@ -1138,7 +1138,7 @@ mod tests {
     #[test]
     fn test_body_add_nested_field() {
         let req = create_post_request();
-        let body = Some(r#"{"user":"john"}"#.to_string());
+        let body = Some(br#"{"user":"john"}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config
@@ -1150,7 +1150,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["user"], "john");
         assert_eq!(json["metadata"]["gateway"], "barbacane");
@@ -1160,7 +1160,7 @@ mod tests {
     #[test]
     fn test_body_add_with_interpolation() {
         let req = create_post_request();
-        let body = Some(r#"{"user":"john"}"#.to_string());
+        let body = Some(br#"{"user":"john"}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config
@@ -1175,7 +1175,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         // Numeric strings from query/path should be preserved as JSON numbers
         assert_eq!(json["userId"], 123);
@@ -1186,14 +1186,14 @@ mod tests {
     #[test]
     fn test_body_remove_field() {
         let req = create_post_request();
-        let body = Some(r#"{"user":"john","password":"secret","age":30}"#.to_string());
+        let body = Some(br#"{"user":"john","password":"secret","age":30}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.remove.push("/password".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["user"], "john");
         assert_eq!(json["age"], 30);
@@ -1204,14 +1204,14 @@ mod tests {
     fn test_body_remove_nested_field() {
         let req = create_post_request();
         let body =
-            Some(r#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_string());
+            Some(br#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.remove.push("/metadata/internal".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["user"], "john");
         assert_eq!(json["metadata"]["public"], "yes");
@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn test_body_rename_field() {
         let req = create_post_request();
-        let body = Some(r#"{"userName":"john","age":30}"#.to_string());
+        let body = Some(br#"{"userName":"john","age":30}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config
@@ -1230,7 +1230,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["user_name"], "john");
         assert_eq!(json["age"], 30);
@@ -1240,7 +1240,7 @@ mod tests {
     #[test]
     fn test_body_rename_nested_field() {
         let req = create_post_request();
-        let body = Some(r#"{"metadata":{"oldName":"value"}}"#.to_string());
+        let body = Some(br#"{"metadata":{"oldName":"value"}}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.rename.insert(
@@ -1250,7 +1250,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["metadata"]["newName"], "value");
         assert_eq!(json["metadata"].get("oldName"), None);
@@ -1259,7 +1259,7 @@ mod tests {
     #[test]
     fn test_body_rename_same_pointer() {
         let req = create_post_request();
-        let body = Some(r#"{"field":"value","other":"keep"}"#.to_string());
+        let body = Some(br#"{"field":"value","other":"keep"}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config
@@ -1268,7 +1268,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         // rename with identical source and destination is a no-op — field must survive
         assert_eq!(json["field"], "value");
@@ -1278,7 +1278,7 @@ mod tests {
     #[test]
     fn test_body_rename_array_element_field() {
         let req = create_post_request();
-        let body = Some(r#"{"items":[{"oldKey":"val1"},{"oldKey":"val2"}]}"#.to_string());
+        let body = Some(br#"{"items":[{"oldKey":"val1"},{"oldKey":"val2"}]}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.rename.insert(
@@ -1288,7 +1288,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["items"][0]["newKey"], "val1");
         assert_eq!(json["items"][0].get("oldKey"), None);
@@ -1299,7 +1299,7 @@ mod tests {
     #[test]
     fn test_body_transformation_order() {
         let req = create_post_request();
-        let body = Some(r#"{"toRemove":"x","toRename":"y","toOverwrite":"old"}"#.to_string());
+        let body = Some(br#"{"toRemove":"x","toRename":"y","toOverwrite":"old"}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.remove.push("/toRemove".to_string());
@@ -1313,7 +1313,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json.get("toRemove"), None);
         assert_eq!(json["renamed"], "y");
@@ -1324,13 +1324,13 @@ mod tests {
     #[test]
     fn test_body_non_json() {
         let req = create_post_request();
-        let body = Some("not json".to_string());
+        let body = Some(b"not json".to_vec());
 
         let mut config = BodyConfig::default();
         config.add.insert("/field".to_string(), "value".to_string());
 
         let result = transform_body(&body, &config, &req);
-        assert_eq!(result, Some("not json".to_string()));
+        assert_eq!(result, Some(b"not json".to_vec()));
     }
 
     #[test]
@@ -1348,7 +1348,7 @@ mod tests {
     #[test]
     fn test_body_nonexistent_pointer() {
         let req = create_post_request();
-        let body = Some(r#"{"user":"john"}"#.to_string());
+        let body = Some(br#"{"user":"john"}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.remove.push("/nonexistent/deeply/nested".to_string());
@@ -1360,7 +1360,7 @@ mod tests {
     #[test]
     fn test_body_array_pointer() {
         let req = create_post_request();
-        let body = Some(r#"{"items":[{"id":1},{"id":2}]}"#.to_string());
+        let body = Some(br#"{"items":[{"id":1},{"id":2}]}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config
@@ -1369,7 +1369,7 @@ mod tests {
 
         let result = transform_body(&body, &config, &req);
         let json: Value =
-            serde_json::from_str(&result.expect("should have body")).expect("valid json");
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
         assert_eq!(json["items"][0]["gateway"], "barbacane");
         assert_eq!(json["items"][1].get("gateway"), None);
@@ -1432,7 +1432,7 @@ mod tests {
             path: "/query-to-body".to_string(),
             query: Some("userId=42".to_string()),
             headers: BTreeMap::new(),
-            body: Some(r#"{"existing":"data"}"#.to_string()),
+            body: Some(br#"{"existing":"data"}"#.to_vec()),
             client_ip: "127.0.0.1".to_string(),
             path_params: BTreeMap::new(),
         };
@@ -1444,7 +1444,7 @@ mod tests {
 
             // userId should have been injected into body from the ORIGINAL query
             let json: Value =
-                serde_json::from_str(modified.body.as_ref().expect("should have body"))
+                serde_json::from_slice(modified.body.as_ref().expect("should have body"))
                     .expect("valid json");
             assert_eq!(json["userId"], 42);
             assert_eq!(json["existing"], "data");

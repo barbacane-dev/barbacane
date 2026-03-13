@@ -56,7 +56,7 @@ fn create_test_response() -> Vec<u8> {
     let response = barbacane_wasm::Response {
         status: 200,
         headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
-        body: Some(r#"{"id":"12345","name":"test"}"#.to_string()),
+        body: Some(br#"{"id":"12345","name":"test"}"#.to_vec()),
     };
 
     serde_json::to_vec(&response).unwrap()

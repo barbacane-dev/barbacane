@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use wasmtime::{Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
 
+use barbacane_plugin_sdk::types::base64_body;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -37,14 +38,17 @@ pub enum StreamEvent {
 
 /// HTTP request format from WASM plugins.
 /// This matches the format used by http-upstream plugin.
+///
+/// The `body` field uses base64 encoding over JSON to support binary payloads
+/// (e.g. multipart/form-data with file uploads).
 #[derive(Debug, Deserialize)]
 struct PluginHttpRequest {
     method: String,
     url: String,
     #[serde(default)]
     headers: BTreeMap<String, String>,
-    #[serde(default)]
-    body: Option<String>,
+    #[serde(default, with = "base64_body")]
+    body: Option<Vec<u8>>,
     #[serde(default)]
     timeout_ms: Option<u64>,
 }
@@ -898,12 +902,13 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                         }
                     };
 
-                // Convert to HttpClientRequest format
+                // Convert to HttpClientRequest format — body is already binary
+                // (base64 decoded by serde during deserialization)
                 let request = HttpClientRequest {
                     method: plugin_request.method,
                     url: plugin_request.url,
                     headers: plugin_request.headers.into_iter().collect(),
-                    body: plugin_request.body.map(|s| s.into_bytes()),
+                    body: plugin_request.body,
                     timeout: plugin_request
                         .timeout_ms
                         .map(std::time::Duration::from_millis),
@@ -1043,7 +1048,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     method: plugin_request.method,
                     url: plugin_request.url,
                     headers: plugin_request.headers.into_iter().collect(),
-                    body: plugin_request.body.map(|s| s.into_bytes()),
+                    body: plugin_request.body,
                     timeout: plugin_request
                         .timeout_ms
                         .map(std::time::Duration::from_millis),

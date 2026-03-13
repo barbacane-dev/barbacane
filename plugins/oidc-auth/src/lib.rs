@@ -742,7 +742,7 @@ impl OidcAuth {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -1330,7 +1330,7 @@ mod tests {
         assert!(www_auth.contains("error=\"missing_token\""));
 
         let body = response.body.unwrap();
-        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], 401);
         assert_eq!(json["type"], "urn:barbacane:error:authentication-failed");
     }
@@ -1343,7 +1343,7 @@ mod tests {
 
         assert_eq!(response.status, 403);
         let body = response.body.unwrap();
-        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], 403);
         assert_eq!(json["type"], "urn:barbacane:error:authorization-failed");
     }

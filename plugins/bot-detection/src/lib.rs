@@ -113,7 +113,7 @@ impl BotDetection {
         Response {
             status: self.status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -296,7 +296,7 @@ mod tests {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 429);
                 let body: serde_json::Value =
-                    serde_json::from_str(r.body.as_ref().unwrap()).unwrap();
+                    serde_json::from_slice(r.body.as_ref().unwrap()).unwrap();
                 assert_eq!(body["detail"], "Rate limited");
                 assert_eq!(body["status"], 429);
             }
@@ -315,7 +315,7 @@ mod tests {
             resp.headers.get("content-type").map(String::as_str),
             Some("application/problem+json")
         );
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:bot-detected");
         assert_eq!(body["user_agent"], "scrapy/2.11");
     }
@@ -324,7 +324,7 @@ mod tests {
     fn test_blocked_response_without_ua() {
         let plugin: BotDetection = serde_json::from_value(serde_json::json!({})).unwrap();
         let resp = plugin.blocked_response(None);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert!(body.get("user_agent").is_none());
     }
 

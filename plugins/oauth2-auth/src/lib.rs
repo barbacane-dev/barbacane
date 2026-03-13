@@ -374,7 +374,7 @@ impl OAuth2Auth {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -665,7 +665,7 @@ mod tests {
         );
         assert!(response.headers.contains_key("www-authenticate"));
 
-        let body = response.body.unwrap();
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(body.contains("\"status\":401"));
         assert!(body.contains("Authentication failed"));
         assert!(body.contains("urn:barbacane:error:authentication-failed"));
@@ -683,7 +683,7 @@ mod tests {
             "application/json"
         );
 
-        let body = response.body.unwrap();
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(body.contains("\"status\":403"));
         assert!(body.contains("Authorization failed"));
         assert!(body.contains("urn:barbacane:error:authorization-failed"));
@@ -840,7 +840,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test body".to_string()),
+            body: Some(b"test body".to_vec()),
         };
 
         let result = config.on_response(response.clone());

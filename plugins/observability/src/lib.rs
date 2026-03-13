@@ -323,7 +323,7 @@ mod tests {
         Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test body".to_string()),
+            body: Some(b"test body".to_vec()),
         }
     }
 
@@ -396,7 +396,7 @@ mod tests {
         let mut req = create_test_request();
         req.headers
             .insert("Content-Type".to_string(), "application/json".to_string());
-        req.body = Some("test".to_string());
+        req.body = Some(b"test".to_vec());
 
         let _ = plugin.on_request(req);
 
@@ -451,7 +451,7 @@ mod tests {
 
         // Verify response is passed through unchanged
         assert_eq!(result.status, 200);
-        assert_eq!(result.body, Some("test body".to_string()));
+        assert_eq!(result.body, Some(b"test body".to_vec()));
     }
 
     #[test]
@@ -671,14 +671,14 @@ mod tests {
         resp.status = 404;
         resp.headers
             .insert("X-Custom".to_string(), "value".to_string());
-        resp.body = Some("not found".to_string());
+        resp.body = Some(b"not found".to_vec());
 
         let result = plugin.on_response(resp);
 
         // Verify response is completely unchanged
         assert_eq!(result.status, 404);
         assert_eq!(result.headers.get("X-Custom"), Some(&"value".to_string()));
-        assert_eq!(result.body, Some("not found".to_string()));
+        assert_eq!(result.body, Some(b"not found".to_vec()));
     }
 
     #[test]

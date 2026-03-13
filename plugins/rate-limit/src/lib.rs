@@ -177,7 +177,7 @@ impl RateLimit {
         Response {
             status: 429,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -566,7 +566,7 @@ mod tests {
 
         let response = rate_limit.too_many_requests_response(&result, "default;q=10;w=60");
 
-        let body = response.body.unwrap();
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(body.contains("\"type\":\"urn:barbacane:error:rate-limit-exceeded\""));
         assert!(body.contains("\"title\":\"Too Many Requests\""));
         assert!(body.contains("\"status\":429"));
@@ -758,13 +758,13 @@ mod tests {
         let response = Response {
             status: 200,
             headers: headers.clone(),
-            body: Some(r#"{"message":"ok"}"#.to_string()),
+            body: Some(br#"{"message":"ok"}"#.to_vec()),
         };
 
         let result = rate_limit.on_response(response);
 
         assert_eq!(result.status, 200);
         assert_eq!(result.headers, headers);
-        assert_eq!(result.body.unwrap(), r#"{"message":"ok"}"#);
+        assert_eq!(result.body.unwrap(), br#"{"message":"ok"}"#);
     }
 }

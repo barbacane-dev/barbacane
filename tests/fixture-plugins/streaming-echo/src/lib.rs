@@ -31,7 +31,7 @@ impl StreamingEcho {
             method: req.method.clone(),
             url: self.url.clone(),
             headers: req.headers.clone(),
-            body: req.body.clone(),
+            body: req.body_string(),
             timeout_ms: Some(30_000),
         };
 
@@ -69,7 +69,7 @@ fn error_response(status: u16, detail: &str) -> Response {
     Response {
         status,
         headers,
-        body: Some(body.to_string()),
+        body: Some(body.to_string().into_bytes()),
     }
 }
 

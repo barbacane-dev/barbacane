@@ -37,7 +37,8 @@ struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    #[serde(with = "base64_body")]
+    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
@@ -137,7 +138,7 @@ impl LambdaDispatcher {
         Response {
             status: http_response.status,
             headers: response_headers,
-            body: http_response.body.and_then(|b| String::from_utf8(b).ok()),
+            body: http_response.body,
         }
     }
 
@@ -166,7 +167,7 @@ impl LambdaDispatcher {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         }
     }
 }
@@ -217,7 +218,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-invocation-failed");
         assert_eq!(body["title"], "Lambda invocation failed");
         assert_eq!(body["status"], 502);
@@ -241,7 +242,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-unavailable");
         assert_eq!(body["title"], "Lambda unavailable");
         assert_eq!(body["status"], 503);
@@ -264,7 +265,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-timeout");
         assert_eq!(body["title"], "Lambda timeout");
         assert_eq!(body["status"], 504);
@@ -336,7 +337,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-invocation-failed");
         assert_eq!(body["title"], "Lambda invocation failed");
         assert_eq!(body["status"], 502);
@@ -366,7 +367,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers,
-            body: Some(r#"{"key": "value"}"#.to_string()),
+            body: Some(br#"{"key": "value"}"#.to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -398,7 +399,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers,
-            body: Some(r#"{"key": "value"}"#.to_string()),
+            body: Some(br#"{"key": "value"}"#.to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -425,7 +426,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers: BTreeMap::new(),
-            body: Some(r#"{"key": "value"}"#.to_string()),
+            body: Some(br#"{"key": "value"}"#.to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -454,7 +455,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers,
-            body: Some("plain text body".to_string()),
+            body: Some(b"plain text body".to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),

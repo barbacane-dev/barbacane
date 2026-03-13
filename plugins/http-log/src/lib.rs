@@ -414,7 +414,7 @@ mod tests {
             path: "/users".to_string(),
             query: Some("page=1".to_string()),
             headers,
-            body: Some(r#"{"name":"alice"}"#.to_string()),
+            body: Some(br#"{"name":"alice"}"#.to_vec()),
             client_ip: "10.0.0.1".to_string(),
             path_params: BTreeMap::new(),
         }
@@ -426,7 +426,7 @@ mod tests {
         Response {
             status: 201,
             headers,
-            body: Some(r#"{"id":42}"#.to_string()),
+            body: Some(br#"{"id":42}"#.to_vec()),
         }
     }
 

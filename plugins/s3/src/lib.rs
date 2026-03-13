@@ -9,10 +9,8 @@
 //! - **Custom endpoint** (always path-style): `{endpoint}/{bucket}/{key}`
 //!
 //! # Binary response bodies
-//! The plugin SDK's `Response` type uses `Option<String>`. Binary objects
-//! (images, PDFs, etc.) whose bodies are not valid UTF-8 will be returned
-//! with an empty body. Use a byte-range request or a pre-signed URL to
-//! download binary content directly.
+//! The plugin SDK's `Response` type uses `Option<Vec<u8>>`, so binary
+//! objects (images, PDFs, etc.) are passed through without data loss.
 
 use barbacane_plugin_sdk::prelude::*;
 use barbacane_sigv4 as sigv4;
@@ -89,7 +87,8 @@ struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    #[serde(with = "base64_body")]
+    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
@@ -114,14 +113,14 @@ impl S3Dispatcher {
         key: &str,
         method: &str,
         query: Option<&str>,
-        body: Option<&str>,
+        body: Option<&[u8]>,
         incoming_headers: &BTreeMap<String, String>,
         unix_secs: u64,
     ) -> HttpRequest {
         let (datetime, date) = sigv4::format_datetime(unix_secs);
 
         // ── Body hash ──────────────────────────────────────────────────────
-        let body_bytes = body.unwrap_or("").as_bytes();
+        let body_bytes = body.unwrap_or(&[]);
         let body_sha256 = sigv4::sha256_hex(body_bytes);
 
         // ── URL style + Host ───────────────────────────────────────────────
@@ -216,7 +215,7 @@ impl S3Dispatcher {
             method: method.to_string(),
             url: full_url,
             headers,
-            body: body.map(|s| s.to_string()),
+            body: body.map(|b| b.to_vec()),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         }
     }
@@ -329,14 +328,10 @@ impl S3Dispatcher {
             }
         }
 
-        // Note: Binary response bodies that are not valid UTF-8 are omitted.
-        // See module-level documentation for workarounds.
-        let body = http_response.body.and_then(|b| String::from_utf8(b).ok());
-
         Response {
             status: http_response.status,
             headers: response_headers,
-            body,
+            body: http_response.body,
         }
     }
 
@@ -365,7 +360,7 @@ impl S3Dispatcher {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         }
     }
 }
@@ -511,7 +506,7 @@ mod tests {
         let resp = d.dispatch(req);
         assert_eq!(resp.status, 400);
         let body: serde_json::Value =
-            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:bad-request");
     }
 
@@ -523,7 +518,7 @@ mod tests {
         let resp = d.dispatch(make_get_request(params));
         assert_eq!(resp.status, 400);
         let body: serde_json::Value =
-            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:bad-request");
     }
 
@@ -536,7 +531,7 @@ mod tests {
         let resp = d.dispatch(make_get_request(params));
         assert_eq!(resp.status, 502);
         let body: serde_json::Value =
-            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
     }
 
@@ -670,7 +665,7 @@ mod tests {
             "hello.txt",
             "PUT",
             None,
-            Some(body),
+            Some(body.as_bytes()),
             &BTreeMap::new(),
             TEST_TS,
         );
@@ -682,7 +677,7 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "non-empty body must not produce the empty-string hash"
         );
-        assert_eq!(req.body, Some(body.to_string()));
+        assert_eq!(req.body, Some(body.as_bytes().to_vec()));
         assert_eq!(req.method, "PUT");
     }
 
@@ -726,7 +721,7 @@ mod tests {
             "photo.png",
             "PUT",
             None,
-            Some("PNG data"),
+            Some(b"PNG data"),
             &incoming,
             TEST_TS,
         );

@@ -127,7 +127,7 @@ impl IpRestriction {
         Response {
             status: self.status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -385,7 +385,7 @@ mod tests {
         let plugin = test_plugin();
         let resp = plugin.forbidden_response("10.0.0.5");
         assert_eq!(resp.status, 403);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:ip-restricted");
         assert_eq!(body["client_ip"], "10.0.0.5");
     }
@@ -403,7 +403,7 @@ mod tests {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 451);
                 let body: serde_json::Value =
-                    serde_json::from_str(r.body.as_ref().unwrap()).unwrap();
+                    serde_json::from_slice(r.body.as_ref().unwrap()).unwrap();
                 assert_eq!(body["detail"], "Blocked by policy");
             }
             _ => panic!("expected ShortCircuit"),

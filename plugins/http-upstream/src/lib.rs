@@ -38,7 +38,8 @@ struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    #[serde(with = "base64_body")]
+    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
@@ -173,16 +174,10 @@ impl HttpUpstreamDispatcher {
             }
         }
 
-        // Note: Binary response bodies that are not valid UTF-8 will be omitted.
-        // This is a limitation of the plugin SDK's Response type which uses String.
-        // For binary content, consider using a base64-encoding middleware or
-        // returning the raw bytes through a future SDK enhancement.
-        let body = http_response.body.and_then(|b| String::from_utf8(b).ok());
-
         Response {
             status: http_response.status,
             headers: response_headers,
-            body,
+            body: http_response.body,
         }
     }
 
@@ -259,7 +254,7 @@ mod tests {
         method: &str,
         path: &str,
         headers: BTreeMap<String, String>,
-        body: Option<String>,
+        body: Option<Vec<u8>>,
         query: Option<String>,
         path_params: BTreeMap<String, String>,
     ) -> Request {
@@ -718,7 +713,7 @@ mod tests {
             timeout: 30.0,
         };
 
-        let body = r#"{"name":"test"}"#.to_string();
+        let body = br#"{"name":"test"}"#.to_vec();
         let req = make_request(
             "POST",
             "/users",

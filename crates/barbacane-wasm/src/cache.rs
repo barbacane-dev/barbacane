@@ -15,8 +15,9 @@ pub struct CacheEntry {
     pub status: u16,
     /// The cached response headers.
     pub headers: HashMap<String, String>,
-    /// The cached response body.
-    pub body: Option<String>,
+    /// The cached response body (binary-safe via base64 in JSON).
+    #[serde(with = "barbacane_plugin_sdk::types::base64_body")]
+    pub body: Option<Vec<u8>>,
     /// Cache metadata for debugging.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<CacheMetadata>,
@@ -206,7 +207,7 @@ mod tests {
         let entry = CacheEntry {
             status: 200,
             headers: HashMap::new(),
-            body: Some("test body".to_string()),
+            body: Some(b"test body".to_vec()),
             metadata: None,
         };
 
@@ -217,7 +218,7 @@ mod tests {
         assert!(result.entry.is_some());
         let cached = result.entry.unwrap();
         assert_eq!(cached.status, 200);
-        assert_eq!(cached.body, Some("test body".to_string()));
+        assert_eq!(cached.body, Some(b"test body".to_vec()));
     }
 
     #[test]

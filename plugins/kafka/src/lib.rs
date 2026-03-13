@@ -92,7 +92,7 @@ impl KafkaDispatcher {
             url: self.brokers.clone(),
             topic: self.topic.clone(),
             key,
-            payload: req.body.clone().unwrap_or_default(),
+            payload: req.body_string().unwrap_or_default(),
             headers: msg_headers,
         };
 
@@ -192,7 +192,7 @@ impl KafkaDispatcher {
         Response {
             status: 202,
             headers,
-            body: Some(body),
+            body: Some(body.into_bytes()),
         }
     }
 
@@ -238,7 +238,7 @@ impl KafkaDispatcher {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         }
     }
 }
@@ -283,7 +283,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/api/users".to_string(),
             headers,
-            body: Some(r#"{"name":"test"}"#.to_string()),
+            body: Some(br#"{"name":"test"}"#.to_vec()),
             query: None,
             path_params,
             client_ip: "127.0.0.1".to_string(),
@@ -391,7 +391,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["status"], "accepted");
         assert!(body.get("topic").is_none());
         assert!(body.get("partition").is_none());
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(response.status, 202);
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["status"], "accepted");
         assert_eq!(body["topic"], "test-topic");
         assert_eq!(body["partition"], 0);
@@ -471,7 +471,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:kafka-publish-failed");
         assert_eq!(body["title"], "Kafka publish failed");
         assert_eq!(body["status"], 502);
@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(response.status, 202);
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["message"], "queued");
         assert_eq!(body["id"], 123);
     }
@@ -591,7 +591,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:kafka-publish-failed");
         assert_eq!(body["title"], "Kafka publish failed");
     }
