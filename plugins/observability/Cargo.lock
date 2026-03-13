@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "quote",
  "syn",
@@ -21,11 +21,18 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "barbacane-plugin-macros",
+ "base64",
  "serde",
 ]
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "itoa"

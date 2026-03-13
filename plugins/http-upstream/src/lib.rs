@@ -219,7 +219,7 @@ impl HttpUpstreamDispatcher {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         }
     }
 }
@@ -348,7 +348,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
         assert_eq!(body["title"], "Bad Gateway");
         assert_eq!(body["status"], 502);
@@ -376,7 +376,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:circuit-open");
         assert_eq!(body["title"], "Service Unavailable");
         assert_eq!(body["status"], 503);
@@ -400,7 +400,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:upstream-timeout");
         assert_eq!(body["title"], "Gateway Timeout");
         assert_eq!(body["status"], 504);
@@ -428,7 +428,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(response.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:internal");
         assert_eq!(body["title"], "Internal Error");
         assert_eq!(body["status"], 500);

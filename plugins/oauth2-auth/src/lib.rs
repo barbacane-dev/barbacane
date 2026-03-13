@@ -39,7 +39,8 @@ struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    #[serde(with = "base64_body")]
+    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
@@ -268,7 +269,7 @@ impl OAuth2Auth {
             method: "POST".to_string(),
             url: self.introspection_endpoint.clone(),
             headers,
-            body: Some(body),
+            body: Some(body.into_bytes()),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 

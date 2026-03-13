@@ -98,7 +98,8 @@ struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    #[serde(with = "base64_body")]
+    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
@@ -203,7 +204,7 @@ impl HttpLog {
             method: self.method.clone(),
             url: self.endpoint.clone(),
             headers,
-            body: Some(payload.to_string()),
+            body: Some(payload.to_string().into_bytes()),
             timeout_ms: Some(self.timeout_ms),
         };
 
@@ -616,7 +617,7 @@ mod tests {
 
         // Verify the log entry payload
         let payload: serde_json::Value =
-            serde_json::from_str(http_req.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(http_req.body.as_ref().unwrap()).unwrap();
         assert_eq!(payload["timestamp_ms"], 1000);
         assert_eq!(payload["duration_ms"], 50);
         assert_eq!(payload["request"]["method"], "POST");
@@ -639,7 +640,7 @@ mod tests {
         let calls = host::get_http_calls();
         let http_req: HttpRequest = serde_json::from_slice(&calls[0]).unwrap();
         let payload: serde_json::Value =
-            serde_json::from_str(http_req.body.as_ref().unwrap()).unwrap();
+            serde_json::from_slice(http_req.body.as_ref().unwrap()).unwrap();
         assert_eq!(payload["service"], "my-api");
     }
 

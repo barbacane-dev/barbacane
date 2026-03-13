@@ -220,7 +220,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                         let error_resp = barbacane_plugin_sdk::prelude::Response {
                             status: 500,
                             headers: std::collections::BTreeMap::new(),
-                            body: Some(r#"{"error":"failed to parse request"}"#.to_string()),
+                            body: Some(br#"{"error":"failed to parse request"}"#.to_vec()),
                         };
                         if let Ok(output) = serde_json::to_vec(&error_resp) {
                             set_output(&output);
@@ -236,7 +236,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                             let error_resp = barbacane_plugin_sdk::prelude::Response {
                                 status: 500,
                                 headers: std::collections::BTreeMap::new(),
-                                body: Some(r#"{"error":"plugin not initialized"}"#.to_string()),
+                                body: Some(br#"{"error":"plugin not initialized"}"#.to_vec()),
                             };
                             if let Ok(output) = serde_json::to_vec(&error_resp) {
                                 set_output(&output);
