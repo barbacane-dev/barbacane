@@ -280,6 +280,7 @@ x-barbacane-middlewares:
       clock_skew_seconds: 60
       jwks_refresh_seconds: 300
       timeout: 5.0
+      allow_query_token: false  # RFC 6750 §2.3 query param fallback
 ```
 
 #### Configuration
@@ -293,10 +294,11 @@ x-barbacane-middlewares:
 | `clock_skew_seconds` | integer | `60` | Clock skew tolerance for `exp`/`nbf` validation |
 | `jwks_refresh_seconds` | integer | `300` | How often to refresh JWKS keys (seconds) |
 | `timeout` | float | `5.0` | HTTP timeout for discovery and JWKS calls (seconds) |
+| `allow_query_token` | boolean | `false` | Allow token extraction from the `access_token` query parameter ([RFC 6750 §2.3](https://datatracker.ietf.org/doc/html/rfc6750#section-2.3)). Use with caution — tokens in URLs risk leaking via logs and referer headers. |
 
 #### How It Works
 
-1. Extracts the Bearer token from the `Authorization` header
+1. Extracts the Bearer token from the `Authorization` header (or from the `access_token` query parameter if `allow_query_token` is enabled and no header is present)
 2. Parses the JWT header to determine the signing algorithm and key ID (`kid`)
 3. Fetches `{issuer_url}/.well-known/openid-configuration` (cached)
 4. Fetches the JWKS endpoint from the discovery document (cached with TTL)
