@@ -615,3 +615,314 @@ paths:
 
     assert_eq!(resp.status(), 401);
 }
+
+// ========================================
+// Large body tests (write_to_memory OOM)
+// ========================================
+
+/// POST a ~500KB body through middleware + http-upstream dispatch.
+///
+/// This exercises the `write_to_memory` code path with a large payload
+/// that, when JSON+base64 encoded, produces a Request JSON exceeding the
+/// initial WASM linear memory. The fix (memory grow) must handle this
+/// without OOM.
+#[tokio::test]
+async fn test_large_body_through_middleware_to_upstream() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    let apikey_wasm = plugin_wasm("apikey-auth");
+    if !http_upstream_wasm.exists() || !apikey_wasm.exists() {
+        panic!(
+            "WASM plugins not found. Run `make plugins` first.\n  http-upstream: {}\n  apikey-auth: {}",
+            http_upstream_wasm.display(),
+            apikey_wasm.display()
+        );
+    }
+
+    // 500KB payload — large enough to stress WASM memory but under the
+    // default 1MB body-size limit.
+    let large_payload: Vec<u8> = (0..500_000).map(|i| (i % 256) as u8).collect();
+    let payload_len = large_payload.len();
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"received_bytes": payload_len})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n  apikey-auth:\n    path: {}\n",
+        http_upstream_wasm.display(),
+        apikey_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Large Body Test
+  version: "1.0.0"
+
+paths:
+  /upload:
+    post:
+      operationId: uploadLarge
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            header_name: x-api-key
+            keys:
+              test-key-123:
+                id: key-1
+                name: testuser
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/upload"
+          timeout: 30.0
+      responses:
+        "200":
+          description: OK
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/upload")
+        .header("content-type", "application/octet-stream")
+        .header("x-api-key", "test-key-123")
+        .body(large_payload)
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["received_bytes"], payload_len);
+}
+
+/// POST a ~2MB body through middleware + dispatch with raised body-size limit.
+///
+/// Uses `--max-body-size` to allow 3MB payloads. This is the exact scenario
+/// that caused OOM before the `write_to_memory` fix: a 2MB body base64-encoded
+/// produces ~2.7MB of Request JSON, which exceeds the initial 1MB WASM memory.
+#[tokio::test]
+async fn test_2mb_body_through_middleware_to_upstream() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    let apikey_wasm = plugin_wasm("apikey-auth");
+    if !http_upstream_wasm.exists() || !apikey_wasm.exists() {
+        panic!(
+            "WASM plugins not found. Run `make plugins` first.\n  http-upstream: {}\n  apikey-auth: {}",
+            http_upstream_wasm.display(),
+            apikey_wasm.display()
+        );
+    }
+
+    // 2MB payload
+    let large_payload: Vec<u8> = (0..2_000_000).map(|i| (i % 256) as u8).collect();
+    let payload_len = large_payload.len();
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"received_bytes": payload_len})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n  apikey-auth:\n    path: {}\n",
+        http_upstream_wasm.display(),
+        apikey_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Large Body 2MB Test
+  version: "1.0.0"
+
+paths:
+  /upload:
+    post:
+      operationId: uploadLarge2mb
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            header_name: x-api-key
+            keys:
+              test-key-123:
+                id: key-1
+                name: testuser
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/upload"
+          timeout: 30.0
+      responses:
+        "200":
+          description: OK
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    // Raise body-size limit to 3MB to allow the 2MB payload
+    let gateway = TestGateway::from_spec_with_args(
+        spec_path.to_str().unwrap(),
+        &["--max-body-size", "3145728"],
+    )
+    .await
+    .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/upload")
+        .header("content-type", "application/octet-stream")
+        .header("x-api-key", "test-key-123")
+        .body(large_payload)
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["received_bytes"], payload_len);
+}
+
+/// POST a large body directly to dispatcher (no middleware).
+/// Verifies the dispatch-only path handles large payloads without OOM.
+#[tokio::test]
+async fn test_large_body_direct_dispatch() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    if !http_upstream_wasm.exists() {
+        panic!(
+            "WASM plugin not found. Run `make plugins` first.\n  http-upstream: {}",
+            http_upstream_wasm.display(),
+        );
+    }
+
+    let large_payload: Vec<u8> = (0..500_000).map(|i| (i % 256) as u8).collect();
+    let payload_len = large_payload.len();
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/data"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"received_bytes": payload_len})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n",
+        http_upstream_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Large Body Direct Dispatch Test
+  version: "1.0.0"
+
+paths:
+  /data:
+    post:
+      operationId: postLargeData
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/data"
+          timeout: 30.0
+      responses:
+        "200":
+          description: OK
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/data")
+        .header("content-type", "application/octet-stream")
+        .body(large_payload)
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["received_bytes"], payload_len);
+}

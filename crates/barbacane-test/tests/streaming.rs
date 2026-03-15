@@ -100,9 +100,11 @@ paths:
       x-barbacane-middlewares:
         - name: apikey-auth
           config:
+            header_name: x-api-key
             keys:
-              - key: "secret-key"
-                name: "test"
+              secret-key:
+                id: key-1
+                name: test
       x-barbacane-dispatch:
         name: streaming-echo
         config:

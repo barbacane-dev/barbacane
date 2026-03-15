@@ -76,6 +76,11 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 }
             }
 
+            /// Lightweight serialization wrapper — avoids the heap cost of
+            /// an intermediate `serde_json::Value` tree.
+            #[derive(serde::Serialize)]
+            struct ActionOutput<T: serde::Serialize> { action: i32, data: T }
+
             /// Process an incoming request.
             /// Returns 0 to continue, 1 to short-circuit with response.
             #[no_mangle]
@@ -89,6 +94,9 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     Err(_) => return 1, // Parse error, short-circuit
                 };
 
+                // Free the input buffer — data is now owned by `request`.
+                dealloc(ptr, len);
+
                 let instance = unsafe {
                     match PLUGIN_INSTANCE.as_mut() {
                         Some(i) => i,
@@ -98,21 +106,13 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
 
                 match instance.on_request(request) {
                     barbacane_plugin_sdk::prelude::Action::Continue(req) => {
-                        // Serialize the request and set output
-                        if let Ok(output) = serde_json::to_vec(&serde_json::json!({
-                            "action": 0,
-                            "data": req
-                        })) {
+                        if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 0, data: req }) {
                             set_output(&output);
                         }
                         0 // Continue
                     }
                     barbacane_plugin_sdk::prelude::Action::ShortCircuit(resp) => {
-                        // Serialize the response and set output
-                        if let Ok(output) = serde_json::to_vec(&serde_json::json!({
-                            "action": 1,
-                            "data": resp
-                        })) {
+                        if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 1, data: resp }) {
                             set_output(&output);
                         }
                         1 // Short-circuit
@@ -132,6 +132,9 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     Err(_) => return 1,
                 };
 
+                // Free the input buffer.
+                dealloc(ptr, len);
+
                 let instance = unsafe {
                     match PLUGIN_INSTANCE.as_mut() {
                         Some(i) => i,
@@ -146,6 +149,26 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 }
 
                 0
+            }
+
+            /// Allocate `size` bytes via the plugin's allocator and return the pointer.
+            ///
+            /// Called by the host before writing input data into linear memory so that
+            /// dlmalloc is aware of the allocation and will not reuse the region.
+            #[no_mangle]
+            pub extern "C" fn alloc(size: i32) -> i32 {
+                let mut buf = Vec::<u8>::with_capacity(size as usize);
+                let ptr = buf.as_mut_ptr();
+                core::mem::forget(buf);
+                ptr as i32
+            }
+
+            /// Free a region previously returned by `alloc`.
+            #[no_mangle]
+            pub extern "C" fn dealloc(ptr: i32, size: i32) {
+                unsafe {
+                    drop(Vec::from_raw_parts(ptr as *mut u8, 0, size as usize));
+                }
             }
 
             /// Helper to set output via host function.
@@ -216,7 +239,8 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 let request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
                     Ok(r) => r,
                     Err(_) => {
-                        // Return error response
+                        // Free input buffer before returning error.
+                        dealloc(ptr, len);
                         let error_resp = barbacane_plugin_sdk::prelude::Response {
                             status: 500,
                             headers: std::collections::BTreeMap::new(),
@@ -228,6 +252,9 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                         return 1;
                     }
                 };
+
+                // Free the input buffer — data is now owned by `request`.
+                dealloc(ptr, len);
 
                 let instance = unsafe {
                     match PLUGIN_INSTANCE.as_mut() {
@@ -253,6 +280,23 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 }
 
                 0
+            }
+
+            /// Allocate `size` bytes via the plugin's allocator and return the pointer.
+            #[no_mangle]
+            pub extern "C" fn alloc(size: i32) -> i32 {
+                let mut buf = Vec::<u8>::with_capacity(size as usize);
+                let ptr = buf.as_mut_ptr();
+                core::mem::forget(buf);
+                ptr as i32
+            }
+
+            /// Free a region previously returned by `alloc`.
+            #[no_mangle]
+            pub extern "C" fn dealloc(ptr: i32, size: i32) {
+                unsafe {
+                    drop(Vec::from_raw_parts(ptr as *mut u8, 0, size as usize));
+                }
             }
 
             /// Helper to set output via host function.

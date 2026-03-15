@@ -363,23 +363,8 @@ pub struct PluginInstance {
     on_request_func: Option<TypedFunc<(i32, i32), i32>>,
     on_response_func: Option<TypedFunc<(i32, i32), i32>>,
     dispatch_func: Option<TypedFunc<(i32, i32), i32>>,
+    alloc_func: Option<TypedFunc<i32, i32>>,
     memory: Memory,
-
-    /// Start of the safe input region for host→WASM data writes.
-    ///
-    /// Read from the `__data_end` WASM global at instantiation. This marks the
-    /// end of static data and the beginning of the stack, which is safe to
-    /// overwrite because `write_to_memory` is only called *before* a WASM
-    /// function executes (the stack is empty at that point). Falls back to 0
-    /// if the global is not exported (shouldn't happen with wasm-ld).
-    input_region_start: u32,
-
-    /// End of the safe input region (exclusive).
-    ///
-    /// Read from the `__heap_base` WASM global. Data written past this point
-    /// would collide with the dlmalloc heap. Falls back to `mem_size` if the
-    /// global is not exported.
-    input_region_end: u32,
 }
 
 impl PluginInstance {
@@ -470,24 +455,6 @@ impl PluginInstance {
             .get_memory(&mut store, "memory")
             .ok_or_else(|| WasmError::MissingExport("memory".into()))?;
 
-        // Read __data_end and __heap_base globals to determine the safe
-        // input region. wasm-ld exports both: __data_end marks the end of
-        // static data, __heap_base marks where dlmalloc's heap starts.
-        // The region [__data_end..__heap_base] is the stack area, which is
-        // safe to overwrite before a WASM function executes (stack is empty).
-        // The old approach wrote at the top of linear memory, colliding with
-        // the heap and causing OOM in plugins using host_http_call.
-        let input_region_start = instance
-            .get_global(&mut store, "__data_end")
-            .and_then(|g| g.get(&mut store).i32())
-            .map(|v| v as u32)
-            .unwrap_or(0);
-        let input_region_end = instance
-            .get_global(&mut store, "__heap_base")
-            .and_then(|g| g.get(&mut store).i32())
-            .map(|v| v as u32)
-            .unwrap_or(memory.data_size(&store) as u32);
-
         // Cache function references
         let init_func = instance
             .get_typed_func::<(i32, i32), i32>(&mut store, "init")
@@ -501,6 +468,9 @@ impl PluginInstance {
         let dispatch_func = instance
             .get_typed_func::<(i32, i32), i32>(&mut store, "dispatch")
             .ok();
+        let alloc_func = instance
+            .get_typed_func::<i32, i32>(&mut store, "alloc")
+            .ok();
 
         Ok(Self {
             store,
@@ -510,9 +480,8 @@ impl PluginInstance {
             on_request_func,
             on_response_func,
             dispatch_func,
+            alloc_func,
             memory,
-            input_region_start,
-            input_region_end,
         })
     }
 
@@ -521,30 +490,67 @@ impl PluginInstance {
         &self.store.data().plugin_name
     }
 
-    /// Write data to the plugin's memory and return the pointer.
+    /// Write data to the plugin's linear memory and return the pointer.
     ///
-    /// Data is written at `__data_end` — the region between static data and
-    /// the heap (`__heap_base`). This is safe because this function is only
-    /// called *before* the WASM function starts executing (the stack is empty).
-    /// The previous approach wrote at the top of linear memory, which collided
-    /// with the dlmalloc heap in plugins that use `host_http_call`.
+    /// Uses the plugin's exported `alloc` function so that dlmalloc is aware
+    /// of the allocation and will not reuse the region during deserialization.
+    /// Falls back to growing memory directly for legacy plugins that lack the
+    /// `alloc` export (only safe for very small payloads like config JSON).
     pub fn write_to_memory(&mut self, data: &[u8]) -> Result<i32, WasmError> {
-        let ptr = self.input_region_start as usize;
-        let end = ptr + data.len();
-        let limit = self.input_region_end as usize;
-
-        if end > limit {
-            return Err(WasmError::MemoryLimitExceeded {
-                requested: data.len(),
-                limit: limit.saturating_sub(ptr),
-            });
+        if data.is_empty() {
+            return Ok(0);
         }
 
-        self.memory
-            .write(&mut self.store, ptr, data)
-            .map_err(|e| WasmError::Trap(format!("memory write failed: {}", e)))?;
+        if let Some(alloc_func) = self.alloc_func.clone() {
+            // Allocate via the plugin's own allocator — dlmalloc tracks this
+            // region and will not hand it out again during deserialization.
+            let ptr = alloc_func
+                .call(&mut self.store, data.len() as i32)
+                .map_err(|e| WasmError::Trap(format!("alloc failed: {}", e)))?;
 
-        Ok(self.input_region_start as i32)
+            if ptr == 0 {
+                let current_size = self.memory.data_size(&self.store);
+                return Err(WasmError::MemoryLimitExceeded {
+                    requested: data.len(),
+                    limit: self.limits.max_memory_bytes.saturating_sub(current_size),
+                });
+            }
+
+            self.memory
+                .write(&mut self.store, ptr as usize, data)
+                .map_err(|e| WasmError::Trap(format!("memory write failed: {}", e)))?;
+
+            Ok(ptr)
+        } else {
+            // Legacy fallback: grow memory and write at the new region.
+            // Only safe for small payloads (e.g. config JSON during init).
+            let current_size = self.memory.data_size(&self.store);
+            let needed = current_size + data.len();
+
+            if needed > self.limits.max_memory_bytes {
+                return Err(WasmError::MemoryLimitExceeded {
+                    requested: data.len(),
+                    limit: self.limits.max_memory_bytes.saturating_sub(current_size),
+                });
+            }
+
+            const PAGE_SIZE: usize = 65_536;
+            let pages_needed = data.len().div_ceil(PAGE_SIZE);
+
+            self.memory
+                .grow(&mut self.store, pages_needed as u64)
+                .map_err(|_| WasmError::MemoryLimitExceeded {
+                    requested: data.len(),
+                    limit: self.limits.max_memory_bytes.saturating_sub(current_size),
+                })?;
+
+            let ptr = current_size;
+            self.memory
+                .write(&mut self.store, ptr, data)
+                .map_err(|e| WasmError::Trap(format!("memory write failed: {}", e)))?;
+
+            Ok(ptr as i32)
+        }
     }
 
     /// Call the init function with the given config.
@@ -610,14 +616,17 @@ impl PluginInstance {
         // Clear output buffer
         self.store.data_mut().output_buffer.clear();
 
-        // Write data to memory
-        let ptr = self.write_to_memory(data)?;
-        let len = data.len() as i32;
-
-        // Reset fuel
-        if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
+        // Reset fuel before write_to_memory — the `alloc` call runs plugin
+        // code and needs fuel. Scale fuel with payload size: large bodies
+        // require proportionally more instructions for serde + base64.
+        let fuel = self.limits.max_fuel.max(data.len() as u64 * 100);
+        if let Err(e) = self.store.set_fuel(fuel) {
             tracing::warn!(error = %e, "failed to reset WASM fuel");
         }
+
+        // Write data to memory (may call plugin's `alloc` export)
+        let ptr = self.write_to_memory(data)?;
+        let len = data.len() as i32;
 
         // Call function
         let result = func
