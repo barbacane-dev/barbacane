@@ -373,6 +373,13 @@ pub struct PluginInstance {
     /// function executes (the stack is empty at that point). Falls back to 0
     /// if the global is not exported (shouldn't happen with wasm-ld).
     input_region_start: u32,
+
+    /// End of the safe input region (exclusive).
+    ///
+    /// Read from the `__heap_base` WASM global. Data written past this point
+    /// would collide with the dlmalloc heap. Falls back to `mem_size` if the
+    /// global is not exported.
+    input_region_end: u32,
 }
 
 impl PluginInstance {
@@ -463,17 +470,23 @@ impl PluginInstance {
             .get_memory(&mut store, "memory")
             .ok_or_else(|| WasmError::MissingExport("memory".into()))?;
 
-        // Read __data_end global to find the safe input region.
-        // wasm-ld exports this global marking the end of static data. Writing
-        // host data here avoids colliding with the heap (which grows upward
-        // from __heap_base) — the old approach wrote at the top of linear
-        // memory, which is exactly where dlmalloc's heap lives and caused OOM
-        // in plugins that make HTTP calls (e.g. oidc-auth).
+        // Read __data_end and __heap_base globals to determine the safe
+        // input region. wasm-ld exports both: __data_end marks the end of
+        // static data, __heap_base marks where dlmalloc's heap starts.
+        // The region [__data_end..__heap_base] is the stack area, which is
+        // safe to overwrite before a WASM function executes (stack is empty).
+        // The old approach wrote at the top of linear memory, colliding with
+        // the heap and causing OOM in plugins using host_http_call.
         let input_region_start = instance
             .get_global(&mut store, "__data_end")
             .and_then(|g| g.get(&mut store).i32())
             .map(|v| v as u32)
             .unwrap_or(0);
+        let input_region_end = instance
+            .get_global(&mut store, "__heap_base")
+            .and_then(|g| g.get(&mut store).i32())
+            .map(|v| v as u32)
+            .unwrap_or(memory.data_size(&store) as u32);
 
         // Cache function references
         let init_func = instance
@@ -499,6 +512,7 @@ impl PluginInstance {
             dispatch_func,
             memory,
             input_region_start,
+            input_region_end,
         })
     }
 
@@ -510,19 +524,19 @@ impl PluginInstance {
     /// Write data to the plugin's memory and return the pointer.
     ///
     /// Data is written at `__data_end` — the region between static data and
-    /// the stack. This is safe because this function is only called *before*
-    /// the WASM function starts executing (the stack is empty). The previous
-    /// approach wrote at the top of linear memory, which collided with the
-    /// dlmalloc heap in plugins that use `host_http_call`.
+    /// the heap (`__heap_base`). This is safe because this function is only
+    /// called *before* the WASM function starts executing (the stack is empty).
+    /// The previous approach wrote at the top of linear memory, which collided
+    /// with the dlmalloc heap in plugins that use `host_http_call`.
     pub fn write_to_memory(&mut self, data: &[u8]) -> Result<i32, WasmError> {
         let ptr = self.input_region_start as usize;
         let end = ptr + data.len();
-        let mem_size = self.memory.data_size(&self.store);
+        let limit = self.input_region_end as usize;
 
-        if end > mem_size {
+        if end > limit {
             return Err(WasmError::MemoryLimitExceeded {
                 requested: data.len(),
-                limit: mem_size.saturating_sub(ptr),
+                limit: limit.saturating_sub(ptr),
             });
         }
 
