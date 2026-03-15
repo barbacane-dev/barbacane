@@ -452,6 +452,70 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Middleware output with a base64-encoded binary body in the Request.
+    /// Ensures the body survives the parse → serialize cycle in parse_middleware_output.
+    #[test]
+    fn parse_continue_with_binary_body() {
+        use barbacane_plugin_sdk::types::Request;
+        use std::collections::BTreeMap;
+
+        let req = Request {
+            method: "POST".into(),
+            path: "/upload".into(),
+            query: None,
+            headers: BTreeMap::new(),
+            body: Some(vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF]),
+            client_ip: "127.0.0.1".into(),
+            path_params: BTreeMap::new(),
+        };
+
+        // Build the structured output the macro produces
+        let output = serde_json::to_vec(&json!({
+            "action": 0,
+            "data": req
+        }))
+        .unwrap();
+
+        let result = parse_middleware_output(&output, 0).unwrap();
+        match result {
+            OnRequestResult::Continue(data) => {
+                // The data should deserialize back to a Request with the same body
+                let parsed: Request = serde_json::from_slice(&data).unwrap();
+                assert_eq!(parsed.body, Some(vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF]));
+            }
+            OnRequestResult::ShortCircuit(_) => panic!("expected Continue"),
+        }
+    }
+
+    /// Middleware short-circuit with a binary body in the Response.
+    #[test]
+    fn parse_short_circuit_with_binary_body() {
+        use barbacane_plugin_sdk::types::Response;
+        use std::collections::BTreeMap;
+
+        let resp = Response {
+            status: 403,
+            headers: BTreeMap::new(),
+            body: Some(vec![0xFF, 0xFE, 0xFD]),
+        };
+
+        let output = serde_json::to_vec(&json!({
+            "action": 1,
+            "data": resp
+        }))
+        .unwrap();
+
+        let result = parse_middleware_output(&output, 1).unwrap();
+        match result {
+            OnRequestResult::ShortCircuit(data) => {
+                let parsed: Response = serde_json::from_slice(&data).unwrap();
+                assert_eq!(parsed.status, 403);
+                assert_eq!(parsed.body, Some(vec![0xFF, 0xFE, 0xFD]));
+            }
+            OnRequestResult::Continue(_) => panic!("expected ShortCircuit"),
+        }
+    }
+
     #[test]
     fn metrics_callback_type_accepts_closure() {
         use std::cell::RefCell;

@@ -136,7 +136,10 @@ impl TestGateway {
 
         // Compile the specs with manifest
         let paths: Vec<&Path> = spec_paths.iter().map(|s| Path::new(*s)).collect();
-        let options = CompileOptions::default();
+        let options = CompileOptions {
+            allow_plaintext: true,
+            ..CompileOptions::default()
+        };
         compile_with_manifest(
             &paths,
             &project_manifest,

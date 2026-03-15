@@ -2,10 +2,12 @@
 //!
 //! Run with: `cargo test -p barbacane-test`
 
+use std::path::PathBuf;
+
 use barbacane_test::TestGateway;
 
 fn fixture(name: &str) -> String {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
@@ -14,6 +16,19 @@ fn fixture(name: &str) -> String {
         .join(name)
         .display()
         .to_string()
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+fn plugin_wasm(name: &str) -> PathBuf {
+    workspace_root().join(format!("plugins/{name}/{name}.wasm"))
 }
 
 // ========================
@@ -52,9 +67,14 @@ async fn test_http_upstream_post() {
         .unwrap();
 
     // httpbin.org/post returns 200 with JSON containing request details
-    assert_eq!(resp.status(), 200);
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
 
-    let body: serde_json::Value = resp.json().await.unwrap();
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
     assert!(
         body.get("json").is_some(),
         "response should contain json field"
@@ -127,4 +147,471 @@ async fn test_tls_gateway_404() {
     // 404 response over HTTPS
     let resp = gateway.get("/nonexistent").await.unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+// ========================
+// Middleware + POST body
+// ========================
+//
+// Reproduces the Burst scenario: auth middleware → http-upstream dispatch
+// with a JSON body. The body is stripped for middleware (to avoid WASM OOM
+// with large payloads) and reattached before dispatch.
+
+/// POST with a JSON body through apikey-auth middleware + http-upstream.
+/// Uses wiremock to verify the upstream receives the exact body.
+#[tokio::test]
+async fn test_post_body_through_middleware_to_upstream() {
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    let apikey_wasm = plugin_wasm("apikey-auth");
+    if !http_upstream_wasm.exists() || !apikey_wasm.exists() {
+        panic!(
+            "WASM plugins not found. Run `make plugins` first.\n  http-upstream: {}\n  apikey-auth: {}",
+            http_upstream_wasm.display(),
+            apikey_wasm.display()
+        );
+    }
+
+    // Start wiremock upstream that expects a specific JSON body
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .and(body_json(serde_json::json!({"content": "hello world"})))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(serde_json::json!({"id": "msg-1", "content": "hello world"})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    // Build a temp spec with apikey-auth middleware + http-upstream dispatch
+    let temp_dir = tempfile::TempDir::new().unwrap();
+
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n  apikey-auth:\n    path: {}\n",
+        http_upstream_wasm.display(),
+        apikey_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Body Through Middleware Test
+  version: "1.0.0"
+
+paths:
+  /messages:
+    post:
+      operationId: postMessage
+      summary: Post a message through auth middleware
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            header_name: x-api-key
+            keys:
+              test-key-123:
+                id: key-1
+                name: testuser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/messages"
+          timeout: 10.0
+      responses:
+        "201":
+          description: Created
+        "401":
+          description: Unauthorized
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // POST with API key — should pass auth and reach upstream
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/messages")
+        .header("content-type", "application/json")
+        .header("x-api-key", "test-key-123")
+        .body(r#"{"content":"hello world"}"#)
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 201,
+        "expected 201, got {status}. Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["id"], "msg-1");
+    assert_eq!(body["content"], "hello world");
+}
+
+/// POST binary body (application/octet-stream) through middleware to upstream.
+/// Verifies that non-UTF-8 bytes survive the full gateway path.
+#[tokio::test]
+async fn test_post_binary_body_through_middleware_to_upstream() {
+    use wiremock::matchers::{body_bytes, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    let apikey_wasm = plugin_wasm("apikey-auth");
+    if !http_upstream_wasm.exists() || !apikey_wasm.exists() {
+        panic!(
+            "WASM plugins not found. Run `make plugins` first.\n  http-upstream: {}\n  apikey-auth: {}",
+            http_upstream_wasm.display(),
+            apikey_wasm.display()
+        );
+    }
+
+    // Binary payload with null bytes, high bytes, PNG-like header
+    let binary_payload: Vec<u8> = vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG magic
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+        0xFF, 0xFE, 0xFD, 0x80, 0x7F, 0x01, // non-UTF-8 bytes
+    ];
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .and(body_bytes(binary_payload.clone()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"status": "uploaded", "size": 22})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n  apikey-auth:\n    path: {}\n",
+        http_upstream_wasm.display(),
+        apikey_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Binary Body Test
+  version: "1.0.0"
+
+paths:
+  /upload:
+    post:
+      operationId: uploadFile
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            header_name: x-api-key
+            keys:
+              test-key-123:
+                id: key-1
+                name: testuser
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/upload"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/upload")
+        .header("content-type", "application/octet-stream")
+        .header("x-api-key", "test-key-123")
+        .body(binary_payload)
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["status"], "uploaded");
+    assert_eq!(body["size"], 22);
+}
+
+/// POST binary body directly to dispatcher (no middleware).
+/// Verifies the no-middleware path handles binary correctly.
+#[tokio::test]
+async fn test_post_binary_body_direct_dispatch() {
+    use wiremock::matchers::{body_bytes, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    if !http_upstream_wasm.exists() {
+        panic!(
+            "WASM plugin not found. Run `make plugins` first.\n  http-upstream: {}",
+            http_upstream_wasm.display(),
+        );
+    }
+
+    let binary_payload: Vec<u8> = vec![0x00, 0xFF, 0x80, 0x7F, 0xFE, 0x01, 0x02, 0x03];
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/data"))
+        .and(body_bytes(binary_payload.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n",
+        http_upstream_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Binary Direct Dispatch Test
+  version: "1.0.0"
+
+paths:
+  /data:
+    post:
+      operationId: postData
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/data"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/data")
+        .header("content-type", "application/octet-stream")
+        .body(binary_payload)
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
+    assert_eq!(body_text, "ok");
+}
+
+/// Upstream returns binary response body — verify it arrives at the client intact.
+#[tokio::test]
+async fn test_binary_response_body_from_upstream() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    if !http_upstream_wasm.exists() {
+        panic!(
+            "WASM plugin not found. Run `make plugins` first.\n  http-upstream: {}",
+            http_upstream_wasm.display(),
+        );
+    }
+
+    // Binary response body (simulating a small PNG)
+    let binary_response: Vec<u8> = vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG magic
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR
+    ];
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/image.png"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("content-type", "image/png")
+                .set_body_bytes(binary_response.clone()),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n",
+        http_upstream_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Binary Response Test
+  version: "1.0.0"
+
+paths:
+  /image.png:
+    get:
+      operationId: getImage
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/image.png"
+          timeout: 10.0
+      responses:
+        "200":
+          description: PNG image
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/image.png").await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let bytes = resp.bytes().await.unwrap();
+    assert_eq!(bytes.as_ref(), binary_response.as_slice());
+}
+
+/// POST without API key should be rejected by middleware (body never reaches upstream).
+#[tokio::test]
+async fn test_post_body_rejected_by_middleware() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    let apikey_wasm = plugin_wasm("apikey-auth");
+    if !http_upstream_wasm.exists() || !apikey_wasm.exists() {
+        panic!("WASM plugins not found. Run `make plugins` first.");
+    }
+
+    let mock_server = MockServer::start().await;
+    // This mock should NOT be called — middleware should reject before dispatch
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n  apikey-auth:\n    path: {}\n",
+        http_upstream_wasm.display(),
+        apikey_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Body Through Middleware Test
+  version: "1.0.0"
+paths:
+  /messages:
+    post:
+      operationId: postMessage
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            header_name: x-api-key
+            keys:
+              test-key-123:
+                id: key-1
+                name: testuser
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/messages"
+          timeout: 10.0
+      responses:
+        "201":
+          description: Created
+        "401":
+          description: Unauthorized
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // POST without API key — should be rejected by middleware
+    let resp = gateway
+        .post("/messages", r#"{"content":"hello world"}"#)
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 401);
 }
