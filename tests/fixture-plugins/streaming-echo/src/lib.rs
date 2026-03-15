@@ -21,7 +21,8 @@ struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    #[serde(with = "base64_body")]
+    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
@@ -31,7 +32,7 @@ impl StreamingEcho {
             method: req.method.clone(),
             url: self.url.clone(),
             headers: req.headers.clone(),
-            body: req.body_string(),
+            body: req.body.clone(),
             timeout_ms: Some(30_000),
         };
 

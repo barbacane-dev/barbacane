@@ -96,11 +96,7 @@ pub struct MyDispatcher {
 
 impl MyDispatcher {
     pub fn dispatch(&mut self, _req: Request) -> Response {
-        Response {
-            status: self.status,
-            headers: Default::default(),
-            body: Some(self.body.clone()),
-        }
+        Response::text(self.status, Default::default(), &self.body)
     }
 }
 ```
@@ -152,15 +148,17 @@ cp target/wasm32-unknown-unknown/release/my_plugin.wasm .
 
 ```rust
 pub struct Request {
-    pub method: String,      // HTTP method (GET, POST, etc.)
-    pub path: String,        // Request path
-    pub query: Option<String>, // Query string
+    pub method: String,
+    pub path: String,
+    pub query: Option<String>,
     pub headers: BTreeMap<String, String>,
-    pub body: Option<String>,
+    pub body: Option<Vec<u8>>,      // binary-safe (base64-encoded in JSON)
     pub client_ip: String,
     pub path_params: BTreeMap<String, String>,
 }
 ```
+
+Helper methods: `body_str() -> Option<&str>`, `body_string() -> Option<String>`, `set_body_text(&str)`.
 
 ### Response
 
@@ -168,9 +166,15 @@ pub struct Request {
 pub struct Response {
     pub status: u16,
     pub headers: BTreeMap<String, String>,
-    pub body: Option<String>,
+    pub body: Option<Vec<u8>>,      // binary-safe (base64-encoded in JSON)
 }
 ```
+
+Helper methods: `body_str() -> Option<&str>`, `set_body_text(&str)`, `Response::text(status, headers, &str)`.
+
+> **Note:** Bodies are serialized as base64 strings in the JSON contract between host and WASM.
+> This is transparent — serde handles it automatically via `#[serde(with = "base64_body")]`.
+> Plugins work with raw `Vec<u8>` bytes and never see the base64 encoding.
 
 ### Action (Middleware only)
 

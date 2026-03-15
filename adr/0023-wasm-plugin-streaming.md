@@ -5,7 +5,7 @@
 
 ## Context
 
-The current dispatch contract requires plugins to return a fully buffered `Response` (status + headers + `Option<String>` body). This works for typical API proxying but breaks down for use cases that require streaming responses to clients:
+The current dispatch contract requires plugins to return a fully buffered `Response` (status + headers + `Option<Vec<u8>>` body, base64-encoded in JSON). This works for typical API proxying but breaks down for use cases that require streaming responses to clients:
 
 - **LLM completions** — Chat APIs (OpenAI, Anthropic) stream tokens via SSE, often taking 10–60 seconds. Buffering the entire response before sending it to the client defeats the purpose of streaming and creates unacceptable latency.
 - **Event streams** — Server-Sent Events, webhook relays.
