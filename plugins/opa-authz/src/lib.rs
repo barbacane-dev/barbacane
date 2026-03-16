@@ -48,23 +48,21 @@ fn default_deny_message() -> String {
 // HTTP types for host_http_call
 // ---------------------------------------------------------------------------
 
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    #[serde(with = "base64_body")]
-    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     #[allow(dead_code)]
     headers: BTreeMap<String, String>,
-    #[serde(default, with = "base64_body")]
-    body: Option<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,11 +171,13 @@ impl OpaAuthz {
         headers.insert("content-type".to_string(), "application/json".to_string());
         headers.insert("accept".to_string(), "application/json".to_string());
 
+        // Send request body via side-channel
+        set_http_request_body(request_json.as_bytes());
+
         let http_request = HttpRequest {
             method: "POST".to_string(),
             url: self.opa_url.clone(),
             headers,
-            body: Some(request_json.to_string().into_bytes()),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
@@ -212,8 +212,8 @@ impl OpaAuthz {
             )));
         }
 
-        http_response
-            .body
+        // Read response body from side-channel
+        read_http_response_body()
             .ok_or_else(|| OpaError::ServiceError("empty OPA response body".to_string()))
     }
 

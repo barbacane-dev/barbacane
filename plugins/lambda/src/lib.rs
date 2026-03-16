@@ -31,24 +31,23 @@ fn default_pass_through_headers() -> bool {
     true
 }
 
-/// HTTP request for host_http_call.
+/// HTTP request format for host_http_call.
+///
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    #[serde(with = "base64_body")]
-    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
-/// HTTP response from host_http_call.
+/// HTTP response metadata from host_http_call.
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     headers: BTreeMap<String, String>,
-    #[serde(default, with = "base64_body")]
-    body: Option<Vec<u8>>,
 }
 
 impl LambdaDispatcher {
@@ -81,12 +80,16 @@ impl LambdaDispatcher {
             headers.insert("content-type".to_string(), "application/json".to_string());
         }
 
+        // Send request body via side-channel (avoids base64 encoding).
+        if let Some(ref b) = req.body {
+            set_http_request_body(b);
+        }
+
         // Build the HTTP request to Lambda
         let http_request = HttpRequest {
             method: req.method.clone(),
             url: self.url.clone(),
             headers,
-            body: req.body.clone(),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
@@ -128,6 +131,9 @@ impl LambdaDispatcher {
                 }
             };
 
+        // Read response body from side-channel.
+        let response_body = read_http_response_body();
+
         // Build the response
         let mut response_headers = http_response.headers;
 
@@ -139,7 +145,7 @@ impl LambdaDispatcher {
         Response {
             status: http_response.status,
             headers: response_headers,
-            body: http_response.body,
+            body: response_body,
         }
     }
 

@@ -142,25 +142,24 @@ struct DiscoveryResponse {
     jwks_uri: String,
 }
 
-/// HTTP request for host_http_call.
+/// HTTP request format for host_http_call.
+///
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    #[serde(with = "base64_body")]
-    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
-/// HTTP response from host_http_call.
+/// HTTP response metadata from host_http_call.
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     #[allow(dead_code)]
     headers: BTreeMap<String, String>,
-    #[serde(default, with = "base64_body")]
-    body: Option<Vec<u8>>,
 }
 
 /// Signature verification request for host_verify_signature.
@@ -468,20 +467,16 @@ impl OidcAuth {
             self.issuer_url.trim_end_matches('/')
         );
 
-        let response = self
+        let (status, body) = self
             .http_get(&url)
             .map_err(|e| OidcError::DiscoveryFailed(e))?;
 
-        if response.status != 200 {
-            return Err(OidcError::DiscoveryFailed(format!(
-                "status {}",
-                response.status
-            )));
+        if status != 200 {
+            return Err(OidcError::DiscoveryFailed(format!("status {}", status)));
         }
 
-        let body = response
-            .body
-            .ok_or_else(|| OidcError::DiscoveryFailed("empty response".to_string()))?;
+        let body =
+            body.ok_or_else(|| OidcError::DiscoveryFailed("empty response".to_string()))?;
 
         let doc: DiscoveryResponse = serde_json::from_slice(&body)
             .map_err(|e| OidcError::DiscoveryFailed(format!("invalid JSON: {}", e)))?;
@@ -515,20 +510,16 @@ impl OidcAuth {
             .map(|d| d.jwks_uri.clone())
             .ok_or_else(|| OidcError::JwksFetchFailed("no discovery document".to_string()))?;
 
-        let response = self
+        let (status, body) = self
             .http_get(&jwks_uri)
             .map_err(|e| OidcError::JwksFetchFailed(e))?;
 
-        if response.status != 200 {
-            return Err(OidcError::JwksFetchFailed(format!(
-                "status {}",
-                response.status
-            )));
+        if status != 200 {
+            return Err(OidcError::JwksFetchFailed(format!("status {}", status)));
         }
 
-        let body = response
-            .body
-            .ok_or_else(|| OidcError::JwksFetchFailed("empty response".to_string()))?;
+        let body =
+            body.ok_or_else(|| OidcError::JwksFetchFailed("empty response".to_string()))?;
 
         let doc: JwksDocument = serde_json::from_slice(&body)
             .map_err(|e| OidcError::JwksFetchFailed(format!("invalid JSON: {}", e)))?;
@@ -673,7 +664,8 @@ impl OidcAuth {
     }
 
     /// Make an HTTP GET request via host_http_call.
-    fn http_get(&self, url: &str) -> Result<HttpResponse, String> {
+    /// Returns (status, body) where body is read from the side-channel.
+    fn http_get(&self, url: &str) -> Result<(u16, Option<Vec<u8>>), String> {
         let mut headers = BTreeMap::new();
         headers.insert("accept".to_string(), "application/json".to_string());
 
@@ -681,7 +673,6 @@ impl OidcAuth {
             method: "GET".to_string(),
             url: url.to_string(),
             headers,
-            body: None,
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
@@ -703,8 +694,13 @@ impl OidcAuth {
             return Err("failed to read response".to_string());
         }
 
-        serde_json::from_slice(&response_buf[..bytes_read as usize])
-            .map_err(|e| format!("invalid response format: {}", e))
+        let http_response: HttpResponse =
+            serde_json::from_slice(&response_buf[..bytes_read as usize])
+                .map_err(|e| format!("invalid response format: {}", e))?;
+
+        let body = read_http_response_body();
+
+        Ok((http_response.status, body))
     }
 
     /// Build the discovery URL from the issuer.

@@ -455,10 +455,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Middleware output with a base64-encoded binary body in the Request.
-    /// Ensures the body survives the parse → serialize cycle in parse_middleware_output.
+    /// Middleware output with Request metadata (body travels via side-channel).
+    /// Ensures metadata survives the parse → serialize cycle in parse_middleware_output.
     #[test]
-    fn parse_continue_with_binary_body() {
+    fn parse_continue_with_request_metadata() {
         use barbacane_plugin_sdk::types::Request;
         use std::collections::BTreeMap;
 
@@ -466,8 +466,12 @@ mod tests {
             method: "POST".into(),
             path: "/upload".into(),
             query: None,
-            headers: BTreeMap::new(),
-            body: Some(vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF]),
+            headers: {
+                let mut h = BTreeMap::new();
+                h.insert("content-type".into(), "application/octet-stream".into());
+                h
+            },
+            body: None, // Body travels via side-channel, not in JSON
             client_ip: "127.0.0.1".into(),
             path_params: BTreeMap::new(),
         };
@@ -482,24 +486,29 @@ mod tests {
         let result = parse_middleware_output(&output, 0).unwrap();
         match result {
             OnRequestResult::Continue(data) => {
-                // The data should deserialize back to a Request with the same body
                 let parsed: Request = serde_json::from_slice(&data).unwrap();
-                assert_eq!(parsed.body, Some(vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF]));
+                assert_eq!(parsed.method, "POST");
+                assert_eq!(parsed.path, "/upload");
+                assert_eq!(parsed.body, None); // body is serde(skip)
             }
             OnRequestResult::ShortCircuit(_) => panic!("expected Continue"),
         }
     }
 
-    /// Middleware short-circuit with a binary body in the Response.
+    /// Middleware short-circuit Response metadata (body travels via side-channel).
     #[test]
-    fn parse_short_circuit_with_binary_body() {
+    fn parse_short_circuit_with_response_metadata() {
         use barbacane_plugin_sdk::types::Response;
         use std::collections::BTreeMap;
 
         let resp = Response {
             status: 403,
-            headers: BTreeMap::new(),
-            body: Some(vec![0xFF, 0xFE, 0xFD]),
+            headers: {
+                let mut h = BTreeMap::new();
+                h.insert("content-type".into(), "application/json".into());
+                h
+            },
+            body: None, // Body travels via side-channel
         };
 
         let output = serde_json::to_vec(&json!({
@@ -513,7 +522,7 @@ mod tests {
             OnRequestResult::ShortCircuit(data) => {
                 let parsed: Response = serde_json::from_slice(&data).unwrap();
                 assert_eq!(parsed.status, 403);
-                assert_eq!(parsed.body, Some(vec![0xFF, 0xFE, 0xFD]));
+                assert_eq!(parsed.body, None); // body is serde(skip)
             }
             OnRequestResult::Continue(_) => panic!("expected ShortCircuit"),
         }

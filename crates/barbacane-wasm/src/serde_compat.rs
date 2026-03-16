@@ -3,13 +3,10 @@
 //! These tests verify wire-format compatibility between the host-side types
 //! (in `barbacane-wasm`) and the plugin-side types (in `barbacane-plugin-sdk`).
 //!
-//! The types intentionally live in separate crates and have different field
-//! sets (e.g. `PluginHttpRequest.timeout_ms` vs `HttpRequest.timeout`), but
-//! they must agree on shared fields — especially `body`, which uses
-//! `#[serde(with = "base64_body")]` on both sides.
-//!
-//! If a new field is added or a serde attribute changes on one side, these
-//! tests will catch the mismatch at `cargo test` time rather than at runtime.
+//! Plugin Request/Response body uses `#[serde(skip)]` — body travels via
+//! side-channel host functions, never in JSON. Host-side HTTP types
+//! (PluginHttpRequest, HttpResponse) still use `base64_body` in JSON for
+//! the host_http_call/host_http_read_result protocol.
 
 #[cfg(test)]
 mod tests {
@@ -25,9 +22,9 @@ mod tests {
 
     // ── Plugin → Host: PluginHttpRequest ────────────────────────────────
     //
-    // Plugins serialize an HttpRequest struct (with `timeout_ms: Option<u64>`)
-    // and the host deserializes it as `PluginHttpRequest`. They must agree
-    // on the `body` field encoding.
+    // Plugins serialize an HttpRequest struct (with `base64_body` for body
+    // and `timeout_ms: Option<u64>`) and the host deserializes it as
+    // `PluginHttpRequest`. They must agree on the `body` field encoding.
 
     /// A plugin-serialized HTTP request (using base64_body) must deserialize
     /// correctly as the host-side PluginHttpRequest.
@@ -36,7 +33,7 @@ mod tests {
         let binary_body: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0xFF, 0x00, 0x01];
         let b64 = base64::engine::general_purpose::STANDARD.encode(&binary_body);
 
-        // This is what a plugin (e.g. http-upstream) serializes
+        // This is what a plugin (e.g. http-upstream) serializes for host_http_call
         let plugin_json = json!({
             "method": "POST",
             "url": "https://upstream.example.com/api",
@@ -71,9 +68,8 @@ mod tests {
     // ── Host → Plugin: HttpResponse ─────────────────────────────────────
     //
     // The host serializes HttpResponse (with base64_body) and the plugin
-    // deserializes it as its own HttpResponse struct. Since plugins define
-    // their own HttpResponse type, we test against a generic struct that
-    // mirrors what plugins use.
+    // deserializes it. Since body now travels via side-channel for the
+    // main Request/Response path, this only applies to host_http_call responses.
 
     /// Host-serialized HttpResponse must be parseable by plugin-side code.
     #[test]
@@ -118,16 +114,14 @@ mod tests {
         );
     }
 
-    // ── Host → Plugin: Request (gateway main path) ──────────────────────
+    // ── Plugin Request/Response: body is serde(skip) ────────────────────
     //
-    // The host builds a `Request` (from barbacane_plugin_sdk), serializes
-    // it to JSON (with body as base64), writes it into WASM memory, and the
-    // plugin deserializes it. This must always round-trip correctly.
+    // Body does NOT appear in JSON for Request and Response. These tests
+    // verify the side-channel contract.
 
-    /// Host-serialized Request with binary body must be parseable by plugin.
+    /// Request body is absent from JSON (travels via side-channel).
     #[test]
-    fn host_request_roundtrip_with_binary_body() {
-        let body: Vec<u8> = (0..=255).collect();
+    fn request_body_absent_from_json() {
         let req = Request {
             method: "POST".into(),
             path: "/upload".into(),
@@ -137,28 +131,28 @@ mod tests {
                 h.insert("content-type".into(), "application/octet-stream".into());
                 h
             },
-            body: Some(body.clone()),
+            body: Some((0..=255).collect()),
             client_ip: "10.0.0.1".into(),
             path_params: BTreeMap::new(),
         };
 
         let json_bytes = serde_json::to_vec(&req).unwrap();
-        let parsed: Request = serde_json::from_slice(&json_bytes).unwrap();
+        let json_str = std::str::from_utf8(&json_bytes).unwrap();
+        assert!(
+            !json_str.contains("body"),
+            "body should not appear in Request JSON"
+        );
 
-        assert_eq!(parsed.body, Some(body));
+        // Metadata survives
+        let parsed: Request = serde_json::from_slice(&json_bytes).unwrap();
         assert_eq!(parsed.method, "POST");
         assert_eq!(parsed.query, Some("fmt=raw".into()));
+        assert_eq!(parsed.body, None); // body is skipped
     }
 
-    // ── Plugin → Host: Response (dispatcher output) ─────────────────────
-    //
-    // The dispatcher plugin serializes a `Response` and writes it to the
-    // output buffer. The host reads this buffer and deserializes it.
-
-    /// Plugin-serialized Response with binary body must be parseable by host.
+    /// Response body is absent from JSON (travels via side-channel).
     #[test]
-    fn plugin_response_roundtrip_with_binary_body() {
-        let body: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    fn response_body_absent_from_json() {
         let resp = Response {
             status: 200,
             headers: {
@@ -166,63 +160,59 @@ mod tests {
                 h.insert("content-type".into(), "image/png".into());
                 h
             },
-            body: Some(body.clone()),
+            body: Some(vec![0x89, 0x50, 0x4E, 0x47]),
         };
 
         let json_bytes = serde_json::to_vec(&resp).unwrap();
+        let json_str = std::str::from_utf8(&json_bytes).unwrap();
+        assert!(
+            !json_str.contains("body"),
+            "body should not appear in Response JSON"
+        );
 
-        // Host parses as serde_json::Value (actual host code path)
-        let value: serde_json::Value = serde_json::from_slice(&json_bytes).unwrap();
-        assert_eq!(value["status"], 200);
-
-        // Host then extracts body — it expects a base64 string
-        let body_b64 = value["body"]
-            .as_str()
-            .expect("body should be a string (base64)");
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(body_b64)
-            .expect("body should be valid base64");
-        assert_eq!(decoded, body);
+        assert_eq!(resp.status, 200);
     }
 
-    // ── Middleware action output → Host extraction ───────────────────────
-    //
-    // Middleware wraps its output as {"action": 0, "data": <Request>} (Continue)
-    // or {"action": 1, "data": <Response>} (ShortCircuit). The host extracts
-    // `data` via Value manipulation and re-serializes it. The body field must
-    // survive this Value→String→parse roundtrip.
-
-    /// Middleware Continue action: body survives Value extraction and re-parse.
+    /// Middleware Continue output: metadata survives Value extraction.
+    /// Body is absent from JSON (travels via side-channel).
     #[test]
-    fn middleware_continue_body_survives_value_extraction() {
-        let body: Vec<u8> = vec![0x00, 0xFF, 0x80, 0x7F];
+    fn middleware_continue_metadata_survives_value_extraction() {
         let req = Request {
             method: "POST".into(),
             path: "/api/data".into(),
             query: None,
-            headers: BTreeMap::new(),
-            body: Some(body.clone()),
+            headers: {
+                let mut h = BTreeMap::new();
+                h.insert("x-consumer-id".into(), "user-42".into());
+                h
+            },
+            body: None,
             client_ip: "127.0.0.1".into(),
             path_params: BTreeMap::new(),
         };
 
-        // Middleware serializes: {"action": 0, "data": <request>}
         let output = json!({"action": 0, "data": req});
         let output_bytes = serde_json::to_vec(&output).unwrap();
 
-        // Host extracts "data" as Value, then re-serializes to bytes
         let parsed: serde_json::Value = serde_json::from_slice(&output_bytes).unwrap();
         let data_bytes = serde_json::to_vec(&parsed["data"]).unwrap();
 
-        // Dispatcher receives this and deserializes as Request
         let dispatch_req: Request = serde_json::from_slice(&data_bytes).unwrap();
-        assert_eq!(dispatch_req.body, Some(body));
+        assert_eq!(dispatch_req.method, "POST");
+        assert_eq!(dispatch_req.path, "/api/data");
+        assert_eq!(
+            dispatch_req
+                .headers
+                .get("x-consumer-id")
+                .map(|s| s.as_str()),
+            Some("user-42")
+        );
+        assert_eq!(dispatch_req.body, None);
     }
 
-    /// Middleware ShortCircuit action: response body survives Value extraction.
+    /// Middleware ShortCircuit: response metadata survives Value extraction.
     #[test]
-    fn middleware_shortcircuit_body_survives_value_extraction() {
-        let body = b"{\"error\":\"forbidden\"}".to_vec();
+    fn middleware_shortcircuit_metadata_survives_value_extraction() {
         let resp = Response {
             status: 403,
             headers: {
@@ -230,7 +220,7 @@ mod tests {
                 h.insert("content-type".into(), "application/json".into());
                 h
             },
-            body: Some(body.clone()),
+            body: None,
         };
 
         let output = json!({"action": 1, "data": resp});
@@ -241,100 +231,55 @@ mod tests {
 
         let host_resp: Response = serde_json::from_slice(&data_bytes).unwrap();
         assert_eq!(host_resp.status, 403);
-        assert_eq!(host_resp.body, Some(body));
+        assert_eq!(host_resp.body, None);
     }
 
-    // ── Body stripping + reattachment (BodyAccessControl path) ──────────
+    // ── Large body is NOT in JSON ───────────────────────────────────────
     //
-    // When middleware has body_access=false, the host strips the body
-    // (sets to null) before calling the middleware, then reattaches it
-    // after. This path uses Value manipulation to inject the base64 body.
+    // Verify JSON size is small regardless of body size (body is in side-channel).
 
-    /// Body stripped for middleware, then reattached via Value injection.
+    /// JSON size is independent of body size.
     #[test]
-    fn body_strip_and_reattach_via_value_injection() {
-        let original_body: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF];
-
-        // Host sends body: None to middleware
-        let stripped_req = Request {
-            method: "POST".into(),
-            path: "/upload".into(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: None,
-            client_ip: "127.0.0.1".into(),
-            path_params: BTreeMap::new(),
-        };
-        let stripped_json = serde_json::to_vec(&stripped_req).unwrap();
-
-        // Middleware passes through unchanged
-        let mw_req: Request = serde_json::from_slice(&stripped_json).unwrap();
-        assert!(mw_req.body.is_none());
-
-        let mw_output = serde_json::to_vec(&json!({"action": 0, "data": mw_req})).unwrap();
-
-        // Host extracts data, injects body
-        let parsed: serde_json::Value = serde_json::from_slice(&mw_output).unwrap();
-        let mut data_value = parsed["data"].clone();
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&original_body);
-        data_value
-            .as_object_mut()
-            .unwrap()
-            .insert("body".to_string(), serde_json::Value::String(b64));
-        let final_json = serde_json::to_vec(&data_value).unwrap();
-
-        // Dispatcher deserializes
-        let dispatch_req: Request = serde_json::from_slice(&final_json).unwrap();
-        assert_eq!(dispatch_req.body, Some(original_body));
-    }
-
-    // ── Large binary body cross-type ────────────────────────────────────
-    //
-    // Verify that a large payload (simulating file upload) survives the full
-    // host↔plugin serde boundary without truncation or corruption.
-
-    /// 1MB binary payload roundtrips through Request serialize/deserialize.
-    #[test]
-    fn large_binary_body_request_roundtrip() {
-        let body: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
+    fn large_body_does_not_inflate_json() {
+        let body: Vec<u8> = vec![0xAA; 1_000_000]; // 1MB
         let req = Request {
             method: "POST".into(),
             path: "/upload".into(),
             query: None,
             headers: BTreeMap::new(),
-            body: Some(body.clone()),
+            body: Some(body),
             client_ip: "127.0.0.1".into(),
             path_params: BTreeMap::new(),
         };
 
         let json_bytes = serde_json::to_vec(&req).unwrap();
-        let parsed: Request = serde_json::from_slice(&json_bytes).unwrap();
-        assert_eq!(parsed.body.as_ref().unwrap().len(), 1_000_000);
-        assert_eq!(parsed.body, Some(body));
+        // JSON should be tiny — just metadata, no body
+        assert!(
+            json_bytes.len() < 200,
+            "JSON should be small (was {} bytes); body must not be in JSON",
+            json_bytes.len()
+        );
     }
 
-    /// 1MB body survives the full middleware Continue extraction path.
+    /// Large body in middleware output doesn't inflate JSON.
     #[test]
-    fn large_binary_body_middleware_extraction_roundtrip() {
-        let body: Vec<u8> = (0..1_000_000).map(|i| (i % 256) as u8).collect();
+    fn large_body_middleware_output_stays_small() {
         let req = Request {
             method: "POST".into(),
             path: "/upload".into(),
             query: None,
             headers: BTreeMap::new(),
-            body: Some(body.clone()),
+            body: Some(vec![0xBB; 1_000_000]),
             client_ip: "127.0.0.1".into(),
             path_params: BTreeMap::new(),
         };
 
         let output = json!({"action": 0, "data": req});
         let output_bytes = serde_json::to_vec(&output).unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_slice(&output_bytes).unwrap();
-        let data_bytes = serde_json::to_vec(&parsed["data"]).unwrap();
-        let dispatch_req: Request = serde_json::from_slice(&data_bytes).unwrap();
-
-        assert_eq!(dispatch_req.body.as_ref().unwrap().len(), 1_000_000);
-        assert_eq!(&dispatch_req.body.unwrap()[..256], &body[..256]);
+        assert!(
+            output_bytes.len() < 300,
+            "middleware output JSON should be small (was {} bytes)",
+            output_bytes.len()
+        );
     }
 }

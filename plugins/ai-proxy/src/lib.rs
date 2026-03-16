@@ -124,22 +124,20 @@ pub struct AiProxy {
 // Wire types for host_http_call / host_http_stream
 // ---------------------------------------------------------------------------
 
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    #[serde(with = "base64_body")]
-    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     headers: BTreeMap<String, String>,
-    #[serde(default, with = "base64_body")]
-    body: Option<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -302,12 +300,14 @@ impl AiProxy {
         let headers = openai_headers(target);
 
         let body = self.maybe_inject_max_tokens(&req.body);
+        if let Some(ref b) = body {
+            set_http_request_body(b);
+        }
 
         let http_req = HttpRequest {
             method: req.method.clone(),
             url,
             headers,
-            body,
             timeout_ms: Some(self.timeout * 1000),
         };
 
@@ -322,12 +322,14 @@ impl AiProxy {
         headers.insert("accept".to_string(), "text/event-stream".to_string());
 
         let body = self.maybe_inject_max_tokens(&req.body);
+        if let Some(ref b) = body {
+            set_http_request_body(b);
+        }
 
         let http_req = HttpRequest {
             method: req.method.clone(),
             url,
             headers,
-            body,
             timeout_ms: Some(self.timeout * 1000),
         };
 
@@ -360,12 +362,12 @@ impl AiProxy {
         }
 
         let body = translate_to_anthropic(&req.body, &target.model, stream, self.max_tokens)?;
+        set_http_request_body(body.as_bytes());
 
         let http_req = HttpRequest {
             method: "POST".to_string(),
             url,
             headers,
-            body: Some(body.into_bytes()),
             timeout_ms: Some(self.timeout * 1000),
         };
 
@@ -609,6 +611,7 @@ fn http_call(req: &HttpRequest) -> Result<HttpResponse, String> {
 }
 
 fn build_response(http_resp: HttpResponse) -> Response {
+    let response_body = read_http_response_body();
     let mut headers = BTreeMap::new();
     for (k, v) in http_resp.headers {
         let k_lower = k.to_lowercase();
@@ -622,7 +625,7 @@ fn build_response(http_resp: HttpResponse) -> Response {
     Response {
         status: http_resp.status,
         headers,
-        body: http_resp.body,
+        body: response_body,
     }
 }
 

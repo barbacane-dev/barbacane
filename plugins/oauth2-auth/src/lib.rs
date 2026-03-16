@@ -33,25 +33,24 @@ fn default_timeout() -> f64 {
     5.0 // 5 seconds default for auth calls
 }
 
-/// HTTP request for host_http_call.
+/// HTTP request format for host_http_call.
+///
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    #[serde(with = "base64_body")]
-    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
-/// HTTP response from host_http_call.
+/// HTTP response metadata from host_http_call.
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     #[allow(dead_code)]
     headers: BTreeMap<String, String>,
-    #[serde(default, with = "base64_body")]
-    body: Option<Vec<u8>>,
 }
 
 /// RFC 7662 Token Introspection Response.
@@ -266,11 +265,13 @@ impl OAuth2Auth {
         // Build request body (application/x-www-form-urlencoded)
         let body = format!("token={}", url_encode(token));
 
+        // Send request body via side-channel
+        set_http_request_body(body.as_bytes());
+
         let http_request = HttpRequest {
             method: "POST".to_string(),
             url: self.introspection_endpoint.clone(),
             headers,
-            body: Some(body.into_bytes()),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
@@ -314,9 +315,8 @@ impl OAuth2Auth {
             )));
         }
 
-        // Parse introspection response body
-        let body = http_response
-            .body
+        // Read response body from side-channel
+        let body = read_http_response_body()
             .ok_or_else(|| OAuth2Error::IntrospectionFailed("empty response body".to_string()))?;
 
         serde_json::from_slice(&body).map_err(|e| {

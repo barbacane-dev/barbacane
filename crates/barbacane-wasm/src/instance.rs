@@ -148,6 +148,27 @@ pub struct PluginState {
     /// runtime, because the TcpStream must be created on the runtime that will
     /// drive it (a temporary runtime's I/O driver dies when the runtime drops).
     pub ws_upgrade_request: Option<crate::ws_client::WsUpgradeRequest>,
+
+    // --- Side-channel body buffers ---
+    // Bodies travel as raw bytes via dedicated host functions instead of
+    // base64-encoded inside JSON. This eliminates the ~3.65× memory overhead
+    // and allows 10MB+ bodies within the default 16MB WASM memory limit.
+    /// Request/response body held by the host, set before calling the handler.
+    /// Plugins read it via `host_body_len()` + `host_body_read()`.
+    pub request_body: Option<Vec<u8>>,
+
+    /// Output body set by the plugin via `host_body_set()` or `host_body_clear()`.
+    /// Outer Option: was the function called? Inner Option: body or None.
+    pub output_body: Option<Option<Vec<u8>>>,
+
+    /// HTTP response body from `host_http_call`, held separately from the
+    /// JSON metadata in `last_http_result`. Plugins read it via
+    /// `host_http_response_body_len()` + `host_http_response_body_read()`.
+    pub http_response_body: Option<Vec<u8>>,
+
+    /// Outbound HTTP request body set by the plugin via
+    /// `host_http_request_body_set()`. Consumed by `host_http_call`.
+    pub http_request_body: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)] // Constructors used by different pool configurations
@@ -174,6 +195,10 @@ impl PluginState {
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
+            request_body: None,
+            output_body: None,
+            http_response_body: None,
+            http_request_body: None,
         }
     }
 
@@ -203,6 +228,10 @@ impl PluginState {
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
+            request_body: None,
+            output_body: None,
+            http_response_body: None,
+            http_request_body: None,
         }
     }
 
@@ -233,6 +262,10 @@ impl PluginState {
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
+            request_body: None,
+            output_body: None,
+            http_response_body: None,
+            http_request_body: None,
         }
     }
 
@@ -268,6 +301,10 @@ impl PluginState {
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
+            request_body: None,
+            output_body: None,
+            http_response_body: None,
+            http_request_body: None,
         }
     }
 
@@ -304,6 +341,10 @@ impl PluginState {
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
+            request_body: None,
+            output_body: None,
+            http_response_body: None,
+            http_request_body: None,
         }
     }
 
@@ -328,6 +369,19 @@ impl PluginState {
     /// Take the upstream WebSocket upgrade request from host_ws_upgrade (ADR-0026).
     pub fn take_ws_upgrade_request(&mut self) -> Option<crate::ws_client::WsUpgradeRequest> {
         self.ws_upgrade_request.take()
+    }
+
+    /// Set the request body for the next handler call (side-channel).
+    pub fn set_request_body(&mut self, body: Option<Vec<u8>>) {
+        self.request_body = body;
+    }
+
+    /// Take the output body set by the plugin via host_body_set/host_body_clear.
+    /// Returns `None` if the plugin didn't call either function (body unchanged).
+    /// Returns `Some(None)` if the plugin called host_body_clear.
+    /// Returns `Some(Some(bytes))` if the plugin called host_body_set.
+    pub fn take_output_body(&mut self) -> Option<Option<Vec<u8>>> {
+        self.output_body.take()
     }
 }
 
@@ -676,6 +730,16 @@ impl PluginInstance {
     pub fn take_ws_upgrade_request(&mut self) -> Option<crate::ws_client::WsUpgradeRequest> {
         self.store.data_mut().take_ws_upgrade_request()
     }
+
+    /// Set the request/response body for the next handler call (side-channel).
+    pub fn set_request_body(&mut self, body: Option<Vec<u8>>) {
+        self.store.data_mut().set_request_body(body);
+    }
+
+    /// Take the output body set by the plugin via host_body_set/host_body_clear.
+    pub fn take_output_body(&mut self) -> Option<Option<Vec<u8>>> {
+        self.store.data_mut().take_output_body()
+    }
 }
 
 /// Register a `host_*_read_result` function that copies data from plugin state to WASM memory.
@@ -737,6 +801,107 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
             },
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_set_output: {}", e)))?;
+
+    // --- Side-channel body host functions ---
+    // Bodies travel as raw bytes instead of base64-in-JSON, eliminating
+    // the ~3.65× memory overhead per boundary crossing.
+
+    // host_body_len — returns the length of the held body, or -1 if None.
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_body_len",
+            |caller: Caller<'_, PluginState>| -> i64 {
+                match &caller.data().request_body {
+                    Some(body) => body.len() as i64,
+                    None => -1,
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_body_len: {}", e)))?;
+
+    // host_body_read — copy the held body into WASM memory at ptr.
+    add_read_result_fn(linker, "host_body_read", |state| state.request_body.take())?;
+
+    // host_body_set — set the output body from raw bytes in WASM memory.
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_body_set",
+            |mut caller: Caller<'_, PluginState>, ptr: i32, len: i32| {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                let start = ptr as usize;
+                let end = start + len as usize;
+                let data = memory.data(&caller);
+
+                if end <= data.len() {
+                    let bytes = data[start..end].to_vec();
+                    caller.data_mut().output_body = Some(Some(bytes));
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_body_set: {}", e)))?;
+
+    // host_body_clear — explicitly set the output body to None.
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_body_clear",
+            |mut caller: Caller<'_, PluginState>| {
+                caller.data_mut().output_body = Some(None);
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_body_clear: {}", e)))?;
+
+    // host_http_response_body_len — length of the HTTP response body from host_http_call.
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_http_response_body_len",
+            |caller: Caller<'_, PluginState>| -> i64 {
+                match &caller.data().http_response_body {
+                    Some(body) => body.len() as i64,
+                    None => -1,
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_http_response_body_len: {}", e))
+        })?;
+
+    // host_http_response_body_read — copy HTTP response body into WASM memory.
+    add_read_result_fn(linker, "host_http_response_body_read", |state| {
+        state.http_response_body.take()
+    })?;
+
+    // host_http_request_body_set — set the outbound HTTP request body from WASM memory.
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_http_request_body_set",
+            |mut caller: Caller<'_, PluginState>, ptr: i32, len: i32| {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                let start = ptr as usize;
+                let end = start + len as usize;
+                let data = memory.data(&caller);
+
+                if end <= data.len() {
+                    let bytes = data[start..end].to_vec();
+                    caller.data_mut().http_request_body = Some(bytes);
+                }
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_http_request_body_set: {}", e))
+        })?;
 
     // host_log
     linker
@@ -945,13 +1110,19 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                         }
                     };
 
-                // Convert to HttpClientRequest format — body is already binary
-                // (base64 decoded by serde during deserialization)
+                // Body priority: side-channel (host_http_request_body_set) > JSON body.
+                // Side-channel avoids base64 overhead for large payloads.
+                let body = caller
+                    .data_mut()
+                    .http_request_body
+                    .take()
+                    .or(plugin_request.body);
+
                 let request = HttpClientRequest {
                     method: plugin_request.method,
                     url: plugin_request.url,
                     headers: plugin_request.headers.into_iter().collect(),
-                    body: plugin_request.body,
+                    body,
                     timeout: plugin_request
                         .timeout_ms
                         .map(std::time::Duration::from_millis),
@@ -971,7 +1142,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 // so we can't schedule work on it. Create a new runtime just for this call.
                 // TODO: Optimize by using a thread-local runtime or worker pool instead of
                 // creating a new runtime per call (performance improvement for high throughput).
-                let response_json = std::thread::scope(|s| {
+                let response_result = std::thread::scope(|s| {
                     let handle = s.spawn(|| {
                         let rt = match tokio::runtime::Builder::new_current_thread()
                             .enable_all()
@@ -986,7 +1157,13 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
 
                         rt.block_on(async {
                             match http_client.call(request).await {
-                                Ok(response) => serde_json::to_vec(&response).ok(),
+                                Ok(mut response) => {
+                                    // Strip body into side-channel to avoid base64
+                                    // encoding in the JSON metadata.
+                                    let body = response.body.take();
+                                    let json = serde_json::to_vec(&response).ok();
+                                    Some((json, body))
+                                }
                                 Err(e) => {
                                     tracing::error!("HTTP call failed: {}", e);
                                     // Return error response
@@ -1022,7 +1199,8 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                                             &e.to_string(),
                                         ),
                                     };
-                                    serde_json::to_vec(&error_response).ok()
+                                    let json = serde_json::to_vec(&error_response).ok();
+                                    Some((json, None))
                                 }
                             }
                         })
@@ -1037,13 +1215,14 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 });
 
-                match response_json {
-                    Some(json) => {
+                match response_result {
+                    Some((Some(json), body)) => {
                         let len = json.len() as i32;
                         caller.data_mut().last_http_result = Some(json);
+                        caller.data_mut().http_response_body = body;
                         len
                     }
-                    None => -1,
+                    _ => -1,
                 }
             },
         )
@@ -1087,11 +1266,18 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                         }
                     };
 
+                // Body priority: side-channel (host_http_request_body_set) > JSON body.
+                let body = caller
+                    .data_mut()
+                    .http_request_body
+                    .take()
+                    .or(plugin_request.body);
+
                 let request = HttpClientRequest {
                     method: plugin_request.method,
                     url: plugin_request.url,
                     headers: plugin_request.headers.into_iter().collect(),
-                    body: plugin_request.body,
+                    body,
                     timeout: plugin_request
                         .timeout_ms
                         .map(std::time::Duration::from_millis),
@@ -1108,7 +1294,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 // Clone the stream sender (Arc makes this cheap).
                 let stream_sender = caller.data().stream_sender.clone();
 
-                let response_json = std::thread::scope(|s| {
+                let response_result = std::thread::scope(|s| {
                     let handle = s.spawn(|| {
                         let rt = match tokio::runtime::Builder::new_current_thread()
                             .enable_all()
@@ -1172,13 +1358,15 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                                         }
                                     }
 
-                                    // Serialize the complete buffered response for host_http_read_result.
+                                    // Strip body into side-channel, serialize
+                                    // metadata-only JSON for host_http_read_result.
                                     let complete = HttpClientResponse {
                                         status,
                                         headers: upstream_headers.into_iter().collect(),
-                                        body: Some(buffer),
+                                        body: None,
                                     };
-                                    serde_json::to_vec(&complete).ok()
+                                    let json = serde_json::to_vec(&complete).ok();
+                                    Some((json, Some(buffer)))
                                 }
                                 Err(e) => {
                                     tracing::error!("host_http_stream: request failed: {}", e);
@@ -1197,13 +1385,14 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 });
 
-                match response_json {
-                    Some(json) => {
+                match response_result {
+                    Some((Some(json), body)) => {
                         let len = json.len() as i32;
                         caller.data_mut().last_http_result = Some(json);
+                        caller.data_mut().http_response_body = body;
                         len
                     }
-                    None => -1,
+                    _ => -1,
                 }
             },
         )

@@ -81,24 +81,23 @@ fn default_timeout() -> f64 {
     30.0
 }
 
-/// HTTP request for `host_http_call`.
+/// HTTP request format for `host_http_call`.
+///
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    #[serde(with = "base64_body")]
-    body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
 
-/// HTTP response from `host_http_call`.
+/// HTTP response metadata from `host_http_call`.
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     headers: BTreeMap<String, String>,
-    #[serde(default, with = "base64_body")]
-    body: Option<Vec<u8>>,
 }
 
 impl S3Dispatcher {
@@ -216,7 +215,6 @@ impl S3Dispatcher {
             method: method.to_string(),
             url: full_url,
             headers,
-            body: body.map(|b| b.to_vec()),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         }
     }
@@ -253,7 +251,12 @@ impl S3Dispatcher {
             }
         };
 
-        // ── 3. Build signed request ────────────────────────────────────────
+        // ── 3. Send request body via side-channel ──────────────────────────
+        if let Some(ref b) = req.body {
+            set_http_request_body(b);
+        }
+
+        // ── 4. Build signed request ────────────────────────────────────────
         let unix_secs = current_timestamp();
         let http_request = self.build_s3_request(
             &bucket,
@@ -265,7 +268,7 @@ impl S3Dispatcher {
             unix_secs,
         );
 
-        // ── 4. Serialize and call S3 ───────────────────────────────────────
+        // ── 5. Serialize and call S3 ───────────────────────────────────────
         let request_json = match serde_json::to_vec(&http_request) {
             Ok(json) => json,
             Err(e) => {
@@ -316,7 +319,10 @@ impl S3Dispatcher {
                 }
             };
 
-        // ── 5. Pass through response ───────────────────────────────────────
+        // ── 6. Read response body from side-channel ─────────────────────────
+        let response_body = read_http_response_body();
+
+        // ── 7. Pass through response ───────────────────────────────────────
         // Filter hop-by-hop headers; pass S3 error codes through transparently.
         let mut response_headers = BTreeMap::new();
         for (key, value) in http_response.headers {
@@ -332,7 +338,7 @@ impl S3Dispatcher {
         Response {
             status: http_response.status,
             headers: response_headers,
-            body: http_response.body,
+            body: response_body,
         }
     }
 
@@ -678,7 +684,6 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "non-empty body must not produce the empty-string hash"
         );
-        assert_eq!(req.body, Some(body.as_bytes().to_vec()));
         assert_eq!(req.method, "PUT");
     }
 
