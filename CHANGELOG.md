@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-16
+
 ### Added
 - **wasm**: side-channel body passing via 7 new host functions (`host_body_len`, `host_body_read`, `host_body_set`, `host_body_clear`, `host_http_response_body_len`, `host_http_response_body_read`, `host_http_request_body_set`)
   - Bodies travel as raw bytes instead of base64-encoded inside JSON
@@ -25,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `request-transformer`, `response-transformer`, `cel`, `request-size-limit` declare `body_access = true`; all other middleware plugins skip the body
 - **wasm**: WASM memory formula changed from `max(16MB, body × 4)` to `max(16MB, body + 4MB)`
 - **plugins**: all 27 plugins migrated to side-channel body protocol; `http-upstream` removed `base64` dependency
+
+### CI
+- Upgraded all GitHub Actions to Node.js 24-compatible versions (#50)
 
 ## [0.3.1] - 2026-03-13
 
