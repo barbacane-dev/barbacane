@@ -1,6 +1,6 @@
 # SPEC-008: Middleware Body Access Control
 
-**Status:** Draft
+**Status:** Implemented
 **Date:** 2026-03-15
 **Derived from:** SPEC-003 (Plugin System)
 
@@ -8,7 +8,7 @@
 
 ## 1. Problem Statement
 
-Barbacane currently serializes the full request body (base64-encoded) into every middleware's `Request` JSON. A 2MB file upload becomes ~2.7MB of base64, copied into every WASM instance in the chain — even for auth plugins that only inspect headers.
+Prior to side-channel body passing, Barbacane serialized the full request body (base64-encoded) into every middleware's `Request` JSON. A 2MB file upload became ~2.7MB of base64, copied into every WASM instance in the chain — even for auth plugins that only inspect headers. Bodies now travel as raw bytes via side-channel host functions (see PR #49), but body access control remains necessary to avoid injecting large bodies into middleware that only inspects headers.
 
 This is the opposite of what every major gateway does:
 
@@ -47,60 +47,62 @@ body_access = true    # default: false
 | `false` (default) | Request with `body: null` | Full response (unchanged) |
 | `true` | Full request with body | Full response (unchanged) |
 
-When `body_access` is `false`, the host sets `body` to `null` in the JSON before passing it to the middleware. The original body is held aside by the host and re-attached after the middleware chain completes, before dispatching.
+When `body_access` is `false`, the host does not inject the body into the WASM instance's side-channel. The plugin sees `body: None`. The original body is held aside by the host (`BodyAccessControl`) and re-attached after the middleware chain completes, before dispatching.
 
 ### 2.3 Body preservation across the chain
 
 The chain execution loop is unchanged — middlewares still run in order, each receiving the previous middleware's output as its input. The only difference is whether `body` is present or `null` when a specific middleware sees the request.
 
-The host holds the body aside in a separate variable and manages it around each middleware call:
+The host holds the body aside in `BodyAccessControl` and manages it around each middleware call via side-channel host functions:
 
 ```
-current_request = full request (with body)
-held_body = current_request.body
+metadata_json = serialize(request)      # body is #[serde(skip)], absent from JSON
+held_body = request.body                # raw bytes, held in host memory
 
 for each middleware in chain order:
     if middleware.body_access:
-        # Pass full request (body included) to WASM
-        current_request = middleware.on_request(current_request)
-        held_body = current_request.body       # middleware may have modified body
+        instance.set_request_body(held_body)     # inject via side-channel
     else:
-        # Strip body before WASM, re-attach after
-        current_request.body = null
-        current_request = middleware.on_request(current_request)
-        current_request.body = held_body       # restore original/last-modified body
+        instance.set_request_body(None)          # plugin sees body: None
 
-# Dispatcher always gets the final body
-dispatcher.dispatch(current_request)
+    metadata_json = instance.on_request(metadata_json)
+
+    if middleware.body_access:
+        if instance.take_output_body() is Some(new_body):
+            held_body = new_body                 # middleware modified body
+
+# Dispatcher always gets the final body via side-channel
+instance.set_request_body(held_body)
+dispatcher.dispatch(metadata_json)
 ```
 
 **Concrete example** — chain: `[apikey-auth, rate-limit, request-transformer, cors]`
 where only `request-transformer` has `body_access = true`:
 
 ```
-Step 0: current_request has 2MB body, held_body = 2MB body
+Step 0: metadata_json = request without body, held_body = 2MB raw bytes
 
 Step 1: apikey-auth (body_access = false)
-    → strip body → pass headers-only request to WASM → get output
-    → current_request = output (may have added X-Consumer-Id header)
-    → current_request.body = held_body (re-attach 2MB body)
+    → set_request_body(None) → pass metadata JSON → get output
+    → metadata_json = output (may have added X-Consumer-Id header)
+    → held_body unchanged
 
 Step 2: rate-limit (body_access = false)
-    → strip body → pass headers-only request → get output
-    → current_request = output
-    → current_request.body = held_body
+    → set_request_body(None) → pass metadata JSON → get output
+    → metadata_json = output
+    → held_body unchanged
 
 Step 3: request-transformer (body_access = true)
-    → pass full request WITH 2MB body to WASM → get output
-    → current_request = output (body may now be different — e.g. added a JSON field)
-    → held_body = current_request.body (update held body with transformer's changes)
+    → set_request_body(held_body) → pass metadata JSON → get output
+    → metadata_json = output
+    → held_body = take_output_body() (transformer may have modified body)
 
 Step 4: cors (body_access = false)
-    → strip body → pass headers-only request → get output
-    → current_request = output
-    → current_request.body = held_body (transformer's modified body)
+    → set_request_body(None) → pass metadata JSON → get output
+    → metadata_json = output
+    → held_body unchanged (transformer's modified body preserved)
 
-Step 5: dispatcher receives current_request with final body
+Step 5: dispatcher receives metadata_json + held_body via side-channel
 ```
 
 Key behaviors:
@@ -218,13 +220,11 @@ pub struct LoadedPlugin {
 
 ### 4.3 Middleware chain execution
 
-In `execute_middleware_on_request` (or the chain execution layer), before calling `instance.on_request(data)`:
+In `execute_middleware_on_request`, `BodyAccessControl` manages body injection and collection around each middleware call:
 
-1. Check if this middleware has `body_access`.
-2. If not, strip the `body` field from the request JSON before passing it to the WASM instance.
-3. After the middleware returns, re-attach the held-aside body to the output request.
-
-The body stripping and re-attachment happen at the JSON level (`serde_json::Value` manipulation), which is already the pattern used in the test suite (see `gateway_flow_body_stripped_then_reattached` in `types.rs`).
+1. `prepare_instance()` — injects the held body into the instance's side-channel if `body_access` is true, otherwise sets it to `None`.
+2. The middleware runs with metadata-only JSON (body is `#[serde(skip)]`).
+3. `collect_after()` — updates metadata JSON from the middleware output, and if `body_access` is true, takes any modified body from the instance's side-channel.
 
 ### 4.4 Where body access is checked
 
@@ -254,11 +254,11 @@ Existing artifacts must be recompiled after this change (pre-1.0, no backward co
 
 For a route with 4 auth middlewares and a 2MB body:
 
-| Metric | Before (current) | After (body_access) |
-|--------|------------------|---------------------|
-| Base64 copies into WASM | 4 x 2.7MB = 10.8MB | 0 (auth plugins get null) |
+| Metric | Before (base64 in JSON) | After (side-channel + body_access) |
+|--------|------------------------|-------------------------------------|
+| Body copies into WASM | 4 × 2.7MB base64 = 10.8MB | 0 (auth plugins get None) |
 | WASM memory per auth middleware | ~8MB peak | ~1MB peak |
 | JSON parse time per middleware | ~5ms (with body) | ~0.2ms (headers only) |
 | Total chain overhead (4 MW) | ~20ms + 32MB memory | ~0.8ms + 4MB memory |
 
-The dispatcher still receives the full body (one copy), which is unavoidable.
+The dispatcher receives the full body (one raw copy via side-channel), which is unavoidable but no longer incurs base64 overhead (~2MB raw instead of ~7.3MB peak).
