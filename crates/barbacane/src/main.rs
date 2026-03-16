@@ -1363,34 +1363,13 @@ impl Gateway {
             .map(|mw| self.plugin_pool.body_access(&mw.name))
             .collect();
 
-        // Extract the held body from the request JSON (for body stripping)
-        let mut held_body: Option<serde_json::Value> = None;
-        let any_stripped = body_access_flags.iter().any(|&ba| !ba);
-        if any_stripped {
-            if let Ok(req_value) = serde_json::from_slice::<serde_json::Value>(request_json) {
-                held_body = req_value.get("body").cloned();
-            }
-        }
-
-        // Execute middleware chain with body access control
-        let mut current_request = request_json.to_vec();
+        // Split-once: extract the body from the request JSON once upfront (SPEC-008).
+        let mut body_ctrl = barbacane_wasm::BodyAccessControl::split(request_json);
         let mut current_context = RequestContext::default();
 
         for (index, instance) in instances.iter_mut().enumerate() {
             let has_body_access = body_access_flags[index];
-
-            // Prepare request for this middleware
-            let request_for_wasm = if any_stripped && !has_body_access {
-                // Strip body: set to null
-                if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&current_request) {
-                    v["body"] = serde_json::Value::Null;
-                    serde_json::to_vec(&v).unwrap_or_else(|_| current_request.clone())
-                } else {
-                    current_request.clone()
-                }
-            } else {
-                current_request.clone()
-            };
+            let request_for_wasm = body_ctrl.request_for(has_body_access);
 
             instance.set_context(current_context.clone());
             let start = std::time::Instant::now();
@@ -1407,30 +1386,8 @@ impl Gateway {
                                 start.elapsed().as_secs_f64(),
                                 false,
                             );
-                            current_request = new_request;
                             current_context = instance.get_context();
-
-                            // Body reattach/update logic
-                            if any_stripped {
-                                if has_body_access {
-                                    // Middleware may have modified the body — update held_body
-                                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(
-                                        &current_request,
-                                    ) {
-                                        held_body = v.get("body").cloned();
-                                    }
-                                } else if let Some(ref body) = held_body {
-                                    // Reattach the held body
-                                    if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(
-                                        &current_request,
-                                    ) {
-                                        v["body"] = body.clone();
-                                        if let Ok(reattached) = serde_json::to_vec(&v) {
-                                            current_request = reattached;
-                                        }
-                                    }
-                                }
-                            }
+                            body_ctrl.update_after_middleware(new_request, has_body_access);
                         }
                         Ok(barbacane_wasm::OnRequestResult::ShortCircuit(response)) => {
                             self.metrics.record_middleware(
@@ -1440,7 +1397,6 @@ impl Gateway {
                                 true,
                             );
                             let final_context = instance.get_context();
-                            // Run on_response for middlewares that already executed on_request
                             let final_response = barbacane_wasm::execute_on_response_partial(
                                 &mut instances,
                                 &response,
@@ -1492,7 +1448,7 @@ impl Gateway {
             }
         }
 
-        Ok((current_request, instances, current_context))
+        Ok((body_ctrl.finalize(), instances, current_context))
     }
 
     /// Execute middleware on_response chain.

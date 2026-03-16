@@ -3,6 +3,7 @@
 //! This crate provides the wasmtime-based runtime for loading and executing
 //! WASM plugins (middlewares and dispatchers) according to SPEC-003.
 
+mod body_access;
 pub mod broker;
 pub mod cache;
 mod chain;
@@ -26,6 +27,7 @@ mod validate;
 pub mod version;
 pub mod ws_client;
 
+pub use body_access::BodyAccessControl;
 pub use chain::{
     execute_on_request, execute_on_request_with_metrics, execute_on_response,
     execute_on_response_partial, execute_on_response_with_metrics, parse_middleware_output,
