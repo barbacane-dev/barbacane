@@ -505,7 +505,9 @@ name = "barbacane-plugin-sdk"
 version = "0.3.1"
 dependencies = [
  "barbacane-plugin-macros",
+ "base64 0.22.1",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -560,6 +562,7 @@ dependencies = [
  "async-nats",
  "barbacane-plugin-sdk",
  "barbacane-telemetry",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "criterion",

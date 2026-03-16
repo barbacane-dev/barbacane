@@ -144,7 +144,7 @@ impl Acl {
         Response {
             status: 403,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -399,7 +399,7 @@ mod tests {
             resp.headers.get("content-type").unwrap(),
             "application/problem+json"
         );
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:acl-denied");
         assert_eq!(body["title"], "Forbidden");
         assert_eq!(body["status"], 403);
@@ -412,7 +412,7 @@ mod tests {
         let mut acl = default_acl();
         acl.hide_consumer_in_errors = true;
         let resp = acl.forbidden_response(Some("alice"));
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert!(body.get("consumer").is_none());
     }
 
@@ -424,7 +424,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("ok".to_string()),
+            body: Some(b"ok".to_vec()),
         };
         let result = acl.on_response(response.clone());
         assert_eq!(result.status, 200);

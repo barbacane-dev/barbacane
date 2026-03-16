@@ -7,3 +7,4 @@ wasm = "request-size-limit.wasm"
 
 [capabilities]
 log = true
+body_access = true

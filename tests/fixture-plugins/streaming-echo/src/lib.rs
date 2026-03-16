@@ -16,12 +16,12 @@ pub struct StreamingEcho {
 }
 
 /// HTTP request passed to `host_http_stream` (same layout as `host_http_call`).
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
     timeout_ms: Option<u64>,
 }
 
@@ -31,9 +31,13 @@ impl StreamingEcho {
             method: req.method.clone(),
             url: self.url.clone(),
             headers: req.headers.clone(),
-            body: req.body.clone(),
             timeout_ms: Some(30_000),
         };
+
+        // Send request body via side-channel (if any).
+        if let Some(body) = &req.body {
+            barbacane_plugin_sdk::body::set_http_request_body(body);
+        }
 
         let request_json = match serde_json::to_vec(&http_request) {
             Ok(j) => j,
@@ -69,7 +73,7 @@ fn error_response(status: u16, detail: &str) -> Response {
     Response {
         status,
         headers,
-        body: Some(body.to_string()),
+        body: Some(body.to_string().into_bytes()),
     }
 }
 

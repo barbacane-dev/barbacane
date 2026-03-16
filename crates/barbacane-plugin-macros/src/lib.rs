@@ -41,7 +41,8 @@ use syn::{parse_macro_input, ItemStruct};
 /// - `on_request(ptr, len) -> i32` - Process request (0=continue, 1=short-circuit)
 /// - `on_response(ptr, len) -> i32` - Process response
 ///
-/// The plugin must call `host_set_output` to return data to the host.
+/// Bodies travel via side-channel host functions (host_body_read/host_body_set),
+/// not embedded in JSON. The glue code handles this transparently.
 #[proc_macro_attribute]
 pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemStruct);
@@ -76,6 +77,11 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 }
             }
 
+            /// Lightweight serialization wrapper — avoids the heap cost of
+            /// an intermediate `serde_json::Value` tree.
+            #[derive(serde::Serialize)]
+            struct ActionOutput<T: serde::Serialize> { action: i32, data: T }
+
             /// Process an incoming request.
             /// Returns 0 to continue, 1 to short-circuit with response.
             #[no_mangle]
@@ -84,10 +90,16 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     core::slice::from_raw_parts(ptr as *const u8, len as usize)
                 };
 
-                let request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
+                let mut request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
                     Ok(r) => r,
                     Err(_) => return 1, // Parse error, short-circuit
                 };
+
+                // Free the input buffer — data is now owned by `request`.
+                dealloc(ptr, len);
+
+                // Read body from side-channel (host_body_read).
+                request.body = barbacane_plugin_sdk::body::read_request_body();
 
                 let instance = unsafe {
                     match PLUGIN_INSTANCE.as_mut() {
@@ -97,22 +109,24 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 };
 
                 match instance.on_request(request) {
-                    barbacane_plugin_sdk::prelude::Action::Continue(req) => {
-                        // Serialize the request and set output
-                        if let Ok(output) = serde_json::to_vec(&serde_json::json!({
-                            "action": 0,
-                            "data": req
-                        })) {
+                    barbacane_plugin_sdk::prelude::Action::Continue(mut req) => {
+                        // Extract body and send via side-channel.
+                        match req.body.take() {
+                            Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                            None => barbacane_plugin_sdk::body::clear_response_body(),
+                        }
+                        if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 0, data: req }) {
                             set_output(&output);
                         }
                         0 // Continue
                     }
-                    barbacane_plugin_sdk::prelude::Action::ShortCircuit(resp) => {
-                        // Serialize the response and set output
-                        if let Ok(output) = serde_json::to_vec(&serde_json::json!({
-                            "action": 1,
-                            "data": resp
-                        })) {
+                    barbacane_plugin_sdk::prelude::Action::ShortCircuit(mut resp) => {
+                        // Extract body and send via side-channel.
+                        match resp.body.take() {
+                            Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                            None => barbacane_plugin_sdk::body::clear_response_body(),
+                        }
+                        if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 1, data: resp }) {
                             set_output(&output);
                         }
                         1 // Short-circuit
@@ -127,10 +141,16 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     core::slice::from_raw_parts(ptr as *const u8, len as usize)
                 };
 
-                let response: barbacane_plugin_sdk::prelude::Response = match serde_json::from_slice(response_bytes) {
+                let mut response: barbacane_plugin_sdk::prelude::Response = match serde_json::from_slice(response_bytes) {
                     Ok(r) => r,
                     Err(_) => return 1,
                 };
+
+                // Free the input buffer.
+                dealloc(ptr, len);
+
+                // Read body from side-channel (host_body_read).
+                response.body = barbacane_plugin_sdk::body::read_request_body();
 
                 let instance = unsafe {
                     match PLUGIN_INSTANCE.as_mut() {
@@ -139,13 +159,39 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     }
                 };
 
-                let result = instance.on_response(response);
+                let mut result = instance.on_response(response);
+
+                // Extract body and send via side-channel.
+                match result.body.take() {
+                    Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                    None => barbacane_plugin_sdk::body::clear_response_body(),
+                }
 
                 if let Ok(output) = serde_json::to_vec(&result) {
                     set_output(&output);
                 }
 
                 0
+            }
+
+            /// Allocate `size` bytes via the plugin's allocator and return the pointer.
+            ///
+            /// Called by the host before writing input data into linear memory so that
+            /// dlmalloc is aware of the allocation and will not reuse the region.
+            #[no_mangle]
+            pub extern "C" fn alloc(size: i32) -> i32 {
+                let mut buf = Vec::<u8>::with_capacity(size as usize);
+                let ptr = buf.as_mut_ptr();
+                core::mem::forget(buf);
+                ptr as i32
+            }
+
+            /// Free a region previously returned by `alloc`.
+            #[no_mangle]
+            pub extern "C" fn dealloc(ptr: i32, size: i32) {
+                unsafe {
+                    drop(Vec::from_raw_parts(ptr as *mut u8, 0, size as usize));
+                }
             }
 
             /// Helper to set output via host function.
@@ -173,7 +219,8 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
 /// - `init(ptr, len) -> i32` - Initialize with JSON config
 /// - `dispatch(ptr, len) -> i32` - Handle request and return response
 ///
-/// The plugin must call `host_set_output` to return the response to the host.
+/// Bodies travel via side-channel host functions (host_body_read/host_body_set),
+/// not embedded in JSON. The glue code handles this transparently.
 #[proc_macro_attribute]
 pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemStruct);
@@ -213,30 +260,45 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     core::slice::from_raw_parts(ptr as *const u8, len as usize)
                 };
 
-                let request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
+                let mut request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
                     Ok(r) => r,
                     Err(_) => {
-                        // Return error response
+                        // Free input buffer before returning error.
+                        dealloc(ptr, len);
                         let error_resp = barbacane_plugin_sdk::prelude::Response {
                             status: 500,
                             headers: std::collections::BTreeMap::new(),
-                            body: Some(r#"{"error":"failed to parse request"}"#.to_string()),
+                            body: Some(br#"{"error":"failed to parse request"}"#.to_vec()),
                         };
-                        if let Ok(output) = serde_json::to_vec(&error_resp) {
+                        // Send error body via side-channel.
+                        if let Some(ref body) = error_resp.body {
+                            barbacane_plugin_sdk::body::set_response_body(body);
+                        }
+                        let mut err_resp_for_json = error_resp;
+                        err_resp_for_json.body = None;
+                        if let Ok(output) = serde_json::to_vec(&err_resp_for_json) {
                             set_output(&output);
                         }
                         return 1;
                     }
                 };
 
+                // Free the input buffer — data is now owned by `request`.
+                dealloc(ptr, len);
+
+                // Read body from side-channel (host_body_read).
+                request.body = barbacane_plugin_sdk::body::read_request_body();
+
                 let instance = unsafe {
                     match PLUGIN_INSTANCE.as_mut() {
                         Some(i) => i,
                         None => {
+                            let error_body = br#"{"error":"plugin not initialized"}"#;
+                            barbacane_plugin_sdk::body::set_response_body(error_body);
                             let error_resp = barbacane_plugin_sdk::prelude::Response {
                                 status: 500,
                                 headers: std::collections::BTreeMap::new(),
-                                body: Some(r#"{"error":"plugin not initialized"}"#.to_string()),
+                                body: None,
                             };
                             if let Ok(output) = serde_json::to_vec(&error_resp) {
                                 set_output(&output);
@@ -246,13 +308,36 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     }
                 };
 
-                let response = instance.dispatch(request);
+                let mut response = instance.dispatch(request);
+
+                // Extract body and send via side-channel.
+                match response.body.take() {
+                    Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                    None => barbacane_plugin_sdk::body::clear_response_body(),
+                }
 
                 if let Ok(output) = serde_json::to_vec(&response) {
                     set_output(&output);
                 }
 
                 0
+            }
+
+            /// Allocate `size` bytes via the plugin's allocator and return the pointer.
+            #[no_mangle]
+            pub extern "C" fn alloc(size: i32) -> i32 {
+                let mut buf = Vec::<u8>::with_capacity(size as usize);
+                let ptr = buf.as_mut_ptr();
+                core::mem::forget(buf);
+                ptr as i32
+            }
+
+            /// Free a region previously returned by `alloc`.
+            #[no_mangle]
+            pub extern "C" fn dealloc(ptr: i32, size: i32) {
+                unsafe {
+                    drop(Vec::from_raw_parts(ptr as *mut u8, 0, size as usize));
+                }
             }
 
             /// Helper to set output via host function.

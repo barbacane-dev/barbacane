@@ -195,7 +195,7 @@ impl BasicAuth {
         Response {
             status: 401,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -503,7 +503,7 @@ mod tests {
         assert!(www_auth.contains("Basic realm=\"test-api\""));
         assert!(www_auth.contains("invalid_credentials"));
 
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["status"], 401);
         assert_eq!(body["type"], "urn:barbacane:error:authentication-failed");
     }

@@ -286,7 +286,7 @@ impl Cors {
         Response {
             status: 403,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -501,7 +501,7 @@ mod tests {
         );
         assert_eq!(response.headers.get("vary"), Some(&"Origin".to_string()));
 
-        let body = response.body.expect("Response should have a body");
+        let body = String::from_utf8(response.body.expect("Response should have a body")).unwrap();
         assert!(body.contains("urn:barbacane:error:cors-not-allowed"));
         assert!(body.contains("CORS Not Allowed"));
         assert!(body.contains("403"));
@@ -547,7 +547,7 @@ mod tests {
         match cors.on_request(req) {
             Action::ShortCircuit(response) => {
                 assert_eq!(response.status, 403);
-                let body = response.body.expect("Response should have a body");
+                let body = String::from_utf8(response.body.expect("Response should have a body")).unwrap();
                 assert!(body.contains("https://evil.com"));
             }
             Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
@@ -627,7 +627,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test".to_string()),
+            body: Some(b"test".to_vec()),
         };
 
         let modified = cors.on_response(response);
@@ -644,7 +644,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test".to_string()),
+            body: Some(b"test".to_vec()),
         };
 
         let modified = cors.on_response(response);
@@ -661,7 +661,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test".to_string()),
+            body: Some(b"test".to_vec()),
         };
 
         let modified = cors.on_response(response);
@@ -678,7 +678,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test".to_string()),
+            body: Some(b"test".to_vec()),
         };
 
         let modified = cors.on_response(response);

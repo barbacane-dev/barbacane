@@ -103,18 +103,30 @@ impl TestGateway {
         Self::from_specs_with_tls(&[spec_path]).await
     }
 
+    /// Create a TestGateway from a spec with extra CLI args for the data plane.
+    pub async fn from_spec_with_args(
+        spec_path: &str,
+        extra_args: &[&str],
+    ) -> Result<Self, TestError> {
+        Self::create_gateway_with_args(&[spec_path], false, extra_args).await
+    }
+
     /// Create a TestGateway from multiple spec files.
     pub async fn from_specs(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway(spec_paths, false).await
+        Self::create_gateway_with_args(spec_paths, false, &[]).await
     }
 
     /// Create a TLS-enabled TestGateway from multiple spec files.
     pub async fn from_specs_with_tls(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway(spec_paths, true).await
+        Self::create_gateway_with_args(spec_paths, true, &[]).await
     }
 
-    /// Internal method to create a gateway with optional TLS.
-    async fn create_gateway(spec_paths: &[&str], tls_enabled: bool) -> Result<Self, TestError> {
+    /// Internal method to create a gateway with optional TLS and extra CLI args.
+    async fn create_gateway_with_args(
+        spec_paths: &[&str],
+        tls_enabled: bool,
+        extra_args: &[&str],
+    ) -> Result<Self, TestError> {
         // Create temp directory for the artifact
         let temp_dir = TempDir::new()?;
         let artifact_path = temp_dir.path().join("test.bca");
@@ -136,7 +148,10 @@ impl TestGateway {
 
         // Compile the specs with manifest
         let paths: Vec<&Path> = spec_paths.iter().map(|s| Path::new(*s)).collect();
-        let options = CompileOptions::default();
+        let options = CompileOptions {
+            allow_plaintext: true,
+            ..CompileOptions::default()
+        };
         compile_with_manifest(
             &paths,
             &project_manifest,
@@ -177,6 +192,11 @@ impl TestGateway {
         if let Some(ref certs) = tls_certs {
             cmd.arg("--tls-cert").arg(&certs.cert_path);
             cmd.arg("--tls-key").arg(&certs.key_path);
+        }
+
+        // Add any extra CLI arguments
+        for arg in extra_args {
+            cmd.arg(arg);
         }
 
         // Start the gateway process

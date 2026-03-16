@@ -105,6 +105,9 @@ context_get = true
 | `verify_signature` | `host_verify_signature` |
 | `rate_limit` | `host_rate_limit_check`, `host_rate_limit_read_result` |
 | `cache` | `host_cache_get`, `host_cache_set`, `host_cache_read_result` |
+| `body_access` | *(none — controls whether `on_request` receives the request body)* |
+
+`body_access` is not a host function capability — it's a manifest-level flag (SPEC-008). When `false` (default for middleware), the host strips the request body before calling `on_request`, reducing WASM memory usage. Dispatchers always receive the body regardless. Set `body_access = true` only for middleware that reads or modifies `request.body`.
 
 ### Building Plugins
 

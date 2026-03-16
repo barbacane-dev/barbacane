@@ -27,12 +27,14 @@
 //! }
 //! ```
 
+pub mod body;
 pub mod types;
 
 /// Re-export proc macros for plugin development.
 pub use barbacane_plugin_macros::{barbacane_dispatcher, barbacane_middleware};
 
 pub mod prelude {
+    pub use crate::body::*;
     pub use crate::types::*;
     pub use crate::{barbacane_dispatcher, barbacane_middleware};
 }

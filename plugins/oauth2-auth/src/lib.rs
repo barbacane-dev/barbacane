@@ -33,23 +33,24 @@ fn default_timeout() -> f64 {
     5.0 // 5 seconds default for auth calls
 }
 
-/// HTTP request for host_http_call.
+/// HTTP request format for host_http_call.
+///
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
     timeout_ms: Option<u64>,
 }
 
-/// HTTP response from host_http_call.
+/// HTTP response metadata from host_http_call.
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     #[allow(dead_code)]
     headers: BTreeMap<String, String>,
-    body: Option<Vec<u8>>,
 }
 
 /// RFC 7662 Token Introspection Response.
@@ -264,11 +265,13 @@ impl OAuth2Auth {
         // Build request body (application/x-www-form-urlencoded)
         let body = format!("token={}", url_encode(token));
 
+        // Send request body via side-channel
+        set_http_request_body(body.as_bytes());
+
         let http_request = HttpRequest {
             method: "POST".to_string(),
             url: self.introspection_endpoint.clone(),
             headers,
-            body: Some(body),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
@@ -312,9 +315,8 @@ impl OAuth2Auth {
             )));
         }
 
-        // Parse introspection response body
-        let body = http_response
-            .body
+        // Read response body from side-channel
+        let body = read_http_response_body()
             .ok_or_else(|| OAuth2Error::IntrospectionFailed("empty response body".to_string()))?;
 
         serde_json::from_slice(&body).map_err(|e| {
@@ -374,7 +376,7 @@ impl OAuth2Auth {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -665,7 +667,7 @@ mod tests {
         );
         assert!(response.headers.contains_key("www-authenticate"));
 
-        let body = response.body.unwrap();
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(body.contains("\"status\":401"));
         assert!(body.contains("Authentication failed"));
         assert!(body.contains("urn:barbacane:error:authentication-failed"));
@@ -683,7 +685,7 @@ mod tests {
             "application/json"
         );
 
-        let body = response.body.unwrap();
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(body.contains("\"status\":403"));
         assert!(body.contains("Authorization failed"));
         assert!(body.contains("urn:barbacane:error:authorization-failed"));
@@ -840,7 +842,7 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("test body".to_string()),
+            body: Some(b"test body".to_vec()),
         };
 
         let result = config.on_response(response.clone());

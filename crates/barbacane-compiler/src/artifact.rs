@@ -113,6 +113,27 @@ pub struct BundledPlugin {
     pub wasm_path: String,
     /// SHA-256 hash of the WASM file.
     pub sha256: String,
+    /// Plugin capabilities declared in plugin.toml.
+    pub capabilities: PluginCapabilities,
+}
+
+/// Plugin capabilities stored in the artifact manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginCapabilities {
+    /// Whether the middleware receives the request body in `on_request`.
+    #[serde(default)]
+    pub body_access: bool,
+}
+
+/// A plugin loaded from a .bca artifact, ready for compilation.
+#[derive(Debug, Clone)]
+pub struct LoadedPlugin {
+    /// Plugin version.
+    pub version: String,
+    /// WASM binary content.
+    pub wasm_bytes: Vec<u8>,
+    /// Whether this plugin needs the request body.
+    pub body_access: bool,
 }
 
 /// Metadata about a source spec included in the artifact.
@@ -222,6 +243,7 @@ pub fn compile_with_manifest(
             version: p.version.unwrap_or_else(|| "0.1.0".to_string()),
             plugin_type: p.plugin_type.unwrap_or_else(|| "plugin".to_string()),
             wasm_bytes: p.wasm_bytes,
+            body_access: p.body_access,
         })
         .collect();
 
@@ -302,10 +324,8 @@ pub fn load_specs(artifact_path: &Path) -> Result<HashMap<String, String>, Compi
 }
 
 /// Load all bundled plugins from a .bca artifact.
-/// Returns a map of plugin name -> (version, WASM bytes).
-pub fn load_plugins(
-    artifact_path: &Path,
-) -> Result<HashMap<String, (String, Vec<u8>)>, CompileError> {
+/// Returns a map of plugin name -> LoadedPlugin.
+pub fn load_plugins(artifact_path: &Path) -> Result<HashMap<String, LoadedPlugin>, CompileError> {
     // First load manifest to get plugin metadata
     let manifest = load_manifest(artifact_path)?;
 
@@ -315,21 +335,28 @@ pub fn load_plugins(
 
     let mut plugins = HashMap::new();
 
-    // Build a map of wasm_path -> (name, version) from manifest
-    let plugin_info: HashMap<String, (String, String)> = manifest
+    // Build a map of wasm_path -> plugin info from manifest
+    let plugin_info: HashMap<String, (&BundledPlugin,)> = manifest
         .plugins
         .iter()
-        .map(|p| (p.wasm_path.clone(), (p.name.clone(), p.version.clone())))
+        .map(|p| (p.wasm_path.clone(), (p,)))
         .collect();
 
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path_str = entry.path()?.to_string_lossy().into_owned();
 
-        if let Some((name, version)) = plugin_info.get(&path_str) {
+        if let Some((bundled,)) = plugin_info.get(&path_str) {
             let mut wasm_bytes = Vec::new();
             entry.read_to_end(&mut wasm_bytes)?;
-            plugins.insert(name.clone(), (version.clone(), wasm_bytes));
+            plugins.insert(
+                bundled.name.clone(),
+                LoadedPlugin {
+                    version: bundled.version.clone(),
+                    wasm_bytes,
+                    body_access: bundled.capabilities.body_access,
+                },
+            );
         }
     }
 
@@ -346,6 +373,8 @@ pub struct PluginBundle {
     pub plugin_type: String,
     /// WASM binary content.
     pub wasm_bytes: Vec<u8>,
+    /// Whether this plugin needs the request body.
+    pub body_access: bool,
 }
 
 /// Parse spec files into (ApiSpec, content, sha256) tuples.
@@ -583,6 +612,9 @@ fn compile_inner(
             plugin_type: plugin.plugin_type.clone(),
             wasm_path,
             sha256,
+            capabilities: PluginCapabilities {
+                body_access: plugin.body_access,
+            },
         });
     }
 
@@ -1280,6 +1312,7 @@ paths:
             version: "1.0.0".to_string(),
             plugin_type: "middleware".to_string(),
             wasm_bytes: fake_wasm.clone(),
+            body_access: false,
         }];
 
         let result = compile(
@@ -1302,9 +1335,9 @@ paths:
         // Load plugins back
         let loaded = load_plugins(&output_path).unwrap();
         assert_eq!(loaded.len(), 1);
-        let (version, wasm_bytes) = loaded.get("test-plugin").unwrap();
-        assert_eq!(version, "1.0.0");
-        assert_eq!(wasm_bytes, &fake_wasm);
+        let plugin = loaded.get("test-plugin").unwrap();
+        assert_eq!(plugin.version, "1.0.0");
+        assert_eq!(plugin.wasm_bytes, fake_wasm);
     }
 
     #[test]

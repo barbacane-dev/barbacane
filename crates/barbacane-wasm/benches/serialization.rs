@@ -61,7 +61,7 @@ fn bench_request_serialization(c: &mut Criterion) {
             path: "/api/users".to_string(),
             query: None,
             headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
-            body: Some(body),
+            body: Some(body.into_bytes()),
             client_ip: "127.0.0.1".to_string(),
             path_params: BTreeMap::new(),
         };
@@ -93,7 +93,7 @@ fn bench_request_serialization(c: &mut Criterion) {
             path: "/api/v1/users/{userId}/orders/{orderId}".to_string(),
             query: Some("include=items&sort=date&limit=10".to_string()),
             headers,
-            body: Some("x".repeat(1024)),
+            body: Some(vec![b'x'; 1024]),
             client_ip: "192.168.1.100".to_string(),
             path_params,
         };
@@ -123,7 +123,7 @@ fn bench_response_serialization(c: &mut Criterion) {
         let resp = Response {
             status: 200,
             headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
-            body: Some("x".repeat(size)),
+            body: Some(vec![b'x'; size]),
         };
 
         group.bench_with_input(BenchmarkId::new("with_body", label), &resp, |b, resp| {

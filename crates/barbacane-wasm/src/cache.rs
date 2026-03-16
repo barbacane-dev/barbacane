@@ -15,8 +15,9 @@ pub struct CacheEntry {
     pub status: u16,
     /// The cached response headers.
     pub headers: HashMap<String, String>,
-    /// The cached response body.
-    pub body: Option<String>,
+    /// The cached response body (binary-safe via base64 in JSON).
+    #[serde(with = "barbacane_plugin_sdk::types::base64_body")]
+    pub body: Option<Vec<u8>>,
     /// Cache metadata for debugging.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<CacheMetadata>,
@@ -206,7 +207,7 @@ mod tests {
         let entry = CacheEntry {
             status: 200,
             headers: HashMap::new(),
-            body: Some("test body".to_string()),
+            body: Some(b"test body".to_vec()),
             metadata: None,
         };
 
@@ -217,7 +218,7 @@ mod tests {
         assert!(result.entry.is_some());
         let cached = result.entry.unwrap();
         assert_eq!(cached.status, 200);
-        assert_eq!(cached.body, Some("test body".to_string()));
+        assert_eq!(cached.body, Some(b"test body".to_vec()));
     }
 
     #[test]
@@ -256,5 +257,53 @@ mod tests {
         let stats = cache.stats();
         assert_eq!(stats.total_entries, 3);
         assert_eq!(stats.valid_entries, 3);
+    }
+
+    #[test]
+    fn test_cache_binary_body_roundtrip() {
+        let cache = ResponseCache::new();
+
+        let binary_body = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
+        let entry = CacheEntry {
+            status: 200,
+            headers: {
+                let mut h = HashMap::new();
+                h.insert("content-type".to_string(), "image/png".to_string());
+                h
+            },
+            body: Some(binary_body.clone()),
+            metadata: None,
+        };
+
+        cache.set("binary-key", entry, 60);
+        let cached = cache.get("binary-key").entry.unwrap();
+        assert_eq!(cached.body, Some(binary_body));
+    }
+
+    #[test]
+    fn test_cache_entry_json_roundtrip() {
+        // CacheEntry uses base64_body for JSON — verify roundtrip
+        let entry = CacheEntry {
+            status: 200,
+            headers: HashMap::new(),
+            body: Some(vec![0x00, 0xFF, 0x80]),
+            metadata: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let decoded: CacheEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.body, entry.body);
+    }
+
+    #[test]
+    fn test_cache_entry_json_none_body() {
+        let entry = CacheEntry {
+            status: 204,
+            headers: HashMap::new(),
+            body: None,
+            metadata: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let decoded: CacheEntry = serde_json::from_str(&json).unwrap();
+        assert!(decoded.body.is_none());
     }
 }

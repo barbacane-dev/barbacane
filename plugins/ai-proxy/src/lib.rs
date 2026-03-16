@@ -124,20 +124,20 @@ pub struct AiProxy {
 // Wire types for host_http_call / host_http_stream
 // ---------------------------------------------------------------------------
 
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
     timeout_ms: Option<u64>,
 }
 
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     headers: BTreeMap<String, String>,
-    body: Option<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -300,12 +300,14 @@ impl AiProxy {
         let headers = openai_headers(target);
 
         let body = self.maybe_inject_max_tokens(&req.body);
+        if let Some(ref b) = body {
+            set_http_request_body(b);
+        }
 
         let http_req = HttpRequest {
             method: req.method.clone(),
             url,
             headers,
-            body,
             timeout_ms: Some(self.timeout * 1000),
         };
 
@@ -320,12 +322,14 @@ impl AiProxy {
         headers.insert("accept".to_string(), "text/event-stream".to_string());
 
         let body = self.maybe_inject_max_tokens(&req.body);
+        if let Some(ref b) = body {
+            set_http_request_body(b);
+        }
 
         let http_req = HttpRequest {
             method: req.method.clone(),
             url,
             headers,
-            body,
             timeout_ms: Some(self.timeout * 1000),
         };
 
@@ -358,12 +362,12 @@ impl AiProxy {
         }
 
         let body = translate_to_anthropic(&req.body, &target.model, stream, self.max_tokens)?;
+        set_http_request_body(body.as_bytes());
 
         let http_req = HttpRequest {
             method: "POST".to_string(),
             url,
             headers,
-            body: Some(body),
             timeout_ms: Some(self.timeout * 1000),
         };
 
@@ -373,10 +377,10 @@ impl AiProxy {
         // Only translate 2xx responses; pass error responses through as-is
         if resp.status >= 200 && resp.status < 300 {
             let translated_body = resp
-                .body
-                .as_deref()
+                .body_str()
                 .map(translate_from_anthropic)
-                .transpose()?;
+                .transpose()?
+                .map(|s| s.into_bytes());
             Ok(Response {
                 status: resp.status,
                 headers: resp.headers,
@@ -390,20 +394,20 @@ impl AiProxy {
     /// Inject a default `max_tokens` into the request body when the client
     /// didn't send one — required for Anthropic (field is mandatory) and
     /// useful as a cost guardrail for OpenAI.
-    fn maybe_inject_max_tokens(&self, body: &Option<String>) -> Option<String> {
+    fn maybe_inject_max_tokens(&self, body: &Option<Vec<u8>>) -> Option<Vec<u8>> {
         let Some(max) = self.max_tokens else {
             return body.clone();
         };
         let Some(raw) = body.as_deref() else {
             return body.clone();
         };
-        let Ok(mut v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(raw) else {
             return body.clone();
         };
         if let Some(obj) = v.as_object_mut() {
             if !obj.contains_key("max_tokens") {
                 obj.insert("max_tokens".to_string(), serde_json::json!(max));
-                return Some(v.to_string());
+                return Some(serde_json::to_vec(&v).unwrap_or_default());
             }
         }
         body.clone()
@@ -417,14 +421,14 @@ impl AiProxy {
 /// Translate an OpenAI chat completion request body to Anthropic Messages API format.
 /// Pinned to Anthropic API version 2024-10-22 (ADR-0024).
 fn translate_to_anthropic(
-    body: &Option<String>,
+    body: &Option<Vec<u8>>,
     model: &str,
     stream: bool,
     default_max_tokens: Option<u32>,
 ) -> Result<String, String> {
-    let raw = body.as_deref().unwrap_or("{}");
+    let raw = body.as_deref().unwrap_or(b"{}");
     let openai: serde_json::Value =
-        serde_json::from_str(raw).map_err(|e| format!("invalid request body: {}", e))?;
+        serde_json::from_slice(raw).map_err(|e| format!("invalid request body: {}", e))?;
 
     let messages = openai["messages"]
         .as_array()
@@ -531,7 +535,7 @@ fn propagate_context(target: &TargetConfig, resp: &Response) {
         return;
     }
 
-    if let Some(tokens) = extract_tokens(resp.body.as_deref()) {
+    if let Some(tokens) = extract_tokens(resp.body.as_deref().and_then(|b| std::str::from_utf8(b).ok())) {
         let prompt = tokens.0.to_string();
         let completion = tokens.1.to_string();
 
@@ -578,9 +582,9 @@ fn openai_headers(target: &TargetConfig) -> BTreeMap<String, String> {
     headers
 }
 
-fn is_streaming_request(body: &Option<String>) -> bool {
+fn is_streaming_request(body: &Option<Vec<u8>>) -> bool {
     body.as_ref()
-        .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
         .and_then(|v| v["stream"].as_bool())
         .unwrap_or(false)
 }
@@ -607,6 +611,7 @@ fn http_call(req: &HttpRequest) -> Result<HttpResponse, String> {
 }
 
 fn build_response(http_resp: HttpResponse) -> Response {
+    let response_body = read_http_response_body();
     let mut headers = BTreeMap::new();
     for (k, v) in http_resp.headers {
         let k_lower = k.to_lowercase();
@@ -617,13 +622,10 @@ fn build_response(http_resp: HttpResponse) -> Response {
             headers.insert(k, v);
         }
     }
-    let body = http_resp
-        .body
-        .and_then(|b| String::from_utf8(b).ok());
     Response {
         status: http_resp.status,
         headers,
-        body,
+        body: response_body,
     }
 }
 
@@ -644,7 +646,7 @@ fn error_response(status: u16, detail: &str) -> Response {
     Response {
         status,
         headers,
-        body: Some(body.to_string()),
+        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
     }
 }
 
@@ -857,7 +859,7 @@ mod tests {
             path: "/v1/chat/completions".to_string(),
             query: None,
             headers,
-            body: body.map(|s| s.to_string()),
+            body: body.map(|s| s.as_bytes().to_vec()),
             client_ip: "127.0.0.1".to_string(),
             path_params: BTreeMap::new(),
         }
@@ -1029,17 +1031,17 @@ mod tests {
 
     #[test]
     fn streaming_detection_true() {
-        assert!(is_streaming_request(&Some(r#"{"stream":true,"messages":[]}"#.to_string())));
+        assert!(is_streaming_request(&Some(br#"{"stream":true,"messages":[]}"#.to_vec())));
     }
 
     #[test]
     fn streaming_detection_false() {
-        assert!(!is_streaming_request(&Some(r#"{"stream":false,"messages":[]}"#.to_string())));
+        assert!(!is_streaming_request(&Some(br#"{"stream":false,"messages":[]}"#.to_vec())));
     }
 
     #[test]
     fn streaming_detection_absent() {
-        assert!(!is_streaming_request(&Some(r#"{"messages":[]}"#.to_string())));
+        assert!(!is_streaming_request(&Some(br#"{"messages":[]}"#.to_vec())));
     }
 
     #[test]
@@ -1058,7 +1060,7 @@ mod tests {
             ],
             "max_tokens": 1024
         }"#;
-        let result = translate_to_anthropic(&Some(body.to_string()), "claude-opus-4-6", false, None)
+        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "claude-opus-4-6", false, None)
             .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
 
@@ -1078,7 +1080,7 @@ mod tests {
                 {"role": "user", "content": "Hi"}
             ]
         }"#;
-        let result = translate_to_anthropic(&Some(body.to_string()), "claude-opus-4-6", false, None)
+        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "claude-opus-4-6", false, None)
             .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
 
@@ -1097,7 +1099,7 @@ mod tests {
                 {"role": "user", "content": "Hello"}
             ]
         }"#;
-        let result = translate_to_anthropic(&Some(body.to_string()), "m", false, None)
+        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "m", false, None)
             .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(v["system"].as_str(), Some("Part one.\nPart two."));
@@ -1106,7 +1108,7 @@ mod tests {
     #[test]
     fn translate_to_anthropic_uses_default_max_tokens() {
         let body = r#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        let result = translate_to_anthropic(&Some(body.to_string()), "m", false, Some(2048))
+        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "m", false, Some(2048))
             .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(v["max_tokens"].as_u64(), Some(2048));
@@ -1115,7 +1117,7 @@ mod tests {
     #[test]
     fn translate_to_anthropic_fallback_max_tokens_4096() {
         let body = r#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        let result = translate_to_anthropic(&Some(body.to_string()), "m", false, None)
+        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "m", false, None)
             .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(v["max_tokens"].as_u64(), Some(4096));
@@ -1128,7 +1130,7 @@ mod tests {
             "temperature": 0.7,
             "top_p": 0.9
         }"#;
-        let result = translate_to_anthropic(&Some(body.to_string()), "m", false, None)
+        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "m", false, None)
             .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert!((v["temperature"].as_f64().unwrap() - 0.7).abs() < 0.001);
@@ -1138,7 +1140,7 @@ mod tests {
     #[test]
     fn translate_to_anthropic_stream_flag() {
         let body = r#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        let result = translate_to_anthropic(&Some(body.to_string()), "m", true, None)
+        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "m", true, None)
             .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(v["stream"].as_bool(), Some(true));
@@ -1228,9 +1230,9 @@ mod tests {
             targets: BTreeMap::new(),
             default_target: None,
         };
-        let body = Some(r#"{"messages":[]}"#.to_string());
+        let body = Some(br#"{"messages":[]}"#.to_vec());
         let result = plugin.maybe_inject_max_tokens(&body).expect("body");
-        let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+        let v: serde_json::Value = serde_json::from_slice(&result).expect("valid json");
         assert_eq!(v["max_tokens"].as_u64(), Some(2048));
     }
 
@@ -1247,9 +1249,9 @@ mod tests {
             targets: BTreeMap::new(),
             default_target: None,
         };
-        let body = Some(r#"{"messages":[],"max_tokens":512}"#.to_string());
+        let body = Some(br#"{"messages":[],"max_tokens":512}"#.to_vec());
         let result = plugin.maybe_inject_max_tokens(&body).expect("body");
-        let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+        let v: serde_json::Value = serde_json::from_slice(&result).expect("valid json");
         assert_eq!(v["max_tokens"].as_u64(), Some(512)); // client value preserved
     }
 
@@ -1314,7 +1316,7 @@ mod tests {
         let resp = error_response(502, "all providers failed");
         assert_eq!(resp.status, 502);
         assert_eq!(resp.headers.get("content-type").map(|s| s.as_str()), Some("application/problem+json"));
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"].as_str(), Some("urn:barbacane:error:upstream-unavailable"));
         assert_eq!(body["status"].as_u64(), Some(502));
     }
@@ -1323,7 +1325,7 @@ mod tests {
     fn error_response_500_format() {
         let resp = error_response(500, "misconfiguration");
         assert_eq!(resp.status, 500);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"].as_str(), Some("urn:barbacane:error:internal"));
     }
 
@@ -1353,7 +1355,7 @@ mod tests {
         let resp = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some(r#"{"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#.to_string()),
+            body: Some(br#"{"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#.to_vec()),
         };
         propagate_context(&target, &resp);
 
@@ -1395,7 +1397,7 @@ mod tests {
         let resp = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some(r#"{"usage":{"prompt_tokens":5,"completion_tokens":15,"total_tokens":20}}"#.to_string()),
+            body: Some(br#"{"usage":{"prompt_tokens":5,"completion_tokens":15,"total_tokens":20}}"#.to_vec()),
         };
         propagate_context(&target, &resp);
 

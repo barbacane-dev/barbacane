@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+use barbacane_plugin_sdk::types::base64_body;
 
 /// TLS configuration for upstream mTLS connections.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -426,8 +427,8 @@ pub struct HttpRequest {
     /// Request headers.
     #[serde(default)]
     pub headers: HashMap<String, String>,
-    /// Request body (optional).
-    #[serde(default)]
+    /// Request body (optional, base64-encoded in JSON for WASM transport).
+    #[serde(default, with = "base64_body")]
     pub body: Option<Vec<u8>>,
     /// Request timeout (optional, uses client default).
     #[serde(default, with = "option_duration_serde")]
@@ -441,7 +442,8 @@ pub struct HttpResponse {
     pub status: u16,
     /// Response headers.
     pub headers: HashMap<String, String>,
-    /// Response body (optional).
+    /// Response body (optional, base64-encoded in JSON for WASM transport).
+    #[serde(default, with = "base64_body")]
     pub body: Option<Vec<u8>>,
 }
 
@@ -819,5 +821,105 @@ mod tests {
 
         assert_eq!(tls1.cache_key(), tls2.cache_key());
         assert_ne!(tls1.cache_key(), tls3.cache_key());
+    }
+
+    // ── base64 body serde (host ↔ WASM plugin compatibility) ─────────────
+
+    /// Verify that HttpRequest serialized by a WASM plugin (base64 body)
+    /// deserializes correctly on the host side.
+    #[test]
+    fn http_request_base64_body_roundtrip() {
+        let binary_body: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0xFF, 0xFE, 0x00, 0x01];
+        let req = HttpRequest {
+            method: "POST".into(),
+            url: "https://example.com/upload".into(),
+            headers: Default::default(),
+            body: Some(binary_body.clone()),
+            timeout: None,
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        // Body must be base64-encoded in JSON, not raw bytes
+        assert!(
+            !json.contains("\\u0089"),
+            "body should be base64-encoded, not escaped unicode"
+        );
+
+        let decoded: HttpRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.body.unwrap(), binary_body);
+    }
+
+    /// Verify that HttpResponse serialized by the host (base64 body)
+    /// deserializes correctly on the plugin side.
+    #[test]
+    fn http_response_base64_body_roundtrip() {
+        let binary_body: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0xFF, 0xFE, 0x00, 0x01];
+        let resp = HttpResponse {
+            status: 200,
+            headers: Default::default(),
+            body: Some(binary_body.clone()),
+        };
+
+        let json = serde_json::to_string(&resp).unwrap();
+        let decoded: HttpResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.body.unwrap(), binary_body);
+    }
+
+    /// Verify None body serializes as null and deserializes back.
+    #[test]
+    fn http_request_null_body_roundtrip() {
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: "https://example.com".into(),
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""body":null"#));
+
+        let decoded: HttpRequest = serde_json::from_str(&json).unwrap();
+        assert!(decoded.body.is_none());
+    }
+
+    /// Simulate what a WASM plugin sends: manually construct the JSON with
+    /// a base64 string body and verify the host deserializes it correctly.
+    #[test]
+    fn http_request_deserialize_from_plugin_json() {
+        use base64::Engine;
+        let raw_bytes: Vec<u8> = vec![0x00, 0x01, 0x80, 0xFF];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
+
+        let json = format!(
+            r#"{{
+                "method": "POST",
+                "url": "https://example.com/api",
+                "body": "{b64}"
+            }}"#
+        );
+
+        let req: HttpRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req.body.unwrap(), raw_bytes);
+    }
+
+    /// Simulate what the host sends back: manually construct JSON with
+    /// base64 body and verify plugin-side deserialization.
+    #[test]
+    fn http_response_deserialize_from_host_json() {
+        use base64::Engine;
+        let raw_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
+
+        let json = format!(
+            r#"{{
+                "status": 200,
+                "headers": {{}},
+                "body": "{b64}"
+            }}"#
+        );
+
+        let resp: HttpResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(resp.body.unwrap(), raw_bytes);
     }
 }

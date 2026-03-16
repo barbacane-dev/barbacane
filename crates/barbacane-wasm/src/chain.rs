@@ -326,7 +326,10 @@ pub fn execute_on_response_partial(
 }
 
 /// Parse middleware output to determine the action.
-fn parse_middleware_output(output: &[u8], result_code: i32) -> Result<OnRequestResult, WasmError> {
+pub fn parse_middleware_output(
+    output: &[u8],
+    result_code: i32,
+) -> Result<OnRequestResult, WasmError> {
     // If no output, use result code as simple continue/short-circuit
     if output.is_empty() {
         return if result_code == 0 {
@@ -450,6 +453,79 @@ mod tests {
     fn parse_empty_short_circuit_fails() {
         let result = parse_middleware_output(&[], 1);
         assert!(result.is_err());
+    }
+
+    /// Middleware output with Request metadata (body travels via side-channel).
+    /// Ensures metadata survives the parse → serialize cycle in parse_middleware_output.
+    #[test]
+    fn parse_continue_with_request_metadata() {
+        use barbacane_plugin_sdk::types::Request;
+        use std::collections::BTreeMap;
+
+        let req = Request {
+            method: "POST".into(),
+            path: "/upload".into(),
+            query: None,
+            headers: {
+                let mut h = BTreeMap::new();
+                h.insert("content-type".into(), "application/octet-stream".into());
+                h
+            },
+            body: None, // Body travels via side-channel, not in JSON
+            client_ip: "127.0.0.1".into(),
+            path_params: BTreeMap::new(),
+        };
+
+        // Build the structured output the macro produces
+        let output = serde_json::to_vec(&json!({
+            "action": 0,
+            "data": req
+        }))
+        .unwrap();
+
+        let result = parse_middleware_output(&output, 0).unwrap();
+        match result {
+            OnRequestResult::Continue(data) => {
+                let parsed: Request = serde_json::from_slice(&data).unwrap();
+                assert_eq!(parsed.method, "POST");
+                assert_eq!(parsed.path, "/upload");
+                assert_eq!(parsed.body, None); // body is serde(skip)
+            }
+            OnRequestResult::ShortCircuit(_) => panic!("expected Continue"),
+        }
+    }
+
+    /// Middleware short-circuit Response metadata (body travels via side-channel).
+    #[test]
+    fn parse_short_circuit_with_response_metadata() {
+        use barbacane_plugin_sdk::types::Response;
+        use std::collections::BTreeMap;
+
+        let resp = Response {
+            status: 403,
+            headers: {
+                let mut h = BTreeMap::new();
+                h.insert("content-type".into(), "application/json".into());
+                h
+            },
+            body: None, // Body travels via side-channel
+        };
+
+        let output = serde_json::to_vec(&json!({
+            "action": 1,
+            "data": resp
+        }))
+        .unwrap();
+
+        let result = parse_middleware_output(&output, 1).unwrap();
+        match result {
+            OnRequestResult::ShortCircuit(data) => {
+                let parsed: Response = serde_json::from_slice(&data).unwrap();
+                assert_eq!(parsed.status, 403);
+                assert_eq!(parsed.body, None); // body is serde(skip)
+            }
+            OnRequestResult::Continue(_) => panic!("expected ShortCircuit"),
+        }
     }
 
     #[test]

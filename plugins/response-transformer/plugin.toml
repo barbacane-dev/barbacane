@@ -7,3 +7,4 @@ wasm = "response-transformer.wasm"
 
 [capabilities]
 log = true
+body_access = true

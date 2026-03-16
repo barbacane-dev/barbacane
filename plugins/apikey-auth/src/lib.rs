@@ -205,7 +205,7 @@ impl ApiKeyAuth {
         Response {
             status: 401,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -477,7 +477,7 @@ mod tests {
             resp.headers.get("content-type").unwrap(),
             "application/json"
         );
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:authentication-failed");
         assert_eq!(body["status"], 401);
     }
@@ -534,10 +534,10 @@ mod tests {
         let resp = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("ok".to_string()),
+            body: Some(b"ok".to_vec()),
         };
         let result = plugin.on_response(resp);
         assert_eq!(result.status, 200);
-        assert_eq!(result.body.as_deref(), Some("ok"));
+        assert_eq!(result.body_str(), Some("ok"));
     }
 }

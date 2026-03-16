@@ -123,7 +123,7 @@ impl CelPolicy {
         );
         request_map.insert(
             "body".to_string(),
-            str_val(req.body.as_deref().unwrap_or("")),
+            str_val(req.body_str().unwrap_or("")),
         );
         request_map.insert("client_ip".to_string(), str_val(&req.client_ip));
 
@@ -174,7 +174,7 @@ impl CelPolicy {
         Response {
             status: 403,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 
@@ -196,7 +196,7 @@ impl CelPolicy {
         Response {
             status: 500,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 
@@ -218,7 +218,7 @@ impl CelPolicy {
         Response {
             status: 500,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -630,7 +630,7 @@ mod tests {
     fn eval_body_access() {
         let mut config = create_config("request.body != ''");
         let mut req = create_request();
-        req.body = Some(r#"{"data":"test"}"#.to_string());
+        req.body = Some(br#"{"data":"test"}"#.to_vec());
         match config.on_request(req) {
             Action::Continue(_) => {}
             Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
@@ -658,7 +658,7 @@ mod tests {
             Action::ShortCircuit(resp) => {
                 assert_eq!(resp.status, 500);
                 let body: serde_json::Value =
-                    serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+                    serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
                 assert_eq!(body["type"], "urn:barbacane:error:cel-config");
             }
         }
@@ -673,7 +673,7 @@ mod tests {
             Action::ShortCircuit(resp) => {
                 assert_eq!(resp.status, 500);
                 let body: serde_json::Value =
-                    serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+                    serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
                 assert_eq!(body["type"], "urn:barbacane:error:cel-evaluation");
             }
         }
@@ -693,7 +693,7 @@ mod tests {
         );
 
         let body: serde_json::Value =
-            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:cel-denied");
         assert_eq!(body["title"], "Forbidden");
         assert_eq!(body["status"], 403);
@@ -707,7 +707,7 @@ mod tests {
 
         let resp = config.denied_response();
         let body: serde_json::Value =
-            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["detail"], "Custom deny");
     }
 
@@ -718,7 +718,7 @@ mod tests {
 
         assert_eq!(resp.status, 500);
         let body: serde_json::Value =
-            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:cel-config");
         assert_eq!(body["title"], "Internal Server Error");
     }
@@ -730,7 +730,7 @@ mod tests {
 
         assert_eq!(resp.status, 500);
         let body: serde_json::Value =
-            serde_json::from_str(resp.body.as_ref().expect("body")).expect("json");
+            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:cel-evaluation");
     }
 
@@ -781,12 +781,12 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("ok".to_string()),
+            body: Some(b"ok".to_vec()),
         };
 
         let result = config.on_response(response);
         assert_eq!(result.status, 200);
-        assert_eq!(result.body, Some("ok".to_string()));
+        assert_eq!(result.body, Some(b"ok".to_vec()));
     }
 
     // --- Default values ---

@@ -31,22 +31,23 @@ fn default_pass_through_headers() -> bool {
     true
 }
 
-/// HTTP request for host_http_call.
+/// HTTP request format for host_http_call.
+///
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
     timeout_ms: Option<u64>,
 }
 
-/// HTTP response from host_http_call.
+/// HTTP response metadata from host_http_call.
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     headers: BTreeMap<String, String>,
-    body: Option<Vec<u8>>,
 }
 
 impl LambdaDispatcher {
@@ -79,12 +80,16 @@ impl LambdaDispatcher {
             headers.insert("content-type".to_string(), "application/json".to_string());
         }
 
+        // Send request body via side-channel (avoids base64 encoding).
+        if let Some(ref b) = req.body {
+            set_http_request_body(b);
+        }
+
         // Build the HTTP request to Lambda
         let http_request = HttpRequest {
             method: req.method.clone(),
             url: self.url.clone(),
             headers,
-            body: req.body.clone(),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
@@ -126,6 +131,9 @@ impl LambdaDispatcher {
                 }
             };
 
+        // Read response body from side-channel.
+        let response_body = read_http_response_body();
+
         // Build the response
         let mut response_headers = http_response.headers;
 
@@ -137,7 +145,7 @@ impl LambdaDispatcher {
         Response {
             status: http_response.status,
             headers: response_headers,
-            body: http_response.body.and_then(|b| String::from_utf8(b).ok()),
+            body: response_body,
         }
     }
 
@@ -166,7 +174,7 @@ impl LambdaDispatcher {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         }
     }
 }
@@ -217,7 +225,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-invocation-failed");
         assert_eq!(body["title"], "Lambda invocation failed");
         assert_eq!(body["status"], 502);
@@ -241,7 +249,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-unavailable");
         assert_eq!(body["title"], "Lambda unavailable");
         assert_eq!(body["status"], 503);
@@ -264,7 +272,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-timeout");
         assert_eq!(body["title"], "Lambda timeout");
         assert_eq!(body["status"], 504);
@@ -336,7 +344,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(&response.body.unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&response.body.unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:lambda-invocation-failed");
         assert_eq!(body["title"], "Lambda invocation failed");
         assert_eq!(body["status"], 502);
@@ -366,7 +374,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers,
-            body: Some(r#"{"key": "value"}"#.to_string()),
+            body: Some(br#"{"key": "value"}"#.to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -398,7 +406,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers,
-            body: Some(r#"{"key": "value"}"#.to_string()),
+            body: Some(br#"{"key": "value"}"#.to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -425,7 +433,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers: BTreeMap::new(),
-            body: Some(r#"{"key": "value"}"#.to_string()),
+            body: Some(br#"{"key": "value"}"#.to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),
@@ -454,7 +462,7 @@ mod tests {
             method: "POST".to_string(),
             path: "/test".to_string(),
             headers,
-            body: Some("plain text body".to_string()),
+            body: Some(b"plain text body".to_vec()),
             query: None,
             path_params: BTreeMap::new(),
             client_ip: "127.0.0.1".to_string(),

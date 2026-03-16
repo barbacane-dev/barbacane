@@ -310,6 +310,7 @@ mod tests {
                 plugin_type: "middleware".to_string(),
                 wasm_path: "plugins/rate-limit.wasm".to_string(),
                 sha256: "sha256:plugin_hash".to_string(),
+                capabilities: barbacane_compiler::PluginCapabilities::default(),
             }],
             artifact_hash: "sha256:test".to_string(),
             provenance: barbacane_compiler::Provenance::default(),

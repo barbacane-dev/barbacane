@@ -60,7 +60,8 @@ struct CacheResult {
 struct CacheEntry {
     status: u16,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
+    #[serde(with = "barbacane_plugin_sdk::types::base64_body")]
+    body: Option<Vec<u8>>,
 }
 
 impl Cache {
@@ -493,7 +494,7 @@ mod tests {
                 h.insert("content-type".to_string(), "application/json".to_string());
                 h
             },
-            body: Some(r#"{"users":[]}"#.to_string()),
+            body: Some(br#"{"users":[]}"#.to_vec()),
         };
         let entry_json = serde_json::to_string(&entry).unwrap();
         call_cache_set("GET:/api/users", &entry_json, 300);
@@ -518,7 +519,7 @@ mod tests {
                     resp.headers.get("content-type"),
                     Some(&"application/json".to_string())
                 );
-                assert_eq!(resp.body, Some(r#"{"users":[]}"#.to_string()));
+                assert_eq!(resp.body, Some(br#"{"users":[]}"#.to_vec()));
             }
             _ => panic!("Expected Action::ShortCircuit for cache hit"),
         }
@@ -543,7 +544,7 @@ mod tests {
                 h.insert("content-type".to_string(), "application/json".to_string());
                 h
             },
-            body: Some(r#"{"users":[]}"#.to_string()),
+            body: Some(br#"{"users":[]}"#.to_vec()),
         };
 
         let result = cache.on_response(resp);
@@ -571,7 +572,7 @@ mod tests {
         let resp = Response {
             status: 500,
             headers: BTreeMap::new(),
-            body: Some("Internal Server Error".to_string()),
+            body: Some(b"Internal Server Error".to_vec()),
         };
 
         let result = cache.on_response(resp);
@@ -606,7 +607,7 @@ mod tests {
                 h.insert("cache-control".to_string(), "no-store".to_string());
                 h
             },
-            body: Some(r#"{"users":[]}"#.to_string()),
+            body: Some(br#"{"users":[]}"#.to_vec()),
         };
 
         let result = cache.on_response(resp);
@@ -644,7 +645,7 @@ mod tests {
                 );
                 h
             },
-            body: Some(r#"{"users":[]}"#.to_string()),
+            body: Some(br#"{"users":[]}"#.to_vec()),
         };
 
         let result = cache.on_response(resp);
@@ -668,7 +669,7 @@ mod tests {
         let resp = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some(r#"{"created":true}"#.to_string()),
+            body: Some(br#"{"created":true}"#.to_vec()),
         };
 
         let result = cache.on_response(resp);
@@ -704,7 +705,7 @@ mod tests {
                 h.insert("x-custom".to_string(), "value".to_string());
                 h
             },
-            body: Some(r#"{"data":"test"}"#.to_string()),
+            body: Some(br#"{"data":"test"}"#.to_vec()),
         };
 
         let result = cache.on_response(resp.clone());
@@ -748,7 +749,7 @@ mod tests {
             let resp = Response {
                 status,
                 headers: BTreeMap::new(),
-                body: Some("test".to_string()),
+                body: Some(b"test".to_vec()),
             };
 
             let result = cache.on_response(resp);

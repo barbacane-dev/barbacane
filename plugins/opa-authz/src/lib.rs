@@ -48,21 +48,21 @@ fn default_deny_message() -> String {
 // HTTP types for host_http_call
 // ---------------------------------------------------------------------------
 
+/// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    body: Option<String>,
     timeout_ms: Option<u64>,
 }
 
+/// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
 struct HttpResponse {
     status: u16,
     #[allow(dead_code)]
     headers: BTreeMap<String, String>,
-    body: Option<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ impl OpaAuthz {
         };
 
         let body = if self.include_body {
-            req.body.clone()
+            req.body_string()
         } else {
             None
         };
@@ -171,11 +171,13 @@ impl OpaAuthz {
         headers.insert("content-type".to_string(), "application/json".to_string());
         headers.insert("accept".to_string(), "application/json".to_string());
 
+        // Send request body via side-channel
+        set_http_request_body(request_json.as_bytes());
+
         let http_request = HttpRequest {
             method: "POST".to_string(),
             url: self.opa_url.clone(),
             headers,
-            body: Some(request_json.to_string()),
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
@@ -210,8 +212,8 @@ impl OpaAuthz {
             )));
         }
 
-        http_response
-            .body
+        // Read response body from side-channel
+        read_http_response_body()
             .ok_or_else(|| OpaError::ServiceError("empty OPA response body".to_string()))
     }
 
@@ -254,7 +256,7 @@ impl OpaAuthz {
         Response {
             status: 403,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 
@@ -281,7 +283,7 @@ impl OpaAuthz {
         Response {
             status,
             headers,
-            body: Some(body.to_string()),
+            body: Some(body.to_string().into_bytes()),
         }
     }
 }
@@ -433,7 +435,7 @@ mod tests {
         config.include_body = true;
 
         let mut req = create_request();
-        req.body = Some(r#"{"name":"test"}"#.to_string());
+        req.body = Some(br#"{"name":"test"}"#.to_vec());
 
         let input = config.build_input(&req);
         assert_eq!(input.body, Some(r#"{"name":"test"}"#.to_string()));
@@ -443,7 +445,7 @@ mod tests {
     fn build_input_body_excluded_by_default() {
         let config = create_config();
         let mut req = create_request();
-        req.body = Some(r#"{"name":"test"}"#.to_string());
+        req.body = Some(br#"{"name":"test"}"#.to_vec());
 
         let input = config.build_input(&req);
         assert!(input.body.is_none());
@@ -532,7 +534,7 @@ mod tests {
             "application/problem+json"
         );
 
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:opa-denied");
         assert_eq!(body["title"], "Forbidden");
         assert_eq!(body["status"], 403);
@@ -545,7 +547,7 @@ mod tests {
         config.deny_message = "Custom deny message".to_string();
 
         let resp = config.denied_response();
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["detail"], "Custom deny message");
     }
 
@@ -556,7 +558,7 @@ mod tests {
         let resp = config.error_response(&error);
 
         assert_eq!(resp.status, 503);
-        let body: serde_json::Value = serde_json::from_str(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:opa-unavailable");
         assert_eq!(body["title"], "Service Unavailable");
         assert_eq!(body["detail"], "connection refused");
@@ -570,12 +572,12 @@ mod tests {
         let response = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some("ok".to_string()),
+            body: Some(b"ok".to_vec()),
         };
 
         let result = config.on_response(response);
         assert_eq!(result.status, 200);
-        assert_eq!(result.body, Some("ok".to_string()));
+        assert_eq!(result.body, Some(b"ok".to_vec()));
     }
 
     // --- Default values ---
