@@ -28,8 +28,8 @@ pub mod ws_client;
 
 pub use chain::{
     execute_on_request, execute_on_request_with_metrics, execute_on_response,
-    execute_on_response_partial, execute_on_response_with_metrics, ChainResult, MetricsCallback,
-    MiddlewareChain, MiddlewareConfig, OnRequestResult,
+    execute_on_response_partial, execute_on_response_with_metrics, parse_middleware_output,
+    ChainResult, MetricsCallback, MiddlewareChain, MiddlewareConfig, OnRequestResult,
 };
 pub use engine::WasmEngine;
 pub use error::WasmError;

@@ -8,3 +8,4 @@ wasm = "cel.wasm"
 [capabilities]
 log = true
 context_set = true
+body_access = true

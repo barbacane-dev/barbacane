@@ -65,7 +65,7 @@ fn create_test_response() -> Vec<u8> {
 fn create_noop_instance(engine: &WasmEngine) -> PluginInstance {
     let wasm = noop_wasm_bytes();
     let module = engine
-        .compile(&wasm, "noop".to_string(), "0.1.0".to_string())
+        .compile(&wasm, "noop".to_string(), "0.1.0".to_string(), false)
         .expect("compile");
     PluginInstance::new(engine.engine(), &module, PluginLimits::default()).expect("instance")
 }
@@ -83,7 +83,7 @@ fn bench_wasm_engine(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 engine
-                    .compile(&wasm, "noop".to_string(), "0.1.0".to_string())
+                    .compile(&wasm, "noop".to_string(), "0.1.0".to_string(), false)
                     .unwrap(),
             );
         });
@@ -107,7 +107,7 @@ fn bench_wasm_instance(c: &mut Criterion) {
     let engine = create_engine();
     let wasm = noop_wasm_bytes();
     let module = engine
-        .compile(&wasm, "noop".to_string(), "0.1.0".to_string())
+        .compile(&wasm, "noop".to_string(), "0.1.0".to_string(), false)
         .unwrap();
     let request = create_test_request();
 

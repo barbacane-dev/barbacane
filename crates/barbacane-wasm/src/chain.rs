@@ -326,7 +326,10 @@ pub fn execute_on_response_partial(
 }
 
 /// Parse middleware output to determine the action.
-fn parse_middleware_output(output: &[u8], result_code: i32) -> Result<OnRequestResult, WasmError> {
+pub fn parse_middleware_output(
+    output: &[u8],
+    result_code: i32,
+) -> Result<OnRequestResult, WasmError> {
     // If no output, use result code as simple continue/short-circuit
     if output.is_empty() {
         return if result_code == 0 {

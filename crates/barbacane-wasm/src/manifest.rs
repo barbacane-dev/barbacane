@@ -66,6 +66,11 @@ pub struct Capabilities {
     /// List of host functions this plugin requires.
     #[serde(default)]
     pub host_functions: Vec<String>,
+
+    /// Whether the middleware receives the request body in `on_request`.
+    /// Always implicitly true for dispatchers. Defaults to false for middleware.
+    #[serde(default)]
+    pub body_access: bool,
 }
 
 impl PluginManifest {
@@ -320,5 +325,28 @@ host_functions = ["ws_upgrade", "log"]
         let exports = PluginType::Dispatcher.required_exports();
         assert!(exports.contains(&"init"));
         assert!(exports.contains(&"dispatch"));
+    }
+
+    #[test]
+    fn body_access_defaults_to_false() {
+        let manifest = PluginManifest::from_toml(VALID_MANIFEST).unwrap();
+        assert!(!manifest.capabilities.body_access);
+    }
+
+    #[test]
+    fn body_access_true_parses() {
+        let manifest_str = r#"
+[plugin]
+name = "request-transformer"
+version = "1.0.0"
+type = "middleware"
+wasm = "request_transformer.wasm"
+
+[capabilities]
+host_functions = ["log"]
+body_access = true
+"#;
+        let manifest = PluginManifest::from_toml(manifest_str).unwrap();
+        assert!(manifest.capabilities.body_access);
     }
 }

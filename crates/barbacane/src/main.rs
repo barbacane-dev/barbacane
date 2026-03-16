@@ -675,11 +675,16 @@ impl Gateway {
 
         // Compile all plugin modules first (we'll register them after creating the final pool)
         let mut compiled_modules = Vec::new();
-        for (name, (version, wasm_bytes)) in bundled_plugins {
+        for (name, loaded) in bundled_plugins {
             let module = wasm_engine
-                .compile(&wasm_bytes, name.clone(), version.clone())
+                .compile(
+                    &loaded.wasm_bytes,
+                    name.clone(),
+                    loaded.version.clone(),
+                    loaded.body_access,
+                )
                 .map_err(|e| format!("failed to compile plugin '{}': {}", name, e))?;
-            compiled_modules.push((name, version, module));
+            compiled_modules.push((name, loaded.version, module));
         }
 
         // Collect all configs to find secret references
@@ -1317,7 +1322,7 @@ impl Gateway {
         ),
         Response<Full<Bytes>>,
     > {
-        use barbacane_wasm::{execute_on_request_with_metrics, ChainResult, RequestContext};
+        use barbacane_wasm::RequestContext;
 
         let mut instances = Vec::new();
 
@@ -1352,52 +1357,142 @@ impl Gateway {
             return Ok((request_json.to_vec(), instances, RequestContext::default()));
         }
 
-        // Execute the on_request chain with metrics recording
-        let context = RequestContext::default();
-        let metrics = &self.metrics;
-        let metrics_callback = |name: &str, phase: &str, duration: f64, short_circuit: bool| {
-            metrics.record_middleware(name, phase, duration, short_circuit);
-        };
-        match execute_on_request_with_metrics(
-            &mut instances,
-            request_json,
-            context,
-            Some(&metrics_callback),
-        ) {
-            ChainResult::Continue { request, context } => Ok((request, instances, context)),
-            ChainResult::ShortCircuit {
-                response,
-                middleware_index,
-                context,
-            } => {
-                // Run on_response for middlewares that already executed on_request
-                // (in reverse order, excluding the short-circuiting middleware itself)
-                let final_response = barbacane_wasm::execute_on_response_partial(
-                    &mut instances,
-                    &response,
-                    middleware_index,
-                    context,
-                );
+        // Build per-middleware body_access flags
+        let body_access_flags: Vec<bool> = middlewares
+            .iter()
+            .map(|mw| self.plugin_pool.body_access(&mw.name))
+            .collect();
 
-                match serde_json::from_slice::<barbacane_wasm::Response>(&final_response) {
-                    Ok(plugin_response) => Err(self.build_response_from_plugin(&plugin_response)),
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to parse middleware response");
-                        Err(self.dev_error_response(format_args!(
-                            "failed to parse middleware response: {}",
-                            e
-                        )))
-                    }
-                }
-            }
-            ChainResult::Error {
-                error,
-                trap_result: _,
-            } => {
-                tracing::error!(error = %error, "middleware chain execution failed");
-                Err(self.dev_error_response(format_args!("middleware chain error: {}", error)))
+        // Extract the held body from the request JSON (for body stripping)
+        let mut held_body: Option<serde_json::Value> = None;
+        let any_stripped = body_access_flags.iter().any(|&ba| !ba);
+        if any_stripped {
+            if let Ok(req_value) = serde_json::from_slice::<serde_json::Value>(request_json) {
+                held_body = req_value.get("body").cloned();
             }
         }
+
+        // Execute middleware chain with body access control
+        let mut current_request = request_json.to_vec();
+        let mut current_context = RequestContext::default();
+
+        for (index, instance) in instances.iter_mut().enumerate() {
+            let has_body_access = body_access_flags[index];
+
+            // Prepare request for this middleware
+            let request_for_wasm = if any_stripped && !has_body_access {
+                // Strip body: set to null
+                if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&current_request) {
+                    v["body"] = serde_json::Value::Null;
+                    serde_json::to_vec(&v).unwrap_or_else(|_| current_request.clone())
+                } else {
+                    current_request.clone()
+                }
+            } else {
+                current_request.clone()
+            };
+
+            instance.set_context(current_context.clone());
+            let start = std::time::Instant::now();
+            let middleware_name = instance.name().to_string();
+
+            match instance.on_request(&request_for_wasm) {
+                Ok(result_code) => {
+                    let output = instance.take_output();
+                    match barbacane_wasm::parse_middleware_output(&output, result_code) {
+                        Ok(barbacane_wasm::OnRequestResult::Continue(new_request)) => {
+                            self.metrics.record_middleware(
+                                &middleware_name,
+                                "request",
+                                start.elapsed().as_secs_f64(),
+                                false,
+                            );
+                            current_request = new_request;
+                            current_context = instance.get_context();
+
+                            // Body reattach/update logic
+                            if any_stripped {
+                                if has_body_access {
+                                    // Middleware may have modified the body — update held_body
+                                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(
+                                        &current_request,
+                                    ) {
+                                        held_body = v.get("body").cloned();
+                                    }
+                                } else if let Some(ref body) = held_body {
+                                    // Reattach the held body
+                                    if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(
+                                        &current_request,
+                                    ) {
+                                        v["body"] = body.clone();
+                                        if let Ok(reattached) = serde_json::to_vec(&v) {
+                                            current_request = reattached;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Ok(barbacane_wasm::OnRequestResult::ShortCircuit(response)) => {
+                            self.metrics.record_middleware(
+                                &middleware_name,
+                                "request",
+                                start.elapsed().as_secs_f64(),
+                                true,
+                            );
+                            let final_context = instance.get_context();
+                            // Run on_response for middlewares that already executed on_request
+                            let final_response = barbacane_wasm::execute_on_response_partial(
+                                &mut instances,
+                                &response,
+                                index,
+                                final_context,
+                            );
+                            return match serde_json::from_slice::<barbacane_wasm::Response>(
+                                &final_response,
+                            ) {
+                                Ok(plugin_response) => {
+                                    Err(self.build_response_from_plugin(&plugin_response))
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = %e, "failed to parse middleware response");
+                                    Err(self.dev_error_response(format_args!(
+                                        "failed to parse middleware response: {}",
+                                        e
+                                    )))
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            self.metrics.record_middleware(
+                                &middleware_name,
+                                "request",
+                                start.elapsed().as_secs_f64(),
+                                false,
+                            );
+                            tracing::error!(error = %e, "middleware chain execution failed");
+                            return Err(self.dev_error_response(format_args!(
+                                "middleware chain error: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.metrics.record_middleware(
+                        &middleware_name,
+                        "request",
+                        start.elapsed().as_secs_f64(),
+                        false,
+                    );
+                    tracing::error!(error = %e, "middleware chain execution failed");
+                    return Err(
+                        self.dev_error_response(format_args!("middleware chain error: {}", e))
+                    );
+                }
+            }
+        }
+
+        Ok((current_request, instances, current_context))
     }
 
     /// Execute middleware on_response chain.

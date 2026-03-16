@@ -15,6 +15,8 @@ use crate::error::CompileError;
 #[derive(Debug, Deserialize)]
 struct PluginToml {
     plugin: PluginMeta,
+    #[serde(default)]
+    capabilities: PluginTomlCapabilities,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,12 +26,29 @@ struct PluginMeta {
     plugin_type: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct PluginTomlCapabilities {
+    #[serde(default)]
+    body_access: bool,
+}
+
+/// Plugin metadata extracted from plugin.toml.
+struct PluginMetadata {
+    version: String,
+    plugin_type: String,
+    body_access: bool,
+}
+
 /// Try to read plugin metadata from plugin.toml in the same directory as the WASM file.
-fn read_plugin_metadata(wasm_path: &Path) -> Option<(String, String)> {
+fn read_plugin_metadata(wasm_path: &Path) -> Option<PluginMetadata> {
     let plugin_toml_path = wasm_path.parent()?.join("plugin.toml");
     let content = std::fs::read_to_string(&plugin_toml_path).ok()?;
     let parsed: PluginToml = toml::from_str(&content).ok()?;
-    Some((parsed.plugin.version, parsed.plugin.plugin_type))
+    Some(PluginMetadata {
+        version: parsed.plugin.version,
+        plugin_type: parsed.plugin.plugin_type,
+        body_access: parsed.capabilities.body_access,
+    })
 }
 
 /// Resolve a WASM path from a plugin source, relative to a base path.
@@ -79,22 +98,21 @@ fn resolve_plugin(
     }
 
     // Try to read plugin metadata from plugin.toml
-    let (version, plugin_type) = match source {
+    let metadata = match source {
         PluginSource::Path(path_source) => {
             let wasm_path = resolve_wasm_path(path_source, base_path);
             read_plugin_metadata(&wasm_path)
-                .map(|(v, t)| (Some(v), Some(t)))
-                .unwrap_or((None, None))
         }
-        PluginSource::Url(_) => (None, None),
+        PluginSource::Url(_) => None,
     };
 
     Ok(ResolvedPlugin {
         name: name.to_string(),
         source: source.description(),
         wasm_bytes,
-        version,
-        plugin_type,
+        version: metadata.as_ref().map(|m| m.version.clone()),
+        plugin_type: metadata.as_ref().map(|m| m.plugin_type.clone()),
+        body_access: metadata.as_ref().is_some_and(|m| m.body_access),
     })
 }
 
@@ -155,6 +173,8 @@ pub struct ResolvedPlugin {
     pub version: Option<String>,
     /// Plugin type: "middleware" or "dispatcher" (from plugin.toml if available).
     pub plugin_type: Option<String>,
+    /// Whether this plugin needs the request body in `on_request`.
+    pub body_access: bool,
 }
 
 impl ProjectManifest {

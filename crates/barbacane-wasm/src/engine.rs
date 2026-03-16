@@ -16,6 +16,8 @@ pub struct CompiledModule {
     pub name: String,
     /// The plugin version.
     pub version: String,
+    /// Whether this plugin needs the request body in `on_request`.
+    pub body_access: bool,
 }
 
 impl CompiledModule {
@@ -89,6 +91,7 @@ impl WasmEngine {
         wasm_bytes: &[u8],
         name: String,
         version: String,
+        body_access: bool,
     ) -> Result<CompiledModule, WasmError> {
         let module = Module::new(&self.engine, wasm_bytes)
             .map_err(|e| WasmError::Compilation(e.to_string()))?;
@@ -97,6 +100,7 @@ impl WasmEngine {
             module,
             name,
             version,
+            body_access,
         })
     }
 
@@ -154,7 +158,7 @@ mod tests {
     #[test]
     fn compile_minimal_wasm() {
         let engine = WasmEngine::new().unwrap();
-        let result = engine.compile(MINIMAL_WASM, "test".into(), "1.0.0".into());
+        let result = engine.compile(MINIMAL_WASM, "test".into(), "1.0.0".into(), false);
         assert!(result.is_ok());
     }
 
@@ -162,7 +166,7 @@ mod tests {
     fn compiled_module_has_metadata() {
         let engine = WasmEngine::new().unwrap();
         let module = engine
-            .compile(MINIMAL_WASM, "my-plugin".into(), "2.1.0".into())
+            .compile(MINIMAL_WASM, "my-plugin".into(), "2.1.0".into(), false)
             .unwrap();
         assert_eq!(module.name, "my-plugin");
         assert_eq!(module.version, "2.1.0");

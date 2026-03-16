@@ -262,6 +262,8 @@ async fn resolve_project_plugins(
             version: plugin_with_binary.version.clone(),
             plugin_type: plugin_with_binary.plugin_type.clone(),
             wasm_bytes: plugin_with_binary.wasm_binary,
+            // TODO: read body_access from DB once the plugins table has a capabilities column
+            body_access: false,
         });
     }
 

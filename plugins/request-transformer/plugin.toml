@@ -8,3 +8,4 @@ wasm = "request-transformer.wasm"
 [capabilities]
 log = true
 context_get = true
+body_access = true

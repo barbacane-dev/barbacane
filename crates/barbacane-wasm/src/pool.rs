@@ -246,6 +246,14 @@ impl InstancePool {
         self.modules.contains_key(name)
     }
 
+    /// Check if a plugin has body_access capability.
+    pub fn body_access(&self, name: &str) -> bool {
+        self.modules
+            .get(name)
+            .map(|m| m.body_access)
+            .unwrap_or(false)
+    }
+
     /// Get the number of registered modules.
     pub fn module_count(&self) -> usize {
         self.modules.len()
