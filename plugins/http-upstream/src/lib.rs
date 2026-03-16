@@ -53,6 +53,7 @@ struct HttpRequest {
 struct HttpResponse {
     status: u16,
     headers: BTreeMap<String, String>,
+    #[serde(default, with = "barbacane_plugin_sdk::types::base64_body")]
     body: Option<Vec<u8>>,
 }
 

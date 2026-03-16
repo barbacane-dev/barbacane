@@ -50,6 +50,7 @@ struct HttpResponse {
     status: u16,
     #[allow(dead_code)]
     headers: BTreeMap<String, String>,
+    #[serde(default, with = "base64_body")]
     body: Option<Vec<u8>>,
 }
 

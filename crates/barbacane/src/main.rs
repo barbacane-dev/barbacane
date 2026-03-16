@@ -659,8 +659,13 @@ impl Gateway {
             .map_err(|e| format!("failed to create HTTP client: {}", e))?;
         let http_client = Arc::new(http_client);
 
-        // Initialize WASM engine
-        let plugin_limits = PluginLimits::default();
+        // Initialize WASM engine.
+        // Scale WASM memory to accommodate max_body_size: a base64-encoded body
+        // is ~1.37× the raw size, and the plugin holds the JSON input buffer,
+        // decoded body, and re-encoded output simultaneously.  Use 4× the body
+        // limit (minimum 16 MB) so dispatchers have headroom for file uploads.
+        let wasm_memory = std::cmp::max(16 * 1024 * 1024, limits.max_body_size * 4);
+        let plugin_limits = PluginLimits::default().with_memory(wasm_memory);
         let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
         let wasm_engine = Arc::new(wasm_engine);

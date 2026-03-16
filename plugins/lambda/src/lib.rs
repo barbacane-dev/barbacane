@@ -47,6 +47,7 @@ struct HttpRequest {
 struct HttpResponse {
     status: u16,
     headers: BTreeMap<String, String>,
+    #[serde(default, with = "base64_body")]
     body: Option<Vec<u8>>,
 }
 
