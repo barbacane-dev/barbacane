@@ -7,13 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **wasm**: side-channel body passing via 7 new host functions (`host_body_len`, `host_body_read`, `host_body_set`, `host_body_clear`, `host_http_response_body_len`, `host_http_response_body_read`, `host_http_request_body_set`)
+  - Bodies travel as raw bytes instead of base64-encoded inside JSON
+  - Eliminates ~3.65× memory overhead per boundary crossing
+  - 10MB+ bodies work within the default 16MB WASM memory limit
+- **plugin-sdk**: `barbacane_plugin_sdk::body` module — side-channel body helpers (`read_request_body`, `set_response_body`, `clear_response_body`, `read_http_response_body`, `set_http_request_body`)
+
 ### Fixed
 - **wasm**: fix WASM OOM on large request bodies — input buffers now allocated via plugin's own dlmalloc instead of writing to top-of-memory
+- **wasm**: short-circuit response bodies now always collected regardless of `body_access` flag (fixes empty error responses from middleware like opa-authz)
 
 ### Changed
-- **plugin-sdk**: request/response body is now `Option<Vec<u8>>` with base64 serde (was `Option<String>`), enabling binary payload support across all plugins
-- **wasm**: `body_access` capability — middleware that doesn't declare `body_access = true` receives `null` body, avoiding unnecessary base64 copies of large payloads into each WASM instance
-  - `request-transformer`, `cel`, `request-size-limit` declare `body_access = true`; all other middleware plugins skip the body
+- **plugin-sdk**: `Request.body` and `Response.body` now use `#[serde(skip)]` — bodies travel via side-channel, not JSON. Proc macros handle the protocol transparently.
+- **plugin-sdk**: request/response body is now `Option<Vec<u8>>` (was `Option<String>`), enabling binary payload support across all plugins
+- **wasm**: `body_access` capability — middleware that doesn't declare `body_access = true` receives `null` body, reducing WASM memory usage
+  - `request-transformer`, `response-transformer`, `cel`, `request-size-limit` declare `body_access = true`; all other middleware plugins skip the body
+- **wasm**: WASM memory formula changed from `max(16MB, body × 4)` to `max(16MB, body + 4MB)`
+- **plugins**: all 27 plugins migrated to side-channel body protocol; `http-upstream` removed `base64` dependency
 
 ## [0.3.1] - 2026-03-13
 

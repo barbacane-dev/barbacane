@@ -152,7 +152,7 @@ pub struct Request {
     pub path: String,
     pub query: Option<String>,
     pub headers: BTreeMap<String, String>,
-    pub body: Option<Vec<u8>>,      // binary-safe (base64-encoded in JSON)
+    pub body: Option<Vec<u8>>,      // binary-safe, travels via side-channel
     pub client_ip: String,
     pub path_params: BTreeMap<String, String>,
 }
@@ -166,15 +166,17 @@ Helper methods: `body_str() -> Option<&str>`, `body_string() -> Option<String>`,
 pub struct Response {
     pub status: u16,
     pub headers: BTreeMap<String, String>,
-    pub body: Option<Vec<u8>>,      // binary-safe (base64-encoded in JSON)
+    pub body: Option<Vec<u8>>,      // binary-safe, travels via side-channel
 }
 ```
 
 Helper methods: `body_str() -> Option<&str>`, `set_body_text(&str)`, `Response::text(status, headers, &str)`.
 
-> **Note:** Bodies are serialized as base64 strings in the JSON contract between host and WASM.
-> This is transparent — serde handles it automatically via `#[serde(with = "base64_body")]`.
-> Plugins work with raw `Vec<u8>` bytes and never see the base64 encoding.
+> **Note:** Bodies travel as raw bytes via side-channel host functions (`host_body_read`/`host_body_set`),
+> not embedded in JSON. The proc macros handle this transparently — plugin authors just read and write
+> `request.body` / `response.body` as `Option<Vec<u8>>`. This design (matching proxy-wasm and http-wasm)
+> avoids the ~3.65× memory overhead of base64 encoding, allowing 10MB+ bodies within the default 16MB
+> WASM memory limit.
 
 ### Action (Middleware only)
 
@@ -261,15 +263,28 @@ host_functions = ["http_call"]
 ```
 
 ```rust
-use barbacane_plugin_sdk::host;
+use barbacane_plugin_sdk::prelude::*;
+use serde::Serialize;
 
-let response = host::http_call(HttpRequest {
-    method: "GET".to_string(),
-    url: "https://api.example.com/data".to_string(),
-    headers: Default::default(),
-    body: None,
-    timeout_ms: Some(5000),
-})?;
+// HTTP request struct — body travels via side-channel, not in JSON.
+#[derive(Serialize)]
+struct HttpRequest {
+    method: String,
+    url: String,
+    headers: BTreeMap<String, String>,
+    timeout_ms: Option<u64>,
+}
+
+// Optionally set request body via side-channel:
+// barbacane_plugin_sdk::body::set_http_request_body(b"request body");
+
+// Serialize and call:
+let req = HttpRequest { method: "GET".into(), url: "https://api.example.com".into(), headers: BTreeMap::new(), timeout_ms: Some(5000) };
+let json = serde_json::to_vec(&req).unwrap();
+unsafe { host_http_call(json.as_ptr() as i32, json.len() as i32); }
+
+// Read response body via side-channel:
+// let body = barbacane_plugin_sdk::body::read_http_response_body();
 ```
 
 ## Using Plugins in Specs
@@ -406,11 +421,11 @@ Plugins run in a sandboxed WASM environment with these limits:
 
 | Resource | Limit |
 |----------|-------|
-| Linear memory | 16 MB |
+| Linear memory | max(16 MB, max_body_size + 4 MB) |
 | Stack size | 1 MB |
 | Execution time | 100 ms |
 
-Exceeding these limits results in a trap (500 error for request phase, fault-tolerant for response phase).
+WASM memory scales automatically based on the configured `max_body_size`. Exceeding these limits results in a trap (500 error for request phase, fault-tolerant for response phase).
 
 ## Troubleshooting
 
