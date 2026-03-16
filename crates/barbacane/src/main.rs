@@ -1457,31 +1457,70 @@ impl Gateway {
     }
 
     /// Execute middleware on_response chain.
+    ///
+    /// Like the on_request path (SPEC-008), response body is stripped for
+    /// middleware that don't declare `body_access = true`. This prevents large
+    /// response bodies (e.g. file downloads) from being base64-encoded and
+    /// loaded into every middleware's WASM linear memory.
     fn execute_middleware_on_response(
         &self,
         mut instances: Vec<barbacane_wasm::PluginInstance>,
         response: barbacane_wasm::Response,
         context: barbacane_wasm::RequestContext,
     ) -> barbacane_wasm::Response {
-        use barbacane_wasm::execute_on_response_with_metrics;
-
         let response_json = match serde_json::to_vec(&response) {
             Ok(j) => j,
             Err(_) => return response,
         };
 
-        let metrics = &self.metrics;
-        let metrics_callback = |name: &str, phase: &str, duration: f64, short_circuit: bool| {
-            metrics.record_middleware(name, phase, duration, short_circuit);
-        };
-        let final_response_json = execute_on_response_with_metrics(
-            &mut instances,
-            &response_json,
-            context,
-            Some(&metrics_callback),
-        );
+        // Split-once: extract the body from the response JSON (mirrors request path).
+        let mut body_ctrl = barbacane_wasm::BodyAccessControl::split(&response_json);
 
-        // Parse the final response - middlewares can modify status/headers/body
+        let metrics = &self.metrics;
+
+        // Process in reverse order (on_response runs last-to-first).
+        for instance in instances.iter_mut().rev() {
+            let has_body_access = self.plugin_pool.body_access(instance.name());
+            let response_for_wasm = body_ctrl.request_for(has_body_access);
+
+            instance.set_context(context.clone());
+            let start = std::time::Instant::now();
+            let middleware_name = instance.name().to_string();
+
+            match instance.on_response(&response_for_wasm) {
+                Ok(_result_code) => {
+                    metrics.record_middleware(
+                        &middleware_name,
+                        "response",
+                        start.elapsed().as_secs_f64(),
+                        false,
+                    );
+                    let output = instance.take_output();
+                    if !output.is_empty() {
+                        body_ctrl.update_after_middleware(output, has_body_access);
+                    }
+                }
+                Err(e) => {
+                    metrics.record_middleware(
+                        &middleware_name,
+                        "response",
+                        start.elapsed().as_secs_f64(),
+                        false,
+                    );
+                    let trap_result = barbacane_wasm::TrapResult::from_error(
+                        &e,
+                        barbacane_wasm::TrapContext::OnResponse,
+                    );
+                    tracing::warn!(
+                        error = %trap_result.message(),
+                        "Middleware on_response failed, continuing with original response"
+                    );
+                }
+            }
+        }
+
+        // Re-inject the body and parse back to Response.
+        let final_response_json = body_ctrl.finalize();
         serde_json::from_slice::<barbacane_wasm::Response>(&final_response_json).unwrap_or(response)
     }
 
@@ -1609,14 +1648,17 @@ impl Gateway {
 
                 // Background task: wait for WASM to finish, then run on_response for
                 // observability. Modifications are discarded (response already sent).
+                // Strip the response body to avoid WASM OOM with large streamed payloads.
                 let wh = wasm_handle;
                 let metrics = Arc::clone(&self.metrics);
                 tokio::spawn(async move {
                     match wh.await {
                         Ok((Ok(_), _, Some(last_http), _)) if !middleware_instances.is_empty() => {
-                            if let Ok(plugin_resp) =
+                            if let Ok(mut plugin_resp) =
                                 serde_json::from_slice::<barbacane_wasm::Response>(&last_http)
                             {
+                                // Strip body: observability-only, modifications discarded.
+                                plugin_resp.body = None;
                                 let mut instances = middleware_instances;
                                 let resp_json =
                                     serde_json::to_vec(&plugin_resp).unwrap_or_default();
