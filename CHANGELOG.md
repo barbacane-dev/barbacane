@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **wasm**: fix WASM OOM on large request bodies — input buffers now allocated via plugin's own dlmalloc instead of writing to top-of-memory
+
+### Changed
+- **plugin-sdk**: request/response body is now `Option<Vec<u8>>` with base64 serde (was `Option<String>`), enabling binary payload support across all plugins
+- **wasm**: `body_access` capability — middleware that doesn't declare `body_access = true` receives `null` body, avoiding unnecessary base64 copies of large payloads into each WASM instance
+  - `request-transformer`, `cel`, `request-size-limit` declare `body_access = true`; all other middleware plugins skip the body
+
 ## [0.3.1] - 2026-03-13
 
 ### Fixed
