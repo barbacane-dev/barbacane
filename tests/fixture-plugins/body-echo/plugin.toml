@@ -1,0 +1,10 @@
+[plugin]
+name = "body-echo"
+version = "0.1.0"
+type = "dispatcher"
+description = "Test fixture: echoes request body/headers/metadata for body integrity verification"
+wasm = "body_echo.wasm"
+
+[capabilities]
+log = true
+body_access = true

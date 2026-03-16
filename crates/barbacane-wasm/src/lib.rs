@@ -22,6 +22,8 @@ mod pool;
 pub mod rate_limiter;
 mod schema;
 pub mod secrets;
+#[cfg(test)]
+mod serde_compat;
 mod trap;
 mod validate;
 pub mod version;

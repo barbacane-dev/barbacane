@@ -32,10 +32,16 @@ struct FixturePlugin {
     wasm: &'static str,
 }
 
-const FIXTURE_PLUGINS: &[FixturePlugin] = &[FixturePlugin {
-    dir: "tests/fixture-plugins/streaming-echo",
-    wasm: "streaming_echo.wasm",
-}];
+const FIXTURE_PLUGINS: &[FixturePlugin] = &[
+    FixturePlugin {
+        dir: "tests/fixture-plugins/streaming-echo",
+        wasm: "streaming_echo.wasm",
+    },
+    FixturePlugin {
+        dir: "tests/fixture-plugins/body-echo",
+        wasm: "body_echo.wasm",
+    },
+];
 
 fn main() {
     let root = workspace_root();

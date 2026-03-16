@@ -42,15 +42,15 @@ pub enum StreamEvent {
 /// The `body` field uses base64 encoding over JSON to support binary payloads
 /// (e.g. multipart/form-data with file uploads).
 #[derive(Debug, Deserialize)]
-struct PluginHttpRequest {
-    method: String,
-    url: String,
+pub(crate) struct PluginHttpRequest {
+    pub(crate) method: String,
+    pub(crate) url: String,
     #[serde(default)]
-    headers: BTreeMap<String, String>,
+    pub(crate) headers: BTreeMap<String, String>,
     #[serde(default, with = "base64_body")]
-    body: Option<Vec<u8>>,
+    pub(crate) body: Option<Vec<u8>>,
     #[serde(default)]
-    timeout_ms: Option<u64>,
+    pub(crate) timeout_ms: Option<u64>,
 }
 
 /// Per-request context passed to plugins.

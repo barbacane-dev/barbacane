@@ -1,0 +1,22 @@
+[package]
+name = "body-echo"
+version = "0.1.0"
+edition = "2021"
+description = "Fixture plugin for workload tests — echoes request body/headers/metadata for body integrity verification"
+license = "AGPL-3.0-only"
+
+# Standalone crate excluded from the workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+barbacane-plugin-sdk = { path = "../../../crates/barbacane-plugin-sdk" }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
