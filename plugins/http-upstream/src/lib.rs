@@ -7,7 +7,8 @@
 //! - Configurable timeouts
 
 use barbacane_plugin_sdk::prelude::*;
-use serde::{Deserialize, Serialize};
+use base64::Engine;
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// HTTP upstream dispatcher configuration.
@@ -32,13 +33,17 @@ fn default_timeout() -> f64 {
     30.0
 }
 
-/// HTTP request for host_http_call.
-#[derive(Serialize)]
+/// HTTP request format for host_http_call.
+///
+/// Not `Serialize` — serialization is done manually in `dispatch()` to
+/// pre-encode the body to base64 and drop the raw bytes before building
+/// the JSON output.  This keeps peak WASM memory at ≈ body×2.7 instead
+/// of ≈ body×3.7 (raw + base64 + output all alive simultaneously).
+#[allow(dead_code)]
 struct HttpRequest {
     method: String,
     url: String,
     headers: BTreeMap<String, String>,
-    #[serde(with = "base64_body")]
     body: Option<Vec<u8>>,
     timeout_ms: Option<u64>,
 }
@@ -54,10 +59,22 @@ struct HttpResponse {
 impl HttpUpstreamDispatcher {
     /// Proxy the request to the upstream and return the response.
     pub fn dispatch(&mut self, req: Request) -> Response {
+        // Destructure to avoid cloning the body — saves ~body_size bytes of peak
+        // WASM memory which matters for large uploads (multi-MB).
+        let Request {
+            method,
+            path,
+            query,
+            headers: req_headers,
+            body,
+            client_ip: _,
+            path_params,
+        } = req;
+
         // Build the upstream path
         let upstream_path = match &self.path {
-            Some(template) => self.substitute_path_params(template, &req.path_params),
-            None => req.path.clone(),
+            Some(template) => self.substitute_path_params(template, &path_params),
+            None => path,
         };
 
         // Construct the full URL with query string
@@ -68,7 +85,7 @@ impl HttpUpstreamDispatcher {
         };
 
         // Forward query string from original request
-        let full_url = match &req.query {
+        let full_url = match &query {
             Some(qs) if !qs.is_empty() => format!("{}?{}", base_url, qs),
             _ => base_url,
         };
@@ -77,7 +94,7 @@ impl HttpUpstreamDispatcher {
         let mut headers: BTreeMap<String, String> = BTreeMap::new();
 
         // Forward incoming headers (filter hop-by-hop headers)
-        for (key, value) in &req.headers {
+        for (key, value) in &req_headers {
             let key_lower = key.to_lowercase();
             if !matches!(
                 key_lower.as_str(),
@@ -88,7 +105,7 @@ impl HttpUpstreamDispatcher {
         }
 
         // Add X-Forwarded headers
-        if let Some(host) = req.headers.get("host") {
+        if let Some(host) = req_headers.get("host") {
             headers.insert("x-forwarded-host".to_string(), host.clone());
         }
         // Detect protocol from upstream URL
@@ -99,24 +116,50 @@ impl HttpUpstreamDispatcher {
         };
         headers.insert("x-forwarded-proto".to_string(), proto.to_string());
 
-        // Build the HTTP request
-        let http_request = HttpRequest {
-            method: req.method.clone(),
-            url: full_url.clone(),
-            headers,
-            body: req.body.clone(),
-            timeout_ms: Some((self.timeout * 1000.0) as u64),
-        };
+        let timeout_ms = (self.timeout * 1000.0) as u64;
 
-        // Serialize request
-        let request_json = match serde_json::to_vec(&http_request) {
-            Ok(json) => json,
+        // Pre-encode body to base64 and drop raw bytes BEFORE building
+        // the JSON output buffer.  Peak memory during encode:
+        //   raw + base64 ≈ body × 2.33
+        // Peak memory during JSON serialization:
+        //   base64 + output ≈ body × 2.7
+        //
+        // We serialize field-by-field into a pre-allocated Vec to avoid:
+        // 1. serde_json::json!() intermediate Value tree (+body×1.33)
+        // 2. Vec doubling during output growth (transient +output_size)
+        // Without this, a 3MB upload reaches ~16MB and OOMs in WASM.
+        let body_b64: Option<String> = body.map(|raw| {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+            // raw dropped here — only the base64 string survives
+            encoded
+        });
+
+        // Pre-allocate output: base64 body dominates, add headroom for
+        // other fields and JSON framing.
+        let capacity = body_b64.as_ref().map_or(256, |s| s.len() + 512);
+        let mut buf = Vec::with_capacity(capacity);
+
+        let serialize_result: Result<(), serde_json::Error> = (|| {
+            use serde::ser::{SerializeMap, Serializer};
+            let mut ser = serde_json::Serializer::new(&mut buf);
+            let mut map = ser.serialize_map(Some(5))?;
+            map.serialize_entry("method", &method)?;
+            map.serialize_entry("url", &full_url)?;
+            map.serialize_entry("headers", &headers)?;
+            map.serialize_entry("body", &body_b64)?;
+            map.serialize_entry("timeout_ms", &timeout_ms)?;
+            map.end()
+        })();
+
+        let request_json = match serialize_result {
+            Ok(()) => buf,
             Err(e) => {
+                let msg = e.to_string();
                 return self.error_response(
                     500,
                     "Bad Gateway",
                     "failed to serialize request",
-                    &e.to_string(),
+                    &msg,
                 );
             }
         };

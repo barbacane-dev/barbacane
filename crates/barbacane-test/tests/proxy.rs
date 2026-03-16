@@ -838,6 +838,126 @@ paths:
     assert_eq!(body["received_bytes"], payload_len);
 }
 
+/// POST a ~3MB body through middleware + dispatch.
+///
+/// This is the near-limit regression test for WASM memory pressure in
+/// http-upstream. The peak memory budget inside the 16MB WASM instance
+/// during dispatch is (assuming body is moved, not cloned):
+///
+///   input_json  ≈ body × 1.37          (base64 overhead + JSON framing)
+///   deser_body  = body                  (decoded Vec<u8>)
+///   — input_json freed after deser —
+///   base64_tmp  ≈ body × 1.33          (re-encode for host_http_call)
+///   output_json ≈ body × 1.37          (serialized HttpRequest)
+///   peak        ≈ body + body×1.33 + body×1.37 ≈ body × 3.7
+///
+/// For 3MB: peak ≈ 11.1MB — fits in 16MB with ~5MB headroom.
+/// Before the move-not-clone fix an extra `body` copy pushed a 2.4MB
+/// upload to ~11.5MB peak which, with dlmalloc fragmentation, trapped.
+#[tokio::test]
+async fn test_3mb_body_through_middleware_to_upstream() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    let apikey_wasm = plugin_wasm("apikey-auth");
+    if !http_upstream_wasm.exists() || !apikey_wasm.exists() {
+        panic!(
+            "WASM plugins not found. Run `make plugins` first.\n  http-upstream: {}\n  apikey-auth: {}",
+            http_upstream_wasm.display(),
+            apikey_wasm.display()
+        );
+    }
+
+    // 3MB payload — exercises near-limit WASM memory budget
+    let large_payload: Vec<u8> = (0..3_000_000).map(|i| (i % 256) as u8).collect();
+    let payload_len = large_payload.len();
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"received_bytes": payload_len})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n  apikey-auth:\n    path: {}\n",
+        http_upstream_wasm.display(),
+        apikey_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Large Body 3MB Test
+  version: "1.0.0"
+
+paths:
+  /upload:
+    post:
+      operationId: uploadLarge3mb
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            header_name: x-api-key
+            keys:
+              test-key-123:
+                id: key-1
+                name: testuser
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          path: "/upload"
+          timeout: 30.0
+      responses:
+        "200":
+          description: OK
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    // Raise body-size limit to 4MB to allow the 3MB payload
+    let gateway = TestGateway::from_spec_with_args(
+        spec_path.to_str().unwrap(),
+        &["--max-body-size", "4194304"],
+    )
+    .await
+    .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/upload")
+        .header("content-type", "application/octet-stream")
+        .header("x-api-key", "test-key-123")
+        .body(large_payload)
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["received_bytes"], payload_len);
+}
+
 /// POST a large body directly to dispatcher (no middleware).
 /// Verifies the dispatch-only path handles large payloads without OOM.
 #[tokio::test]

@@ -7,6 +7,7 @@ name = "barbacane-http-upstream-dispatcher"
 version = "0.1.0"
 dependencies = [
  "barbacane-plugin-sdk",
+ "base64",
  "serde",
  "serde_json",
 ]
