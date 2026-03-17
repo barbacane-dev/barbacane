@@ -1101,6 +1101,7 @@ impl Gateway {
                 let response: Response<AnyBody> = self
                     .dispatch(
                         operation,
+                        &path,
                         params,
                         query_string,
                         &body_bytes,
@@ -1228,6 +1229,7 @@ impl Gateway {
     async fn dispatch(
         &self,
         operation: &CompiledOperation,
+        request_path: &str,
         params: Vec<(String, String)>,
         query_string: Option<String>,
         request_body: &[u8],
@@ -1252,7 +1254,7 @@ impl Gateway {
 
         let plugin_request = barbacane_wasm::Request {
             method: operation.method.clone(),
-            path: operation.path.clone(),
+            path: request_path.to_string(),
             query: query_string,
             headers: headers_btree,
             body: None, // Body travels via side-channel

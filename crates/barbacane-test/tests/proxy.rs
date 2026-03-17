@@ -958,6 +958,194 @@ paths:
     assert_eq!(body["received_bytes"], payload_len);
 }
 
+/// GET /items/{id} through http-upstream with NO explicit `path` config.
+/// Verifies that the upstream receives the resolved path (`/items/42`)
+/// rather than the OpenAPI template path (`/items/{id}`).
+#[tokio::test]
+async fn test_http_upstream_path_params_resolved_without_path_config() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    if !http_upstream_wasm.exists() {
+        panic!(
+            "WASM plugin not found. Run `make plugins` first.\n  http-upstream: {}",
+            http_upstream_wasm.display(),
+        );
+    }
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/items/42"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"id": 42, "name": "Widget"})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n",
+        http_upstream_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    // No `path:` in http-upstream config — the plugin should default to req.path,
+    // which must be the resolved path, not the OpenAPI template.
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Path Params Resolved Test
+  version: "1.0.0"
+
+paths:
+  /items/{{id}}:
+    get:
+      operationId: getItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/items/42").await.unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200 (upstream should receive /items/42, not /items/{{id}}). Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["id"], 42);
+    assert_eq!(body["name"], "Widget");
+}
+
+/// GET /users/{id}/posts/{postId} through apikey-auth middleware + http-upstream
+/// with NO explicit `path` config. Verifies path params are resolved through
+/// the full middleware → dispatch pipeline, not just direct dispatch.
+#[tokio::test]
+async fn test_http_upstream_path_params_resolved_through_middleware() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_upstream_wasm = plugin_wasm("http-upstream");
+    let apikey_wasm = plugin_wasm("apikey-auth");
+    if !http_upstream_wasm.exists() || !apikey_wasm.exists() {
+        panic!(
+            "WASM plugins not found. Run `make plugins` first.\n  http-upstream: {}\n  apikey-auth: {}",
+            http_upstream_wasm.display(),
+            apikey_wasm.display()
+        );
+    }
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/7/posts/99"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"userId": 7, "postId": 99, "title": "Hello"})),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let manifest = format!(
+        "plugins:\n  http-upstream:\n    path: {}\n  apikey-auth:\n    path: {}\n",
+        http_upstream_wasm.display(),
+        apikey_wasm.display(),
+    );
+    std::fs::write(temp_dir.path().join("barbacane.yaml"), manifest).unwrap();
+
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: Path Params Through Middleware Test
+  version: "1.0.0"
+
+paths:
+  /users/{{userId}}/posts/{{postId}}:
+    get:
+      operationId: getUserPost
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: postId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            header_name: x-api-key
+            keys:
+              test-key-123:
+                id: key-1
+                name: testuser
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{upstream}"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+        "401":
+          description: Unauthorized
+"#,
+        upstream = mock_server.uri(),
+    );
+    let spec_path = temp_dir.path().join("test.yaml");
+    std::fs::write(&spec_path, spec).unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/users/7/posts/99")
+        .header("x-api-key", "test-key-123")
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "expected 200 (upstream should receive /users/7/posts/99). Body:\n{body_text}"
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(body["userId"], 7);
+    assert_eq!(body["postId"], 99);
+    assert_eq!(body["title"], "Hello");
+}
+
 /// POST a large body directly to dispatcher (no middleware).
 /// Verifies the dispatch-only path handles large payloads without OOM.
 #[tokio::test]
