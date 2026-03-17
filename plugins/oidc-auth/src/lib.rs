@@ -48,6 +48,19 @@ pub struct OidcAuth {
     #[serde(default)]
     allow_query_token: bool,
 
+    /// Custom JWT claim to extract consumer groups from.
+    /// Supports JSON Pointer (RFC 6901) for nested claims (e.g., "/realm_access/roles").
+    /// A plain name like "roles" is treated as "/roles".
+    /// When set, this claim REPLACES scope-based groups in `x-auth-consumer-groups`.
+    #[serde(default)]
+    groups_claim: Option<String>,
+
+    /// Separator for splitting a string-valued groups claim into multiple groups.
+    /// Only used when the claim value is a string (not a JSON array).
+    /// If omitted and the claim is a string, it is treated as a single group.
+    #[serde(default)]
+    groups_claim_separator: Option<String>,
+
     /// Cached OIDC discovery document.
     #[serde(skip)]
     discovery: Option<DiscoveryDoc>,
@@ -76,10 +89,7 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(
-                &input[i + 1..i + 3],
-                16,
-            ) {
+            if let Ok(byte) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
                 out.push(byte);
                 i += 3;
                 continue;
@@ -201,6 +211,9 @@ struct JwtClaims {
     jti: Option<String>,
     #[serde(default)]
     scope: Option<String>,
+    /// All non-standard claims (for groups_claim pointer traversal).
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// Audience can be a single string or array of strings.
@@ -325,7 +338,17 @@ impl OidcAuth {
                     modified_req
                         .headers
                         .insert("x-auth-scope".to_string(), scope.clone());
-                    // Convert space-separated scopes to comma-separated groups
+                }
+
+                if self.groups_claim.is_some() {
+                    if let Ok(claims_value) = serde_json::to_value(&claims) {
+                        if let Some(groups) = self.extract_groups_from_claim(&claims_value) {
+                            modified_req
+                                .headers
+                                .insert("x-auth-consumer-groups".to_string(), groups);
+                        }
+                    }
+                } else if let Some(scope) = &claims.scope {
                     let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
                     if !groups.is_empty() {
                         modified_req
@@ -475,8 +498,7 @@ impl OidcAuth {
             return Err(OidcError::DiscoveryFailed(format!("status {}", status)));
         }
 
-        let body =
-            body.ok_or_else(|| OidcError::DiscoveryFailed("empty response".to_string()))?;
+        let body = body.ok_or_else(|| OidcError::DiscoveryFailed("empty response".to_string()))?;
 
         let doc: DiscoveryResponse = serde_json::from_slice(&body)
             .map_err(|e| OidcError::DiscoveryFailed(format!("invalid JSON: {}", e)))?;
@@ -518,8 +540,7 @@ impl OidcAuth {
             return Err(OidcError::JwksFetchFailed(format!("status {}", status)));
         }
 
-        let body =
-            body.ok_or_else(|| OidcError::JwksFetchFailed("empty response".to_string()))?;
+        let body = body.ok_or_else(|| OidcError::JwksFetchFailed("empty response".to_string()))?;
 
         let doc: JwksDocument = serde_json::from_slice(&body)
             .map_err(|e| OidcError::JwksFetchFailed(format!("invalid JSON: {}", e)))?;
@@ -661,6 +682,54 @@ impl OidcAuth {
         }
 
         Ok(())
+    }
+
+    /// Extract consumer groups from a custom JWT claim.
+    ///
+    /// The claim path is resolved as a JSON Pointer (RFC 6901). A plain name
+    /// like "roles" is normalized to "/roles". Supports both JSON arrays
+    /// (`["admin", "editor"]`) and strings (split by `groups_claim_separator`
+    /// if configured, otherwise treated as a single group).
+    fn extract_groups_from_claim(&self, claims_value: &serde_json::Value) -> Option<String> {
+        let claim_path = self.groups_claim.as_ref()?;
+
+        let pointer = if claim_path.starts_with('/') {
+            claim_path.clone()
+        } else {
+            format!("/{}", claim_path)
+        };
+
+        let value = claims_value.pointer(&pointer)?;
+
+        match value {
+            serde_json::Value::Array(arr) => {
+                let groups: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+                if groups.is_empty() {
+                    None
+                } else {
+                    Some(groups.join(","))
+                }
+            }
+            serde_json::Value::String(s) => {
+                if let Some(sep) = &self.groups_claim_separator {
+                    let groups: Vec<&str> = s
+                        .split(sep.as_str())
+                        .map(|g| g.trim())
+                        .filter(|g| !g.is_empty())
+                        .collect();
+                    if groups.is_empty() {
+                        None
+                    } else {
+                        Some(groups.join(","))
+                    }
+                } else if s.is_empty() {
+                    None
+                } else {
+                    Some(s.clone())
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Make an HTTP GET request via host_http_call.
@@ -818,6 +887,8 @@ mod tests {
             issuer_override: None,
             timeout: 5.0,
             allow_query_token: false,
+            groups_claim: None,
+            groups_claim_separator: None,
             discovery: None,
             jwks_cache: None,
         }
@@ -1117,6 +1188,7 @@ mod tests {
             iat: Some(500),
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         assert!(config.validate_claims(&claims).is_ok());
     }
@@ -1135,6 +1207,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         assert!(matches!(
             config.validate_claims(&claims),
@@ -1156,6 +1229,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         assert!(matches!(
             config.validate_claims(&claims),
@@ -1183,6 +1257,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         assert!(config.validate_claims(&claims).is_ok());
     }
@@ -1205,6 +1280,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         assert!(matches!(
             config.validate_claims(&claims),
@@ -1227,6 +1303,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         assert!(matches!(
             config.validate_claims(&claims),
@@ -1248,6 +1325,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         // 2050 > 2000 but 2050 <= 2000 + 60 (clock_skew) => still valid
         assert!(config.validate_claims(&claims).is_ok());
@@ -1267,6 +1345,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: Some("read write admin".to_string()),
+            extra: BTreeMap::new(),
         };
         assert!(config.check_scopes(&claims, "read write").is_ok());
     }
@@ -1283,6 +1362,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: Some("read".to_string()),
+            extra: BTreeMap::new(),
         };
         assert!(matches!(
             config.check_scopes(&claims, "read write"),
@@ -1302,6 +1382,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
         assert!(matches!(
             config.check_scopes(&claims, "read"),
@@ -1531,6 +1612,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: None,
+            extra: BTreeMap::new(),
         };
 
         let mut headers = BTreeMap::new();
@@ -1554,6 +1636,7 @@ mod tests {
             iat: None,
             jti: None,
             scope: Some("read write admin".to_string()),
+            extra: BTreeMap::new(),
         };
 
         let mut headers = BTreeMap::new();
@@ -1573,9 +1656,155 @@ mod tests {
             headers.get("x-auth-consumer-groups").unwrap(),
             "read,write,admin"
         );
+        assert_eq!(headers.get("x-auth-scope").unwrap(), "read write admin");
+    }
+
+    // --- groups_claim tests ---
+    // These test extract_groups_from_claim and the on_request branching logic
+    // by simulating the header insertion after successful validation.
+
+    fn create_test_config_with_groups_claim(
+        groups_claim: Option<&str>,
+        groups_claim_separator: Option<&str>,
+    ) -> OidcAuth {
+        OidcAuth {
+            issuer_url: "https://auth.example.com".to_string(),
+            audience: None,
+            required_scopes: None,
+            clock_skew_seconds: 60,
+            jwks_refresh_seconds: 300,
+            issuer_override: None,
+            timeout: 5.0,
+            allow_query_token: false,
+            groups_claim: groups_claim.map(|s| s.to_string()),
+            groups_claim_separator: groups_claim_separator.map(|s| s.to_string()),
+            discovery: None,
+            jwks_cache: None,
+        }
+    }
+
+    #[test]
+    fn groups_claim_from_array() {
+        let config = create_test_config_with_groups_claim(Some("roles"), None);
+        let claims_value = serde_json::json!({"sub": "user1", "roles": ["admin", "editor"]});
+        let groups = config.extract_groups_from_claim(&claims_value);
+        assert_eq!(groups.as_deref(), Some("admin,editor"));
+    }
+
+    #[test]
+    fn groups_claim_nested_pointer() {
+        let config = create_test_config_with_groups_claim(Some("/realm_access/roles"), None);
+        let claims_value =
+            serde_json::json!({"sub": "user1", "realm_access": {"roles": ["admin"]}});
+        let groups = config.extract_groups_from_claim(&claims_value);
+        assert_eq!(groups.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn groups_claim_string_with_separator() {
+        let config = create_test_config_with_groups_claim(Some("roles"), Some("|"));
+        let claims_value = serde_json::json!({"sub": "user1", "roles": "admin|editor"});
+        let groups = config.extract_groups_from_claim(&claims_value);
+        assert_eq!(groups.as_deref(), Some("admin,editor"));
+    }
+
+    #[test]
+    fn groups_claim_string_no_separator() {
+        let config = create_test_config_with_groups_claim(Some("roles"), None);
+        let claims_value = serde_json::json!({"sub": "user1", "roles": "admin"});
+        let groups = config.extract_groups_from_claim(&claims_value);
+        assert_eq!(groups.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn groups_claim_replaces_scope_groups() {
+        let config = create_test_config_with_groups_claim(Some("roles"), None);
+        let claims = JwtClaims {
+            sub: Some("user1".to_string()),
+            iss: None,
+            aud: None,
+            exp: None,
+            nbf: None,
+            iat: None,
+            jti: None,
+            scope: Some("read write".to_string()),
+            extra: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "roles".to_string(),
+                    serde_json::json!(["admin", "moderator"]),
+                );
+                m
+            },
+        };
+
+        let mut headers = BTreeMap::new();
+
+        // x-auth-scope always from scope claim
+        if let Some(scope) = &claims.scope {
+            headers.insert("x-auth-scope".to_string(), scope.clone());
+        }
+
+        // groups_claim replaces scope-based groups
+        if config.groups_claim.is_some() {
+            if let Ok(claims_value) = serde_json::to_value(&claims) {
+                if let Some(groups) = config.extract_groups_from_claim(&claims_value) {
+                    headers.insert("x-auth-consumer-groups".to_string(), groups);
+                }
+            }
+        }
+
+        assert_eq!(headers.get("x-auth-scope").unwrap(), "read write");
         assert_eq!(
-            headers.get("x-auth-scope").unwrap(),
-            "read write admin"
+            headers.get("x-auth-consumer-groups").unwrap(),
+            "admin,moderator"
         );
+    }
+
+    #[test]
+    fn groups_claim_missing_claim_no_header() {
+        let config = create_test_config_with_groups_claim(Some("roles"), None);
+        let claims_value = serde_json::json!({"sub": "user1", "scope": "read"});
+        let groups = config.extract_groups_from_claim(&claims_value);
+        assert!(groups.is_none());
+    }
+
+    #[test]
+    fn no_groups_claim_falls_back_to_scope() {
+        let config = create_test_config_with_groups_claim(None, None);
+        let claims = JwtClaims {
+            sub: Some("user1".to_string()),
+            iss: None,
+            aud: None,
+            exp: None,
+            nbf: None,
+            iat: None,
+            jti: None,
+            scope: Some("read write".to_string()),
+            extra: BTreeMap::new(),
+        };
+
+        let mut headers = BTreeMap::new();
+
+        if let Some(scope) = &claims.scope {
+            headers.insert("x-auth-scope".to_string(), scope.clone());
+        }
+
+        // No groups_claim — fall back to scope-based groups
+        if config.groups_claim.is_some() {
+            if let Ok(claims_value) = serde_json::to_value(&claims) {
+                if let Some(groups) = config.extract_groups_from_claim(&claims_value) {
+                    headers.insert("x-auth-consumer-groups".to_string(), groups);
+                }
+            }
+        } else if let Some(scope) = &claims.scope {
+            let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
+            if !groups.is_empty() {
+                headers.insert("x-auth-consumer-groups".to_string(), groups);
+            }
+        }
+
+        assert_eq!(headers.get("x-auth-scope").unwrap(), "read write");
+        assert_eq!(headers.get("x-auth-consumer-groups").unwrap(), "read,write");
     }
 }

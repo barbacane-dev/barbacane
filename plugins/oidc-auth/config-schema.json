@@ -46,6 +46,14 @@
       "type": "boolean",
       "description": "Allow token extraction from the access_token query parameter (RFC 6750 §2.3). Disabled by default — tokens in URLs risk leaking via logs and referer headers.",
       "default": false
+    },
+    "groups_claim": {
+      "type": "string",
+      "description": "JWT claim to extract consumer groups from, replacing scope-based groups. Supports JSON Pointer (RFC 6901) for nested claims (e.g., \"/realm_access/roles\"). A plain name like \"roles\" is treated as \"/roles\"."
+    },
+    "groups_claim_separator": {
+      "type": "string",
+      "description": "Separator for splitting a string-valued groups claim into multiple groups. Only used when the claim value is a string, not a JSON array. If omitted, a string claim is treated as a single group."
     }
   },
   "additionalProperties": false

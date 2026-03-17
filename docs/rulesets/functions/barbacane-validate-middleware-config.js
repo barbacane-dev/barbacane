@@ -167,6 +167,8 @@ const schemas = {
       jwks_refresh_seconds: { type: "integer", minimum: 10 },
       timeout: { type: "number", minimum: 0 },
       allow_query_token: { type: "boolean" },
+      groups_claim: { type: "string" },
+      groups_claim_separator: { type: "string" },
     },
     additionalProperties: false,
   },
