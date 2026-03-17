@@ -452,6 +452,10 @@ enum Commands {
         /// Build source identifier for provenance (e.g., "ci/github-actions").
         #[arg(long)]
         provenance_source: Option<String>,
+
+        /// Disable plugin download cache (force re-download of remote plugins).
+        #[arg(long)]
+        no_cache: bool,
     },
 
     /// Validate OpenAPI spec(s) without compiling.
@@ -3011,6 +3015,7 @@ fn run_compile(
     allow_plaintext: bool,
     provenance_commit: Option<String>,
     provenance_source: Option<String>,
+    no_cache: bool,
 ) -> ExitCode {
     let spec_paths: Vec<&Path> = specs.iter().map(Path::new).collect();
     let output_path = Path::new(output);
@@ -3027,6 +3032,7 @@ fn run_compile(
         allow_plaintext,
         provenance_commit,
         provenance_source,
+        no_cache,
         ..Default::default()
     };
 
@@ -3635,6 +3641,7 @@ async fn main() -> ExitCode {
             allow_plaintext,
             provenance_commit,
             provenance_source,
+            no_cache,
         } => run_compile(
             &spec,
             &output,
@@ -3642,6 +3649,7 @@ async fn main() -> ExitCode {
             allow_plaintext,
             provenance_commit,
             provenance_source,
+            no_cache,
         ),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
         Commands::Init {

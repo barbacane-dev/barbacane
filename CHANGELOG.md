@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **compiler**: remote plugin loading — `url:` sources in `barbacane.yaml` now download WASM plugins over HTTPS at compile time (ADR-0029)
+- **compiler**: optional `sha256` field on URL plugin sources for integrity verification
+- **compiler**: local plugin download cache at `~/.barbacane/cache/plugins/` with checksum-based invalidation
+- **compiler**: automatic `plugin.toml` metadata discovery from sibling URLs
+- **cli**: `--no-cache` flag on `barbacane compile` to force re-download of remote plugins
+- **ci**: release workflow now builds and publishes all 27 plugin `.wasm` files + checksums as GitHub release assets
+
 ## [0.4.1] - 2026-03-17
 
 ### Fixed

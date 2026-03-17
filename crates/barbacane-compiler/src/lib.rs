@@ -4,6 +4,8 @@
 //! and produces a self-contained archive for the data plane.
 
 pub mod artifact;
+pub(crate) mod cache;
+pub(crate) mod download;
 pub mod error;
 pub mod manifest;
 pub mod spec_parser;

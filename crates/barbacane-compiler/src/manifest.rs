@@ -6,10 +6,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
+use crate::cache::PluginCache;
+use crate::download;
+use crate::error::CompileError;
 use crate::spec_parser::ApiSpec;
 use serde::{Deserialize, Serialize};
-
-use crate::error::CompileError;
 
 /// Minimal plugin.toml structure for extracting metadata.
 #[derive(Debug, Deserialize)]
@@ -39,16 +42,21 @@ struct PluginMetadata {
     body_access: bool,
 }
 
-/// Try to read plugin metadata from plugin.toml in the same directory as the WASM file.
-fn read_plugin_metadata(wasm_path: &Path) -> Option<PluginMetadata> {
-    let plugin_toml_path = wasm_path.parent()?.join("plugin.toml");
-    let content = std::fs::read_to_string(&plugin_toml_path).ok()?;
-    let parsed: PluginToml = toml::from_str(&content).ok()?;
+/// Parse plugin metadata from TOML content.
+fn parse_plugin_metadata(content: &str) -> Option<PluginMetadata> {
+    let parsed: PluginToml = toml::from_str(content).ok()?;
     Some(PluginMetadata {
         version: parsed.plugin.version,
         plugin_type: parsed.plugin.plugin_type,
         body_access: parsed.capabilities.body_access,
     })
+}
+
+/// Try to read plugin metadata from plugin.toml in the same directory as the WASM file.
+fn read_plugin_metadata(wasm_path: &Path) -> Option<PluginMetadata> {
+    let plugin_toml_path = wasm_path.parent()?.join("plugin.toml");
+    let content = std::fs::read_to_string(&plugin_toml_path).ok()?;
+    parse_plugin_metadata(&content)
 }
 
 /// Resolve a WASM path from a plugin source, relative to a base path.
@@ -65,25 +73,22 @@ fn resolve_plugin(
     name: &str,
     source: &PluginSource,
     base_path: &Path,
+    no_cache: bool,
 ) -> Result<ResolvedPlugin, CompileError> {
-    let wasm_bytes = match source {
+    let (wasm_bytes, plugin_toml_content) = match source {
         PluginSource::Path(path_source) => {
             let wasm_path = resolve_wasm_path(path_source, base_path);
-            std::fs::read(&wasm_path).map_err(|e| {
+            let bytes = std::fs::read(&wasm_path).map_err(|e| {
                 CompileError::PluginResolution(format!(
                     "failed to read plugin '{}' from {}: {}",
                     name,
                     wasm_path.display(),
                     e
                 ))
-            })?
+            })?;
+            (bytes, None)
         }
-        PluginSource::Url(url_source) => {
-            return Err(CompileError::PluginResolution(format!(
-                "URL plugin sources not yet implemented: {} -> {}",
-                name, url_source.url
-            )));
-        }
+        PluginSource::Url(url_source) => resolve_url_plugin(name, url_source, no_cache)?,
     };
 
     // Validate WASM magic number
@@ -103,7 +108,9 @@ fn resolve_plugin(
             let wasm_path = resolve_wasm_path(path_source, base_path);
             read_plugin_metadata(&wasm_path)
         }
-        PluginSource::Url(_) => None,
+        PluginSource::Url(_) => plugin_toml_content
+            .as_deref()
+            .and_then(parse_plugin_metadata),
     };
 
     Ok(ResolvedPlugin {
@@ -114,6 +121,54 @@ fn resolve_plugin(
         plugin_type: metadata.as_ref().map(|m| m.plugin_type.clone()),
         body_access: metadata.as_ref().is_some_and(|m| m.body_access),
     })
+}
+
+/// Resolve a plugin from a remote URL, using the cache when possible.
+fn resolve_url_plugin(
+    name: &str,
+    url_source: &UrlSource,
+    no_cache: bool,
+) -> Result<(Vec<u8>, Option<String>), CompileError> {
+    let url = &url_source.url;
+
+    if !url.starts_with("https://") {
+        return Err(CompileError::PluginResolution(format!(
+            "plugin '{name}' URL must use HTTPS: {url}"
+        )));
+    }
+
+    // Check cache (unless --no-cache)
+    if !no_cache {
+        let cache = PluginCache::new()?;
+        if let Some(cached) = cache.get(url, url_source.sha256.as_deref()) {
+            tracing::info!(name, url, "using cached plugin");
+            return Ok((cached.wasm_bytes, cached.plugin_toml));
+        }
+    }
+
+    // Download
+    let downloaded = download::download_plugin(url)?;
+
+    // Verify checksum if provided
+    if let Some(expected) = &url_source.sha256 {
+        let actual = hex::encode(Sha256::digest(&downloaded.wasm_bytes));
+        if actual != *expected {
+            return Err(CompileError::PluginResolution(format!(
+                "plugin '{name}' checksum mismatch: expected {expected}, got {actual}"
+            )));
+        }
+    }
+
+    // Store in cache
+    let cache = PluginCache::new()?;
+    cache.put(
+        url,
+        &downloaded.wasm_bytes,
+        downloaded.plugin_toml.as_deref(),
+    )?;
+    tracing::info!(name, url, "cached remote plugin");
+
+    Ok((downloaded.wasm_bytes, downloaded.plugin_toml))
 }
 
 /// A project manifest (`barbacane.yaml`).
@@ -148,6 +203,9 @@ pub struct PathSource {
 pub struct UrlSource {
     /// HTTPS URL to the .wasm file.
     pub url: String,
+    /// Optional SHA-256 checksum for integrity verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 impl PluginSource {
@@ -207,10 +265,15 @@ impl ProjectManifest {
     /// Resolve all plugins: load WASM bytes from their sources.
     ///
     /// The `base_path` is used to resolve relative paths in `path:` sources.
-    pub fn resolve_plugins(&self, base_path: &Path) -> Result<Vec<ResolvedPlugin>, CompileError> {
+    /// If `no_cache` is true, remote plugins are always re-downloaded.
+    pub fn resolve_plugins(
+        &self,
+        base_path: &Path,
+        no_cache: bool,
+    ) -> Result<Vec<ResolvedPlugin>, CompileError> {
         self.plugins
             .iter()
-            .map(|(name, source)| resolve_plugin(name, source, base_path))
+            .map(|(name, source)| resolve_plugin(name, source, base_path, no_cache))
             .collect()
     }
 
@@ -236,10 +299,12 @@ impl ProjectManifest {
     /// Resolve only the plugins that are actually used in the specs.
     ///
     /// This is more efficient than `resolve_plugins` when not all declared plugins are used.
+    /// If `no_cache` is true, remote plugins are always re-downloaded.
     pub fn resolve_used_plugins(
         &self,
         specs: &[ApiSpec],
         base_path: &Path,
+        no_cache: bool,
     ) -> Result<Vec<ResolvedPlugin>, CompileError> {
         self.validate_specs(specs)?;
 
@@ -251,7 +316,7 @@ impl ProjectManifest {
                 Some(s) => s,
                 None => continue, // Already validated, shouldn't happen
             };
-            resolved.push(resolve_plugin(&name, source, base_path)?);
+            resolved.push(resolve_plugin(&name, source, base_path, no_cache)?);
         }
 
         Ok(resolved)
@@ -343,9 +408,38 @@ plugins:
         assert!(manifest.has_plugin("jwt-auth"));
         if let PluginSource::Url(u) = &manifest.plugins["jwt-auth"] {
             assert!(u.url.starts_with("https://"));
+            assert!(u.sha256.is_none());
         } else {
             panic!("Expected URL source");
         }
+    }
+
+    #[test]
+    fn parse_manifest_with_url_and_sha256() {
+        let content = r#"
+plugins:
+  jwt-auth:
+    url: https://plugins.barbacane.io/jwt-auth/1.0.0/jwt-auth.wasm
+    sha256: abc123def456
+"#;
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+
+        if let PluginSource::Url(u) = &manifest.plugins["jwt-auth"] {
+            assert_eq!(u.sha256.as_deref(), Some("abc123def456"));
+        } else {
+            panic!("Expected URL source");
+        }
+    }
+
+    #[test]
+    fn reject_http_url_in_resolve() {
+        let source = PluginSource::Url(UrlSource {
+            url: "http://example.com/plugin.wasm".to_string(),
+            sha256: None,
+        });
+        let result = resolve_plugin("test", &source, Path::new("."), false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("HTTPS"));
     }
 
     #[test]
@@ -371,7 +465,7 @@ plugins:
 "#;
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
 
-        let resolved = manifest.resolve_plugins(temp.path()).unwrap();
+        let resolved = manifest.resolve_plugins(temp.path(), false).unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, "mock");
         assert_eq!(resolved[0].wasm_bytes, wasm_content);
@@ -394,7 +488,7 @@ plugins:
 "#;
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
 
-        let result = manifest.resolve_plugins(temp.path());
+        let result = manifest.resolve_plugins(temp.path(), false);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -413,7 +507,7 @@ plugins:
 "#;
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
 
-        let result = manifest.resolve_plugins(temp.path());
+        let result = manifest.resolve_plugins(temp.path(), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("failed to read"));
     }
@@ -635,7 +729,9 @@ plugins:
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
         let spec = make_spec_using_plugin("mock");
 
-        let resolved = manifest.resolve_used_plugins(&[spec], temp.path()).unwrap();
+        let resolved = manifest
+            .resolve_used_plugins(&[spec], temp.path(), false)
+            .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, "mock");
         assert_eq!(resolved[0].wasm_bytes, wasm_content);
@@ -659,7 +755,9 @@ plugins:
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
         let spec = make_spec_using_plugin("mock");
 
-        let resolved = manifest.resolve_used_plugins(&[spec], temp.path()).unwrap();
+        let resolved = manifest
+            .resolve_used_plugins(&[spec], temp.path(), false)
+            .unwrap();
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, "mock");
     }
@@ -679,7 +777,7 @@ plugins:
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
         let spec = make_spec_using_plugin("bad");
 
-        let result = manifest.resolve_used_plugins(&[spec], temp.path());
+        let result = manifest.resolve_used_plugins(&[spec], temp.path(), false);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -699,7 +797,7 @@ plugins:
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
         let spec = make_spec_using_plugin("missing");
 
-        let result = manifest.resolve_used_plugins(&[spec], temp.path());
+        let result = manifest.resolve_used_plugins(&[spec], temp.path(), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("failed to read"));
     }
@@ -712,7 +810,7 @@ plugins:
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
         let spec = make_spec_using_plugin("unknown");
 
-        let result = manifest.resolve_used_plugins(&[spec], temp.path());
+        let result = manifest.resolve_used_plugins(&[spec], temp.path(), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("E1040"));
     }
@@ -740,7 +838,7 @@ plugins:
 "#;
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
 
-        let resolved = manifest.resolve_plugins(temp.path()).unwrap();
+        let resolved = manifest.resolve_plugins(temp.path(), false).unwrap();
         assert_eq!(resolved[0].version, Some("1.2.3".to_string()));
         assert_eq!(resolved[0].plugin_type, Some("dispatcher".to_string()));
     }
@@ -768,7 +866,9 @@ plugins:
         let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
         let spec = make_spec_using_plugin("mock");
 
-        let resolved = manifest.resolve_used_plugins(&[spec], temp.path()).unwrap();
+        let resolved = manifest
+            .resolve_used_plugins(&[spec], temp.path(), false)
+            .unwrap();
         assert_eq!(resolved[0].version, Some("2.0.0".to_string()));
         assert_eq!(resolved[0].plugin_type, Some("middleware".to_string()));
     }

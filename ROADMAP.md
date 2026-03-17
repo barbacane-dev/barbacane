@@ -116,7 +116,7 @@ Near-term items ready to be picked up:
 |---------|-------------|----------|
 | Rollback support | One-click rollback to previous artifact version | P1 |
 | Artifact signing | GPG/private-key signing + verification on load | P2 |
-| URL plugin source | Load WASM plugins from `url:` in manifests (in addition to `path:`) | P2 |
+| ~~URL plugin source~~ | ~~Load WASM plugins from `url:` in manifests (in addition to `path:`)~~ — **done** (ADR-0029) | ~~P2~~ |
 | ~~Admin introspection endpoints~~ | ~~Dedicated admin port with `/health`, `/metrics`, `/provenance`~~ — **done** (ADR-0022) | ~~P3~~ |
 | Data plane groups | Deploy to specific subsets of data planes | P2 |
 | Audit log | Track all spec/artifact/deployment changes | P2 |

@@ -20,12 +20,14 @@ Standard Rust testing via `cargo test`. Every crate in the workspace has unit te
 
 | Crate | What is tested |
 |-------|----------------|
-| `barbacane-spec-parser` | OpenAPI/AsyncAPI parsing, `x-barbacane-*` extension extraction, `$ref` resolution |
-| `barbacane-compiler` | Routing trie generation, schema compilation, middleware chain resolution, plugin config validation |
-| `barbacane-validator` | JSON Schema validation for all supported keywords, edge cases (nullable, oneOf, format) |
-| `barbacane-router` | Prefix-trie path matching, parameter extraction, method filtering, static-vs-param precedence |
-| `barbacane-wasm-host` | Plugin loading, host function contracts, sandbox enforcement (memory limits, time limits) |
+| `barbacane-compiler` | OpenAPI/AsyncAPI parsing, `x-barbacane-*` extension extraction, `$ref` resolution, routing trie generation, schema compilation, middleware chain resolution, plugin config validation, remote plugin download/cache |
+| `barbacane-wasm` | Plugin loading, host function contracts, sandbox enforcement (memory limits, time limits), side-channel body passing |
 | `barbacane-plugin-sdk` | Macro expansion, serialization, Action type handling |
+| `barbacane-plugin-macros` | Proc macro code generation for `#[barbacane_middleware]` and `#[barbacane_dispatcher]` |
+| `barbacane-telemetry` | Prometheus metrics, tracing setup |
+| `barbacane-sigv4` | AWS SigV4 request signing |
+| `barbacane-control` | Control plane API, database operations, plugin registry |
+| `barbacane` | CLI commands, gateway server, router, request validation |
 
 ### 2.2 Integration tests
 
@@ -227,7 +229,7 @@ Publish artifacts                 (container images, binary releases)
 
 | Requirement | Details |
 |-------------|---------|
-| Rust toolchain | Stable + `wasm32-wasip1` target |
+| Rust toolchain | Stable + `wasm32-unknown-unknown` target |
 | `wasmtime` | For WASM tests |
 | PostgreSQL | For control plane integration tests |
 | No external services | All dispatch tests use `mock` dispatcher |

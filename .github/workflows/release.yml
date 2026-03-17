@@ -451,10 +451,73 @@ jobs:
           echo ""
           echo "All crates published successfully!"
 
+  # Build WASM plugins and collect artifacts for release
+  build-plugins:
+    name: Build Plugins
+    needs: [validate-version, validate-changelog]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-plugins-${{ hashFiles('plugins/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-plugins-
+
+      - name: Build all plugins
+        run: |
+          mkdir -p dist/plugins
+          for plugin_dir in plugins/*/; do
+            if [ -f "$plugin_dir/Cargo.toml" ]; then
+              name=$(basename "$plugin_dir")
+              echo "::group::Building $name"
+              (cd "$plugin_dir" && cargo build --release --target wasm32-unknown-unknown)
+
+              # Find the .wasm output (exclude deps)
+              wasm_file=$(ls "$plugin_dir/target/wasm32-unknown-unknown/release/"*.wasm 2>/dev/null | grep -v deps | head -1)
+              if [ -n "$wasm_file" ]; then
+                cp "$wasm_file" "dist/plugins/$name.wasm"
+                echo "  -> $name.wasm ($(du -h "dist/plugins/$name.wasm" | cut -f1))"
+              else
+                echo "::warning::No .wasm output found for $name"
+              fi
+
+              # Copy plugin.toml if present
+              if [ -f "$plugin_dir/plugin.toml" ]; then
+                cp "$plugin_dir/plugin.toml" "dist/plugins/$name.plugin.toml"
+              fi
+
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Generate plugin checksums
+        run: |
+          cd dist/plugins
+          sha256sum *.wasm > plugin-checksums.txt
+          cat plugin-checksums.txt
+
+      - name: Upload plugin artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugins
+          path: dist/plugins/
+          retention-days: 1
+
   # Create GitHub Release with all artifacts
   create-release:
     name: Create Release
-    needs: [build-binaries, create-manifests, scan-containers, publish-crates]
+    needs: [build-binaries, build-plugins, create-manifests, scan-containers, publish-crates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -465,17 +528,36 @@ jobs:
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v8
         with:
-          path: artifacts
+          path: artifacts/binaries
           pattern: binaries-*
           merge-multiple: true
 
+      - name: Download plugin artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: plugins
+          path: artifacts/plugins
+
+      - name: Prepare release artifacts
+        run: |
+          mkdir -p artifacts/release
+
+          # Binaries
+          cp artifacts/binaries/* artifacts/release/
+
+          # Plugins (.wasm and .plugin.toml files)
+          cp artifacts/plugins/*.wasm artifacts/release/
+          cp artifacts/plugins/*.plugin.toml artifacts/release/
+          cp artifacts/plugins/plugin-checksums.txt artifacts/release/
+
       - name: Generate checksums
         run: |
-          cd artifacts
-          sha256sum * > checksums.txt
+          cd artifacts/release
+          # Checksums for binaries only (plugins have their own file)
+          sha256sum barbacane-* barbacane-control-* > checksums.txt
           cat checksums.txt
 
       - name: Extract release notes from changelog
@@ -496,6 +578,6 @@ jobs:
           name: Barbacane v${{ steps.tag.outputs.version }}
           body_path: release-notes.md
           files: |
-            artifacts/*
+            artifacts/release/*
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.version, '-') }}

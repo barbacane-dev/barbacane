@@ -126,6 +126,7 @@ barbacane compile --spec <FILES>... --manifest <PATH> --output <PATH>
 | `--allow-plaintext` | No | `false` | Allow `http://` upstream URLs during compilation |
 | `--provenance-commit` | No | - | Git commit SHA to embed in artifact provenance metadata |
 | `--provenance-source` | No | - | Build source identifier (e.g., `ci/github-actions`) to embed in artifact provenance |
+| `--no-cache` | No | `false` | Disable plugin download cache (force re-download of remote `url:` plugins) |
 
 ### Examples
 

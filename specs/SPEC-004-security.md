@@ -287,7 +287,7 @@ WASM plugins execute in `wasmtime` with:
 - No clock access (except via `clock_now` host function)
 - No access to other plugins' memory
 - Execution time limits (100ms per call)
-- Memory limits (16 MB per instance)
+- Memory limits (max(16 MB, max_body_size + 4 MB) per instance)
 
 ### 8.2 Capability enforcement
 
