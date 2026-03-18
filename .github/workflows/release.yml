@@ -556,9 +556,14 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts/release
-          # Checksums for binaries only (plugins have their own file)
-          sha256sum barbacane-* barbacane-control-* > checksums.txt
-          cat checksums.txt
+          # Checksums for binaries (plugins have their own file)
+          binaries=$(ls barbacane-* barbacane-control-* 2>/dev/null || true)
+          if [ -n "$binaries" ]; then
+            sha256sum $binaries > checksums.txt
+            cat checksums.txt
+          else
+            echo "::warning::No binary files found for checksums"
+          fi
 
       - name: Extract release notes from changelog
         id: changelog

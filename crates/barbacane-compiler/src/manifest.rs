@@ -159,14 +159,16 @@ fn resolve_url_plugin(
         }
     }
 
-    // Store in cache
-    let cache = PluginCache::new()?;
-    cache.put(
-        url,
-        &downloaded.wasm_bytes,
-        downloaded.plugin_toml.as_deref(),
-    )?;
-    tracing::info!(name, url, "cached remote plugin");
+    // Store in cache (unless --no-cache)
+    if !no_cache {
+        let cache = PluginCache::new()?;
+        cache.put(
+            url,
+            &downloaded.wasm_bytes,
+            downloaded.plugin_toml.as_deref(),
+        )?;
+        tracing::info!(name, url, "cached remote plugin");
+    }
 
     Ok((downloaded.wasm_bytes, downloaded.plugin_toml))
 }
