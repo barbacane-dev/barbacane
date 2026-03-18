@@ -453,7 +453,7 @@ enum Commands {
         #[arg(long)]
         provenance_source: Option<String>,
 
-        /// Disable plugin download cache (force re-download of remote plugins).
+        /// Bypass the plugin download cache entirely (no read, no write).
         #[arg(long)]
         no_cache: bool,
     },

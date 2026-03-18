@@ -305,7 +305,7 @@ plugins:
     sha256: abc123...  # optional integrity check
 ```
 
-Remote plugins are downloaded at compile time and cached at `~/.barbacane/cache/plugins/`. Use `--no-cache` to force re-download.
+Remote plugins are downloaded at compile time and cached at `~/.barbacane/cache/plugins/`. Use `--no-cache` to bypass the cache entirely (re-download without caching).
 
 ### Use in OpenAPI spec
 

@@ -41,7 +41,7 @@ Downloaded plugins are cached at `~/.barbacane/cache/plugins/<sha256-of-url>/` c
 Cache behavior:
 - If `sha256` is specified, the cache validates against it — mismatches trigger re-download
 - If `sha256` is not specified, cached files are used if present
-- `--no-cache` flag on `barbacane compile` forces re-download
+- `--no-cache` flag on `barbacane compile` bypasses the cache entirely (no read, no write)
 
 ### Plugin Metadata Resolution
 

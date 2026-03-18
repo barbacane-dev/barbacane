@@ -472,7 +472,7 @@ plugins:
 - URL must use HTTPS (HTTP is rejected)
 - If `sha256` is provided, the downloaded bytes are verified against it; mismatches cause a compile error
 - The compiler attempts to fetch `plugin.toml` metadata from sibling URLs (`<name>.plugin.toml` then `plugin.toml` in the parent directory)
-- `--no-cache` flag forces re-download, bypassing the local cache
+- `--no-cache` flag bypasses the cache entirely — plugins are re-downloaded and not written to cache
 
 Official Barbacane plugins are published as GitHub release assets on every tagged release, with checksums in `plugin-checksums.txt`.
 

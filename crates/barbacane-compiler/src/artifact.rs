@@ -36,7 +36,7 @@ pub struct CompileOptions {
     pub provenance_commit: Option<String>,
     /// Source identifier for build provenance (e.g., "ci/github-actions").
     pub provenance_source: Option<String>,
-    /// Disable plugin download cache (force re-download of remote plugins).
+    /// Bypass the plugin download cache entirely (no read, no write).
     pub no_cache: bool,
 }
 
