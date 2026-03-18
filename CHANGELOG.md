@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-18
+
 ### Added
 - **compiler**: remote plugin loading — `url:` sources in `barbacane.yaml` now download WASM plugins over HTTPS at compile time (ADR-0029)
 - **compiler**: optional `sha256` field on URL plugin sources for integrity verification
