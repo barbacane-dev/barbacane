@@ -291,11 +291,21 @@ unsafe { host_http_call(json.as_ptr() as i32, json.len() as i32); }
 
 ### Declare in barbacane.yaml
 
+Plugins can be sourced from a local path or a remote URL:
+
 ```yaml
 plugins:
+  # Local path (development)
   my-plugin:
     path: ./plugins/my_plugin.wasm
+
+  # Remote URL (production, CI/CD)
+  jwt-auth:
+    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.0/jwt-auth.wasm
+    sha256: abc123...  # optional integrity check
 ```
+
+Remote plugins are downloaded at compile time and cached at `~/.barbacane/cache/plugins/`. Use `--no-cache` to bypass the cache entirely (re-download without caching).
 
 ### Use in OpenAPI spec
 
@@ -447,3 +457,45 @@ Your plugin exceeded resource limits or panicked. Check logs for details. Common
 ### Unknown capability
 
 You're using a host function not declared in `plugin.toml`. Add it to `capabilities.host_functions`.
+
+## Distributing Plugins
+
+### GitHub Releases
+
+The recommended way to distribute plugins is as GitHub release assets. Upload both the `.wasm` binary and `plugin.toml` alongside your release:
+
+```
+my-plugin.wasm
+my-plugin.plugin.toml
+```
+
+Generate checksums for integrity verification:
+
+```bash
+sha256sum my-plugin.wasm > checksums.txt
+```
+
+Users reference your plugin by URL in their `barbacane.yaml`:
+
+```yaml
+plugins:
+  my-plugin:
+    url: https://github.com/your-org/my-plugin/releases/download/v1.0.0/my-plugin.wasm
+    sha256: <from checksums.txt>
+```
+
+### Official Plugins
+
+All official Barbacane plugins are published as release assets on every tagged release. Pre-built `.wasm` files and checksums (`plugin-checksums.txt`) are available at:
+
+```
+https://github.com/barbacane-dev/barbacane/releases/download/v<VERSION>/<plugin-name>.wasm
+```
+
+### Plugin Metadata Discovery
+
+When resolving a `url:` source, the compiler attempts to fetch `plugin.toml` from sibling URLs to extract version and type metadata:
+1. `<name>.plugin.toml` (same directory as the `.wasm`)
+2. `plugin.toml` (parent directory)
+
+If neither is found, the plugin still works but without version/type metadata in the artifact manifest.

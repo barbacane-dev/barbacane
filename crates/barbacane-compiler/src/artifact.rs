@@ -36,6 +36,8 @@ pub struct CompileOptions {
     pub provenance_commit: Option<String>,
     /// Source identifier for build provenance (e.g., "ci/github-actions").
     pub provenance_source: Option<String>,
+    /// Bypass the plugin download cache entirely (no read, no write).
+    pub no_cache: bool,
 }
 
 impl Default for CompileOptions {
@@ -46,6 +48,7 @@ impl Default for CompileOptions {
             max_schema_properties: 256,
             provenance_commit: None,
             provenance_source: None,
+            no_cache: false,
         }
     }
 }
@@ -233,7 +236,8 @@ pub fn compile_with_manifest(
     project_manifest.validate_specs(&api_specs)?;
 
     // Resolve used plugins (loads WASM bytes)
-    let resolved_plugins = project_manifest.resolve_used_plugins(&api_specs, manifest_base_path)?;
+    let resolved_plugins =
+        project_manifest.resolve_used_plugins(&api_specs, manifest_base_path, options.no_cache)?;
 
     // Convert to PluginBundle
     let plugin_bundles: Vec<PluginBundle> = resolved_plugins

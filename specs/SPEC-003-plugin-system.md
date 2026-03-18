@@ -2,7 +2,8 @@
 
 **Status:** Draft
 **Date:** 2026-01-28
-**Derived from:** ADR-0006, ADR-0008, ADR-0016
+**Updated:** 2026-03-17
+**Derived from:** ADR-0006, ADR-0008, ADR-0016, ADR-0029
 
 ---
 
@@ -64,7 +65,7 @@ If the plugin takes no config, the schema should be:
 
 ### 2.3 WASM binary
 
-The `.wasm` file compiled from the plugin's source code. Must target `wasm32-wasip1`. The binary must export the functions defined in section 3.
+The `.wasm` file compiled from the plugin's source code. Must target `wasm32-unknown-unknown` (not `wasm32-wasip1` — WASI imports cause init failures in the Barbacane WASM runtime). The binary must export the functions defined in section 3.
 
 ---
 
@@ -256,7 +257,7 @@ Metrics are auto-prefixed: `barbacane_plugin_<plugin_name>_<metric_name>`. Label
 
 ## 5. Data Formats
 
-All data crossing the WASM boundary is JSON-encoded UTF-8.
+Metadata (method, path, headers, status) crosses the WASM boundary as JSON-encoded UTF-8. Bodies travel as raw bytes via side-channel host functions — they are **not** included in the JSON payload.
 
 ### 5.1 Request
 
@@ -269,7 +270,6 @@ All data crossing the WASM boundary is JSON-encoded UTF-8.
     "content-type": "application/json",
     "authorization": "Bearer eyJ..."
   },
-  "body": "<base64-encoded bytes or null>",
   "client_ip": "192.168.1.1",
   "path_params": {
     "id": "123"
@@ -280,12 +280,13 @@ All data crossing the WASM boundary is JSON-encoded UTF-8.
 | Field | Type | Description |
 |-------|------|-------------|
 | `method` | string | HTTP method (uppercase) |
-| `path` | string | Request path (decoded) |
+| `path` | string | Resolved request path (e.g. `/users/123`, not the OpenAPI template) |
 | `query` | string or null | Raw query string (without `?`) |
 | `headers` | object | Header map (lowercase keys, last value wins for duplicates) |
-| `body` | string or null | Base64-encoded request body, or `null` if no body |
 | `client_ip` | string | Client IP address |
 | `path_params` | object | Captured path parameters from routing |
+
+The request body is available via side-channel host functions (`host_body_len`, `host_body_read`). Middleware plugins only receive the body if `body_access = true` is declared in `plugin.toml` capabilities (SPEC-008). Dispatchers always receive the body.
 
 ### 5.2 Response
 
@@ -294,8 +295,7 @@ All data crossing the WASM boundary is JSON-encoded UTF-8.
   "status": 200,
   "headers": {
     "content-type": "application/json"
-  },
-  "body": "<base64-encoded bytes or null>"
+  }
 }
 ```
 
@@ -303,7 +303,8 @@ All data crossing the WASM boundary is JSON-encoded UTF-8.
 |-------|------|-------------|
 | `status` | integer | HTTP status code |
 | `headers` | object | Response headers |
-| `body` | string or null | Base64-encoded response body |
+
+The response body is written via side-channel host functions (`host_body_set`). In the plugin SDK, `request.body` and `response.body` are `Option<Vec<u8>>` fields with `#[serde(skip)]` — the proc macros handle the side-channel protocol transparently.
 
 ---
 
@@ -319,11 +320,11 @@ Each WASM instance is constrained:
 
 | Limit | Default |
 |-------|---------|
-| Linear memory | 16 MB |
+| Linear memory | max(16 MB, max_body_size + 4 MB) |
 | Execution time per call | 100 ms (per `on_request` / `on_response` / `dispatch` call) |
 | Stack size | 1 MB |
 
-If a plugin exceeds execution time, the WASM runtime traps and the gateway returns `500`. If memory is exhausted, the runtime traps.
+WASM memory scales automatically based on the configured `max_body_size`. If a plugin exceeds execution time, the WASM runtime traps and the gateway returns `500`. If memory is exhausted, the runtime traps.
 
 ### 6.3 Concurrency
 
@@ -352,57 +353,36 @@ The Rust SDK is a crate that abstracts the raw WASM ABI.
 
 ```rust
 use barbacane_plugin_sdk::prelude::*;
+use serde::Deserialize;
 
+#[barbacane_middleware]
 #[derive(Deserialize)]
-struct Config {
+pub struct RateLimit {
     quota: u32,
     window: u32,
-    #[serde(default = "default_quota_unit")]
-    quota_unit: String,
     #[serde(default = "default_key")]
     key: String,
-    #[serde(default = "default_policy_name")]
-    policy_name: String,
 }
 
-fn default_quota_unit() -> String { "requests".into() }
 fn default_key() -> String { "client_ip".into() }
-fn default_policy_name() -> String { "default".into() }
 
-#[barbacane_middleware]
-fn on_request(req: &Request, config: &Config) -> Action<Request> {
-    let key_value = if config.key.starts_with("context:") {
-        barbacane::context::get(&config.key[8..]).unwrap_or_default()
-    } else if config.key.starts_with("header:") {
-        req.header(&config.key[7..]).unwrap_or_default()
-    } else {
-        req.client_ip.clone()
-    };
+impl RateLimit {
+    pub fn on_request(&mut self, req: Request) -> Action {
+        let key_value = if self.key.starts_with("header:") {
+            req.headers.get(&self.key[7..]).cloned().unwrap_or_default()
+        } else {
+            req.client_ip.clone()
+        };
 
-    let remaining = get_remaining(&key_value, config.quota, config.window);
+        // ... rate limit check logic ...
 
-    if remaining == 0 {
-        let reset_in = get_reset_seconds(&key_value, config.window);
-        Action::ShortCircuit(
-            Response::new(429)
-                .header("content-type", "application/problem+json")
-                .header("ratelimit-policy", &format!("\"{}\":q={};w={}", config.policy_name, config.quota, config.window))
-                .header("ratelimit", &format!("\"{}\":r=0;t={}", config.policy_name, reset_in))
-                .header("retry-after", &reset_in.to_string())
-                .body(r#"{"type":"urn:barbacane:error:rate-limited","title":"Too Many Requests","status":429}"#)
-        )
-    } else {
-        Action::Continue(req.clone())
+        Action::Continue(req)
     }
-}
 
-#[barbacane_middleware]
-fn on_response(res: &Response, config: &Config) -> Response {
-    let remaining = get_current_remaining(config);
-    let reset_in = get_current_reset(config);
-    res.clone()
-        .header("ratelimit-policy", &format!("\"{}\":q={};w={}", config.policy_name, config.quota, config.window))
-        .header("ratelimit", &format!("\"{}\":r={};t={}", config.policy_name, remaining, reset_in))
+    pub fn on_response(&mut self, resp: Response) -> Response {
+        // Add rate limit headers to response
+        resp
+    }
 }
 ```
 
@@ -410,32 +390,21 @@ fn on_response(res: &Response, config: &Config) -> Response {
 
 ```rust
 use barbacane_plugin_sdk::prelude::*;
-
-#[derive(Deserialize)]
-struct Config {
-    url: String,
-    timeout: Option<String>,
-}
+use serde::Deserialize;
 
 #[barbacane_dispatcher]
-fn dispatch(req: &Request, config: &Config) -> Response {
-    let upstream_req = HttpRequest {
-        method: req.method.clone(),
-        url: format!("{}{}", config.url, req.path),
-        headers: req.headers.clone(),
-        body: req.body.clone(),
-    };
+#[derive(Deserialize)]
+pub struct MyUpstream {
+    url: String,
+    #[serde(default)]
+    timeout: Option<f64>,
+}
 
-    match barbacane::http::call(&upstream_req) {
-        Ok(res) => Response::new(res.status)
-            .headers(res.headers)
-            .body_bytes(res.body),
-        Err(e) => {
-            barbacane::log::error(&format!("upstream call failed: {}", e));
-            Response::new(502)
-                .header("content-type", "application/problem+json")
-                .body(r#"{"type":"urn:barbacane:error:upstream-unavailable","title":"Bad Gateway","status":502}"#)
-        }
+impl MyUpstream {
+    pub fn dispatch(&mut self, req: Request) -> Response {
+        // Use host_http_call to proxy to upstream
+        // Request/response bodies travel via side-channel automatically
+        Response::text(200, Default::default(), "ok")
     }
 }
 ```
@@ -443,13 +412,13 @@ fn dispatch(req: &Request, config: &Config) -> Response {
 ### 7.3 What the macros generate
 
 `#[barbacane_middleware]` generates:
-- `init` export: deserializes config JSON into the `Config` struct, stores in a `static`
-- `on_request` export: deserializes request JSON, calls the user function, serializes the result, calls `host_set_output`
-- `on_response` export: no-op pass-through (unless the user defines an `on_response` function)
+- `init` export: deserializes config JSON into the struct, stores in a `static`
+- `on_request` export: deserializes request JSON, reads body via side-channel (if `body_access = true`), calls `self.on_request()`, serializes result, writes body via side-channel, calls `host_set_output`
+- `on_response` export: same pattern for response phase; no-op if not defined
 
 `#[barbacane_dispatcher]` generates:
 - `init` export: same as above
-- `dispatch` export: deserializes request, calls user function, serializes response, calls `host_set_output`
+- `dispatch` export: deserializes request, reads body via side-channel, calls `self.dispatch()`, serializes response, writes body via side-channel, calls `host_set_output`
 
 ---
 
@@ -477,7 +446,37 @@ The control plane validates:
 5. The `.wasm` binary does not import host functions outside its declared capabilities
 6. No plugin with the same `name@version` already exists (versions are immutable once registered)
 
-### 8.3 Version resolution
+### 8.3 Plugin Sources in Manifest (`barbacane.yaml`)
+
+The project manifest declares available plugins with two source types (ADR-0029):
+
+```yaml
+plugins:
+  # Local file path
+  mock:
+    path: ./plugins/mock.wasm
+
+  # Remote HTTPS URL
+  jwt-auth:
+    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.0/jwt-auth.wasm
+    sha256: abc123...  # optional integrity check
+```
+
+| Source | Fields | Resolution |
+|--------|--------|------------|
+| `path` | `path` (string) | Resolved relative to the manifest directory, or absolute |
+| `url` | `url` (string), `sha256` (string, optional) | Downloaded over HTTPS at compile time, cached at `~/.barbacane/cache/plugins/` |
+
+**URL source rules:**
+
+- URL must use HTTPS (HTTP is rejected)
+- If `sha256` is provided, the downloaded bytes are verified against it; mismatches cause a compile error
+- The compiler attempts to fetch `plugin.toml` metadata from sibling URLs (`<name>.plugin.toml` then `plugin.toml` in the parent directory)
+- `--no-cache` flag bypasses the cache entirely — plugins are re-downloaded and not written to cache
+
+Official Barbacane plugins are published as GitHub release assets on every tagged release, with checksums in `plugin-checksums.txt`.
+
+### 8.4 Version resolution
 
 In specs, plugins can be referenced as:
 
