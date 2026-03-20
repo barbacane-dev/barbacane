@@ -23,8 +23,8 @@ Several rules use custom JavaScript functions (config schema validation, duplica
 mkdir -p .barbacane/rulesets/functions .barbacane/rulesets/schemas
 curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
 for f in barbacane-auth-opt-out barbacane-no-duplicate-middlewares barbacane-no-plaintext-upstream \
-         barbacane-no-unknown-extensions barbacane-valid-secret-refs barbacane-validate-dispatch-config \
-         barbacane-validate-middleware-config; do
+         barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
+         barbacane-validate-dispatch-config barbacane-validate-middleware-config; do
   curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
 done
 ```
@@ -55,7 +55,7 @@ The Barbacane ruleset includes the following rules, grouped by category.
 |------|----------|-------------|
 | `barbacane-dispatch-required` | error | Every operation must declare `x-barbacane-dispatch` |
 | `barbacane-dispatch-has-name` | error | Dispatch block must include a `name` field |
-| `barbacane-dispatch-known-plugin` | error | Plugin name must be a known dispatcher (`mock`, `http-upstream`, `kafka`, `nats`, `s3`, `lambda`) |
+| `barbacane-dispatch-known-plugin` | error | Plugin name must be a known dispatcher (`ai-proxy`, `http-upstream`, `kafka`, `lambda`, `mock`, `nats`, `s3`, `ws-upstream`) |
 | `barbacane-dispatch-has-config` | error | Dispatch block must include a `config` object |
 | `barbacane-dispatch-config-valid` | error | Config must validate against the plugin's JSON Schema (required fields, types, no unknown fields) |
 
@@ -69,6 +69,14 @@ The Barbacane ruleset includes the following rules, grouped by category.
 | `barbacane-middleware-no-duplicate` | warn | No duplicate middleware names in a chain |
 
 The same rules apply to operation-level middlewares (`barbacane-op-middleware-*`).
+
+### Path Parameter Validation
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| `barbacane-valid-path-params` | error | Path parameters must match their template, including Barbacane's `{param+}` wildcard catch-all syntax |
+
+> **Note:** The built-in vacuum `path-params` rule is disabled by the Barbacane ruleset because it rejects the `{paramName+}` wildcard syntax. The custom `barbacane-valid-path-params` rule replaces it with full wildcard support.
 
 ### Extension Hygiene
 
@@ -121,8 +129,8 @@ rules:
     mkdir -p .barbacane/rulesets/functions
     curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
     for f in barbacane-auth-opt-out barbacane-no-duplicate-middlewares barbacane-no-plaintext-upstream \
-             barbacane-no-unknown-extensions barbacane-valid-secret-refs barbacane-validate-dispatch-config \
-             barbacane-validate-middleware-config; do
+             barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
+             barbacane-validate-dispatch-config barbacane-validate-middleware-config; do
       curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
     done
 
