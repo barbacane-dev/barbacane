@@ -1,0 +1,115 @@
+openapi: "3.1.0"
+info:
+  title: Redirect Test API
+  version: "1.0.0"
+
+paths:
+  /old-page:
+    get:
+      operationId: exactRedirect
+      summary: Exact path redirect to /new-page
+      x-barbacane-middlewares:
+        - name: redirect
+          config:
+            rules:
+              - path: /old-page
+                target: /new-page
+                status_code: 301
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"should not reach here"}'
+      responses:
+        "301":
+          description: Moved Permanently
+
+  /api/v1/users:
+    get:
+      operationId: prefixRedirect
+      summary: Prefix redirect from /api/v1 to /api/v2
+      x-barbacane-middlewares:
+        - name: redirect
+          config:
+            rules:
+              - prefix: /api/v1
+                target: /api/v2
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"should not reach here"}'
+      responses:
+        "302":
+          description: Found
+
+  /catch-all:
+    get:
+      operationId: catchAllRedirect
+      summary: Catch-all redirect to external URL
+      x-barbacane-middlewares:
+        - name: redirect
+          config:
+            status_code: 308
+            rules:
+              - target: https://example.com
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"should not reach here"}'
+      responses:
+        "308":
+          description: Permanent Redirect
+
+  /with-query:
+    get:
+      operationId: queryPreserveRedirect
+      summary: Redirect preserving query string
+      x-barbacane-middlewares:
+        - name: redirect
+          config:
+            rules:
+              - path: /with-query
+                target: /new-location
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"should not reach here"}'
+      responses:
+        "302":
+          description: Found
+
+  /no-query:
+    get:
+      operationId: queryStripRedirect
+      summary: Redirect stripping query string
+      x-barbacane-middlewares:
+        - name: redirect
+          config:
+            preserve_query: false
+            rules:
+              - path: /no-query
+                target: /new-location
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"should not reach here"}'
+      responses:
+        "302":
+          description: Found
+
+  /no-redirect:
+    get:
+      operationId: noRedirect
+      summary: Endpoint without redirect middleware
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"no redirect"}'
+      responses:
+        "200":
+          description: Success

@@ -1337,6 +1337,102 @@ Transformations are applied in this order:
 
 ---
 
+## URL Redirection
+
+### redirect
+
+Redirects requests based on configurable path rules. Supports exact path matching, prefix matching with path rewriting, configurable status codes (301/302/307/308), and query string preservation.
+
+```yaml
+x-barbacane-middlewares:
+  - name: redirect
+    config:
+      status_code: 302
+      preserve_query: true
+      rules:
+        - path: /old-page
+          target: /new-page
+          status_code: 301
+        - prefix: /api/v1
+          target: /api/v2
+        - target: https://fallback.example.com
+```
+
+#### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `status_code` | integer | `302` | Default HTTP status code for redirects (301, 302, 307, 308) |
+| `preserve_query` | boolean | `true` | Append the original query string to the redirect target |
+| `rules` | array | **required** | Redirect rules evaluated in order; first match wins |
+
+#### Rule Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `path` | string | Exact path to match. Mutually exclusive with `prefix` |
+| `prefix` | string | Path prefix to match. The matched prefix is stripped and the remainder is appended to `target` |
+| `target` | string | **Required.** Redirect target URL or path |
+| `status_code` | integer | Override the top-level `status_code` for this rule |
+
+If neither `path` nor `prefix` is set, the rule matches all requests (catch-all).
+
+#### Matching Behavior
+
+- Rules are evaluated in order. The first matching rule wins.
+- **Exact match** (`path`): redirects only when the request path equals the value exactly.
+- **Prefix match** (`prefix`): strips the matched prefix and appends the remainder to `target`. For example, `prefix: /api/v1` with `target: /api/v2` redirects `/api/v1/users?page=2` to `/api/v2/users?page=2`.
+- **Catch-all**: omit both `path` and `prefix` to redirect all requests hitting the route.
+
+#### Status Codes
+
+| Code | Meaning | Method preserved? |
+|------|---------|-------------------|
+| 301 | Moved Permanently | No (may change to GET) |
+| 302 | Found | No (may change to GET) |
+| 307 | Temporary Redirect | Yes |
+| 308 | Permanent Redirect | Yes |
+
+Use 307/308 when you need POST/PUT/DELETE requests to be retried with the same method.
+
+#### Use Cases
+
+**Domain migration:**
+```yaml
+- name: redirect
+  config:
+    status_code: 301
+    rules:
+      - target: https://new-domain.com
+```
+
+**API versioning:**
+```yaml
+- name: redirect
+  config:
+    rules:
+      - prefix: /api/v1
+        target: /api/v2
+        status_code: 301
+```
+
+**Multiple redirects:**
+```yaml
+- name: redirect
+  config:
+    rules:
+      - path: /blog
+        target: https://blog.example.com
+        status_code: 301
+      - path: /docs
+        target: https://docs.example.com
+        status_code: 301
+      - prefix: /old-api
+        target: /api
+```
+
+---
+
 ## Planned Middlewares
 
 The following middlewares are planned for future milestones:

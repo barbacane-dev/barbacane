@@ -52,6 +52,8 @@ plugins:
     path: ../../plugins/s3/s3.wasm
   ai-proxy:
     path: ../../plugins/ai-proxy/ai-proxy.wasm
+  redirect:
+    path: ../../plugins/redirect/redirect.wasm
   response-transformer:
     path: ../../plugins/response-transformer/response-transformer.wasm
   ws-upstream:

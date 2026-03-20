@@ -1,0 +1,9 @@
+[plugin]
+name = "redirect"
+version = "0.1.0"
+type = "middleware"
+description = "URL redirections (301/302/307/308) with path matching and query string preservation"
+wasm = "redirect.wasm"
+
+[capabilities]
+log = true

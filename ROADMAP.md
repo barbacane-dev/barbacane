@@ -53,7 +53,7 @@ Near-term items ready to be picked up:
 | ~~`opa-authz`~~ | ~~Middleware~~ | ~~OPA policy evaluation via REST API (`host_http_call`)~~ — **done** |
 | ~~`bot-detection`~~ | ~~Middleware~~ | ~~Block known bots by User-Agent patterns~~ — **done** |
 | `idempotency` | Middleware | Idempotent request processing via `Idempotency-Key` header (requires cache capability) |
-| `redirect` | Middleware | URL redirections (301/302) |
+| ~~`redirect`~~ | ~~Middleware~~ | ~~URL redirections (301/302/307/308)~~ — **done** |
 | ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ — **done** |
 | ~~`acl`~~ | ~~Middleware~~ | ~~Access control by consumer/group after auth~~ — **done** |
 | ~~`request-size-limit`~~ | ~~Middleware~~ | ~~Reject requests exceeding size (per-route)~~ — **done** |

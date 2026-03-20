@@ -1174,6 +1174,117 @@ async fn test_response_transformer_passthrough() {
 }
 
 // =========================================================================
+// Redirect middleware integration tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_redirect_exact_path_301() {
+    let gateway = TestGateway::from_spec(&fixture("redirect.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/old-page")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 301);
+    assert_eq!(
+        resp.headers().get("location").map(|v| v.to_str().unwrap()),
+        Some("/new-page")
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_prefix_strips_and_appends() {
+    let gateway = TestGateway::from_spec(&fixture("redirect.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/api/v1/users")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 302);
+    assert_eq!(
+        resp.headers().get("location").map(|v| v.to_str().unwrap()),
+        Some("/api/v2/users")
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_catch_all_308() {
+    let gateway = TestGateway::from_spec(&fixture("redirect.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/catch-all")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 308);
+    assert_eq!(
+        resp.headers().get("location").map(|v| v.to_str().unwrap()),
+        Some("https://example.com")
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_preserves_query_string() {
+    let gateway = TestGateway::from_spec(&fixture("redirect.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/with-query?foo=bar&page=2")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 302);
+    assert_eq!(
+        resp.headers().get("location").map(|v| v.to_str().unwrap()),
+        Some("/new-location?foo=bar&page=2")
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_strips_query_when_disabled() {
+    let gateway = TestGateway::from_spec(&fixture("redirect.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/no-query?foo=bar")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 302);
+    assert_eq!(
+        resp.headers().get("location").map(|v| v.to_str().unwrap()),
+        Some("/new-location")
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_no_redirect_endpoint_passes_through() {
+    let gateway = TestGateway::from_spec(&fixture("redirect.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/no-redirect").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["message"], "no redirect");
+}
+
+// =========================================================================
 // WebSocket Upstream dispatcher integration tests
 // =========================================================================
 

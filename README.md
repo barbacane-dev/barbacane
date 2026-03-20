@@ -101,6 +101,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `request-size-limit` | Middleware | Request body size limits |
 | `ip-restriction` | Middleware | IP allowlist/blocklist |
 | `bot-detection` | Middleware | Block bots by User-Agent pattern |
+| `redirect` | Middleware | URL redirections (301/302/307/308) with path matching |
 | `request-transformer` | Middleware | Modify headers, query params, path, and body before upstream |
 | `response-transformer` | Middleware | Modify status code, headers, and body before client |
 | `observability` | Middleware | SLO monitoring and detailed logging |

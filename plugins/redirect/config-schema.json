@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:redirect:config",
+  "title": "HTTP Redirect Middleware Configuration",
+  "type": "object",
+  "properties": {
+    "status_code": {
+      "type": "integer",
+      "enum": [301, 302, 307, 308],
+      "default": 302,
+      "description": "HTTP status code for redirects (default: 302 Found)"
+    },
+    "preserve_query": {
+      "type": "boolean",
+      "default": true,
+      "description": "Append the original query string to the redirect target (default: true)"
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Exact path to match. If omitted, the rule matches all requests."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Path prefix to match. The matched prefix is stripped and the remainder is appended to target. Mutually exclusive with 'path'."
+          },
+          "target": {
+            "type": "string",
+            "description": "Redirect target URL or path (e.g., 'https://example.com/new' or '/new-path')"
+          },
+          "status_code": {
+            "type": "integer",
+            "enum": [301, 302, 307, 308],
+            "description": "Override the top-level status_code for this rule"
+          }
+        },
+        "not": {
+          "required": ["path", "prefix"]
+        },
+        "additionalProperties": false
+      },
+      "description": "Redirect rules evaluated in order. First match wins."
+    }
+  },
+  "required": ["rules"],
+  "additionalProperties": false
+}
