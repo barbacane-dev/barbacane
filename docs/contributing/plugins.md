@@ -301,7 +301,7 @@ plugins:
 
   # Remote URL (production, CI/CD)
   jwt-auth:
-    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.0/jwt-auth.wasm
+    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.1/jwt-auth.wasm
     sha256: abc123...  # optional integrity check
 ```
 

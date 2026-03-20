@@ -185,14 +185,14 @@ plugins:
 
 The manifest declares all WASM plugins used by your spec. Plugins can be sourced from a local path or a remote URL:
 - **Local path**: `path: ./plugins/name.wasm`
-- **Remote URL**: `url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.0/name.wasm`
+- **Remote URL**: `url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.1/name.wasm`
 
 Remote plugins are downloaded at compile time and cached locally. You can optionally pin integrity with a `sha256` checksum:
 
 ```yaml
 plugins:
   jwt-auth:
-    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.0/jwt-auth.wasm
+    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.1/jwt-auth.wasm
     sha256: abc123...
 ```
 

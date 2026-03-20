@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-20
+
+### Added
+- **plugin**: `redirect` middleware — URL redirections (301/302/307/308) with exact path matching, prefix matching with path rewriting, and query string preservation
+
+### Fixed
+- **ruleset**: vacuum custom ruleset now supports Barbacane's `{paramName+}` wildcard catch-all path syntax — disables the built-in `path-params` rule and replaces it with `barbacane-valid-path-params` which strips the `+` suffix before matching
+
 ## [0.5.0] - 2026-03-18
 
 ### Added
