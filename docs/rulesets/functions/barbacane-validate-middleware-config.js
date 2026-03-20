@@ -196,6 +196,16 @@ const schemas = {
     additionalProperties: false,
   },
 
+  "redirect": {
+    required: ["rules"],
+    properties: {
+      status_code: { type: "integer" },
+      preserve_query: { type: "boolean" },
+      rules: { type: "array" },
+    },
+    additionalProperties: false,
+  },
+
   "request-size-limit": {
     required: [],
     properties: {

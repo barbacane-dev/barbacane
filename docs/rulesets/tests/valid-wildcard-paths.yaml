@@ -1,0 +1,73 @@
+openapi: "3.1.0"
+info:
+  title: Wildcard Path Parameters Test
+  version: "1.0.0"
+  description: Validates that {paramName+} catch-all syntax passes lint.
+
+paths:
+  /storage/{bucket}/{key+}:
+    get:
+      operationId: getObject
+      summary: Get object from storage
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          bucket_param: bucket
+          key_param: key
+          region: us-east-1
+          endpoint: "https://s3.us-east-1.amazonaws.com"
+          access_key_id: "env://AWS_ACCESS_KEY_ID"
+          secret_access_key: "env://AWS_SECRET_ACCESS_KEY"
+      responses:
+        "200":
+          description: Object content
+
+  /static/{path+}:
+    get:
+      operationId: getStaticAsset
+      summary: Serve static assets
+      parameters:
+        - name: path
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://cdn.example.com"
+      responses:
+        "200":
+          description: Asset content
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      summary: Regular path parameter (non-wildcard)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"user":"found"}'
+      responses:
+        "200":
+          description: User details

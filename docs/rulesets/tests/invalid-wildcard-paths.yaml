@@ -1,0 +1,40 @@
+openapi: "3.1.0"
+info:
+  title: Invalid Wildcard Path Parameters Test
+  version: "1.0.0"
+  description: Missing parameter definitions for {paramName+} paths.
+
+paths:
+  /files/{path+}:
+    get:
+      operationId: getFile
+      summary: Missing path parameter definition
+      # No parameters defined — should trigger barbacane-valid-path-params error
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"error":"missing param def"}'
+      responses:
+        "200":
+          description: File content
+
+  /storage/{bucket}/{key+}:
+    get:
+      operationId: getObject
+      summary: Only one of two params defined
+      parameters:
+        - name: bucket
+          in: path
+          required: true
+          schema:
+            type: string
+        # "key" is not defined — should trigger error
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"error":"partial params"}'
+      responses:
+        "200":
+          description: Object content

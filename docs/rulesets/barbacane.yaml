@@ -100,6 +100,7 @@ rules:
           - oidc-auth
           - opa-authz
           - rate-limit
+          - redirect
           - request-size-limit
           - request-transformer
           - response-transformer
@@ -156,6 +157,7 @@ rules:
           - oidc-auth
           - opa-authz
           - rate-limit
+          - redirect
           - request-size-limit
           - request-transformer
           - response-transformer
@@ -215,6 +217,26 @@ rules:
     given: "$['x-barbacane-middlewares'][*].config"
     then:
       function: barbacane-valid-secret-refs
+
+  # ---------------------------------------------------------------------------
+  # Auth safety
+  # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # Path parameter validation (overrides built-in "path-params" rule)
+  # ---------------------------------------------------------------------------
+
+  # Disable Vacuum's built-in path-params rule — it rejects Barbacane's
+  # {paramName+} wildcard catch-all syntax as invalid OpenAPI.
+  path-params: off
+
+  barbacane-valid-path-params:
+    description: "Path parameters must match their template, including Barbacane's {param+} wildcard syntax."
+    documentationUrl: https://docs.barbacane.dev/guide/spec-configuration.html#path-parameters
+    severity: error
+    given: "$.paths"
+    then:
+      function: barbacane-valid-path-params
 
   # ---------------------------------------------------------------------------
   # Auth safety

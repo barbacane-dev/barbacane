@@ -65,6 +65,7 @@ assert_zero_violations "$ROOT_DIR/tests/fixtures/jwt-auth.yaml" "fixtures/jwt-au
 assert_zero_violations "$ROOT_DIR/tests/fixtures/rate-limit.yaml" "fixtures/rate-limit"
 assert_zero_violations "$ROOT_DIR/tests/fixtures/cors.yaml" "fixtures/cors"
 assert_zero_violations "$ROOT_DIR/tests/fixtures/http-upstream.yaml" "fixtures/http-upstream"
+assert_zero_violations "$SCRIPT_DIR/valid-wildcard-paths.yaml" "valid-wildcard-paths"
 echo ""
 
 # Invalid specs should produce violations
@@ -74,6 +75,7 @@ assert_has_violations "$SCRIPT_DIR/invalid-middleware.yaml" "invalid-middleware"
 assert_has_violations "$SCRIPT_DIR/invalid-upstream-secrets.yaml" "invalid-upstream-secrets" 2
 assert_has_violations "$ROOT_DIR/tests/fixtures/invalid-missing-dispatch.yaml" "fixtures/invalid-missing-dispatch" 1
 assert_has_violations "$ROOT_DIR/tests/fixtures/invalid-unknown-extension.yaml" "fixtures/invalid-unknown-extension" 1
+assert_has_violations "$SCRIPT_DIR/invalid-wildcard-paths.yaml" "invalid-wildcard-paths" 2
 echo ""
 
 echo "Results: $PASS passed, $FAIL failed"
