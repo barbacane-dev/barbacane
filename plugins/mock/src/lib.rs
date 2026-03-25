@@ -37,19 +37,76 @@ fn default_content_type() -> String {
 }
 
 impl MockDispatcher {
-    /// Handle a request and return the configured static response.
-    pub fn dispatch(&mut self, _req: Request) -> Response {
+    /// Handle a request and return the configured response.
+    ///
+    /// Supports `{{placeholder}}` interpolation in the body:
+    /// - `{{request.method}}`, `{{request.path}}`, `{{request.query}}`, `{{request.client_ip}}`
+    /// - `{{headers.<name>}}` — request header value
+    /// - `{{path_params.<name>}}` — path parameter value
+    ///
+    /// Unresolved placeholders are left as-is.
+    pub fn dispatch(&mut self, req: Request) -> Response {
         let mut headers = self.headers.clone();
         headers.insert("content-type".to_string(), self.content_type.clone());
+
+        let body = if self.body.is_empty() {
+            None
+        } else {
+            Some(interpolate(&self.body, &req).into_bytes())
+        };
 
         Response {
             status: self.status,
             headers,
-            body: if self.body.is_empty() {
-                None
+            body,
+        }
+    }
+}
+
+/// Replace `{{...}}` placeholders in `template` with values from `req`.
+fn interpolate(template: &str, req: &Request) -> String {
+    let mut result = String::with_capacity(template.len());
+    let mut rest = template;
+
+    while let Some(start) = rest.find("{{") {
+        result.push_str(&rest[..start]);
+        let after_open = &rest[start + 2..];
+        if let Some(end) = after_open.find("}}") {
+            let key = after_open[..end].trim();
+            if let Some(value) = resolve_placeholder(key, req) {
+                result.push_str(&value);
             } else {
-                Some(self.body.as_bytes().to_vec())
-            },
+                // Keep unresolved placeholder as-is
+                result.push_str(&rest[start..start + 2 + end + 2]);
+            }
+            rest = &after_open[end + 2..];
+        } else {
+            // No closing braces — keep the rest as-is
+            result.push_str(&rest[start..]);
+            rest = "";
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
+/// Resolve a single placeholder key against the request.
+fn resolve_placeholder(key: &str, req: &Request) -> Option<String> {
+    if let Some(name) = key.strip_prefix("headers.") {
+        // Try exact match, then lowercase
+        req.headers
+            .get(name)
+            .or_else(|| req.headers.get(&name.to_lowercase()))
+            .cloned()
+    } else if let Some(name) = key.strip_prefix("path_params.") {
+        req.path_params.get(name).cloned()
+    } else {
+        match key {
+            "request.method" => Some(req.method.clone()),
+            "request.path" => Some(req.path.clone()),
+            "request.query" => req.query.clone(),
+            "request.client_ip" => Some(req.client_ip.clone()),
+            _ => None,
         }
     }
 }
@@ -138,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dispatch_ignores_request() {
+    fn test_dispatch_static_body_unchanged() {
         let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
             "status": 200,
             "body": "static"
@@ -159,5 +216,141 @@ mod tests {
         .unwrap();
         let resp = plugin.dispatch(test_request());
         assert!(resp.body.is_none());
+    }
+
+    // --- interpolation ---
+
+    #[test]
+    fn test_interpolate_request_method() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "method={{request.method}}"
+        }))
+        .unwrap();
+        let resp = plugin.dispatch(test_request());
+        assert_eq!(resp.body_str(), Some("method=GET"));
+    }
+
+    #[test]
+    fn test_interpolate_request_path() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "path={{request.path}}"
+        }))
+        .unwrap();
+        let resp = plugin.dispatch(test_request());
+        assert_eq!(resp.body_str(), Some("path=/test"));
+    }
+
+    #[test]
+    fn test_interpolate_request_client_ip() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "ip={{request.client_ip}}"
+        }))
+        .unwrap();
+        let resp = plugin.dispatch(test_request());
+        assert_eq!(resp.body_str(), Some("ip=127.0.0.1"));
+    }
+
+    #[test]
+    fn test_interpolate_request_query() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "q={{request.query}}"
+        }))
+        .unwrap();
+        let mut req = test_request();
+        req.query = Some("foo=bar".to_string());
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.body_str(), Some("q=foo=bar"));
+    }
+
+    #[test]
+    fn test_interpolate_request_query_missing() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "q={{request.query}}"
+        }))
+        .unwrap();
+        let resp = plugin.dispatch(test_request());
+        assert_eq!(resp.body_str(), Some("q={{request.query}}"));
+    }
+
+    #[test]
+    fn test_interpolate_headers() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "consumer={{headers.x-auth-consumer}}"
+        }))
+        .unwrap();
+        let mut req = test_request();
+        req.headers
+            .insert("x-auth-consumer".to_string(), "alice".to_string());
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.body_str(), Some("consumer=alice"));
+    }
+
+    #[test]
+    fn test_interpolate_headers_case_insensitive() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "key={{headers.X-Auth-Key-Name}}"
+        }))
+        .unwrap();
+        let mut req = test_request();
+        req.headers
+            .insert("x-auth-key-name".to_string(), "prod-key".to_string());
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.body_str(), Some("key=prod-key"));
+    }
+
+    #[test]
+    fn test_interpolate_path_params() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "{\"id\": \"{{path_params.userId}}\"}"
+        }))
+        .unwrap();
+        let mut req = test_request();
+        req.path_params
+            .insert("userId".to_string(), "42".to_string());
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.body_str(), Some("{\"id\": \"42\"}"));
+    }
+
+    #[test]
+    fn test_interpolate_multiple_placeholders() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "{{request.method}} {{request.path}} by {{headers.x-auth-consumer}}"
+        }))
+        .unwrap();
+        let mut req = test_request();
+        req.headers
+            .insert("x-auth-consumer".to_string(), "bob".to_string());
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.body_str(), Some("GET /test by bob"));
+    }
+
+    #[test]
+    fn test_interpolate_unresolved_kept_as_is() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "val={{unknown.key}}"
+        }))
+        .unwrap();
+        let resp = plugin.dispatch(test_request());
+        assert_eq!(resp.body_str(), Some("val={{unknown.key}}"));
+    }
+
+    #[test]
+    fn test_interpolate_unclosed_braces() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "val={{request.method"
+        }))
+        .unwrap();
+        let resp = plugin.dispatch(test_request());
+        assert_eq!(resp.body_str(), Some("val={{request.method"));
+    }
+
+    #[test]
+    fn test_interpolate_whitespace_in_placeholder() {
+        let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({
+            "body": "m={{ request.method }}"
+        }))
+        .unwrap();
+        let resp = plugin.dispatch(test_request());
+        assert_eq!(resp.body_str(), Some("m=GET"));
     }
 }

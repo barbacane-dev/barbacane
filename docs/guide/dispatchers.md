@@ -20,7 +20,7 @@ All dispatchers are implemented as WASM plugins and must be declared in your `ba
 
 ### mock
 
-Returns static responses. Useful for health checks, stubs, and testing.
+Returns static or interpolated responses. Useful for health checks, stubs, and testing.
 
 ```yaml
 x-barbacane-dispatch:
@@ -35,9 +35,24 @@ x-barbacane-dispatch:
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `status` | integer | 200 | HTTP status code |
-| `body` | string | `""` | Response body |
+| `body` | string | `""` | Response body (supports `{{placeholder}}` interpolation) |
 | `headers` | object | `{}` | Additional response headers |
 | `content_type` | string | `"application/json"` | Content-Type header value |
+
+#### Body Interpolation
+
+The `body` field supports `{{placeholder}}` interpolation with values from the incoming request:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `{{request.method}}` | HTTP method (GET, POST, etc.) |
+| `{{request.path}}` | Request path |
+| `{{request.query}}` | Query string (unresolved if absent) |
+| `{{request.client_ip}}` | Client IP address |
+| `{{headers.<name>}}` | Request header value (case-insensitive fallback) |
+| `{{path_params.<name>}}` | Path parameter value |
+
+Unresolved placeholders are left as-is in the response body.
 
 #### Examples
 
@@ -48,6 +63,24 @@ x-barbacane-dispatch:
   config:
     status: 200
     body: '{"status":"healthy","version":"1.0.0"}'
+```
+
+**Interpolated response with auth context:**
+```yaml
+x-barbacane-dispatch:
+  name: mock
+  config:
+    status: 418
+    body: '{"error":"I am a teapot","consumer":"{{headers.x-auth-key-name}}"}'
+```
+
+**Path parameter echo:**
+```yaml
+x-barbacane-dispatch:
+  name: mock
+  config:
+    status: 200
+    body: '{"userId":"{{path_params.userId}}","method":"{{request.method}}"}'
 ```
 
 **Not found response:**
