@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-03-25
+
+### Added
+- **plugin**: `mock` dispatcher now supports `{{placeholder}}` body interpolation — `{{headers.<name>}}`, `{{path_params.<name>}}`, `{{request.method}}`, `{{request.path}}`, `{{request.query}}`, `{{request.client_ip}}`
+
+### Changed
+- **plugin**: `apikey-auth` `keys` config changed from object (API key as map key) to array of entries with explicit `key` field — enables `env://` and `file://` secret references on keys
+- **plugin**: `basic-auth` `credentials` config changed from object (username as map key) to array of entries with explicit `username` field
+
+### Fixed
+- **plugin**: `env://` and `file://` secret references in `apikey-auth` keys were silently ignored because the secret resolver only walks JSON object values, not keys
+
 ## [0.5.1] - 2026-03-20
 
 ### Added
