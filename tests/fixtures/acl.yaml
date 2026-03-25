@@ -11,20 +11,20 @@ x-barbacane-middlewares:
     config:
       realm: "acl-test"
       credentials:
-        admin:
+        - username: admin
           password: "admin123"
           roles:
             - admin
             - editor
-        editor:
+        - username: editor
           password: "editor123"
           roles:
             - editor
-        viewer:
+        - username: viewer
           password: "viewer123"
           roles:
             - viewer
-        banned_user:
+        - username: banned_user
           password: "banned123"
           roles:
             - viewer
@@ -40,16 +40,16 @@ paths:
           config:
             realm: "acl-test"
             credentials:
-              admin:
+              - username: admin
                 password: "admin123"
                 roles: [admin, editor]
-              editor:
+              - username: editor
                 password: "editor123"
                 roles: [editor]
-              viewer:
+              - username: viewer
                 password: "viewer123"
                 roles: [viewer]
-              banned_user:
+              - username: banned_user
                 password: "banned123"
                 roles: [viewer, banned]
         - name: acl
@@ -77,16 +77,16 @@ paths:
           config:
             realm: "acl-test"
             credentials:
-              admin:
+              - username: admin
                 password: "admin123"
                 roles: [admin, editor]
-              editor:
+              - username: editor
                 password: "editor123"
                 roles: [editor]
-              viewer:
+              - username: viewer
                 password: "viewer123"
                 roles: [viewer]
-              banned_user:
+              - username: banned_user
                 password: "banned123"
                 roles: [viewer, banned]
         - name: acl
@@ -115,16 +115,16 @@ paths:
           config:
             realm: "acl-test"
             credentials:
-              admin:
+              - username: admin
                 password: "admin123"
                 roles: [admin, editor]
-              editor:
+              - username: editor
                 password: "editor123"
                 roles: [editor]
-              viewer:
+              - username: viewer
                 password: "viewer123"
                 roles: [viewer]
-              banned_user:
+              - username: banned_user
                 password: "banned123"
                 roles: [viewer, banned]
         - name: acl
@@ -152,10 +152,10 @@ paths:
           config:
             realm: "acl-test"
             credentials:
-              admin:
+              - username: admin
                 password: "admin123"
                 roles: [admin, editor]
-              editor:
+              - username: editor
                 password: "editor123"
                 roles: [editor]
         - name: acl
@@ -185,10 +185,10 @@ paths:
           config:
             realm: "acl-test"
             credentials:
-              admin:
+              - username: admin
                 password: "admin123"
                 roles: [admin]
-              viewer:
+              - username: viewer
                 password: "viewer123"
                 roles: [viewer]
         - name: acl

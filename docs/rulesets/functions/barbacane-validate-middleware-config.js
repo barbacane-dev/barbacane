@@ -22,7 +22,7 @@ const schemas = {
       key_location: { type: "string" },
       header_name: { type: "string" },
       query_param: { type: "string" },
-      keys: { type: "object" },
+      keys: { type: "array" },
     },
     additionalProperties: false,
   },
@@ -32,7 +32,7 @@ const schemas = {
     properties: {
       realm: { type: "string" },
       strip_credentials: { type: "boolean" },
-      credentials: { type: "object" },
+      credentials: { type: "array" },
     },
     additionalProperties: false,
   },

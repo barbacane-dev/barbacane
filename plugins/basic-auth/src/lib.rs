@@ -20,15 +20,18 @@ pub struct BasicAuth {
     #[serde(default = "default_strip_credentials")]
     strip_credentials: bool,
 
-    /// Map of username to credential entry (password and optional roles).
+    /// List of credential entries (username, password, and optional roles).
     #[serde(default)]
-    credentials: BTreeMap<String, CredentialEntry>,
+    credentials: Vec<CredentialEntry>,
 }
 
 /// Credential entry for a single user.
 #[derive(Debug, Clone, Deserialize)]
 struct CredentialEntry {
-    /// Password for this user.
+    /// Username for this credential.
+    username: String,
+
+    /// Password for this user. Supports secret references (e.g. `env://MY_PASSWORD`).
     password: String,
 
     /// Optional roles/permissions for this user.
@@ -129,7 +132,8 @@ impl BasicAuth {
         let (username, password) = self.extract_credentials(req)?;
         let entry = self
             .credentials
-            .get(&username)
+            .iter()
+            .find(|e| e.username == username)
             .ok_or(BasicAuthError::InvalidCredentials)?;
         if entry.password != password {
             return Err(BasicAuthError::InvalidCredentials);
@@ -207,21 +211,18 @@ mod tests {
 
     /// Helper: build a BasicAuth instance with test credentials.
     fn test_plugin() -> BasicAuth {
-        let mut credentials = BTreeMap::new();
-        credentials.insert(
-            "admin".to_string(),
+        let credentials = vec![
             CredentialEntry {
+                username: "admin".to_string(),
                 password: "secret123".to_string(),
                 roles: vec!["admin".to_string(), "editor".to_string()],
             },
-        );
-        credentials.insert(
-            "reader".to_string(),
             CredentialEntry {
+                username: "reader".to_string(),
                 password: "readonly456".to_string(),
                 roles: vec![],
             },
-        );
+        ];
         BasicAuth {
             realm: "test-api".to_string(),
             strip_credentials: true,
@@ -523,16 +524,18 @@ mod tests {
         let json = r#"{
             "realm": "myapp",
             "strip_credentials": false,
-            "credentials": {
-                "alice": { "password": "p@ss", "roles": ["admin"] },
-                "bob": { "password": "secret" }
-            }
+            "credentials": [
+                { "username": "alice", "password": "p@ss", "roles": ["admin"] },
+                { "username": "bob", "password": "secret" }
+            ]
         }"#;
         let config: BasicAuth = serde_json::from_str(json).unwrap();
         assert_eq!(config.realm, "myapp");
         assert!(!config.strip_credentials);
         assert_eq!(config.credentials.len(), 2);
-        assert_eq!(config.credentials["alice"].roles, vec!["admin"]);
-        assert!(config.credentials["bob"].roles.is_empty());
+        assert_eq!(config.credentials[0].username, "alice");
+        assert_eq!(config.credentials[0].roles, vec!["admin"]);
+        assert_eq!(config.credentials[1].username, "bob");
+        assert!(config.credentials[1].roles.is_empty());
     }
 }

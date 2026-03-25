@@ -188,15 +188,17 @@ x-barbacane-middlewares:
       header_name: X-API-Key      # when key_location is "header"
       query_param: api_key        # when key_location is "query"
       keys:
-        sk_live_abc123:
+        - key: "env://API_KEY_PRODUCTION"
           id: key-001
           name: Production Key
           scopes: ["read", "write"]
-        sk_test_xyz789:
+        - key: sk_test_xyz789
           id: key-002
           name: Test Key
           scopes: ["read"]
 ```
+
+The `key` field supports secret references (`env://`, `file://`) which are resolved at gateway startup. See [Secrets](secrets.md) for details.
 
 #### Configuration
 
@@ -205,7 +207,7 @@ x-barbacane-middlewares:
 | `key_location` | string | `header` | Where to find key (`header` or `query`) |
 | `header_name` | string | `X-API-Key` | Header name (when `key_location: header`) |
 | `query_param` | string | `api_key` | Query param name (when `key_location: query`) |
-| `keys` | object | `{}` | Map of valid API keys to metadata |
+| `keys` | array | `[]` | List of API key entries with metadata |
 
 #### Context Headers
 
@@ -336,10 +338,10 @@ x-barbacane-middlewares:
       realm: "My API"
       strip_credentials: true
       credentials:
-        admin:
+        - username: admin
           password: "env://ADMIN_PASSWORD"
           roles: ["admin", "editor"]
-        readonly:
+        - username: readonly
           password: "env://READONLY_PASSWORD"
           roles: ["viewer"]
 ```
@@ -350,12 +352,13 @@ x-barbacane-middlewares:
 |----------|------|---------|-------------|
 | `realm` | string | `api` | Authentication realm shown in `WWW-Authenticate` challenge |
 | `strip_credentials` | boolean | `true` | Remove `Authorization` header before forwarding to upstream |
-| `credentials` | object | `{}` | Map of username to credential entry |
+| `credentials` | array | `[]` | List of credential entries |
 
 Each credential entry:
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
+| `username` | string | **required** | Username for this credential |
 | `password` | string | **required** | Password for this user (supports secret references) |
 | `roles` | array | `[]` | Optional roles for authorization |
 
@@ -394,10 +397,10 @@ x-barbacane-middlewares:
     config:
       realm: "my-api"
       credentials:
-        admin:
+        - username: admin
           password: "env://ADMIN_PASSWORD"
           roles: ["admin", "editor"]
-        viewer:
+        - username: viewer
           password: "env://VIEWER_PASSWORD"
           roles: ["viewer"]
   - name: acl

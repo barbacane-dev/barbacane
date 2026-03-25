@@ -212,7 +212,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              test-key-123:
+              - key: test-key-123
                 id: key-1
                 name: testuser
       requestBody:
@@ -322,7 +322,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              test-key-123:
+              - key: test-key-123
                 id: key-1
                 name: testuser
       requestBody:
@@ -578,7 +578,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              test-key-123:
+              - key: test-key-123
                 id: key-1
                 name: testuser
       requestBody:
@@ -679,7 +679,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              test-key-123:
+              - key: test-key-123
                 id: key-1
                 name: testuser
       requestBody:
@@ -785,7 +785,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              test-key-123:
+              - key: test-key-123
                 id: key-1
                 name: testuser
       requestBody:
@@ -906,7 +906,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              test-key-123:
+              - key: test-key-123
                 id: key-1
                 name: testuser
       requestBody:
@@ -1103,7 +1103,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              test-key-123:
+              - key: test-key-123
                 id: key-1
                 name: testuser
       x-barbacane-dispatch:

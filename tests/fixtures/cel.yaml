@@ -54,10 +54,10 @@ paths:
           config:
             realm: "cel-test"
             credentials:
-              admin:
+              - username: admin
                 password: "admin123"
                 roles: [admin, editor]
-              viewer:
+              - username: viewer
                 password: "viewer123"
                 roles: [viewer]
         - name: cel

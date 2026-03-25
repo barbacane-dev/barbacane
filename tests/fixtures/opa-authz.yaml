@@ -38,10 +38,10 @@ paths:
           config:
             realm: "opa-test"
             credentials:
-              admin:
+              - username: admin
                 password: "admin123"
                 roles: [admin]
-              viewer:
+              - username: viewer
                 password: "viewer123"
                 roles: [viewer]
         - name: opa-authz
