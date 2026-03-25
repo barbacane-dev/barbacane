@@ -1910,12 +1910,27 @@ impl Gateway {
     }
 
     /// Handle reserved /__barbacane/* endpoints.
+    ///
+    /// These endpoints always allow cross-origin requests (`Access-Control-Allow-Origin: *`)
+    /// so that Swagger UI, Redoc, or similar tools hosted on different domains can fetch specs.
     fn handle_barbacane_endpoint(
         &self,
         path: &str,
         method: &Method,
         query: Option<&str>,
     ) -> Response<Full<Bytes>> {
+        // Handle CORS preflight for internal endpoints
+        if method == Method::OPTIONS {
+            return Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .header("access-control-allow-origin", "*")
+                .header("access-control-allow-methods", "GET, OPTIONS")
+                .header("access-control-allow-headers", "content-type, accept")
+                .header("access-control-max-age", "86400")
+                .body(Full::new(Bytes::new()))
+                .expect("valid response");
+        }
+
         if method != Method::GET {
             return self.method_not_allowed_response(vec!["GET".to_string()]);
         }
@@ -1925,7 +1940,7 @@ impl Gateway {
             .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("format=")))
             .unwrap_or("yaml");
 
-        match path {
+        let mut response = match path {
             "/__barbacane/health" => self.health_response(),
             "/__barbacane/specs" => self.specs_index_response(),
             "/__barbacane/specs/openapi" => self.merged_openapi_response(format),
@@ -1938,7 +1953,13 @@ impl Gateway {
                     self.not_found_response()
                 }
             }
-        }
+        };
+
+        response
+            .headers_mut()
+            .insert("access-control-allow-origin", HeaderValue::from_static("*"));
+
+        response
     }
 
     /// Build the specs index response (always JSON).
