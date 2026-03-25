@@ -3,6 +3,7 @@
 //! Run with: `cargo test -p barbacane-test`
 
 use barbacane_test::TestGateway;
+use reqwest::Method;
 
 fn fixture(name: &str) -> String {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -325,4 +326,60 @@ async fn test_specs_merged_asyncapi_empty() {
     // Should return 404 when no AsyncAPI specs exist
     let resp = gateway.get("/__barbacane/specs/asyncapi").await.unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_specs_cors_headers_on_get() {
+    let gateway = TestGateway::from_spec(&fixture("minimal.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/__barbacane/specs").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "*"
+    );
+}
+
+#[tokio::test]
+async fn test_specs_cors_preflight() {
+    let gateway = TestGateway::from_spec(&fixture("minimal.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(Method::OPTIONS, "/__barbacane/specs/openapi")
+        .header("origin", "https://example.com")
+        .header("access-control-request-method", "GET")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 204);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "*"
+    );
+    assert!(resp
+        .headers()
+        .get("access-control-allow-methods")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("GET"));
+}
+
+#[tokio::test]
+async fn test_health_cors_headers() {
+    let gateway = TestGateway::from_spec(&fixture("minimal.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "*"
+    );
 }
