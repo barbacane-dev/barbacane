@@ -10,13 +10,13 @@ x-barbacane-middlewares:
     config:
       realm: "test-api"
       credentials:
-        admin:
+        - username: admin
           password: "secret123"
           roles:
             - admin
             - read
             - write
-        reader:
+        - username: reader
           password: "readonly456"
           roles:
             - read

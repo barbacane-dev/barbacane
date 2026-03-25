@@ -22,12 +22,16 @@
       "default": "api_key"
     },
     "keys": {
-      "type": "object",
-      "description": "Map of valid API keys to their metadata",
-      "additionalProperties": {
+      "type": "array",
+      "description": "List of valid API keys with their metadata",
+      "items": {
         "type": "object",
-        "required": ["id"],
+        "required": ["key", "id"],
         "properties": {
+          "key": {
+            "type": "string",
+            "description": "The API key value. Supports secret references (e.g. env://MY_API_KEY)."
+          },
           "id": {
             "type": "string",
             "description": "Unique identifier for this key (for logging/auditing)"
@@ -47,7 +51,7 @@
         },
         "additionalProperties": false
       },
-      "default": {}
+      "default": []
     }
   },
   "additionalProperties": false

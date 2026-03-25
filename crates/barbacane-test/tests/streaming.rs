@@ -102,7 +102,7 @@ paths:
           config:
             header_name: x-api-key
             keys:
-              secret-key:
+              - key: secret-key
                 id: key-1
                 name: test
       x-barbacane-dispatch:

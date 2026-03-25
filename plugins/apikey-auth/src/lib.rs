@@ -26,16 +26,17 @@ pub struct ApiKeyAuth {
     #[serde(default = "default_query_param")]
     query_param: String,
 
-    /// Map of valid API keys to their metadata.
-    /// Key: the API key string
-    /// Value: key metadata (id, name, optional scopes)
+    /// List of valid API keys with their metadata.
     #[serde(default)]
-    keys: BTreeMap<String, ApiKeyEntry>,
+    keys: Vec<ApiKeyEntry>,
 }
 
-/// Metadata for a single API key.
+/// A single API key entry.
 #[derive(Debug, Clone, Deserialize)]
 struct ApiKeyEntry {
+    /// The API key value. Supports secret references (e.g. `env://MY_API_KEY`).
+    key: String,
+
     /// Unique identifier for this key (for logging/auditing).
     id: String,
 
@@ -179,7 +180,10 @@ impl ApiKeyAuth {
 
     /// Look up the API key in the configured key store.
     fn lookup_key(&self, key: &str) -> Result<&ApiKeyEntry, ApiKeyError> {
-        self.keys.get(key).ok_or(ApiKeyError::InvalidKey)
+        self.keys
+            .iter()
+            .find(|e| e.key == key)
+            .ok_or(ApiKeyError::InvalidKey)
     }
 
     /// Generate 401 Unauthorized response.
@@ -244,11 +248,11 @@ mod tests {
 
     fn test_plugin() -> ApiKeyAuth {
         serde_json::from_value(serde_json::json!({
-            "keys": {
-                "sk-test-123": { "id": "key1", "name": "Test Key", "scopes": ["read", "write"] },
-                "sk-readonly": { "id": "key2", "scopes": ["read"] },
-                "sk-noname": { "id": "key3" }
-            }
+            "keys": [
+                { "key": "sk-test-123", "id": "key1", "name": "Test Key", "scopes": ["read", "write"] },
+                { "key": "sk-readonly", "id": "key2", "scopes": ["read"] },
+                { "key": "sk-noname", "id": "key3" }
+            ]
         }))
         .unwrap()
     }
@@ -417,8 +421,8 @@ mod tests {
         match plugin.on_request(req) {
             Action::Continue(r) => {
                 assert_eq!(r.headers.get("x-auth-key-id").unwrap(), "key3");
-                assert!(r.headers.get("x-auth-key-name").is_none());
-                assert!(r.headers.get("x-auth-key-scopes").is_none());
+                assert!(!r.headers.contains_key("x-auth-key-name"));
+                assert!(!r.headers.contains_key("x-auth-key-scopes"));
                 assert_eq!(r.headers.get("x-auth-consumer").unwrap(), "key3");
                 assert!(!r.headers.contains_key("x-auth-consumer-groups"));
             }
@@ -456,7 +460,7 @@ mod tests {
     fn test_on_request_query_location() {
         let mut plugin: ApiKeyAuth = serde_json::from_value(serde_json::json!({
             "key_location": "query",
-            "keys": { "mykey": { "id": "q1" } }
+            "keys": [{ "key": "mykey", "id": "q1" }]
         }))
         .unwrap();
         let req = request_with_query("api_key=mykey");
@@ -520,7 +524,7 @@ mod tests {
     fn test_config_custom_header() {
         let plugin: ApiKeyAuth = serde_json::from_value(serde_json::json!({
             "header_name": "Authorization",
-            "keys": { "Bearer tok": { "id": "t1" } }
+            "keys": [{ "key": "Bearer tok", "id": "t1" }]
         }))
         .unwrap();
         assert_eq!(plugin.header_name, "Authorization");

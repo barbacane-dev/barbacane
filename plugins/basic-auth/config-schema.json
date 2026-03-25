@@ -16,15 +16,19 @@
       "default": true
     },
     "credentials": {
-      "type": "object",
-      "description": "Map of username to credential entry",
-      "additionalProperties": {
+      "type": "array",
+      "description": "List of credential entries (username, password, and optional roles)",
+      "items": {
         "type": "object",
-        "required": ["password"],
+        "required": ["username", "password"],
         "properties": {
+          "username": {
+            "type": "string",
+            "description": "Username for this credential"
+          },
           "password": {
             "type": "string",
-            "description": "Password for this user"
+            "description": "Password for this user. Supports secret references (e.g. env://MY_PASSWORD)."
           },
           "roles": {
             "type": "array",
@@ -35,7 +39,7 @@
         },
         "additionalProperties": false
       },
-      "default": {}
+      "default": []
     }
   },
   "additionalProperties": false
