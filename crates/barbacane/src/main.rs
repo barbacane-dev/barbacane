@@ -1172,7 +1172,7 @@ impl Gateway {
                 }
 
                 // Not a CORS preflight or no CORS middleware found - return 405
-                let response = self.method_not_allowed_response(allowed);
+                let response = self.method_not_allowed_response(allowed, &method_str, &path);
                 self.record_request_metrics(
                     &method_str,
                     &path,
@@ -1917,7 +1917,11 @@ impl Gateway {
         query: Option<&str>,
     ) -> Response<Full<Bytes>> {
         if method != Method::GET {
-            return self.method_not_allowed_response(vec!["GET".to_string()]);
+            return self.method_not_allowed_response(
+                vec!["GET".to_string()],
+                method.as_str(),
+                path,
+            );
         }
 
         // Parse format from query string (default: yaml for specs, json for index)
@@ -2089,27 +2093,41 @@ impl Gateway {
             .expect("valid response")
     }
 
-    /// Build a 404 Not Found response.
+    /// Build a 404 Not Found response (RFC 9457).
     fn not_found_response(&self) -> Response<Full<Bytes>> {
-        let body = r#"{"error":"not found"}"#;
+        let body = serde_json::json!({
+            "type": "urn:barbacane:error:not-found",
+            "title": "Not Found",
+            "status": 404,
+        });
 
         Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body)))
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")
     }
 
-    /// Build a 405 Method Not Allowed response.
-    fn method_not_allowed_response(&self, allowed: Vec<String>) -> Response<Full<Bytes>> {
-        let body = r#"{"error":"method not allowed"}"#;
+    /// Build a 405 Method Not Allowed response (RFC 9457).
+    fn method_not_allowed_response(
+        &self,
+        allowed: Vec<String>,
+        method: &str,
+        path: &str,
+    ) -> Response<Full<Bytes>> {
         let allow_header = allowed.join(", ");
+        let body = serde_json::json!({
+            "type": "urn:barbacane:error:method-not-allowed",
+            "title": "Method Not Allowed",
+            "status": 405,
+            "detail": format!("{method} is not allowed on {path}. Allowed methods: {allow_header}"),
+        });
 
         Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
-            .header("content-type", "application/json")
+            .header("content-type", "application/problem+json")
             .header("allow", allow_header)
-            .body(Full::new(Bytes::from(body)))
+            .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")
     }
 
