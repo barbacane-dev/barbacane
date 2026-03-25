@@ -67,7 +67,7 @@ tar = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "stream", "blocking"] }
 
 # NATS client
-async-nats = "0.38"
+async-nats = "0.46"
 
 # Kafka client
 rskafka = "0.6"
