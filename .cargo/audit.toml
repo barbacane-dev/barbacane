@@ -25,6 +25,10 @@ ignore = [
     # Fix requires wasmtime >= 24.0.6 (we use 28.0.1)
     # Not exploitable: Barbacane does not expose wasi:http to guest modules
     "RUSTSEC-2026-0021",
+
+    # CRL Distribution Point matching logic error in rustls-webpki 0.102.x
+    # Pinned by async-nats 0.46.0 — awaiting upstream fix
+    "RUSTSEC-2026-0049",
 ]
 
 # Treat unmaintained crates as warnings, not errors
