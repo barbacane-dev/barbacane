@@ -634,6 +634,8 @@ struct Gateway {
     api_name: String,
     /// Request counter for generating request IDs (fallback if UUID too slow).
     _request_counter: AtomicU64,
+    /// MCP server (None if MCP is not enabled in the artifact).
+    mcp_server: Option<barbacane_lib::mcp::McpServer>,
 }
 
 impl Gateway {
@@ -821,6 +823,16 @@ impl Gateway {
             })
             .unwrap_or_else(|| "default".to_string());
 
+        // Construct MCP server if enabled
+        let mcp_server = if manifest.mcp.enabled {
+            Some(barbacane_lib::mcp::McpServer::new(
+                &resolved_operations,
+                &manifest.mcp,
+            ))
+        } else {
+            None
+        };
+
         Ok(Gateway {
             manifest,
             router,
@@ -836,6 +848,7 @@ impl Gateway {
             metrics,
             api_name,
             _request_counter: AtomicU64::new(0),
+            mcp_server,
         })
     }
 
@@ -948,6 +961,14 @@ impl Gateway {
                 &request_id,
                 &trace_id,
             )));
+        }
+
+        // MCP endpoint — needs body access, so handle before generic reserved endpoints
+        if path == "/__barbacane/mcp" {
+            let response = self
+                .handle_mcp_endpoint(req, &method, &request_id, &trace_id, start_time)
+                .await;
+            return Ok(response);
         }
 
         // Reserved /__barbacane/* endpoints (skip other limits for internal endpoints)
@@ -1964,6 +1985,247 @@ impl Gateway {
             .insert("access-control-allow-origin", HeaderValue::from_static("*"));
 
         response
+    }
+
+    /// Handle MCP endpoint requests (POST /__barbacane/mcp, DELETE /__barbacane/mcp).
+    async fn handle_mcp_endpoint(
+        &self,
+        req: Request<Incoming>,
+        method: &Method,
+        request_id: &str,
+        trace_id: &str,
+        start_time: std::time::Instant,
+    ) -> Response<AnyBody> {
+        let mcp_server = match &self.mcp_server {
+            Some(s) => s,
+            None => {
+                let response = Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header("content-type", "application/problem+json")
+                    .body(Full::new(Bytes::from(
+                        r#"{"type":"urn:barbacane:error:not-found","title":"Not Found","status":404,"detail":"MCP is not enabled in this artifact"}"#,
+                    )))
+                    .expect("valid response");
+                return box_full(Self::add_standard_headers(response, request_id, trace_id));
+            }
+        };
+
+        // CORS preflight
+        if *method == Method::OPTIONS {
+            let response = Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .header("access-control-allow-origin", "*")
+                .header("access-control-allow-methods", "POST, DELETE, OPTIONS")
+                .header(
+                    "access-control-allow-headers",
+                    "content-type, authorization, mcp-session-id",
+                )
+                .header("access-control-max-age", "86400")
+                .body(Full::new(Bytes::new()))
+                .expect("valid response");
+            return box_full(Self::add_standard_headers(response, request_id, trace_id));
+        }
+
+        // Handle session termination
+        if *method == Method::DELETE {
+            if let Some(session_id) = req
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+            {
+                mcp_server.remove_session(session_id);
+            }
+            let response = Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Full::new(Bytes::new()))
+                .expect("valid response");
+            return box_full(Self::add_standard_headers(response, request_id, trace_id));
+        }
+
+        // Only POST is allowed
+        if *method != Method::POST {
+            let response = Response::builder()
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .header("allow", "POST, DELETE, OPTIONS")
+                .header("content-type", "application/problem+json")
+                .body(Full::new(Bytes::from(
+                    r#"{"type":"urn:barbacane:error:method-not-allowed","title":"Method Not Allowed","status":405,"detail":"MCP endpoint only accepts POST and DELETE"}"#,
+                )))
+                .expect("valid response");
+            return box_full(Self::add_standard_headers(response, request_id, trace_id));
+        }
+
+        // Extract session ID and all request headers before consuming the body
+        let session_id = req
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        // Forward all request headers for tool call dispatch (auth middleware
+        // may inspect any header — Authorization, Cookie, X-Api-Key, etc.)
+        let forwarded_headers: HashMap<String, String> = req
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
+            .collect();
+
+        // Check content-length against body size limit before collecting
+        if let Some(content_length) = req
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            if let Err(e) = self.limits.validate_body_size(content_length) {
+                let response = self.validation_error_response(&[e]);
+                return box_full(Self::add_standard_headers(response, request_id, trace_id));
+            }
+        }
+
+        let body = match http_body_util::BodyExt::collect(req.into_body()).await {
+            Ok(collected) => collected.to_bytes(),
+            Err(_) => {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header("content-type", "application/problem+json")
+                    .body(Full::new(Bytes::from(
+                        r#"{"type":"urn:barbacane:error:bad-request","title":"Bad Request","status":400,"detail":"failed to read request body"}"#,
+                    )))
+                    .expect("valid response");
+                return box_full(Self::add_standard_headers(response, request_id, trace_id));
+            }
+        };
+
+        // Validate collected body size
+        if let Err(e) = self.limits.validate_body_size(body.len()) {
+            let response = self.validation_error_response(&[e]);
+            return box_full(Self::add_standard_headers(response, request_id, trace_id));
+        }
+
+        // Single parse: handle_request returns the appropriate result type
+        let result = mcp_server.handle_request(&body, session_id.as_deref());
+
+        match result {
+            barbacane_lib::mcp::McpResult::NeedsDispatch {
+                operation_index,
+                path,
+                query,
+                body: tool_body,
+                json_rpc_id,
+            } => {
+                // Dispatch through the middleware + dispatcher pipeline
+                let operation = &self.operations[operation_index];
+                let request_body = tool_body.as_deref().unwrap_or(&[]);
+
+                // Build headers: content-type + forwarded request headers
+                let mut headers = forwarded_headers;
+                if !request_body.is_empty() {
+                    headers.insert("content-type".to_string(), "application/json".to_string());
+                }
+
+                // Extract path params from the resolved path
+                let params: Vec<(String, String)> = operation
+                    .parameters
+                    .iter()
+                    .filter(|p| p.location == "path")
+                    .filter_map(|p| {
+                        extract_path_param(&operation.path, &path, &p.name)
+                            .map(|v| (p.name.clone(), v))
+                    })
+                    .collect();
+
+                let dispatch_result = self
+                    .dispatch(
+                        operation,
+                        &path,
+                        params,
+                        query,
+                        request_body,
+                        &headers,
+                        None, // no client_addr for internal dispatch
+                        None, // no upgrade handle
+                    )
+                    .await;
+
+                // Convert the HTTP response to MCP tool result
+                match dispatch_result {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        let resp_body =
+                            match http_body_util::BodyExt::collect(response.into_body()).await {
+                                Ok(collected) => Some(collected.to_bytes().to_vec()),
+                                Err(_) => None,
+                            };
+                        let mcp_response = barbacane_lib::mcp::format_tool_result(
+                            json_rpc_id,
+                            status,
+                            resp_body.as_deref(),
+                        );
+
+                        self.record_request_metrics(
+                            "POST",
+                            "/__barbacane/mcp",
+                            200,
+                            body.len() as u64,
+                            mcp_response.len() as u64,
+                            start_time,
+                        );
+
+                        let response = Response::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", "application/json")
+                            .body(Full::new(Bytes::from(mcp_response)))
+                            .expect("valid response");
+                        box_full(Self::add_standard_headers(response, request_id, trace_id))
+                    }
+                    Err(_) => {
+                        // This shouldn't happen since dispatch returns Result<_, Infallible>
+                        let response = Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Full::new(Bytes::new()))
+                            .expect("valid response");
+                        box_full(Self::add_standard_headers(response, request_id, trace_id))
+                    }
+                }
+            }
+
+            barbacane_lib::mcp::McpResult::Response {
+                body: resp_body,
+                session_id: new_session_id,
+            } => {
+                self.record_request_metrics(
+                    "POST",
+                    "/__barbacane/mcp",
+                    200,
+                    body.len() as u64,
+                    resp_body.len() as u64,
+                    start_time,
+                );
+
+                let mut builder = Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json");
+
+                if let Some(sid) = new_session_id {
+                    builder = builder.header("mcp-session-id", sid);
+                }
+
+                let response = builder
+                    .body(Full::new(Bytes::from(resp_body)))
+                    .expect("valid response");
+                box_full(Self::add_standard_headers(response, request_id, trace_id))
+            }
+
+            barbacane_lib::mcp::McpResult::NoResponse => {
+                // JSON-RPC notification — return 204
+                let response = Response::builder()
+                    .status(StatusCode::NO_CONTENT)
+                    .body(Full::new(Bytes::new()))
+                    .expect("valid response");
+                box_full(Self::add_standard_headers(response, request_id, trace_id))
+            }
+        }
     }
 
     /// Build the specs index response (always JSON).
@@ -3406,6 +3668,27 @@ async fn run_serve(
         eprintln!("barbacane: admin API on http://{}", admin_addr);
     }
 
+    // MCP session eviction background task (runs every 5 minutes)
+    {
+        let gw = gateway.clone();
+        let mut evict_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let g = gw.load();
+                        if let Some(ref mcp) = g.mcp_server {
+                            mcp.evict_expired_sessions();
+                        }
+                    }
+                    _ = evict_shutdown.changed() => break,
+                }
+            }
+        });
+    }
+
     // Keep-alive timeout (currently used for documentation; HTTP/1.1 uses internal defaults)
     let _keepalive_duration = Duration::from_secs(keepalive_timeout);
     let shutdown_duration = Duration::from_secs(shutdown_timeout);
@@ -3823,6 +4106,36 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Extract a path parameter value from a resolved path by comparing with the template.
+///
+/// For example, given template "/users/{id}" and resolved path "/users/123",
+/// extracts "123" for parameter "id".
+///
+/// For wildcard params like "/files/{path+}" and resolved "/files/a/b/c",
+/// extracts "a/b/c" (all remaining segments joined).
+fn extract_path_param(template: &str, resolved: &str, param_name: &str) -> Option<String> {
+    let template_segments: Vec<&str> = template.split('/').collect();
+    let resolved_segments: Vec<&str> = resolved.split('/').collect();
+
+    for (i, t_seg) in template_segments.iter().enumerate() {
+        let placeholder = format!("{{{}}}", param_name);
+        let wildcard_placeholder = format!("{{{}+}}", param_name);
+
+        if *t_seg == wildcard_placeholder {
+            // Wildcard: join all remaining resolved segments
+            if i < resolved_segments.len() {
+                return Some(resolved_segments[i..].join("/"));
+            }
+            return None;
+        }
+
+        if *t_seg == placeholder {
+            return resolved_segments.get(i).map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3845,6 +4158,78 @@ mod tests {
         assert_eq!(
             ws_url_to_http_base("ws://localhost:9090"),
             "http://localhost:9090"
+        );
+    }
+
+    #[test]
+    fn test_extract_path_param_simple() {
+        assert_eq!(
+            extract_path_param("/users/{id}", "/users/123", "id"),
+            Some("123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_path_param_multiple() {
+        assert_eq!(
+            extract_path_param(
+                "/users/{userId}/orders/{orderId}",
+                "/users/abc/orders/456",
+                "userId"
+            ),
+            Some("abc".to_string())
+        );
+        assert_eq!(
+            extract_path_param(
+                "/users/{userId}/orders/{orderId}",
+                "/users/abc/orders/456",
+                "orderId"
+            ),
+            Some("456".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_path_param_not_found() {
+        assert_eq!(
+            extract_path_param("/users/{id}", "/users/123", "name"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_path_param_wildcard() {
+        assert_eq!(
+            extract_path_param("/files/{path+}", "/files/a/b/c", "path"),
+            Some("a/b/c".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_path_param_wildcard_single_segment() {
+        assert_eq!(
+            extract_path_param("/files/{path+}", "/files/readme.txt", "path"),
+            Some("readme.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_path_param_wildcard_with_prefix() {
+        assert_eq!(
+            extract_path_param(
+                "/storage/{bucket}/{key+}",
+                "/storage/uploads/2024/01/report.pdf",
+                "bucket"
+            ),
+            Some("uploads".to_string())
+        );
+        assert_eq!(
+            extract_path_param(
+                "/storage/{bucket}/{key+}",
+                "/storage/uploads/2024/01/report.pdf",
+                "key"
+            ),
+            Some("2024/01/report.pdf".to_string())
         );
     }
 }

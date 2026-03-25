@@ -6,5 +6,6 @@
 pub mod admin;
 pub mod control_plane;
 pub mod hot_reload;
+pub mod mcp;
 pub mod router;
 pub mod validator;

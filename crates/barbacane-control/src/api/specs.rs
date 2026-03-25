@@ -498,6 +498,8 @@ mod tests {
             path: path.to_string(),
             method: method.to_string(),
             operation_id: None,
+            summary: None,
+            description: None,
             parameters: vec![],
             request_body: None,
             dispatch: None,
@@ -507,6 +509,7 @@ mod tests {
             extensions: BTreeMap::new(),
             messages: vec![],
             bindings: BTreeMap::new(),
+            responses: BTreeMap::new(),
         }
     }
 

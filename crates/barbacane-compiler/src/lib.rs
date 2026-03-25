@@ -13,8 +13,8 @@ pub mod spec_parser;
 pub use artifact::{
     compile, compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs,
     BundledPlugin, CompileOptions, CompileResult, CompiledOperation, CompiledRoutes, LoadedPlugin,
-    Manifest, PluginBundle, PluginCapabilities, Provenance, SourceSpec, ARTIFACT_VERSION,
-    COMPILER_VERSION,
+    Manifest, McpConfig, PluginBundle, PluginCapabilities, Provenance, SourceSpec,
+    ARTIFACT_VERSION, COMPILER_VERSION,
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{
@@ -23,5 +23,6 @@ pub use manifest::{
 // Re-export spec-parser types for convenience
 pub use spec_parser::{
     parse_spec, parse_spec_file, ApiSpec, AsyncAction, Channel, ContentSchema, DispatchConfig,
-    Message, MiddlewareConfig, Operation, Parameter, ParseError, RequestBody, SpecFormat,
+    Message, MiddlewareConfig, Operation, Parameter, ParseError, RequestBody, ResponseContent,
+    SpecFormat,
 };

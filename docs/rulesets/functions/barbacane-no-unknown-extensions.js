@@ -1,7 +1,7 @@
 // Flags x-barbacane-* keys that are not recognized by Barbacane.
 // Only x-barbacane-dispatch and x-barbacane-middlewares are valid.
 
-const KNOWN = new Set(["x-barbacane-dispatch", "x-barbacane-middlewares"]);
+const KNOWN = new Set(["x-barbacane-dispatch", "x-barbacane-middlewares", "x-barbacane-mcp"]);
 
 function getSchema() {
   return {
@@ -24,7 +24,7 @@ function collectUnknown(obj, path, results) {
   for (const [key, value] of Object.entries(obj)) {
     if (key.startsWith("x-barbacane-") && !KNOWN.has(key)) {
       results.push({
-        message: `Unknown Barbacane extension "${key}" at ${path}. Only x-barbacane-dispatch and x-barbacane-middlewares are recognized.`,
+        message: `Unknown Barbacane extension "${key}" at ${path}. Only x-barbacane-dispatch, x-barbacane-middlewares, and x-barbacane-mcp are recognized.`,
       });
     }
 
