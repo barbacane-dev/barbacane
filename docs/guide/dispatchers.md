@@ -686,6 +686,254 @@ x-barbacane-dispatch:
 - **Signing**: All requests are signed with AWS Signature Version 4. The signed headers are `host`, `x-amz-content-sha256`, `x-amz-date`, and `x-amz-security-token` (when a session token is present)
 - **Binary objects**: The current implementation returns the response body as a UTF-8 string. Binary objects (images, archives, etc.) are not suitable for this dispatcher — use pre-signed URLs for binary downloads
 
+### ai-proxy
+
+AI gateway dispatcher — exposes a unified OpenAI-compatible API to clients and routes to LLM providers (OpenAI, Anthropic, Ollama). Supports named targets for policy-driven routing, provider fallback on failure, and token count propagation for downstream middlewares.
+
+```yaml
+x-barbacane-dispatch:
+  name: ai-proxy
+  config:
+    provider: openai
+    model: gpt-4o
+    api_key: "${OPENAI_API_KEY}"
+```
+
+#### How It Works
+
+Clients always send requests in [OpenAI chat completion format](https://platform.openai.com/docs/api-reference/chat). The dispatcher handles provider differences transparently:
+
+- **OpenAI / Ollama** — requests are passed through as-is (both are OpenAI-compatible).
+- **Anthropic** — requests and responses are automatically translated between OpenAI format and the [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) (system messages extracted, stop reasons mapped, usage fields normalized).
+
+After each successful call, the dispatcher writes context keys (`ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens`) for downstream middlewares to consume (e.g. for cost tracking or token budgets).
+
+#### Configuration
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `provider` | string | If no `targets` | - | Provider type: `openai`, `anthropic`, or `ollama` |
+| `model` | string | If no `targets` | - | Model identifier (e.g. `gpt-4o`, `claude-opus-4-6`, `mistral`) |
+| `api_key` | string | No | - | API key. Supports `${ENV_VAR}` substitution. Omit for Ollama |
+| `base_url` | string | No | Provider default | Custom endpoint URL (Azure OpenAI, self-hosted vLLM, remote Ollama, etc.) |
+| `timeout` | integer | No | 120 | Request timeout in seconds |
+| `max_tokens` | integer | No | - | Default `max_tokens` injected when the client omits it. Required for Anthropic (enforced by their API). Acts as a cost guardrail for OpenAI/Ollama |
+| `fallback` | array | No | `[]` | Ordered list of fallback providers (see below) |
+| `targets` | object | No | - | Named provider targets for policy-driven routing (see below) |
+| `default_target` | string | No | - | Target to use when no `ai.target` context key is set. Must match a key in `targets` |
+
+**Provider defaults:**
+
+| Provider | Default Base URL |
+|----------|-----------------|
+| `openai` | `https://api.openai.com` |
+| `anthropic` | `https://api.anthropic.com` |
+| `ollama` | `http://localhost:11434` |
+
+#### Configuration Modes
+
+**Flat (single provider):**
+
+```yaml
+x-barbacane-dispatch:
+  name: ai-proxy
+  config:
+    provider: openai
+    model: gpt-4o
+    api_key: "${OPENAI_API_KEY}"
+    max_tokens: 4096
+```
+
+**Named targets (policy-driven routing):**
+
+Define named provider profiles. The `cel` middleware selects the active target by writing `ai.target` into context before the dispatcher runs.
+
+```yaml
+x-barbacane-dispatch:
+  name: ai-proxy
+  config:
+    default_target: standard
+    targets:
+      standard:
+        provider: ollama
+        model: mistral
+      premium:
+        provider: anthropic
+        model: claude-opus-4-6
+        api_key: "${ANTHROPIC_API_KEY}"
+    max_tokens: 4096
+```
+
+With a `cel` middleware routing by API key tier:
+
+```yaml
+x-barbacane-middlewares:
+  - name: apikey-auth
+    config:
+      keys: [{ key: "${FREE_KEY}", name: free }, { key: "${PAID_KEY}", name: paid }]
+  - name: cel
+    config:
+      rules:
+        - expr: 'context["apikey.name"] == "paid"'
+          set_context:
+            ai.target: premium
+```
+
+#### Target Resolution
+
+The dispatcher resolves the active target using this priority chain:
+
+1. **`ai.target` context key** — set by an upstream middleware (e.g. `cel`)
+2. **`default_target`** — the named target to use when no context key is present
+3. **Flat config** — the top-level `provider`/`model` fields
+
+If none resolve, the dispatcher returns 500.
+
+#### Provider Fallback
+
+The `fallback` list is tried in order when the primary target returns a 5xx or a connection error. 4xx responses (client errors) are returned directly without fallback.
+
+```yaml
+x-barbacane-dispatch:
+  name: ai-proxy
+  config:
+    provider: openai
+    model: gpt-4o
+    api_key: "${OPENAI_API_KEY}"
+    fallback:
+      - provider: anthropic
+        model: claude-sonnet-4-20250514
+        api_key: "${ANTHROPIC_API_KEY}"
+      - provider: ollama
+        model: mistral
+        base_url: "http://ollama.internal:11434"
+```
+
+#### Streaming
+
+For OpenAI-compatible providers (OpenAI, Ollama), streaming is supported natively — set `"stream": true` in the client request body and the dispatcher uses `host_http_stream` to relay SSE chunks.
+
+Anthropic streaming is not yet supported; when `"stream": true` is sent to an Anthropic target, the dispatcher buffers the full response and returns it non-streamed (a warning is logged).
+
+#### Context Propagation
+
+After a successful dispatch, the following context keys are set:
+
+| Context Key | Description |
+|-------------|-------------|
+| `ai.provider` | Provider name (`openai`, `anthropic`, `ollama`) |
+| `ai.model` | Model identifier used |
+| `ai.prompt_tokens` | Input token count (non-streamed responses only) |
+| `ai.completion_tokens` | Output token count (non-streamed responses only) |
+
+Token counts are unavailable for streamed responses.
+
+#### Metrics
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `requests_total` | `provider`, `status` | Total requests per provider and HTTP status |
+| `request_duration_seconds` | `provider` | Latency histogram per provider |
+| `tokens_total` | `provider`, `type` (`prompt`/`completion`) | Token usage counters |
+| `fallback_total` | `from_provider`, `to_provider` | Fallback events between providers |
+
+#### Examples
+
+**Simple OpenAI proxy:**
+```yaml
+/v1/chat/completions:
+  post:
+    x-barbacane-dispatch:
+      name: ai-proxy
+      config:
+        provider: openai
+        model: gpt-4o
+        api_key: "${OPENAI_API_KEY}"
+        max_tokens: 4096
+```
+
+**Anthropic with cost guardrail:**
+```yaml
+/v1/chat/completions:
+  post:
+    x-barbacane-dispatch:
+      name: ai-proxy
+      config:
+        provider: anthropic
+        model: claude-sonnet-4-20250514
+        api_key: "${ANTHROPIC_API_KEY}"
+        max_tokens: 2048
+        timeout: 180
+```
+
+**Local Ollama for development:**
+```yaml
+/v1/chat/completions:
+  post:
+    x-barbacane-dispatch:
+      name: ai-proxy
+      config:
+        provider: ollama
+        model: mistral
+```
+
+**Multi-provider with fallback and tier-based routing:**
+```yaml
+/v1/chat/completions:
+  post:
+    x-barbacane-middlewares:
+      - name: apikey-auth
+        config:
+          keys:
+            - { key: "${FREE_KEY}", name: free }
+            - { key: "${PAID_KEY}", name: paid }
+      - name: cel
+        config:
+          rules:
+            - expr: 'context["apikey.name"] == "paid"'
+              set_context:
+                ai.target: premium
+    x-barbacane-dispatch:
+      name: ai-proxy
+      config:
+        default_target: standard
+        targets:
+          standard:
+            provider: ollama
+            model: mistral
+          premium:
+            provider: anthropic
+            model: claude-opus-4-6
+            api_key: "${ANTHROPIC_API_KEY}"
+        fallback:
+          - provider: openai
+            model: gpt-4o
+            api_key: "${OPENAI_API_KEY}"
+        max_tokens: 4096
+```
+
+**Azure OpenAI (custom endpoint):**
+```yaml
+/v1/chat/completions:
+  post:
+    x-barbacane-dispatch:
+      name: ai-proxy
+      config:
+        provider: openai
+        model: gpt-4o
+        api_key: "${AZURE_OPENAI_KEY}"
+        base_url: "https://my-resource.openai.azure.com"
+```
+
+#### Error Handling
+
+| Status | Condition |
+|--------|-----------|
+| 500 Internal Server Error | No provider configured (missing `provider` and no `targets`) |
+| 502 Bad Gateway | All providers (primary + fallback chain) failed |
+
+Error responses use RFC 9457 `application/problem+json` format.
+
 ### ws-upstream
 
 Transparent WebSocket proxy. Upgrades the client connection to WebSocket and relays frames bidirectionally to an upstream WebSocket server. The gateway handles the full lifecycle: handshake, frame relay, and connection teardown.
