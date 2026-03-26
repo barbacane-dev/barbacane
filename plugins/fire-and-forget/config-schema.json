@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:fire-and-forget:config",
+  "title": "Fire-and-Forget Dispatcher Config",
+  "description": "Configuration for the fire-and-forget dispatcher plugin. Forwards the request to an upstream URL and returns an immediate static response.",
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Upstream URL to forward the request to",
+      "format": "uri"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "description": "Timeout in milliseconds for the upstream HTTP call",
+      "default": 5000,
+      "minimum": 1
+    },
+    "response": {
+      "type": "object",
+      "description": "Static response returned to the client",
+      "properties": {
+        "status": {
+          "type": "integer",
+          "description": "HTTP status code",
+          "default": 202,
+          "minimum": 100,
+          "maximum": 599
+        },
+        "headers": {
+          "type": "object",
+          "description": "Additional response headers",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Content-Type header value",
+          "default": "application/json"
+        },
+        "body": {
+          "type": "string",
+          "description": "Response body string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["url"],
+  "additionalProperties": false
+}

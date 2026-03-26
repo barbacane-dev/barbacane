@@ -1,0 +1,9 @@
+[plugin]
+name = "fire-and-forget"
+version = "0.1.0"
+type = "dispatcher"
+description = "Forwards request to upstream and returns an immediate static response"
+wasm = "fire-and-forget.wasm"
+
+[capabilities]
+host_functions = ["host_http_call", "host_log"]

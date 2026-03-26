@@ -1,0 +1,88 @@
+openapi: "3.0.3"
+info:
+  title: Fire-and-Forget Dispatch Test API
+  version: "1.0.0"
+  description: API for testing fire-and-forget dispatcher (forwards request, returns static response)
+
+paths:
+  /webhooks/ingest:
+    post:
+      summary: Accepts a webhook and forwards it upstream
+      operationId: postWebhookIngest
+      x-barbacane-dispatch:
+        name: fire-and-forget
+        config:
+          url: "http://backend:3000/ingest"
+          timeout_ms: 5000
+          response:
+            status: 202
+            body: '{"accepted": true}'
+            content_type: application/json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                payload:
+                  type: object
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted:
+                    type: boolean
+
+  /events/notify:
+    post:
+      summary: Fire-and-forget with custom headers and timeout
+      operationId: postEventNotify
+      x-barbacane-dispatch:
+        name: fire-and-forget
+        config:
+          url: "http://event-processor:8080/notify"
+          timeout_ms: 2000
+          response:
+            status: 200
+            body: '{"queued": true}'
+            headers:
+              X-Queue-Status: accepted
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queued:
+                    type: boolean
+
+  /audit/log:
+    post:
+      summary: Fire-and-forget with minimal config (defaults)
+      operationId: postAuditLog
+      x-barbacane-dispatch:
+        name: fire-and-forget
+        config:
+          url: "http://audit-service:9090/log"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "202":
+          description: Accepted
