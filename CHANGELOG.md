@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **plugin**: `fire-and-forget` dispatcher — forwards request to upstream (best-effort) and returns an immediate static response, useful for webhook ingestion, async job submission, and audit trails
+
 ## [0.5.2] - 2026-03-25
 
 ### Added

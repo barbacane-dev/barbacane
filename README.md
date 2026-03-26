@@ -86,6 +86,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `s3` | Dispatcher | Proxy requests to AWS S3 / S3-compatible storage with SigV4 signing |
 | `ai-proxy` | Dispatcher | Unified LLM routing to OpenAI, Anthropic, and Ollama with provider fallback |
 | `ws-upstream` | Dispatcher | WebSocket transparent proxy with full middleware chain on upgrade |
+| `fire-and-forget` | Dispatcher | Forward request to upstream and return immediate static response |
 | `jwt-auth` | Middleware | JWT token validation |
 | `apikey-auth` | Middleware | API key authentication |
 | `basic-auth` | Middleware | HTTP Basic authentication (RFC 7617) |

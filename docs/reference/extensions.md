@@ -143,6 +143,23 @@ paths:
           secret_access_key: env://AWS_SECRET_ACCESS_KEY
 ```
 
+### Dispatcher: `fire-and-forget`
+
+Forwards request to upstream (best-effort) and returns an immediate static response.
+
+```yaml
+x-barbacane-dispatch:
+  name: fire-and-forget
+  config:
+    url: string           # Required. Upstream URL to forward the request to
+    timeout_ms: integer   # Optional. Timeout in milliseconds (default: 5000)
+    response:             # Optional. Static response returned to the client
+      status: integer     #   HTTP status code (default: 202)
+      content_type: string #  Content-Type header (default: "application/json")
+      body: string        #   Response body (default: "")
+      headers: object     #   Additional response headers (default: {})
+```
+
 ### Dispatcher: `ws-upstream`
 
 Transparent WebSocket proxy. Upgrades the connection and relays frames bidirectionally.

@@ -1050,6 +1050,99 @@ Client: GET /ws/echo?token=abc → Upstream: ws://echo.internal:8080/?token=abc
 - **Development mode**: `ws://` URLs are allowed with `--allow-plaintext-upstream`
 - **Authentication**: Apply auth middleware (jwt-auth, oidc-auth, etc.) to protect WebSocket endpoints — middleware runs on the initial upgrade request
 
+### fire-and-forget
+
+Forwards the incoming request to a configured upstream URL without waiting for the result, and returns an immediate static response. Useful for webhook ingestion, async job submission, and audit trails.
+
+The outbound HTTP call is best-effort: if the upstream is unreachable or returns an error, the client still receives the configured response.
+
+```yaml
+x-barbacane-dispatch:
+  name: fire-and-forget
+  config:
+    url: "http://backend:3000/ingest"
+    response:
+      status: 202
+      body: '{"accepted": true}'
+```
+
+#### Configuration
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `url` | string | Yes | - | Upstream URL to forward the request to |
+| `timeout_ms` | integer | No | 5000 | Timeout in milliseconds for the upstream HTTP call |
+| `response` | object | No | See below | Static response returned to the client |
+
+##### Response Object
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `status` | integer | No | 202 | HTTP status code |
+| `content_type` | string | No | `application/json` | Content-Type header value |
+| `body` | string | No | `""` | Response body |
+| `headers` | object | No | `{}` | Additional response headers |
+
+#### How It Works
+
+1. The request arrives (already processed by the middleware chain)
+2. The dispatcher forwards method, headers, and body to the configured `url`
+3. The upstream response is discarded — errors are logged as warnings
+4. The configured static response is returned to the client
+
+Because the upstream call happens synchronously in the WASM runtime, the client does wait for the HTTP call to complete (or time out). For truly decoupled async processing, consider using the `kafka` or `nats` dispatchers with a consumer behind them.
+
+#### Examples
+
+**Webhook ingestion:**
+```yaml
+/webhooks/stripe:
+  post:
+    x-barbacane-dispatch:
+      name: fire-and-forget
+      config:
+        url: "https://processor.internal/stripe-events"
+        timeout_ms: 3000
+        response:
+          status: 202
+          body: '{"received": true}'
+```
+
+**Audit logging:**
+```yaml
+/audit/events:
+  post:
+    x-barbacane-dispatch:
+      name: fire-and-forget
+      config:
+        url: "http://audit-service:9090/log"
+        response:
+          status: 200
+          body: '{"logged": true}'
+          headers:
+            X-Audit-Status: accepted
+```
+
+**Minimal config (defaults to 202, empty body):**
+```yaml
+/notify:
+  post:
+    x-barbacane-dispatch:
+      name: fire-and-forget
+      config:
+        url: "https://notification-service.internal/send"
+```
+
+#### Error Handling
+
+The dispatcher never returns an error to the client. Upstream failures are logged but the configured static response is always returned.
+
+| Upstream Outcome | Client Receives | Log Level |
+|------------------|----------------|-----------|
+| Success | Configured response | DEBUG |
+| Connection error | Configured response | WARN |
+| Timeout | Configured response | WARN |
+
 ---
 
 ## Best Practices
