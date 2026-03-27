@@ -97,6 +97,15 @@ async fn test_fixture_compiles_mcp() {
 }
 
 #[tokio::test]
+async fn test_fixture_compiles_fire_and_forget() {
+    let gateway = TestGateway::from_spec(&fixture("fire-and-forget.yaml"))
+        .await
+        .expect("fire-and-forget fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
 async fn test_fixture_compiles_ai_proxy() {
     let gateway = TestGateway::from_spec(&fixture("ai-proxy.yaml"))
         .await
