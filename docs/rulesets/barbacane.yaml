@@ -28,7 +28,7 @@ rules:
       function: truthy
 
   barbacane-dispatch-known-plugin:
-    description: "Dispatcher plugin must be one of: ai-proxy, http-upstream, kafka, lambda, mock, nats, s3, ws-upstream."
+    description: "Dispatcher plugin must be one of: ai-proxy, fire-and-forget, http-upstream, kafka, lambda, mock, nats, s3, ws-upstream."
     documentationUrl: https://docs.barbacane.dev/guide/dispatchers.html
     severity: error
     given: "$.paths[*][*]['x-barbacane-dispatch'].name"
@@ -37,6 +37,7 @@ rules:
       functionOptions:
         values:
           - ai-proxy
+          - fire-and-forget
           - http-upstream
           - kafka
           - lambda

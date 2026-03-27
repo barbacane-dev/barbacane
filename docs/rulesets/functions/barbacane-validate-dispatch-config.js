@@ -18,6 +18,16 @@ const schemas = {
     additionalProperties: false,
   },
 
+  "fire-and-forget": {
+    required: ["url"],
+    properties: {
+      url: { type: "string" },
+      timeout_ms: { type: "integer", minimum: 1 },
+      response: { type: "object" },
+    },
+    additionalProperties: false,
+  },
+
   "http-upstream": {
     required: ["url"],
     properties: {

@@ -58,3 +58,5 @@ plugins:
     path: ../../plugins/response-transformer/response-transformer.wasm
   ws-upstream:
     path: ../../plugins/ws-upstream/ws-upstream.wasm
+  fire-and-forget:
+    path: ../../plugins/fire-and-forget/fire-and-forget.wasm
