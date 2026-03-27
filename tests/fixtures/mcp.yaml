@@ -49,7 +49,7 @@ paths:
         name: mock
         config:
           status: 200
-          body: '{"id":"user-found","name":"Test User"}'
+          body: '{"id":"{{path_params.id}}","name":"Test User"}'
       responses:
         "200":
           description: User found

@@ -231,13 +231,11 @@ async fn test_mcp_tools_call_with_path_params() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["result"]["isError"], false);
 
-    // Verify the tool call dispatched successfully and returned content
-    let content = &body["result"]["content"];
-    assert!(content.is_array());
-    assert_eq!(content[0]["type"], "text");
-    // The mock dispatcher returned a response (path param substitution
-    // is tested separately in mock unit tests)
-    assert!(!content[0]["text"].as_str().unwrap().is_empty());
+    // Mock dispatcher interpolates {{path_params.id}} → "42"
+    let text: serde_json::Value =
+        serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text["id"], "42");
+    assert_eq!(text["name"], "Test User");
 }
 
 #[tokio::test]
