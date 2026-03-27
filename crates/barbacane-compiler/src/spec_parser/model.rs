@@ -39,6 +39,12 @@ pub struct Operation {
     pub method: String,
     /// The operationId, if present.
     pub operation_id: Option<String>,
+    /// The operation summary (short description for MCP tool name).
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// The operation description (detailed description for MCP tool).
+    #[serde(default)]
+    pub description: Option<String>,
     /// Path/channel parameters defined on this operation.
     pub parameters: Vec<Parameter>,
     /// Request body definition (OpenAPI: requestBody, AsyncAPI: message payload for SEND).
@@ -61,6 +67,16 @@ pub struct Operation {
     /// Protocol bindings (AsyncAPI: kafka, nats, mqtt, amqp, ws).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, serde_json::Value>,
+    /// Response definitions keyed by status code (e.g., "200", "201").
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub responses: BTreeMap<String, ResponseContent>,
+}
+
+/// Response content for a specific status code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseContent {
+    /// Content types and their schemas (e.g., "application/json" -> schema).
+    pub content: BTreeMap<String, ContentSchema>,
 }
 
 /// A path, query, or header parameter.

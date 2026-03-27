@@ -179,11 +179,23 @@ rules:
       function: barbacane-no-duplicate-middlewares
 
   # ---------------------------------------------------------------------------
+  # MCP validation
+  # ---------------------------------------------------------------------------
+
+  barbacane-mcp-requires-operation-id:
+    description: "MCP-enabled operations must have an operationId."
+    documentationUrl: https://docs.barbacane.dev/guide/mcp.html
+    severity: error
+    given: "$.paths[*][*]"
+    then:
+      function: barbacane-mcp-requires-fields
+
+  # ---------------------------------------------------------------------------
   # Extension hygiene
   # ---------------------------------------------------------------------------
 
   barbacane-no-unknown-extension:
-    description: "Only x-barbacane-dispatch and x-barbacane-middlewares are recognized Barbacane extensions."
+    description: "Only x-barbacane-dispatch, x-barbacane-middlewares, and x-barbacane-mcp are recognized Barbacane extensions."
     documentationUrl: https://docs.barbacane.dev/reference/extensions.html
     severity: warn
     given: "$"

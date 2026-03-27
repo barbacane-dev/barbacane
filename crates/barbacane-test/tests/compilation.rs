@@ -88,6 +88,15 @@ async fn test_fixture_compiles_correlation_id() {
 }
 
 #[tokio::test]
+async fn test_fixture_compiles_mcp() {
+    let gateway = TestGateway::from_spec(&fixture("mcp.yaml"))
+        .await
+        .expect("mcp fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
 async fn test_fixture_compiles_fire_and_forget() {
     let gateway = TestGateway::from_spec(&fixture("fire-and-forget.yaml"))
         .await

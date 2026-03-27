@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::error::ParseError;
 use super::model::{
     ApiSpec, ContentSchema, DispatchConfig, Message, MiddlewareConfig, Operation, Parameter,
-    RequestBody, SpecFormat,
+    RequestBody, ResponseContent, SpecFormat,
 };
 
 /// Resolve a JSON Reference like `#/components/schemas/User` from the spec root.
@@ -227,7 +227,18 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let summary = op_obj
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let description = op_obj
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
                 let request_body = parse_request_body(op_obj, spec_root)?;
+                let responses = parse_responses(op_obj, spec_root)?;
 
                 let dispatch = extract_dispatch(op_obj);
 
@@ -255,6 +266,8 @@ fn parse_openapi_paths(
                     path: path.clone(),
                     method: method.to_uppercase(),
                     operation_id,
+                    summary,
+                    description,
                     parameters: params,
                     request_body,
                     dispatch,
@@ -264,6 +277,7 @@ fn parse_openapi_paths(
                     extensions,
                     messages: Vec::new(), // OpenAPI doesn't use AsyncAPI messages
                     bindings: BTreeMap::new(), // OpenAPI doesn't use protocol bindings
+                    responses,
                 });
             }
         }
@@ -289,7 +303,18 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let summary = op_obj
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let description = op_obj
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
                 let request_body = parse_request_body(op_obj, spec_root)?;
+                let responses = parse_responses(op_obj, spec_root)?;
                 let dispatch = extract_dispatch(op_obj);
 
                 let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
@@ -314,6 +339,8 @@ fn parse_openapi_paths(
                     path: path.clone(),
                     method: method_name.to_uppercase(),
                     operation_id,
+                    summary,
+                    description,
                     parameters: params,
                     request_body,
                     dispatch,
@@ -323,6 +350,7 @@ fn parse_openapi_paths(
                     extensions,
                     messages: Vec::new(),
                     bindings: BTreeMap::new(),
+                    responses,
                 });
             }
         }
@@ -419,6 +447,43 @@ fn parse_request_body(
     }
 
     Ok(Some(RequestBody { required, content }))
+}
+
+/// Parse response definitions from an operation object.
+fn parse_responses(
+    obj: &serde_json::Map<String, Value>,
+    spec_root: &Value,
+) -> Result<BTreeMap<String, ResponseContent>, ParseError> {
+    let Some(responses) = obj.get("responses").and_then(|v| v.as_object()) else {
+        return Ok(BTreeMap::new());
+    };
+
+    let mut result = BTreeMap::new();
+    for (status_code, resp_value) in responses {
+        // Resolve $ref on the response object itself
+        let resolved = resolve_schema_refs(resp_value, spec_root, &mut HashSet::new())?;
+        let Some(resp_obj) = resolved.as_object() else {
+            continue;
+        };
+
+        let Some(content_obj) = resp_obj.get("content").and_then(|v| v.as_object()) else {
+            continue;
+        };
+
+        let mut content = BTreeMap::new();
+        for (media_type, media_obj) in content_obj {
+            let raw_schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
+            let schema = raw_schema
+                .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+                .transpose()?;
+            content.insert(media_type.clone(), ContentSchema { schema });
+        }
+
+        if !content.is_empty() {
+            result.insert(status_code.clone(), ResponseContent { content });
+        }
+    }
+    Ok(result)
 }
 
 /// Parse AsyncAPI 3.x channels and operations.
@@ -538,6 +603,8 @@ fn parse_asyncapi_channels(
             path: address,
             method,
             operation_id: Some(op_id.clone()),
+            summary: None,
+            description: None,
             parameters: channel_params,
             request_body,
             dispatch,
@@ -547,6 +614,7 @@ fn parse_asyncapi_channels(
             extensions,
             messages,
             bindings,
+            responses: BTreeMap::new(),
         });
     }
 
@@ -1741,5 +1809,162 @@ operations:
         let payload = msg.payload.as_ref().unwrap();
         assert!(payload.get("$ref").is_none());
         assert_eq!(payload.get("type").unwrap(), "object");
+    }
+
+    #[test]
+    fn parse_summary_and_description() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Create a new order
+      description: Creates an order with items and shipping address
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+"##;
+        let spec = parse_spec(yaml).expect("should parse");
+        let op = &spec.operations[0];
+        assert_eq!(op.summary.as_deref(), Some("Create a new order"));
+        assert_eq!(
+            op.description.as_deref(),
+            Some("Creates an order with items and shipping address")
+        );
+    }
+
+    #[test]
+    fn parse_summary_and_description_absent() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+"##;
+        let spec = parse_spec(yaml).expect("should parse");
+        let op = &spec.operations[0];
+        assert!(op.summary.is_none());
+        assert!(op.description.is_none());
+    }
+
+    #[test]
+    fn parse_responses_with_schema() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_id:
+                    type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+"##;
+        let spec = parse_spec(yaml).expect("should parse");
+        let op = &spec.operations[0];
+        assert_eq!(op.responses.len(), 2);
+        assert!(op.responses.contains_key("200"));
+        assert!(op.responses.contains_key("404"));
+        let resp_200 = &op.responses["200"];
+        let schema = resp_200.content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        assert!(schema["properties"]["order_id"].is_object());
+    }
+
+    #[test]
+    fn parse_responses_with_ref() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+components:
+  schemas:
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+"##;
+        let spec = parse_spec(yaml).expect("should parse");
+        let op = &spec.operations[0];
+        let schema = op.responses["200"].content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        // $ref should be resolved inline
+        assert!(schema.get("$ref").is_none());
+        assert!(schema["properties"]["id"].is_object());
+    }
+
+    #[test]
+    fn parse_responses_empty_when_no_content() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 204
+      responses:
+        "204":
+          description: No content
+"##;
+        let spec = parse_spec(yaml).expect("should parse");
+        let op = &spec.operations[0];
+        assert!(op.responses.is_empty());
     }
 }

@@ -537,6 +537,8 @@ plugins:
                     path: "/health".to_string(),
                     method: "GET".to_string(),
                     operation_id: None,
+                    summary: None,
+                    description: None,
                     parameters: vec![],
                     request_body: None,
                     dispatch: Some(DispatchConfig {
@@ -549,11 +551,14 @@ plugins:
                     extensions: BTreeMap::new(),
                     messages: vec![],
                     bindings: BTreeMap::new(),
+                    responses: BTreeMap::new(),
                 },
                 Operation {
                     path: "/api".to_string(),
                     method: "GET".to_string(),
                     operation_id: None,
+                    summary: None,
+                    description: None,
                     parameters: vec![],
                     request_body: None,
                     dispatch: Some(DispatchConfig {
@@ -569,6 +574,7 @@ plugins:
                     extensions: BTreeMap::new(),
                     messages: vec![],
                     bindings: BTreeMap::new(),
+                    responses: BTreeMap::new(),
                 },
             ],
         };
@@ -601,6 +607,8 @@ plugins:
                 path: "/health".to_string(),
                 method: "GET".to_string(),
                 operation_id: None,
+                summary: None,
+                description: None,
                 parameters: vec![],
                 request_body: None,
                 dispatch: Some(DispatchConfig {
@@ -613,6 +621,7 @@ plugins:
                 extensions: BTreeMap::new(),
                 messages: vec![],
                 bindings: BTreeMap::new(),
+                responses: BTreeMap::new(),
             }],
         };
 
@@ -644,6 +653,8 @@ plugins:
                 path: "/proxy".to_string(),
                 method: "GET".to_string(),
                 operation_id: None,
+                summary: None,
+                description: None,
                 parameters: vec![],
                 request_body: None,
                 dispatch: Some(DispatchConfig {
@@ -656,6 +667,7 @@ plugins:
                 extensions: BTreeMap::new(),
                 messages: vec![],
                 bindings: BTreeMap::new(),
+                responses: BTreeMap::new(),
             }],
         };
 
@@ -690,6 +702,8 @@ plugins:
                 path: "/health".to_string(),
                 method: "GET".to_string(),
                 operation_id: None,
+                summary: None,
+                description: None,
                 parameters: vec![],
                 request_body: None,
                 dispatch: Some(DispatchConfig {
@@ -702,6 +716,7 @@ plugins:
                 extensions: BTreeMap::new(),
                 messages: vec![],
                 bindings: BTreeMap::new(),
+                responses: BTreeMap::new(),
             }],
         }
     }

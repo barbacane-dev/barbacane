@@ -1,0 +1,112 @@
+openapi: "3.0.3"
+info:
+  title: MCP Test API
+  version: "1.0.0"
+  description: API for testing MCP server integration
+
+x-barbacane-mcp:
+  enabled: true
+  server_name: "MCP Test Server"
+  server_version: "1.0.0"
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      operationId: getHealth
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /users/{id}:
+    get:
+      summary: Get a user by ID
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fields
+          in: query
+          required: false
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"{{path_params.id}}","name":"Test User"}'
+      responses:
+        "200":
+          description: User found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+
+  /users:
+    post:
+      summary: Create a new user
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+              required:
+                - name
+                - email
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{"id":"new-user-1","name":"created"}'
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+
+  /internal/reset:
+    post:
+      summary: Reset database (excluded from MCP)
+      operationId: resetDatabase
+      x-barbacane-mcp:
+        enabled: false
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 204
+      responses:
+        "204":
+          description: Reset complete

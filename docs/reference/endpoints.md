@@ -138,6 +138,60 @@ curl http://localhost:8080/__barbacane/specs/openapi | \
 
 ---
 
+## MCP Server
+
+```
+POST /__barbacane/mcp
+DELETE /__barbacane/mcp
+```
+
+JSON-RPC 2.0 endpoint for the Model Context Protocol. Only available when `x-barbacane-mcp: { enabled: true }` is set in the spec.
+
+### Supported Methods
+
+| JSON-RPC Method | Description |
+|----------------|-------------|
+| `initialize` | Handshake — returns server capabilities and session ID |
+| `notifications/initialized` | Client acknowledgment (no response) |
+| `tools/list` | List available MCP tools (generated from operations) |
+| `tools/call` | Execute a tool (dispatches through middleware + dispatcher pipeline) |
+| `ping` | Keepalive check |
+
+### Session Management
+
+- `initialize` returns a `Mcp-Session-Id` response header
+- Subsequent requests should include `Mcp-Session-Id` in the request header
+- `DELETE /__barbacane/mcp` with `Mcp-Session-Id` terminates the session
+- Sessions expire after 30 minutes of inactivity
+
+### Authentication
+
+MCP tool calls route through the same middleware pipeline as regular HTTP requests. Auth headers (`Authorization`, `X-Api-Key`, etc.) from the MCP HTTP request are forwarded to the internal dispatch, so existing auth middleware (jwt-auth, apikey-auth, etc.) applies transparently.
+
+### Example
+
+```bash
+# Initialize
+curl -X POST http://localhost:8080/__barbacane/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+
+# List tools
+curl -X POST http://localhost:8080/__barbacane/mcp \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: <session-id>" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# Call a tool
+curl -X POST http://localhost:8080/__barbacane/mcp \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: <session-id>" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"createOrder","arguments":{"items":[{"id":"abc"}]}}}'
+```
+
+---
+
 ## Path Reservation
 
 The entire `/__barbacane/` prefix is reserved. Attempting to define operations under this path in your spec will result in undefined behavior (your routes may be shadowed by built-in endpoints).

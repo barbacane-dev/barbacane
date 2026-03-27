@@ -13,14 +13,14 @@ use std::collections::BTreeMap;
 
 use crate::spec_parser::{
     parse_spec_file, ApiSpec, DispatchConfig, Message, MiddlewareConfig, Parameter, RequestBody,
-    SpecFormat,
+    ResponseContent, SpecFormat,
 };
 
 use crate::error::{CompileError, CompileWarning};
 use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
-pub const ARTIFACT_VERSION: u32 = 2;
+pub const ARTIFACT_VERSION: u32 = 3;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
@@ -65,6 +65,7 @@ pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const KNOWN_EXTENSIONS: &[&str] = &[
     "x-barbacane-dispatch",    // Operation level - dispatcher config (required)
     "x-barbacane-middlewares", // Root or operation level - middleware chain
+    "x-barbacane-mcp",         // Root or operation level - MCP server config
 ];
 
 /// Result of compilation including the manifest and any warnings.
@@ -92,6 +93,22 @@ pub struct Manifest {
     pub artifact_hash: String,
     /// Build provenance metadata (git commit, CI source, etc.).
     pub provenance: Provenance,
+    /// MCP server configuration (from root-level x-barbacane-mcp).
+    #[serde(default)]
+    pub mcp: McpConfig,
+}
+
+/// MCP server configuration extracted from `x-barbacane-mcp`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct McpConfig {
+    /// Whether MCP is enabled globally.
+    pub enabled: bool,
+    /// MCP server name (defaults to info.title).
+    #[serde(default)]
+    pub server_name: Option<String>,
+    /// MCP server version (defaults to info.version).
+    #[serde(default)]
+    pub server_version: Option<String>,
 }
 
 /// Build provenance metadata embedded in the manifest.
@@ -164,6 +181,12 @@ pub struct CompiledOperation {
     /// HTTP method (OpenAPI: "GET", AsyncAPI: "SEND"/"RECEIVE").
     pub method: String,
     pub operation_id: Option<String>,
+    /// Operation summary (short description).
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Operation description (detailed).
+    #[serde(default)]
+    pub description: Option<String>,
     /// Parameters for validation (path, query, header).
     pub parameters: Vec<Parameter>,
     /// Request body schema for validation.
@@ -186,6 +209,15 @@ pub struct CompiledOperation {
     /// Protocol bindings (AsyncAPI: kafka, nats, mqtt, amqp, ws).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, serde_json::Value>,
+    /// Response definitions keyed by status code.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub responses: BTreeMap<String, ResponseContent>,
+    /// Whether this operation is exposed as an MCP tool.
+    #[serde(default)]
+    pub mcp_enabled: Option<bool>,
+    /// MCP-specific tool description override.
+    #[serde(default)]
+    pub mcp_description: Option<String>,
 }
 
 /// Compile one or more spec files into a .bca artifact.
@@ -430,6 +462,9 @@ fn compile_inner(
     let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
     let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
 
+    // Extract root-level MCP config from first spec that has it
+    let root_mcp_config = extract_root_mcp_config(specs);
+
     for (spec, _, _) in specs {
         let spec_file = spec.filename.as_deref().unwrap_or("unknown");
 
@@ -568,11 +603,38 @@ fn compile_inner(
                 }
             }
 
+            // Resolve MCP enabled state for this operation
+            let (mcp_enabled, mcp_description) =
+                resolve_mcp_config(&root_mcp_config, op.extensions.get("x-barbacane-mcp"));
+
+            // MCP warnings
+            if mcp_enabled == Some(true) {
+                if op.operation_id.is_none() {
+                    warnings.push(CompileWarning {
+                        code: "E1060".to_string(),
+                        message: "operation without operationId cannot be exposed as MCP tool"
+                            .to_string(),
+                        location: Some(location.clone()),
+                    });
+                }
+                if op.summary.is_none() && op.description.is_none() {
+                    warnings.push(CompileWarning {
+                        code: "E1061".to_string(),
+                        message:
+                            "MCP-enabled operation has no summary or description for tool metadata"
+                                .to_string(),
+                        location: Some(location.clone()),
+                    });
+                }
+            }
+
             operations.push(CompiledOperation {
                 index: operations.len(),
                 path: op.path.clone(),
                 method: op.method.clone(),
                 operation_id: op.operation_id.clone(),
+                summary: op.summary.clone(),
+                description: op.description.clone(),
                 parameters: op.parameters.clone(),
                 request_body: op.request_body.clone(),
                 dispatch,
@@ -581,6 +643,9 @@ fn compile_inner(
                 sunset: op.sunset.clone(),
                 messages: op.messages.clone(),
                 bindings: op.bindings.clone(),
+                responses: op.responses.clone(),
+                mcp_enabled,
+                mcp_description,
             });
         }
     }
@@ -652,6 +717,20 @@ fn compile_inner(
         source: options.provenance_source.clone(),
     };
 
+    // Build MCP config for manifest, defaulting server_name/server_version from spec info
+    let mcp = {
+        let mut cfg = root_mcp_config.clone();
+        if cfg.enabled {
+            if cfg.server_name.is_none() {
+                cfg.server_name = specs.first().map(|(s, _, _)| s.title.clone());
+            }
+            if cfg.server_version.is_none() {
+                cfg.server_version = specs.first().map(|(s, _, _)| s.api_version.clone());
+            }
+        }
+        cfg
+    };
+
     let manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
         compiled_at: now_utc_iso8601(),
@@ -662,6 +741,7 @@ fn compile_inner(
         plugins: bundled_plugins,
         artifact_hash,
         provenance,
+        mcp,
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
@@ -1028,6 +1108,53 @@ mod hex {
             result.push(HEX_CHARS[(byte & 0x0f) as usize] as char);
         }
         result
+    }
+}
+
+/// Extract root-level `x-barbacane-mcp` config from the first spec that defines it.
+fn extract_root_mcp_config(specs: &[(ApiSpec, String, String)]) -> McpConfig {
+    for (spec, _, _) in specs {
+        if let Some(mcp_value) = spec.extensions.get("x-barbacane-mcp") {
+            let enabled = mcp_value
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let server_name = mcp_value
+                .get("server_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let server_version = mcp_value
+                .get("server_version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            return McpConfig {
+                enabled,
+                server_name,
+                server_version,
+            };
+        }
+    }
+    McpConfig::default()
+}
+
+/// Resolve MCP enabled/description for a single operation from root + operation-level config.
+fn resolve_mcp_config(
+    root: &McpConfig,
+    op_extension: Option<&serde_json::Value>,
+) -> (Option<bool>, Option<String>) {
+    if let Some(ext) = op_extension {
+        let enabled = ext.get("enabled").and_then(|v| v.as_bool());
+        let description = ext
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        // Operation-level enabled wins; if not set, inherit from root
+        let resolved_enabled = enabled.or(if root.enabled { Some(true) } else { None });
+        (resolved_enabled, description)
+    } else if root.enabled {
+        (Some(true), None)
+    } else {
+        (None, None)
     }
 }
 
@@ -2473,5 +2600,100 @@ paths:
             r1.manifest.artifact_hash, r2.manifest.artifact_hash,
             "Provenance metadata must not affect artifact hash"
         );
+    }
+
+    // --- MCP config tests ---
+
+    #[test]
+    fn extract_root_mcp_config_enabled() {
+        let spec = ApiSpec {
+            filename: None,
+            format: SpecFormat::OpenApi,
+            version: "3.1.0".to_string(),
+            title: "My API".to_string(),
+            api_version: "2.0.0".to_string(),
+            operations: vec![],
+            global_middlewares: vec![],
+            extensions: BTreeMap::from([(
+                "x-barbacane-mcp".to_string(),
+                serde_json::json!({
+                    "enabled": true,
+                    "server_name": "Custom Name"
+                }),
+            )]),
+        };
+        let specs = vec![(spec, String::new(), String::new())];
+        let cfg = extract_root_mcp_config(&specs);
+        assert!(cfg.enabled);
+        assert_eq!(cfg.server_name.as_deref(), Some("Custom Name"));
+        assert!(cfg.server_version.is_none());
+    }
+
+    #[test]
+    fn extract_root_mcp_config_disabled_by_default() {
+        let spec = ApiSpec {
+            filename: None,
+            format: SpecFormat::OpenApi,
+            version: "3.1.0".to_string(),
+            title: "Test".to_string(),
+            api_version: "1.0.0".to_string(),
+            operations: vec![],
+            global_middlewares: vec![],
+            extensions: BTreeMap::new(),
+        };
+        let specs = vec![(spec, String::new(), String::new())];
+        let cfg = extract_root_mcp_config(&specs);
+        assert!(!cfg.enabled);
+    }
+
+    #[test]
+    fn resolve_mcp_config_inherits_from_root() {
+        let root = McpConfig {
+            enabled: true,
+            server_name: None,
+            server_version: None,
+        };
+        // No operation-level extension → inherits root
+        let (enabled, desc) = resolve_mcp_config(&root, None);
+        assert_eq!(enabled, Some(true));
+        assert!(desc.is_none());
+    }
+
+    #[test]
+    fn resolve_mcp_config_operation_overrides_root() {
+        let root = McpConfig {
+            enabled: true,
+            server_name: None,
+            server_version: None,
+        };
+        // Operation opts out
+        let ext = serde_json::json!({"enabled": false});
+        let (enabled, _) = resolve_mcp_config(&root, Some(&ext));
+        assert_eq!(enabled, Some(false));
+    }
+
+    #[test]
+    fn resolve_mcp_config_operation_description_override() {
+        let root = McpConfig {
+            enabled: true,
+            server_name: None,
+            server_version: None,
+        };
+        let ext = serde_json::json!({"description": "Custom tool description"});
+        let (enabled, desc) = resolve_mcp_config(&root, Some(&ext));
+        // enabled not set at operation level → inherits root true
+        assert_eq!(enabled, Some(true));
+        assert_eq!(desc.as_deref(), Some("Custom tool description"));
+    }
+
+    #[test]
+    fn resolve_mcp_config_root_disabled_no_inheritance() {
+        let root = McpConfig {
+            enabled: false,
+            server_name: None,
+            server_version: None,
+        };
+        let (enabled, _) = resolve_mcp_config(&root, None);
+        assert!(enabled.is_none());
     }
 }

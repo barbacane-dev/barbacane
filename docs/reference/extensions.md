@@ -8,6 +8,7 @@ Complete reference for all `x-barbacane-*` OpenAPI extensions.
 |-----------|----------|----------|---------|
 | [`x-barbacane-dispatch`](#x-barbacane-dispatch) | Operation | Yes | Route to dispatcher |
 | [`x-barbacane-middlewares`](#x-barbacane-middlewares) | Root / Operation | No | Apply middleware chain |
+| [`x-barbacane-mcp`](#x-barbacane-mcp) | Root / Operation | No | Enable MCP server |
 
 ---
 
@@ -515,6 +516,99 @@ Per-operation observability middleware for SLO monitoring, detailed logging, and
 | `detailed_request_logs` | boolean | `false` | Log incoming request details |
 | `detailed_response_logs` | boolean | `false` | Log outgoing response details including duration |
 | `emit_latency_histogram` | boolean | `false` | Emit `barbacane_plugin_observability_latency_ms` histogram |
+
+---
+
+## x-barbacane-mcp
+
+Enables the MCP (Model Context Protocol) server. When enabled, API operations are automatically exposed as MCP tools that AI agents can discover and call via JSON-RPC 2.0.
+
+### Location
+
+- **Root level**: Enables MCP globally for all operations
+- **Operation level**: Override per operation (opt in or opt out)
+
+### Schema
+
+```yaml
+x-barbacane-mcp:
+  enabled: boolean        # Required. Enable/disable MCP
+  server_name: string     # Optional. MCP server name (defaults to info.title)
+  server_version: string  # Optional. MCP server version (defaults to info.version)
+  description: string     # Optional. Operation-level tool description override
+```
+
+### Properties
+
+| Property | Type | Level | Default | Description |
+|----------|------|-------|---------|-------------|
+| `enabled` | boolean | Root/Operation | `false` | Enable MCP tool exposure |
+| `server_name` | string | Root | `info.title` | Server name in MCP handshake |
+| `server_version` | string | Root | `info.version` | Server version in MCP handshake |
+| `description` | string | Operation | `summary` or `description` | Override tool description |
+
+### Requirements
+
+When MCP is enabled for an operation:
+- `operationId` is required (used as the MCP tool name)
+- `summary` or `description` is required (used as the MCP tool description)
+
+### Examples
+
+**Enable MCP globally:**
+```yaml
+openapi: "3.1.0"
+info:
+  title: Order API
+  version: "1.0.0"
+
+x-barbacane-mcp:
+  enabled: true
+
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Create a new order
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://backend.internal"
+```
+
+**Opt out a specific operation:**
+```yaml
+x-barbacane-mcp:
+  enabled: true
+
+paths:
+  /admin/reset:
+    post:
+      operationId: resetDatabase
+      summary: Reset the database
+      x-barbacane-mcp:
+        enabled: false
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://backend.internal"
+```
+
+**Custom tool description:**
+```yaml
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Create order
+      x-barbacane-mcp:
+        enabled: true
+        description: "Create a new customer order with items and shipping address"
+```
+
+### MCP Endpoint
+
+When enabled, the gateway exposes `POST /__barbacane/mcp` for JSON-RPC 2.0 requests. See [Reserved Endpoints](endpoints.md) for details.
 
 ---
 

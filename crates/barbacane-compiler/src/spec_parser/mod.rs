@@ -10,6 +10,6 @@ pub mod parser;
 pub use error::ParseError;
 pub use model::{
     ApiSpec, AsyncAction, Channel, ContentSchema, DispatchConfig, Message, MiddlewareConfig,
-    Operation, Parameter, RequestBody, SpecFormat,
+    Operation, Parameter, RequestBody, ResponseContent, SpecFormat,
 };
 pub use parser::{parse_spec, parse_spec_file};
