@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Count all passing tests across the project.
+# Count all tests across the project by scanning source annotations.
+# Instant — no compilation or test execution needed.
+#
 # Run from repo root: ./scripts/count-tests.sh
 #
 # Options:
@@ -18,57 +20,49 @@ bold="\033[1m"
 dim="\033[2m"
 reset="\033[0m"
 
+# Count #[test] and #[tokio::test] annotations in Rust files under a directory.
+count_rust_tests() {
+  local n
+  n=$(grep -rch '#\[test\]\|#\[tokio::test\]' "$@" --include='*.rs' 2>/dev/null | awk '{s+=$1} END {print s+0}') || true
+  echo "${n:-0}"
+}
+
 echo -e "${bold}=== Barbacane Test Count ===${reset}"
 echo ""
 
-# 1. Workspace unit tests (excludes barbacane-test which holds integration/CLI tests)
-echo -e "${dim}Running workspace unit tests...${reset}"
-UNIT=$(cargo test --workspace --exclude barbacane-test 2>&1 \
-  | grep "^test result:" \
-  | awk '{sum += $4} END {print sum}')
+# 1. Workspace unit tests (all crates except barbacane-test)
+UNIT=0
+for crate in "$ROOT"/crates/*/src/; do
+  [[ "$crate" == *barbacane-test* ]] && continue
+  count=$(count_rust_tests "$crate")
+  UNIT=$((UNIT + count))
+done
 echo -e "  Unit tests:        ${bold}${UNIT}${reset}"
 
-# 2. Plugin tests (only dirs with Cargo.toml — avoids pre-built wasm-only dirs)
-echo -e "${dim}Running plugin tests...${reset}"
+# 2. Plugin tests
 PLUGIN_TOTAL=0
 for p in "$ROOT"/plugins/*/; do
   [ -f "$p/Cargo.toml" ] || continue
-  count=$(cd "$p" && cargo test 2>&1 \
-    | grep "^test result:" \
-    | awk '{sum += $4} END {print sum}')
+  [ -d "$p/src" ] || continue
+  count=$(count_rust_tests "$p/src/")
   PLUGIN_TOTAL=$((PLUGIN_TOTAL + count))
 done
 echo -e "  Plugin tests:      ${bold}${PLUGIN_TOTAL}${reset}"
 
-# 3. Integration tests (tests/ directory in barbacane-test)
-echo -e "${dim}Running integration tests...${reset}"
-TEST_OUTPUT=$(cargo test -p barbacane-test 2>&1)
-# Integration tests are top-level functions in tests/*.rs — no module prefix.
-# CLI tests are unit tests in src/cli.rs — they appear as "test cli::*".
-INTEGRATION=$(echo "$TEST_OUTPUT" | grep "^test " | grep -v "^test cli::" | grep -c " ok$" || true)
+# 3. Integration tests (barbacane-test tests/ directory)
+INTEGRATION=$(count_rust_tests "$ROOT/crates/barbacane-test/tests/")
 echo -e "  Integration tests: ${bold}${INTEGRATION}${reset}"
 
-# 4. CLI tests (cli module from barbacane-test)
-CLI=$(echo "$TEST_OUTPUT" | grep "^test cli::" | grep -c " ok$" || true)
+# 4. CLI tests (barbacane-test src/ directory)
+CLI=$(count_rust_tests "$ROOT/crates/barbacane-test/src/")
 echo -e "  CLI tests:         ${bold}${CLI}${reset}"
 
-# Check for failures in barbacane-test
-FAILED=$(echo "$TEST_OUTPUT" | grep "^test " | grep -c " FAILED$" || true)
-if [ "$FAILED" -gt 0 ]; then
-  echo -e "  \033[31m⚠ ${FAILED} test(s) FAILED in barbacane-test\033[0m"
-  echo "$TEST_OUTPUT" | grep "^test " | grep " FAILED$" | sed 's/^/    /'
-fi
-
-# 5. UI unit tests (vitest)
-echo -e "${dim}Running UI unit tests...${reset}"
-UI=$(cd "$ROOT/ui" && npx vitest run 2>&1 \
-  | grep -E "Tests\s+" \
-  | grep -oE '[0-9]+ passed' \
-  | awk '{print $1}')
+# 5. UI unit tests (vitest — count `it(` and `test(` in .test.* files)
+UI=$(grep -rh '^\s*\(it\|test\)(' "$ROOT/ui/src/" --include='*.test.*' 2>/dev/null | wc -l | tr -d ' ')
 echo -e "  UI tests:          ${bold}${UI}${reset}"
 
-# 6. E2E tests (static count — Playwright needs a running dev server)
-E2E=$(grep -rh "^\s*test(" "$ROOT"/ui/e2e/*.spec.ts 2>/dev/null | wc -l | tr -d ' ')
+# 6. E2E tests (Playwright — count `test(` in .spec.ts files)
+E2E=$(grep -rh '^\s*test(' "$ROOT"/ui/e2e/*.spec.ts 2>/dev/null | wc -l | tr -d ' ')
 echo -e "  E2E tests:         ${bold}${E2E}${reset}"
 
 TOTAL=$((UNIT + PLUGIN_TOTAL + INTEGRATION + CLI + UI + E2E))

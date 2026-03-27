@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-27
+
 ### Added
+- **gateway**: MCP (Model Context Protocol) server — API operations are automatically exposed as AI-callable tools via JSON-RPC 2.0 at `POST /__barbacane/mcp` (ADR-0025)
+- **compiler**: `x-barbacane-mcp` extension for enabling MCP globally or per-operation, with `server_name`, `server_version`, and `description` overrides
 - **plugin**: `fire-and-forget` dispatcher — forwards request to upstream (best-effort) and returns an immediate static response, useful for webhook ingestion, async job submission, and audit trails
+- **ruleset**: `barbacane-mcp-requires-fields` vacuum rule — validates that MCP-enabled operations have `operationId` and `summary`/`description`
+
+### Fixed
+- **gateway**: CORS headers now included on `/__barbacane/*` reserved endpoints
+- **gateway**: 404 and 405 responses use RFC 9457 `application/problem+json` format
 
 ## [0.5.2] - 2026-03-25
 
