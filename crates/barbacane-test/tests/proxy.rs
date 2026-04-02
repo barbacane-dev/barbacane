@@ -149,6 +149,22 @@ async fn test_tls_gateway_404() {
     assert_eq!(resp.status(), 404);
 }
 
+#[tokio::test]
+async fn test_tls_gateway_http2() {
+    let gateway = TestGateway::from_spec_with_tls(&fixture("minimal.yaml"))
+        .await
+        .expect("failed to start TLS gateway");
+
+    // HTTP/2 should be negotiated via ALPN when TLS is enabled
+    let resp = gateway.get("/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.version(),
+        reqwest::Version::HTTP_2,
+        "expected HTTP/2 negotiated via ALPN over TLS"
+    );
+}
+
 // ========================
 // Middleware + POST body
 // ========================

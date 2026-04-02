@@ -210,9 +210,12 @@ impl TestGateway {
                 TestError::StartupFailed(format!("failed to add root cert: {:?}", e))
             })?;
 
-            let tls_config = rustls::ClientConfig::builder()
+            let mut tls_config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
+
+            // Enable ALPN so the client can negotiate HTTP/2 over TLS
+            tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
             reqwest::Client::builder()
                 .use_preconfigured_tls(tls_config)
