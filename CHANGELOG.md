@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-04-02
+
+### Fixed
+- **gateway**: HTTP/2 connections over TLS failed with a framing error because hyper's HTTP/2 server builder had no timer — now supplies `TokioTimer` explicitly
+- **ruleset**: `fire-and-forget` dispatcher was missing from the vacuum custom ruleset enum and config schema validation
+
 ## [0.6.0] - 2026-03-27
 
 ### Added
