@@ -32,7 +32,7 @@ type AnyBody = BoxBody<Bytes, Infallible>;
 fn box_full(r: Response<Full<Bytes>>) -> Response<AnyBody> {
     r.map(BoxBody::new)
 }
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
@@ -3826,6 +3826,7 @@ async fn run_serve(
                                 builder.http1().keep_alive(true);
                                 builder
                                     .http2()
+                                    .timer(TokioTimer::new())
                                     .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
                                 let conn = builder.serve_connection_with_upgrades(io, service);
 
@@ -3863,6 +3864,7 @@ async fn run_serve(
                         builder.http1().keep_alive(true);
                         builder
                             .http2()
+                            .timer(TokioTimer::new())
                             .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
                         let conn = builder.serve_connection_with_upgrades(io, service);
 
