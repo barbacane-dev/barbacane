@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  issue_comment:
+    types: [created]
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,6 +16,7 @@ jobs:
   # Detect what files changed to skip unnecessary jobs
   changes:
     name: Detect Changes
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -289,14 +292,20 @@ jobs:
         # Run gateway integration tests from barbacane-test crate
         run: cargo test -p barbacane-test --lib -- --test-threads=2
 
-  # Benchmark regression check (only on PRs to main, only when code changes)
+  # Benchmark regression check
+  # Triggered by: adding the "run-benchmarks" label, or commenting "/bench" on a PR.
   benchmarks:
     name: Benchmark Check
     runs-on: ubuntu-latest
-    needs: [changes, fmt, clippy]
-    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    if: >-
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-benchmarks'))
+      || (github.event_name == 'issue_comment' && github.event.issue.pull_request
+          && contains(github.event.comment.body, '/bench'))
     steps:
       - uses: actions/checkout@v6
+        with:
+          # For issue_comment events, check out the PR head
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -308,9 +317,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-bench-
+            ${{ runner.os }}-cargo-
 
       - name: Cache benchmark baselines
         uses: actions/cache@v5

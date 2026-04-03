@@ -146,3 +146,35 @@ paths:
           description: Asset content
         "404":
           description: Asset not found
+
+  # ── SPA fallback ──────────────────────────────────────────────────────────
+  # Single-page application hosting with fallback_key.
+  # On GET 404, retries with index.html so the SPA's JS router can handle the path.
+
+  /spa/{path+}:
+    get:
+      operationId: getSpaPage
+      summary: Serve SPA files with index.html fallback
+      parameters:
+        - name: path
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          access_key_id: test
+          secret_access_key: testtest
+          endpoint: http://localhost:9000
+          force_path_style: true
+          bucket: my-spa
+          key_param: path
+          fallback_key: index.html
+      responses:
+        "200":
+          description: SPA content
+        "404":
+          description: Not found (fallback also missing)
