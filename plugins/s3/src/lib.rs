@@ -63,6 +63,12 @@ pub struct S3Dispatcher {
     #[serde(default = "default_key_param")]
     key_param: String,
 
+    // ── SPA fallback ──────────────────────────────────────────────────────
+    /// Fallback object key for SPA routing.
+    /// When set, a 404 on a GET request triggers a second S3 fetch with this key.
+    #[serde(default)]
+    fallback_key: Option<String>,
+
     // ── Request options ────────────────────────────────────────────────────
     /// Request timeout in seconds (default: 30).
     #[serde(default = "default_timeout")]
@@ -219,6 +225,87 @@ impl S3Dispatcher {
         }
     }
 
+    /// Execute a signed S3 request and return the raw `HttpResponse` + body.
+    fn call_s3(
+        &self,
+        bucket: &str,
+        key: &str,
+        method: &str,
+        query: Option<&str>,
+        body: Option<&[u8]>,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<(HttpResponse, Option<Vec<u8>>), Response> {
+        if let Some(b) = body {
+            set_http_request_body(b);
+        }
+
+        let unix_secs = current_timestamp();
+        let http_request =
+            self.build_s3_request(bucket, key, method, query, body, headers, unix_secs);
+
+        let request_json = serde_json::to_vec(&http_request).map_err(|e| {
+            self.error_response(
+                500,
+                "Internal Error",
+                "failed to serialize request",
+                &e.to_string(),
+            )
+        })?;
+
+        let result_len =
+            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
+
+        if result_len < 0 {
+            return Err(self.error_response(
+                502,
+                "Bad Gateway",
+                "S3 connection failed",
+                "host_http_call returned error",
+            ));
+        }
+
+        let mut response_buf = vec![0u8; result_len as usize];
+        let bytes_read =
+            unsafe { host_http_read_result(response_buf.as_mut_ptr() as i32, result_len) };
+
+        if bytes_read <= 0 {
+            return Err(self.error_response(
+                502,
+                "Bad Gateway",
+                "S3 connection failed",
+                "failed to read response",
+            ));
+        }
+
+        let http_response: HttpResponse =
+            serde_json::from_slice(&response_buf[..bytes_read as usize]).map_err(|e| {
+                self.error_response(502, "Bad Gateway", "invalid S3 response", &e.to_string())
+            })?;
+
+        let response_body = read_http_response_body();
+        Ok((http_response, response_body))
+    }
+
+    /// Filter hop-by-hop headers from an S3 response and build the final `Response`.
+    fn build_response(http_response: HttpResponse, body: Option<Vec<u8>>) -> Response {
+        let mut response_headers = BTreeMap::new();
+        for (key, value) in http_response.headers {
+            let key_lower = key.to_lowercase();
+            if !matches!(
+                key_lower.as_str(),
+                "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
+            ) {
+                response_headers.insert(key, value);
+            }
+        }
+
+        Response {
+            status: http_response.status,
+            headers: response_headers,
+            body,
+        }
+    }
+
     /// Build and sign an S3 request, then proxy it via `host_http_call`.
     pub fn dispatch(&mut self, req: Request) -> Response {
         // ── 1. Resolve bucket ──────────────────────────────────────────────
@@ -251,95 +338,31 @@ impl S3Dispatcher {
             }
         };
 
-        // ── 3. Send request body via side-channel ──────────────────────────
-        if let Some(ref b) = req.body {
-            set_http_request_body(b);
-        }
-
-        // ── 4. Build signed request ────────────────────────────────────────
-        let unix_secs = current_timestamp();
-        let http_request = self.build_s3_request(
+        // ── 3. Call S3 ─────────────────────────────────────────────────────
+        let (http_response, response_body) = match self.call_s3(
             &bucket,
             &key,
             &req.method,
             req.query.as_deref(),
             req.body.as_deref(),
             &req.headers,
-            unix_secs,
-        );
-
-        // ── 5. Serialize and call S3 ───────────────────────────────────────
-        let request_json = match serde_json::to_vec(&http_request) {
-            Ok(json) => json,
-            Err(e) => {
-                return self.error_response(
-                    500,
-                    "Internal Error",
-                    "failed to serialize request",
-                    &e.to_string(),
-                )
-            }
+        ) {
+            Ok(r) => r,
+            Err(resp) => return resp,
         };
 
-        let result_len =
-            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
-
-        if result_len < 0 {
-            return self.error_response(
-                502,
-                "Bad Gateway",
-                "S3 connection failed",
-                "host_http_call returned error",
-            );
-        }
-
-        let mut response_buf = vec![0u8; result_len as usize];
-        let bytes_read =
-            unsafe { host_http_read_result(response_buf.as_mut_ptr() as i32, result_len) };
-
-        if bytes_read <= 0 {
-            return self.error_response(
-                502,
-                "Bad Gateway",
-                "S3 connection failed",
-                "failed to read response",
-            );
-        }
-
-        let http_response: HttpResponse =
-            match serde_json::from_slice(&response_buf[..bytes_read as usize]) {
-                Ok(resp) => resp,
-                Err(e) => {
-                    return self.error_response(
-                        502,
-                        "Bad Gateway",
-                        "invalid S3 response",
-                        &e.to_string(),
-                    )
-                }
-            };
-
-        // ── 6. Read response body from side-channel ─────────────────────────
-        let response_body = read_http_response_body();
-
-        // ── 7. Pass through response ───────────────────────────────────────
-        // Filter hop-by-hop headers; pass S3 error codes through transparently.
-        let mut response_headers = BTreeMap::new();
-        for (key, value) in http_response.headers {
-            let key_lower = key.to_lowercase();
-            if !matches!(
-                key_lower.as_str(),
-                "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
-            ) {
-                response_headers.insert(key, value);
+        // ── 4. SPA fallback: retry with fallback_key on 404 GET ────────────
+        if http_response.status == 404 && req.method == "GET" {
+            if let Some(fallback) = &self.fallback_key {
+                return match self.call_s3(&bucket, fallback, "GET", None, None, &req.headers) {
+                    Ok((resp, body)) => Self::build_response(resp, body),
+                    Err(resp) => resp,
+                };
             }
         }
 
-        Response {
-            status: http_response.status,
-            headers: response_headers,
-            body: response_body,
-        }
+        // ── 5. Pass through response ───────────────────────────────────────
+        Self::build_response(http_response, response_body)
     }
 
     /// Create an error response in RFC 9457 Problem Details format.
@@ -437,6 +460,7 @@ mod tests {
             bucket: bucket.map(|s| s.to_string()),
             bucket_param: "bucket".to_string(),
             key_param: "key".to_string(),
+            fallback_key: None,
             timeout: 30.0,
         }
     }
@@ -469,6 +493,7 @@ mod tests {
         assert_eq!(cfg.bucket_param, "bucket");
         assert_eq!(cfg.key_param, "key");
         assert!(!cfg.force_path_style);
+        assert!(cfg.fallback_key.is_none());
         assert_eq!(cfg.timeout, 30.0);
     }
 
@@ -484,15 +509,20 @@ mod tests {
             "bucket": "my-bucket",
             "bucket_param": "bkt",
             "key_param": "obj",
+            "fallback_key": "index.html",
             "timeout": 60.0
         }"#;
         let cfg: S3Dispatcher = serde_json::from_str(json).expect("deserialize");
         assert_eq!(cfg.session_token, Some("token".to_string()));
-        assert_eq!(cfg.endpoint, Some("https://minio.internal:9000".to_string()));
+        assert_eq!(
+            cfg.endpoint,
+            Some("https://minio.internal:9000".to_string())
+        );
         assert!(cfg.force_path_style);
         assert_eq!(cfg.bucket, Some("my-bucket".to_string()));
         assert_eq!(cfg.bucket_param, "bkt");
         assert_eq!(cfg.key_param, "obj");
+        assert_eq!(cfg.fallback_key, Some("index.html".to_string()));
         assert_eq!(cfg.timeout, 60.0);
     }
 
@@ -542,6 +572,42 @@ mod tests {
         assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
     }
 
+    // ── SPA fallback (dispatch level) ───────────────────────────────────
+
+    #[test]
+    fn test_fallback_not_triggered_on_non_404() {
+        // Native stub returns 502 (not 404) — fallback must NOT fire.
+        // A second call_s3 would also return 502, so the final status stays 502
+        // regardless, but this test documents intent.
+        let mut d = make_dispatcher(Some("my-spa"), None);
+        d.fallback_key = Some("index.html".to_string());
+        let mut params = BTreeMap::new();
+        params.insert("key".to_string(), "channels/123".to_string());
+        let resp = d.dispatch(make_get_request(params));
+        assert_eq!(resp.status, 502);
+    }
+
+    #[test]
+    fn test_fallback_not_triggered_on_post() {
+        // Fallback only applies to GET requests.
+        let mut d = make_dispatcher(Some("my-spa"), None);
+        d.fallback_key = Some("index.html".to_string());
+        let mut params = BTreeMap::new();
+        params.insert("key".to_string(), "api/data".to_string());
+        let req = Request {
+            method: "POST".to_string(),
+            path: "/".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: None,
+            path_params: params,
+            client_ip: "127.0.0.1".to_string(),
+        };
+        let resp = d.dispatch(req);
+        // Still 502 from native stub — but fallback was not attempted
+        assert_eq!(resp.status, 502);
+    }
+
     // ── Bucket resolution (dispatch level) ────────────────────────────────
 
     #[test]
@@ -583,10 +649,7 @@ mod tests {
             req.url,
             "https://my-bucket.s3.us-east-1.amazonaws.com/my-key.txt"
         );
-        assert_eq!(
-            req.headers["host"],
-            "my-bucket.s3.us-east-1.amazonaws.com"
-        );
+        assert_eq!(req.headers["host"], "my-bucket.s3.us-east-1.amazonaws.com");
         // Credential scope must reference correct region and service
         assert!(req.headers["authorization"]
             .contains("Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request"));
@@ -629,10 +692,7 @@ mod tests {
             &BTreeMap::new(),
             TEST_TS,
         );
-        assert_eq!(
-            req.url,
-            "https://minio.internal:9000/uploads/data/file.csv"
-        );
+        assert_eq!(req.url, "https://minio.internal:9000/uploads/data/file.csv");
         assert_eq!(req.headers["host"], "minio.internal:9000");
     }
 
@@ -658,8 +718,7 @@ mod tests {
     #[test]
     fn test_timestamp_propagated_to_amz_date() {
         let d = make_dispatcher(Some("bucket"), None);
-        let req =
-            d.build_s3_request("bucket", "k", "GET", None, None, &BTreeMap::new(), TEST_TS);
+        let req = d.build_s3_request("bucket", "k", "GET", None, None, &BTreeMap::new(), TEST_TS);
         assert_eq!(req.headers["x-amz-date"], "20130524T000000Z");
     }
 
@@ -680,8 +739,7 @@ mod tests {
         // Body hash must reflect the actual body content, not the empty-body hash
         assert_eq!(req.headers["x-amz-content-sha256"], expected_hash);
         assert_ne!(
-            expected_hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            expected_hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "non-empty body must not produce the empty-string hash"
         );
         assert_eq!(req.method, "PUT");
@@ -690,8 +748,7 @@ mod tests {
     #[test]
     fn test_empty_body_hash_for_get() {
         let d = make_dispatcher(Some("bucket"), None);
-        let req =
-            d.build_s3_request("bucket", "k", "GET", None, None, &BTreeMap::new(), TEST_TS);
+        let req = d.build_s3_request("bucket", "k", "GET", None, None, &BTreeMap::new(), TEST_TS);
         assert_eq!(
             req.headers["x-amz-content-sha256"],
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

@@ -95,6 +95,7 @@ const schemas = {
       bucket: { type: "string" },
       bucket_param: { type: "string" },
       key_param: { type: "string" },
+      fallback_key: { type: "string" },
       timeout: { type: "number", minimum: 0 },
     },
     additionalProperties: false,

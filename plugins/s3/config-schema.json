@@ -46,6 +46,10 @@
       "default": "key",
       "description": "Name of the path parameter that holds the object key. Use a wildcard parameter ({key+} in the route template) to capture multi-segment keys containing slashes."
     },
+    "fallback_key": {
+      "type": "string",
+      "description": "Fallback object key for SPA routing. When set, a 404 on a GET request triggers a second S3 fetch with this key (e.g. index.html)."
+    },
     "timeout": {
       "type": "number",
       "default": 30,
