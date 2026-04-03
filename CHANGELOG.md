@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-04-03
+
+### Added
+- **plugin**: S3 dispatcher `fallback_key` config — on GET 404, retries with the fallback key (e.g. `index.html`) for single-page application hosting without a reverse proxy
+
+### Changed
+- **ci**: benchmark job now runs on-demand only (add `run-benchmarks` label or comment `/bench` on a PR)
+
 ## [0.6.1] - 2026-04-02
 
 ### Fixed
