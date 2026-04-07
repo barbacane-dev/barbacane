@@ -564,6 +564,7 @@ x-barbacane-dispatch:
 | `bucket` | string | No | - | Hard-coded bucket name. When set, `bucket_param` is ignored. Use for single-bucket routes like `/assets/{key+}` |
 | `bucket_param` | string | No | `"bucket"` | Name of the path parameter that holds the bucket |
 | `key_param` | string | No | `"key"` | Name of the path parameter that holds the object key |
+| `fallback_key` | string | No | - | Fallback object key for SPA routing. When set, a 404 on a GET request triggers a second S3 fetch with this key (e.g. `index.html`). Query parameters are stripped from the S3 request to avoid SigV4 signature errors |
 | `timeout` | number | No | `30` | Request timeout in seconds |
 
 #### URL Styles
@@ -601,6 +602,25 @@ Use `{key+}` (greedy wildcard) to capture multi-segment S3 keys containing slash
 ```
 
 `GET /files/uploads/2024/01/report.pdf` → S3 key `2024/01/report.pdf` in bucket `uploads`.
+
+#### SPA Fallback
+
+Set `fallback_key` to serve a default object (typically `index.html`) when S3 returns a 404 on a GET request. This enables client-side routing for single-page applications:
+
+```yaml
+x-barbacane-dispatch:
+  name: s3
+  config:
+    region: us-east-1
+    bucket: my-spa
+    access_key_id: env://AWS_ACCESS_KEY_ID
+    secret_access_key: env://AWS_SECRET_ACCESS_KEY
+    fallback_key: index.html
+```
+
+`GET /dashboard/settings` → S3 returns 404 → re-fetches `index.html` from the same bucket.
+
+When `fallback_key` is set, query parameters are automatically stripped from the S3 request. Frontend query strings (e.g. `?code=...&state=...` from OIDC callbacks) belong to the client-side router — forwarding them to S3 would invalidate the SigV4 signature and prevent the 404→fallback path from triggering.
 
 #### Examples
 
@@ -669,6 +689,23 @@ x-barbacane-dispatch:
     secret_access_key: env://AWS_SECRET_ACCESS_KEY
     session_token: env://AWS_SESSION_TOKEN
     bucket: my-bucket
+```
+
+**SPA with OIDC authentication (fallback to `index.html`):**
+```yaml
+paths:
+  /{path+}:
+    get:
+      parameters:
+        - { name: path, in: path, required: true, allowReserved: true, schema: { type: string } }
+      x-barbacane-dispatch:
+        name: s3
+        config:
+          region: us-east-1
+          bucket: my-spa
+          access_key_id: env://AWS_ACCESS_KEY_ID
+          secret_access_key: env://AWS_SECRET_ACCESS_KEY
+          fallback_key: index.html
 ```
 
 #### Error Handling
