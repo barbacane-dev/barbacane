@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-07
+
+### Fixed
+- **plugin**: S3 dispatcher now strips query parameters from S3 requests when `fallback_key` is set — fixes SigV4 signature errors on SPA routes with query strings (e.g. OIDC `/callback?code=...`)
+
+### Documentation
+- **plugin**: added `fallback_key` property and SPA fallback section to S3 dispatcher docs
+
 ## [0.6.2] - 2026-04-03
 
 ### Added
