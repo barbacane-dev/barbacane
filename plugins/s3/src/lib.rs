@@ -339,11 +339,18 @@ impl S3Dispatcher {
         };
 
         // ── 3. Call S3 ─────────────────────────────────────────────────────
+        // When fallback_key is set (SPA mode), ignore query params — they belong
+        // to the frontend router, not S3, and would invalidate SigV4 signatures.
+        let query = if self.fallback_key.is_some() {
+            None
+        } else {
+            req.query.as_deref()
+        };
         let (http_response, response_body) = match self.call_s3(
             &bucket,
             &key,
             &req.method,
-            req.query.as_deref(),
+            query,
             req.body.as_deref(),
             &req.headers,
         ) {
