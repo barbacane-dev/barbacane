@@ -15,6 +15,7 @@ barbacane <COMMAND> [OPTIONS]
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize a new Barbacane project |
+| `dev` | Start a local development server with auto-reload |
 | `compile` | Compile OpenAPI spec(s) into a `.bca` artifact |
 | `validate` | Validate spec(s) without compiling |
 | `serve` | Run the gateway server |
@@ -93,8 +94,9 @@ barbacane init my-api -t minimal
 
 ```
 my-api/
-├── barbacane.yaml    # Project manifest (plugin declarations)
-├── api.yaml          # OpenAPI 3.1 specification
+├── barbacane.yaml    # Project manifest (plugin declarations, specs folder)
+├── specs/
+│   └── api.yaml      # OpenAPI 3.1 specification
 ├── plugins/          # Directory for WASM plugins
 └── .gitignore        # Ignores *.bca, target/, plugins/*.wasm
 ```
@@ -108,19 +110,97 @@ my-api/
 
 ---
 
-## barbacane compile
+## barbacane dev
 
-Compile one or more OpenAPI specs into a `.bca` artifact.
+Start a local development server with automatic file watching and hot-reload. Compiles specs from `barbacane.yaml`, starts the gateway, watches for file changes, and reloads automatically on every save.
 
 ```bash
-barbacane compile --spec <FILES>... --manifest <PATH> --output <PATH>
+barbacane dev [OPTIONS]
 ```
 
 ### Options
 
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
-| `--spec`, `-s` | Yes | - | One or more spec files (YAML or JSON) |
+| `--listen` | No | `0.0.0.0:8080` | Listen address |
+| `--manifest`, `-m` | No | `barbacane.yaml` | Path to `barbacane.yaml` manifest |
+| `--spec`, `-s` | No | - | Override spec files (uses these instead of the manifest's `specs` folder) |
+| `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
+| `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address. Set to `off` to disable |
+| `--debounce-ms` | No | `300` | Debounce delay in milliseconds before recompiling after a file change |
+
+Dev mode is always enabled (verbose errors, plaintext HTTP upstreams allowed).
+
+### Spec Discovery
+
+The dev server discovers spec files from the `specs` field in `barbacane.yaml`:
+
+```yaml
+specs: ./specs/
+plugins:
+  mock:
+    path: ./plugins/mock.wasm
+```
+
+All `*.yaml`, `*.yml`, and `*.json` files in the specified folder are compiled. New files added to the folder are picked up on the next reload.
+
+Use `--spec` to override the manifest's specs folder with explicit files.
+
+### File Watching
+
+The dev server watches for changes to:
+- `barbacane.yaml` manifest
+- The `specs` folder (recursively — new files are detected)
+- All local plugin `.wasm` files referenced in the manifest
+
+On file change, the server recompiles and hot-reloads the gateway. If compilation fails, the previous version continues serving while the error is printed to stderr.
+
+### Examples
+
+```bash
+# Start with default settings (reads barbacane.yaml in current directory)
+barbacane dev
+
+# Custom manifest and port
+barbacane dev --manifest path/to/barbacane.yaml --listen 127.0.0.1:3000
+
+# Override spec files instead of using manifest's specs folder
+barbacane dev --spec api.yaml --spec events.yaml
+
+# Increase debounce for slow plugin builds
+barbacane dev --debounce-ms 1000
+```
+
+### Example Output
+
+```
+barbacane dev: loaded barbacane.yaml (2 spec(s), 3 plugin(s))
+barbacane dev: compiled 5 route(s) in 42ms
+barbacane dev: listening on http://0.0.0.0:8080
+barbacane dev: admin API on http://127.0.0.1:8081
+barbacane dev: watching barbacane.yaml, specs/, plugins/mock.wasm
+
+[specs/api.yaml] recompiling... reloaded 5 route(s) in 38ms
+
+[specs/api.yaml] recompiling... compile error: E1010 — missing x-barbacane-dispatch on GET /users
+barbacane dev: serving previous version
+```
+
+---
+
+## barbacane compile
+
+Compile one or more OpenAPI specs into a `.bca` artifact.
+
+```bash
+barbacane compile [--spec <FILES>...] --manifest <PATH> --output <PATH>
+```
+
+### Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--spec`, `-s` | No | - | One or more spec files (YAML or JSON). If omitted, discovers specs from the manifest's `specs` folder |
 | `--output`, `-o` | Yes | - | Output artifact path |
 | `--manifest`, `-m` | Yes | - | Path to `barbacane.yaml` manifest |
 | `--allow-plaintext` | No | `false` | Allow `http://` upstream URLs during compilation |
@@ -131,6 +211,9 @@ barbacane compile --spec <FILES>... --manifest <PATH> --output <PATH>
 ### Examples
 
 ```bash
+# Compile using specs folder from manifest (zero spec args)
+barbacane compile -m barbacane.yaml -o api.bca
+
 # Compile single spec with manifest
 barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 
@@ -585,16 +668,12 @@ See [Secrets Guide](../guide/secrets.md) for full documentation.
 ### Development Cycle
 
 ```bash
-# Edit spec and manifest
-vim api.yaml barbacane.yaml
+# Recommended: use the dev server (auto-compiles and hot-reloads on save)
+barbacane dev
 
-# Validate (quick check)
+# Or manually: edit, compile, serve
 barbacane validate --spec api.yaml
-
-# Compile with manifest
 barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
-
-# Run in dev mode
 barbacane serve --artifact api.bca --dev
 ```
 
@@ -637,8 +716,8 @@ barbacane compile \
 ### Testing Locally
 
 ```bash
-# Start gateway
-barbacane serve --artifact api.bca --dev --listen 127.0.0.1:8080 &
+# Start dev server (auto-compiles and reloads)
+barbacane dev --listen 127.0.0.1:8080 &
 
 # Test endpoints
 curl http://localhost:8080/health

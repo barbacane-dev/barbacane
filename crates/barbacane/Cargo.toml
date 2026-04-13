@@ -44,6 +44,8 @@ arc-swap = "1.7"
 parking_lot = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+notify = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 fips = ["rustls/fips"]
@@ -52,7 +54,6 @@ fips = ["rustls/fips"]
 workspace = true
 
 [dev-dependencies]
-tempfile = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]

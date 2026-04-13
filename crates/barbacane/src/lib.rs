@@ -5,6 +5,7 @@
 
 pub mod admin;
 pub mod control_plane;
+pub mod dev;
 pub mod hot_reload;
 pub mod mcp;
 pub mod router;

@@ -114,11 +114,16 @@ cargo test -p barbacane-router trie::tests::static_takes_precedence
 ### Run
 
 ```bash
+# Dev server (auto-compiles and hot-reloads on save)
+cargo run --bin barbacane -- dev --manifest tests/fixtures/barbacane.yaml --spec tests/fixtures/minimal.yaml
+
+# Or the manual workflow:
 # Validate a spec
 cargo run --bin barbacane -- validate --spec tests/fixtures/minimal.yaml
 
 # Compile a spec
-cargo run --bin barbacane -- compile --spec tests/fixtures/minimal.yaml --output test.bca
+cargo run --bin barbacane -- compile --spec tests/fixtures/minimal.yaml \
+  --manifest tests/fixtures/barbacane.yaml --output test.bca
 
 # Run the gateway
 cargo run --bin barbacane -- serve --artifact test.bca --listen 127.0.0.1:8080 --dev

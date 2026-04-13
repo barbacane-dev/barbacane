@@ -57,11 +57,17 @@ cd barbacane
 cargo build --release
 make plugins
 
-# Compile your OpenAPI spec
-./target/release/barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
+# Initialize a project and start the dev server
+./target/release/barbacane init my-api --fetch-plugins
+cd my-api
+../target/release/barbacane dev
+```
 
-# Run the gateway
-./target/release/barbacane serve --artifact api.bca --listen 0.0.0.0:8080
+For production, use the explicit compile-and-serve workflow:
+
+```bash
+barbacane compile -m barbacane.yaml -o api.bca
+barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
 ## Documentation
