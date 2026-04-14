@@ -229,7 +229,11 @@ fn init_creates_project_directory() {
         project.join("barbacane.yaml").exists(),
         "barbacane.yaml missing"
     );
-    assert!(project.join("api.yaml").exists(), "api.yaml missing");
+    assert!(
+        project.join("specs/api.yaml").exists(),
+        "specs/api.yaml missing"
+    );
+    assert!(project.join("specs").is_dir(), "specs/ dir missing");
     assert!(project.join("plugins").is_dir(), "plugins/ dir missing");
     assert!(project.join(".gitignore").exists(), ".gitignore missing");
 }
@@ -245,7 +249,7 @@ fn init_in_current_directory() {
         .success();
 
     assert!(tmp.path().join("barbacane.yaml").exists());
-    assert!(tmp.path().join("api.yaml").exists());
+    assert!(tmp.path().join("specs/api.yaml").exists());
 }
 
 #[test]
@@ -261,7 +265,7 @@ fn init_minimal_template() {
         .success();
 
     assert!(project.join("barbacane.yaml").exists());
-    assert!(project.join("api.yaml").exists());
+    assert!(project.join("specs/api.yaml").exists());
 }
 
 #[test]
