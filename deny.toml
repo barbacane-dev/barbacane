@@ -1,0 +1,11 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+ignore = [
+    # rustls-pemfile unmaintained — pinned by rustls-pemfile 2.x (transitive dep, no safe upgrade)
+    "RUSTSEC-2025-0134",
+
+    # CRL Distribution Point matching logic in rustls-webpki 0.102.x — pinned by async-nats
+    "RUSTSEC-2026-0049",
+]

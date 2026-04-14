@@ -77,7 +77,7 @@ impl wasmtime::ResourceLimiter for PluginResourceLimiter {
         _current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool, wasmtime::Error> {
         Ok(desired <= self.limits.max_memory_bytes)
     }
 
@@ -86,7 +86,7 @@ impl wasmtime::ResourceLimiter for PluginResourceLimiter {
         _current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool, wasmtime::Error> {
         // Allow reasonable table growth (for function references, etc.)
         Ok(desired <= 10_000)
     }
