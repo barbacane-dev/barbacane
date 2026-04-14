@@ -85,8 +85,8 @@ parking_lot = "0.12"
 jsonschema = "0.26"
 
 # WASM runtime
-wasmtime = { version = "28", features = ["async", "cranelift", "pooling-allocator"] }
-wasmtime-wasi = { version = "28" }
+wasmtime = { version = "43", features = ["cranelift", "pooling-allocator"] }
+wasmtime-wasi = { version = "43" }
 
 # Plugin manifest
 toml = "0.8"
