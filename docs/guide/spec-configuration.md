@@ -65,6 +65,41 @@ A `GET /files/my-bucket/docs/2024/report.pdf` request captures `bucket=my-bucket
 
 ---
 
+## Project Manifest (`barbacane.yaml`)
+
+The manifest declares the specs folder and plugins available to the gateway:
+
+```yaml
+specs: ./specs/
+
+plugins:
+  mock:
+    path: ./plugins/mock.wasm
+  http-upstream:
+    path: ./plugins/http-upstream.wasm
+  jwt-auth:
+    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.6.3/jwt-auth.wasm
+    sha256: abc123...
+```
+
+### `specs` (optional)
+
+Path to a folder containing spec files (relative to the manifest). All `*.yaml`, `*.yml`, and `*.json` files in this folder are discovered as specs.
+
+Used by:
+- `barbacane dev` — auto-discovers specs for compilation and file watching
+- `barbacane compile` — falls back to this folder when `--spec` is not provided
+
+### `plugins` (required)
+
+Declares all WASM plugins used by your specs. Each plugin maps a name to a source:
+
+- **Local path**: `path: ./plugins/name.wasm` — relative to the manifest directory
+- **Remote URL**: `url: https://...` — downloaded at compile time, cached in `~/.barbacane/cache/plugins/`
+- **Checksum** (optional): `sha256: ...` — integrity verification for remote plugins
+
+---
+
 ## Dispatchers
 
 Every operation needs an `x-barbacane-dispatch` to tell Barbacane how to handle it:

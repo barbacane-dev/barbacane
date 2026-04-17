@@ -38,11 +38,19 @@ git clone https://github.com/barbacane-dev/barbacane.git
 cd barbacane
 cargo build --release
 
-# Compile your OpenAPI spec
-./target/release/barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
+# Initialize a project
+./target/release/barbacane init my-api --fetch-plugins
+cd my-api
 
-# Run the gateway
-./target/release/barbacane serve --artifact api.bca --listen 0.0.0.0:8080
+# Start the dev server (auto-compiles and hot-reloads on save)
+../target/release/barbacane dev
+```
+
+For production, use the explicit compile-and-serve workflow:
+
+```bash
+barbacane compile -m barbacane.yaml -o api.bca
+barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
 ## Documentation

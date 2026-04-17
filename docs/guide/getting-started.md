@@ -99,8 +99,8 @@ cd my-api
 ```
 
 This creates:
-- `barbacane.yaml` — project manifest with plugins configured
-- `api.yaml` — OpenAPI spec with example endpoints
+- `barbacane.yaml` — project manifest with plugins and specs folder configured
+- `specs/api.yaml` — OpenAPI spec with example endpoints
 - `plugins/mock.wasm` — mock dispatcher plugin
 - `plugins/http-upstream.wasm` — HTTP proxy plugin
 - `.gitignore` — ignores build artifacts
@@ -111,7 +111,13 @@ For a minimal skeleton without example endpoints:
 barbacane init my-api --template minimal --fetch-plugins
 ```
 
-Skip to [Step 3: Validate the Spec](#3-validate-the-spec) if using `barbacane init`.
+If using `barbacane init`, you can skip straight to running the gateway:
+
+```bash
+barbacane dev
+```
+
+Or continue below for the manual step-by-step setup.
 
 ### 1. Create an OpenAPI Spec
 
@@ -173,9 +179,11 @@ The key additions are:
 
 ### 2. Create a Manifest
 
-Create a `barbacane.yaml` manifest to declare which plugins to use:
+Create a `barbacane.yaml` manifest to declare your specs folder and plugins:
 
 ```yaml
+specs: ./specs/
+
 plugins:
   mock:
     path: ./plugins/mock.wasm
@@ -183,7 +191,9 @@ plugins:
     path: ./plugins/http-upstream.wasm
 ```
 
-The manifest declares all WASM plugins used by your spec. Plugins can be sourced from a local path or a remote URL:
+The `specs` field points to a folder containing your spec files — all `*.yaml`/`*.json` files are discovered automatically. This enables `barbacane dev` and `barbacane compile` to work without explicit `--spec` flags.
+
+The manifest also declares all WASM plugins used by your spec. Plugins can be sourced from a local path or a remote URL:
 - **Local path**: `path: ./plugins/name.wasm`
 - **Remote URL**: `url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.2/name.wasm`
 
@@ -274,13 +284,17 @@ curl -X POST http://127.0.0.1:8080/health
 
 ## Development Mode
 
-The `--dev` flag enables:
-- Verbose error messages with dispatcher details
-- Detailed logging
-- No production-only restrictions
+For the fastest development workflow, use `barbacane dev`:
 
-For production, omit the flag:
 ```bash
+barbacane dev
+```
+
+This compiles your specs, starts the gateway, and watches for file changes. Every time you save a spec or plugin, the gateway recompiles and hot-reloads automatically — no manual compile-serve cycle needed.
+
+For production, use the explicit compile-and-serve workflow:
+```bash
+barbacane compile -m barbacane.yaml -o api.bca
 barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 

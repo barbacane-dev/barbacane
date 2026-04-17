@@ -229,7 +229,11 @@ fn init_creates_project_directory() {
         project.join("barbacane.yaml").exists(),
         "barbacane.yaml missing"
     );
-    assert!(project.join("api.yaml").exists(), "api.yaml missing");
+    assert!(
+        project.join("specs/api.yaml").exists(),
+        "specs/api.yaml missing"
+    );
+    assert!(project.join("specs").is_dir(), "specs/ dir missing");
     assert!(project.join("plugins").is_dir(), "plugins/ dir missing");
     assert!(project.join(".gitignore").exists(), ".gitignore missing");
 }
@@ -245,7 +249,7 @@ fn init_in_current_directory() {
         .success();
 
     assert!(tmp.path().join("barbacane.yaml").exists());
-    assert!(tmp.path().join("api.yaml").exists());
+    assert!(tmp.path().join("specs/api.yaml").exists());
 }
 
 #[test]
@@ -261,7 +265,7 @@ fn init_minimal_template() {
         .success();
 
     assert!(project.join("barbacane.yaml").exists());
-    assert!(project.join("api.yaml").exists());
+    assert!(project.join("specs/api.yaml").exists());
 }
 
 #[test]
@@ -292,4 +296,127 @@ fn init_fails_on_existing_nonempty_directory() {
         .assert()
         .failure()
         .code(1);
+}
+
+#[test]
+fn init_manifest_contains_specs_folder() {
+    let tmp = TempDir::new().expect("temp dir");
+    let project = tmp.path().join("my-api");
+
+    barbacane().args(["init"]).arg(&project).assert().success();
+
+    let manifest = std::fs::read_to_string(project.join("barbacane.yaml")).expect("read manifest");
+    assert!(
+        manifest.contains("specs: ./specs/"),
+        "manifest should contain specs folder declaration"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// barbacane dev
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dev_missing_manifest_exits_one() {
+    barbacane()
+        .args(["dev", "--manifest", "nonexistent.yaml"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("manifest not found"));
+}
+
+#[test]
+fn dev_no_specs_configured_exits_one() {
+    let tmp = TempDir::new().expect("temp dir");
+    let manifest = tmp.path().join("barbacane.yaml");
+    std::fs::write(&manifest, "plugins: {}\n").expect("write manifest");
+
+    barbacane()
+        .args(["dev", "--manifest"])
+        .arg(&manifest)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("no specs found"));
+}
+
+#[test]
+fn dev_missing_spec_override_exits_one() {
+    let tmp = TempDir::new().expect("temp dir");
+    let manifest = tmp.path().join("barbacane.yaml");
+    std::fs::write(&manifest, "plugins: {}\n").expect("write manifest");
+
+    barbacane()
+        .args(["dev", "--manifest"])
+        .arg(&manifest)
+        .args(["--spec", "nonexistent.yaml"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("compile error"));
+}
+
+#[test]
+fn dev_help_shows_expected_options() {
+    barbacane()
+        .args(["dev", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("auto-reload"))
+        .stdout(contains("--manifest"))
+        .stdout(contains("--spec"))
+        .stdout(contains("--debounce-ms"));
+}
+
+// ---------------------------------------------------------------------------
+// barbacane compile (specs from manifest)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compile_no_specs_and_no_manifest_specs_exits_one() {
+    let tmp = TempDir::new().expect("temp dir");
+    let manifest = tmp.path().join("barbacane.yaml");
+    std::fs::write(&manifest, "plugins: {}\n").expect("write manifest");
+
+    barbacane()
+        .args(["compile", "--manifest"])
+        .arg(&manifest)
+        .arg("--output")
+        .arg(tmp.path().join("out.bca"))
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("no spec files provided"));
+}
+
+#[test]
+fn compile_discovers_specs_from_manifest_folder() {
+    let tmp = TempDir::new().expect("temp dir");
+    let specs_dir = tmp.path().join("specs");
+    std::fs::create_dir_all(&specs_dir).expect("create specs dir");
+
+    // Copy a minimal spec into the specs folder.
+    let spec_content = std::fs::read_to_string(fixtures().join("minimal.yaml")).expect("read spec");
+    std::fs::write(specs_dir.join("api.yaml"), &spec_content).expect("write spec");
+
+    // Manifest with specs folder and the mock plugin declared.
+    let manifest_content = format!(
+        "specs: ./specs/\nplugins:\n  mock:\n    path: {}\n",
+        fixtures().join("../../plugins/mock/mock.wasm").display()
+    );
+    let manifest = tmp.path().join("barbacane.yaml");
+    std::fs::write(&manifest, &manifest_content).expect("write manifest");
+
+    let output = tmp.path().join("out.bca");
+    barbacane()
+        .args(["compile", "--manifest"])
+        .arg(&manifest)
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success()
+        .stderr(contains("compiled 1 spec(s)"));
+
+    assert!(output.exists(), "artifact should be created");
 }

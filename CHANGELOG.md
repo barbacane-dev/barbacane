@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **cli**: `barbacane dev` — local development server with file watching and automatic hot-reload. Compiles specs, starts the gateway, watches for changes to specs, manifest, and plugin WASM files, and reloads the gateway on every save. No more manual compile-serve cycle during development.
+- **compiler**: `specs` field in `barbacane.yaml` — point to a folder (e.g., `specs: ./specs/`) and all `*.yaml`/`*.json` files are discovered automatically. Used by `barbacane dev` for zero-config operation and as a fallback for `barbacane compile` when `--spec` is omitted.
+- **cli**: `barbacane compile` now discovers specs from the manifest's `specs` folder when `--spec` is not provided — `barbacane compile -m barbacane.yaml -o api.bca` works with zero spec args.
+- **cli**: `barbacane init` now scaffolds a `specs/` directory and places the generated spec in `specs/api.yaml` with `specs: ./specs/` in the manifest.
+
 ## [0.6.3] - 2026-04-07
 
 ### Fixed

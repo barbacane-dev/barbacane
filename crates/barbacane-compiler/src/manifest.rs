@@ -181,6 +181,12 @@ pub struct ProjectManifest {
     /// Plugin declarations: name -> source.
     #[serde(default)]
     pub plugins: HashMap<String, PluginSource>,
+
+    /// Path to a folder containing spec files (relative to manifest or absolute).
+    /// All `*.yaml` and `*.json` files in this folder are discovered as specs.
+    /// Used by `barbacane dev` and as a fallback for `barbacane compile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specs: Option<String>,
 }
 
 /// Source location for a plugin.
@@ -254,6 +260,68 @@ impl ProjectManifest {
         })
     }
 
+    /// Discover spec files from the `specs` folder.
+    ///
+    /// Resolves the `specs` path relative to `base_path`, then globs for all
+    /// `*.yaml` and `*.json` files in it. Returns sorted paths.
+    /// Returns `Ok(vec![])` if no `specs` folder is configured.
+    pub fn discover_spec_files(
+        &self,
+        base_path: &Path,
+    ) -> Result<Vec<std::path::PathBuf>, CompileError> {
+        let specs_dir_str = match &self.specs {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
+
+        let specs_dir = if Path::new(specs_dir_str).is_absolute() {
+            std::path::PathBuf::from(specs_dir_str)
+        } else {
+            base_path.join(specs_dir_str)
+        };
+
+        if !specs_dir.is_dir() {
+            return Err(CompileError::ManifestError(format!(
+                "specs folder not found: {}",
+                specs_dir.display()
+            )));
+        }
+
+        let mut spec_files = Vec::new();
+        let entries = std::fs::read_dir(&specs_dir).map_err(|e| {
+            CompileError::ManifestError(format!(
+                "failed to read specs folder {}: {}",
+                specs_dir.display(),
+                e
+            ))
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                CompileError::ManifestError(format!("failed to read directory entry: {}", e))
+            })?;
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext == "yaml" || ext == "yml" || ext == "json" {
+                        spec_files.push(path);
+                    }
+                }
+            }
+        }
+
+        spec_files.sort();
+
+        if spec_files.is_empty() {
+            return Err(CompileError::ManifestError(format!(
+                "no spec files (*.yaml, *.yml, *.json) found in {}",
+                specs_dir.display()
+            )));
+        }
+
+        Ok(spec_files)
+    }
+
     /// Check if a plugin is declared in the manifest.
     pub fn has_plugin(&self, name: &str) -> bool {
         self.plugins.contains_key(name)
@@ -262,6 +330,19 @@ impl ProjectManifest {
     /// Get all declared plugin names.
     pub fn plugin_names(&self) -> Vec<&str> {
         self.plugins.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get resolved paths for all local (`path:`) plugin WASM files.
+    ///
+    /// Useful for file watching in dev mode — only local plugins can change.
+    pub fn local_plugin_paths(&self, base_path: &Path) -> Vec<std::path::PathBuf> {
+        self.plugins
+            .values()
+            .filter_map(|source| match source {
+                PluginSource::Path(p) => Some(resolve_wasm_path(p, base_path)),
+                PluginSource::Url(_) => None,
+            })
+            .collect()
     }
 
     /// Resolve all plugins: load WASM bytes from their sources.
@@ -888,5 +969,113 @@ plugins:
             .unwrap();
         assert_eq!(resolved[0].version, Some("2.0.0".to_string()));
         assert_eq!(resolved[0].plugin_type, Some("middleware".to_string()));
+    }
+
+    #[test]
+    fn parse_manifest_without_specs() {
+        let content = r#"
+plugins:
+  mock:
+    path: ./plugins/mock.wasm
+"#;
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+        assert!(manifest.specs.is_none());
+    }
+
+    #[test]
+    fn parse_manifest_with_specs_folder() {
+        let content = r#"
+specs: ./specs/
+plugins:
+  mock:
+    path: ./plugins/mock.wasm
+"#;
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+        assert_eq!(manifest.specs.as_deref(), Some("./specs/"));
+    }
+
+    #[test]
+    fn discover_spec_files_from_folder() {
+        let temp = TempDir::new().unwrap();
+        let specs_dir = temp.path().join("specs");
+        std::fs::create_dir_all(&specs_dir).unwrap();
+
+        std::fs::write(specs_dir.join("api.yaml"), "openapi: '3.1.0'").unwrap();
+        std::fs::write(specs_dir.join("events.json"), "{}").unwrap();
+        std::fs::write(specs_dir.join("notes.txt"), "not a spec").unwrap();
+
+        let content = "specs: ./specs/\nplugins: {}";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+
+        let files = manifest.discover_spec_files(temp.path()).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files[0].ends_with("api.yaml"));
+        assert!(files[1].ends_with("events.json"));
+    }
+
+    #[test]
+    fn discover_spec_files_yml_extension() {
+        let temp = TempDir::new().unwrap();
+        let specs_dir = temp.path().join("specs");
+        std::fs::create_dir_all(&specs_dir).unwrap();
+
+        std::fs::write(specs_dir.join("api.yml"), "openapi: '3.1.0'").unwrap();
+
+        let content = "specs: ./specs/\nplugins: {}";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+
+        let files = manifest.discover_spec_files(temp.path()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("api.yml"));
+    }
+
+    #[test]
+    fn discover_spec_files_no_specs_configured() {
+        let manifest = ProjectManifest::parse("plugins: {}", Path::new("barbacane.yaml")).unwrap();
+        let files = manifest.discover_spec_files(Path::new(".")).unwrap();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn discover_spec_files_missing_folder() {
+        let content = "specs: ./nonexistent/\nplugins: {}";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+
+        let result = manifest.discover_spec_files(Path::new("."));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("specs folder not found"));
+    }
+
+    #[test]
+    fn discover_spec_files_empty_folder() {
+        let temp = TempDir::new().unwrap();
+        let specs_dir = temp.path().join("specs");
+        std::fs::create_dir_all(&specs_dir).unwrap();
+
+        let content = "specs: ./specs/\nplugins: {}";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+
+        let result = manifest.discover_spec_files(temp.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no spec files"));
+    }
+
+    #[test]
+    fn local_plugin_paths_filters_url_sources() {
+        let content = r#"
+plugins:
+  mock:
+    path: ./plugins/mock.wasm
+  jwt-auth:
+    url: https://plugins.barbacane.io/jwt-auth.wasm
+"#;
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+        let paths = manifest.local_plugin_paths(Path::new("/project"));
+
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("plugins/mock.wasm"));
     }
 }

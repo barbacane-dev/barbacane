@@ -430,7 +430,8 @@ enum Commands {
     /// Compile OpenAPI spec(s) into a .bca artifact.
     Compile {
         /// Input spec file(s) (YAML or JSON).
-        #[arg(short, long, required = true, num_args = 1..)]
+        /// If omitted, discovers specs from the manifest's `specs` folder.
+        #[arg(short, long, num_args = 1..)]
         spec: Vec<String>,
 
         /// Output artifact path.
@@ -488,6 +489,37 @@ enum Commands {
         /// Download official plugins (mock, http-upstream) from GitHub releases.
         #[arg(long)]
         fetch_plugins: bool,
+    },
+
+    /// Start a local development server with auto-reload.
+    ///
+    /// Compiles specs from barbacane.yaml, starts the gateway, watches for
+    /// file changes, and hot-reloads automatically. Equivalent to running
+    /// compile + serve in a loop.
+    Dev {
+        /// Listen address.
+        #[arg(long, default_value = "0.0.0.0:8080")]
+        listen: String,
+
+        /// Path to barbacane.yaml manifest.
+        #[arg(short, long, default_value = "barbacane.yaml")]
+        manifest: String,
+
+        /// Override spec files (uses these instead of the manifest's specs folder).
+        #[arg(short, long)]
+        spec: Vec<String>,
+
+        /// Log level (error, warn, info, debug, trace).
+        #[arg(long, default_value = "info")]
+        log_level: String,
+
+        /// Admin API listen address. Set to "off" to disable.
+        #[arg(long, default_value = "127.0.0.1:8081")]
+        admin_bind: String,
+
+        /// Debounce delay in milliseconds before recompiling after a file change.
+        #[arg(long, default_value = "300")]
+        debounce_ms: u64,
     },
 
     /// Run the gateway server.
@@ -2932,10 +2964,16 @@ async fn run_init(name: &str, template: &str, fetch_plugins: bool) -> ExitCode {
         }
     }
 
-    // Create plugins directory
+    // Create plugins and specs directories
     let plugins_dir = project_dir.join("plugins");
     if let Err(e) = fs::create_dir_all(&plugins_dir) {
         eprintln!("error: failed to create plugins directory: {}", e);
+        return ExitCode::from(1);
+    }
+
+    let specs_dir = project_dir.join("specs");
+    if let Err(e) = fs::create_dir_all(&specs_dir) {
+        eprintln!("error: failed to create specs directory: {}", e);
         return ExitCode::from(1);
     }
 
@@ -2963,6 +3001,8 @@ async fn run_init(name: &str, template: &str, fetch_plugins: bool) -> ExitCode {
         r#"# Barbacane project manifest
 # See https://barbacane.dev/docs/guide/spec-configuration for details
 
+specs: ./specs/
+
 plugins: {}
   # Example plugin configuration:
   # my-plugin:
@@ -2973,6 +3013,7 @@ plugins: {}
         let mut content = String::from(
             "# Barbacane project manifest\n\
              # See https://barbacane.dev/docs/guide/spec-configuration for details\n\n\
+             specs: ./specs/\n\n\
              plugins:\n",
         );
         for (plugin_name, filename) in &downloaded_plugins {
@@ -3135,8 +3176,8 @@ paths:
 "#
     };
 
-    if let Err(e) = fs::write(project_dir.join("api.yaml"), spec_content) {
-        eprintln!("error: failed to create api.yaml: {}", e);
+    if let Err(e) = fs::write(specs_dir.join("api.yaml"), spec_content) {
+        eprintln!("error: failed to create specs/api.yaml: {}", e);
         return ExitCode::from(1);
     }
 
@@ -3170,9 +3211,9 @@ Thumbs.db
     eprintln!("✓ Initialized Barbacane project in {}", dir_name);
     eprintln!();
     eprintln!("Created:");
-    eprintln!("  barbacane.yaml  - project manifest");
+    eprintln!("  barbacane.yaml    - project manifest");
     eprintln!(
-        "  api.yaml        - OpenAPI specification ({} template)",
+        "  specs/api.yaml    - OpenAPI specification ({} template)",
         template
     );
     if !downloaded_plugins.is_empty() {
@@ -3180,25 +3221,19 @@ Thumbs.db
             eprintln!("  plugins/{}  - {} plugin", filename, plugin_name);
         }
     } else {
-        eprintln!("  plugins/        - directory for WASM plugins");
+        eprintln!("  plugins/          - directory for WASM plugins");
     }
-    eprintln!("  .gitignore      - Git ignore file");
+    eprintln!("  .gitignore        - Git ignore file");
     eprintln!();
     eprintln!("Next steps:");
     if downloaded_plugins.is_empty() && !fetch_plugins {
         eprintln!("  1. Download plugins: barbacane init . --fetch-plugins");
         eprintln!("     Or add them manually to plugins/");
-        eprintln!("  2. Edit api.yaml to define your API");
-        eprintln!(
-            "  3. Run: barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca"
-        );
-        eprintln!("  4. Run: barbacane serve --artifact api.bca --dev");
+        eprintln!("  2. Edit specs/api.yaml to define your API");
+        eprintln!("  3. Run: barbacane dev");
     } else {
-        eprintln!("  1. Edit api.yaml to define your API");
-        eprintln!(
-            "  2. Run: barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca"
-        );
-        eprintln!("  3. Run: barbacane serve --artifact api.bca --dev");
+        eprintln!("  1. Edit specs/api.yaml to define your API");
+        eprintln!("  2. Run: barbacane dev");
     }
 
     ExitCode::SUCCESS
@@ -3318,16 +3353,7 @@ fn run_compile(
     provenance_source: Option<String>,
     no_cache: bool,
 ) -> ExitCode {
-    let spec_paths: Vec<&Path> = specs.iter().map(Path::new).collect();
     let output_path = Path::new(output);
-
-    // Check that all spec files exist
-    for path in &spec_paths {
-        if !path.exists() {
-            eprintln!("error: spec file not found: {}", path.display());
-            return ExitCode::from(1);
-        }
-    }
 
     let options = CompileOptions {
         allow_plaintext,
@@ -3354,6 +3380,38 @@ fn run_compile(
 
     // Get the base path for resolving plugin paths (directory containing the manifest)
     let base_path = manifest_path.parent().unwrap_or(Path::new("."));
+
+    // Determine spec paths: from --spec args, or discover from manifest's specs folder.
+    let discovered_specs: Vec<std::path::PathBuf>;
+    let spec_paths: Vec<&Path> = if !specs.is_empty() {
+        specs.iter().map(Path::new).collect()
+    } else {
+        match project_manifest.discover_spec_files(base_path) {
+            Ok(paths) if paths.is_empty() => {
+                eprintln!(
+                    "error: no spec files provided. Use --spec or add 'specs: ./specs/' to {}",
+                    manifest_file
+                );
+                return ExitCode::from(1);
+            }
+            Ok(paths) => {
+                discovered_specs = paths;
+                discovered_specs.iter().map(|p| p.as_path()).collect()
+            }
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
+            }
+        }
+    };
+
+    // Check that all spec files exist
+    for path in &spec_paths {
+        if !path.exists() {
+            eprintln!("error: spec file not found: {}", path.display());
+            return ExitCode::from(1);
+        }
+    }
 
     let result = compile_with_manifest(
         &spec_paths,
@@ -3387,7 +3445,7 @@ fn run_compile(
             };
             eprintln!(
                 "compiled {} spec(s) to {} ({} routes{})",
-                specs.len(),
+                spec_paths.len(),
                 output,
                 manifest.routes_count,
                 plugin_info
@@ -3399,6 +3457,450 @@ fn run_compile(
             ExitCode::from(1)
         }
     }
+}
+
+/// Run the dev server: compile, serve, watch, and hot-reload on changes.
+async fn run_dev(
+    manifest_file: &str,
+    spec_overrides: &[String],
+    listen: &str,
+    metrics: Arc<MetricsRegistry>,
+    admin_bind: &str,
+    debounce_ms: u64,
+) -> ExitCode {
+    use barbacane_lib::dev::DevWatcher;
+
+    let manifest_path = Path::new(manifest_file);
+    if !manifest_path.exists() {
+        eprintln!("barbacane dev: manifest not found: {}", manifest_file);
+        return ExitCode::from(1);
+    }
+
+    let manifest_dir = manifest_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+
+    // Load manifest.
+    let mut project_manifest = match ProjectManifest::load(manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("barbacane dev: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+
+    // Determine spec files.
+    let mut spec_paths = if !spec_overrides.is_empty() {
+        spec_overrides
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect()
+    } else {
+        match project_manifest.discover_spec_files(&manifest_dir) {
+            Ok(paths) if paths.is_empty() => {
+                eprintln!(
+                    "barbacane dev: no specs found. Add 'specs: ./specs/' to {} or pass --spec",
+                    manifest_file
+                );
+                return ExitCode::from(1);
+            }
+            Ok(paths) => paths,
+            Err(e) => {
+                eprintln!("barbacane dev: {}", e);
+                return ExitCode::from(1);
+            }
+        }
+    };
+
+    let spec_count = spec_paths.len();
+    let plugin_count = project_manifest.plugins.len();
+    eprintln!(
+        "barbacane dev: loaded {} ({} spec(s), {} plugin(s))",
+        manifest_file, spec_count, plugin_count,
+    );
+
+    // Initial compile.
+    // no_cache is false: local path: plugins are always read fresh from disk,
+    // and url: plugins should use the download cache to avoid re-fetching on every reload.
+    let compile_options = CompileOptions {
+        allow_plaintext: true,
+        ..Default::default()
+    };
+
+    let mut temp_artifact = match tempfile::NamedTempFile::new() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("barbacane dev: failed to create temp file: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+
+    let temp_path = temp_artifact.path().to_path_buf();
+
+    let spec_refs: Vec<&Path> = spec_paths.iter().map(|p| p.as_path()).collect();
+    let compile_start = Instant::now();
+    if let Err(e) = compile_with_manifest(
+        &spec_refs,
+        &project_manifest,
+        &manifest_dir,
+        &temp_path,
+        &compile_options,
+    ) {
+        eprintln!("barbacane dev: compile error: {}", e);
+        return ExitCode::from(1);
+    }
+    let compile_ms = compile_start.elapsed().as_millis();
+
+    // Load gateway.
+    let limits = RequestLimits::default();
+    let gateway: SharedGateway =
+        match Gateway::load(&temp_path, true, limits.clone(), true, metrics.clone()) {
+            Ok(g) => {
+                eprintln!(
+                    "barbacane dev: compiled {} route(s) in {}ms",
+                    g.manifest.routes_count, compile_ms
+                );
+                Arc::new(ArcSwap::new(Arc::new(g)))
+            }
+            Err(e) => {
+                eprintln!("barbacane dev: {}", e);
+                return ExitCode::from(1);
+            }
+        };
+
+    // Parse listen address.
+    let addr: SocketAddr = match listen.parse() {
+        Ok(a) => a,
+        Err(_) => {
+            eprintln!("barbacane dev: invalid listen address: {}", listen);
+            return ExitCode::from(1);
+        }
+    };
+
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("barbacane dev: failed to bind to {}: {}", addr, e);
+            return ExitCode::from(1);
+        }
+    };
+
+    eprintln!("barbacane dev: listening on http://{}", addr);
+
+    // Shutdown signal.
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        let _ = wait_for_shutdown_signal().await;
+        eprintln!("\nbarbacane dev: shutting down...");
+        let _ = shutdown_tx_clone.send(true);
+    });
+
+    // Admin API.
+    let admin_manifest: Arc<ArcSwap<barbacane_compiler::Manifest>> = {
+        let gw = gateway.load();
+        Arc::new(ArcSwap::new(Arc::new(gw.manifest.clone())))
+    };
+    let drift_detected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    if admin_bind != "off" {
+        let admin_addr: SocketAddr = match admin_bind.parse() {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!(
+                    "barbacane dev: invalid --admin-bind address '{}': {}",
+                    admin_bind, e
+                );
+                return ExitCode::from(1);
+            }
+        };
+
+        let admin_state = Arc::new(admin::AdminState {
+            manifest: admin_manifest.clone(),
+            metrics: metrics.clone(),
+            drift_detected: drift_detected.clone(),
+            started_at: Instant::now(),
+        });
+
+        let admin_shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                admin::start_admin_server(admin_addr, admin_state, admin_shutdown_rx).await
+            {
+                tracing::error!(error = %e, "Admin server failed");
+            }
+        });
+        eprintln!("barbacane dev: admin API on http://{}", admin_addr);
+    }
+
+    // File watcher.
+    let mut watch_paths: Vec<std::path::PathBuf> = vec![manifest_path
+        .canonicalize()
+        .unwrap_or(manifest_path.to_path_buf())];
+
+    // Watch spec sources: specs folder (if using manifest discovery) or individual files (if --spec overrides).
+    if spec_overrides.is_empty() {
+        if let Some(ref specs_dir) = project_manifest.specs {
+            let resolved = if Path::new(specs_dir).is_absolute() {
+                std::path::PathBuf::from(specs_dir)
+            } else {
+                manifest_dir.join(specs_dir)
+            };
+            if resolved.is_dir() {
+                watch_paths.push(resolved);
+            }
+        } else {
+            for p in &spec_paths {
+                watch_paths.push(p.clone());
+            }
+        }
+    } else {
+        for p in &spec_paths {
+            watch_paths.push(p.clone());
+        }
+    }
+
+    // Watch local plugin .wasm files.
+    for p in project_manifest.local_plugin_paths(&manifest_dir) {
+        if p.exists() {
+            watch_paths.push(p);
+        }
+    }
+
+    let watch_display: Vec<String> = watch_paths
+        .iter()
+        .filter_map(|p| p.strip_prefix(&manifest_dir).ok().or(Some(p.as_path())))
+        .map(|p| p.display().to_string())
+        .collect();
+    eprintln!("barbacane dev: watching {}", watch_display.join(", "));
+
+    let mut watcher = match DevWatcher::new(&watch_paths) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("barbacane dev: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+
+    let debounce = Duration::from_millis(debounce_ms);
+
+    // MCP session eviction task.
+    {
+        let gw = gateway.clone();
+        let mut evict_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let g = gw.load();
+                        if let Some(ref mcp) = g.mcp_server {
+                            mcp.evict_expired_sessions();
+                        }
+                    }
+                    _ = evict_shutdown.changed() => break,
+                }
+            }
+        });
+    }
+
+    // Main loop: accept connections + watch for file changes.
+    loop {
+        tokio::select! {
+            // Shutdown.
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+            // File change detected.
+            changed = watcher.next_change(debounce) => {
+                if changed.is_empty() {
+                    continue;
+                }
+
+                let changed_display: Vec<String> = changed
+                    .iter()
+                    .filter_map(|p| p.strip_prefix(&manifest_dir).ok().or(Some(p.as_path())))
+                    .map(|p| p.display().to_string())
+                    .collect();
+                eprint!("barbacane dev: [{}] recompiling...", changed_display.join(", "));
+
+                // Re-read manifest if it changed.
+                let manifest_canonical = manifest_path
+                    .canonicalize()
+                    .unwrap_or(manifest_path.to_path_buf());
+                let manifest_changed = changed.iter().any(|p| {
+                    p.canonicalize().unwrap_or(p.clone()) == manifest_canonical
+                });
+
+                if manifest_changed {
+                    match ProjectManifest::load(manifest_path) {
+                        Ok(m) => project_manifest = m,
+                        Err(e) => {
+                            eprintln!(" manifest error: {}", e);
+                            eprintln!("barbacane dev: serving previous version");
+                            continue;
+                        }
+                    }
+                }
+
+                // Re-discover specs if using manifest folder (picks up additions/removals).
+                if spec_overrides.is_empty() {
+                    match project_manifest.discover_spec_files(&manifest_dir) {
+                        Ok(paths) if !paths.is_empty() => spec_paths = paths,
+                        Ok(_) => {
+                            eprintln!(" no spec files found");
+                            eprintln!("barbacane dev: serving previous version");
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!(" {}", e);
+                            eprintln!("barbacane dev: serving previous version");
+                            continue;
+                        }
+                    }
+                }
+
+                // Compile to new temp file.
+                let new_temp = match tempfile::NamedTempFile::new() {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!(" temp file error: {}", e);
+                        continue;
+                    }
+                };
+                let new_path = new_temp.path().to_path_buf();
+
+                let spec_refs: Vec<&Path> = spec_paths.iter().map(|p| p.as_path()).collect();
+                let compile_start = Instant::now();
+                if let Err(e) = compile_with_manifest(
+                    &spec_refs,
+                    &project_manifest,
+                    &manifest_dir,
+                    &new_path,
+                    &compile_options,
+                ) {
+                    eprintln!(" compile error: {}", e);
+                    eprintln!("barbacane dev: serving previous version");
+                    continue;
+                }
+
+                // Load new gateway.
+                match Gateway::load(&new_path, true, limits.clone(), true, metrics.clone()) {
+                    Ok(new_gw) => {
+                        let routes = new_gw.manifest.routes_count;
+                        let ms = compile_start.elapsed().as_millis();
+
+                        // Atomic swap.
+                        let old = gateway.swap(Arc::new(new_gw));
+                        tokio::task::spawn_blocking(move || drop(old));
+
+                        // Update admin manifest.
+                        let gw = gateway.load();
+                        admin_manifest.store(Arc::new(gw.manifest.clone()));
+
+                        // Replace temp artifact.
+                        temp_artifact = new_temp;
+
+                        eprintln!(" reloaded {} route(s) in {}ms", routes, ms);
+                    }
+                    Err(e) => {
+                        eprintln!(" load error: {}", e);
+                        eprintln!("barbacane dev: serving previous version");
+                    }
+                }
+
+                // Update watches if manifest changed (new plugins or specs folder).
+                if manifest_changed {
+                    let mut new_watch_paths: Vec<std::path::PathBuf> = vec![
+                        manifest_path.canonicalize().unwrap_or(manifest_path.to_path_buf()),
+                    ];
+                    if let Some(ref specs_dir) = project_manifest.specs {
+                        let resolved = if Path::new(specs_dir).is_absolute() {
+                            std::path::PathBuf::from(specs_dir)
+                        } else {
+                            manifest_dir.join(specs_dir)
+                        };
+                        if resolved.is_dir() {
+                            new_watch_paths.push(resolved);
+                        }
+                    }
+                    for p in project_manifest.local_plugin_paths(&manifest_dir) {
+                        if p.exists() {
+                            new_watch_paths.push(p);
+                        }
+                    }
+                    if let Err(e) = watcher.update_watches(&new_watch_paths) {
+                        tracing::warn!(error = %e, "failed to update file watches");
+                    }
+                }
+            }
+            // Accept new connection.
+            accept_result = listener.accept() => {
+                let (stream, peer_addr) = match accept_result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "accept failed");
+                        continue;
+                    }
+                };
+
+                metrics.connection_opened();
+
+                let gateway_snapshot = gateway.load_full();
+                let conn_metrics = metrics.clone();
+                let mut conn_shutdown_rx = shutdown_rx.clone();
+                let client_addr = Some(peer_addr);
+
+                tokio::spawn(async move {
+                    let service = service_fn(move |req| {
+                        let gateway = Arc::clone(&gateway_snapshot);
+                        let client_addr = client_addr;
+                        async move { gateway.handle_request(req, client_addr).await }
+                    });
+
+                    let io = TokioIo::new(stream);
+                    let mut builder = auto::Builder::new(TokioExecutor::new());
+                    builder.http1().keep_alive(true);
+                    builder
+                        .http2()
+                        .timer(TokioTimer::new())
+                        .keep_alive_interval(Some(Duration::from_secs(20)));
+                    let conn = builder.serve_connection_with_upgrades(io, service);
+
+                    tokio::pin!(conn);
+
+                    loop {
+                        tokio::select! {
+                            result = conn.as_mut() => {
+                                if let Err(e) = result {
+                                    if !e.to_string().contains("connection closed") {
+                                        tracing::debug!(error = %e, "connection error");
+                                    }
+                                }
+                                break;
+                            }
+                            _ = conn_shutdown_rx.changed() => {
+                                if *conn_shutdown_rx.borrow() {
+                                    conn.as_mut().graceful_shutdown();
+                                }
+                            }
+                        }
+                    }
+
+                    conn_metrics.connection_closed();
+                });
+            }
+        }
+    }
+
+    // Clean up temp artifact.
+    drop(temp_artifact);
+
+    ExitCode::SUCCESS
 }
 
 /// TLS configuration for the server.
@@ -3976,6 +4478,37 @@ async fn main() -> ExitCode {
             no_cache,
         ),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
+        Commands::Dev {
+            listen,
+            manifest,
+            spec,
+            log_level,
+            admin_bind,
+            debounce_ms,
+        } => {
+            let log_fmt = barbacane_telemetry::LogFormat::Pretty;
+            let telemetry_config = barbacane_telemetry::TelemetryConfig::new()
+                .with_log_level(&log_level)
+                .with_log_format(log_fmt);
+
+            let telemetry = match barbacane_telemetry::Telemetry::init(telemetry_config) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("error: failed to initialize telemetry: {}", e);
+                    return ExitCode::from(1);
+                }
+            };
+
+            run_dev(
+                &manifest,
+                &spec,
+                &listen,
+                telemetry.metrics_clone(),
+                &admin_bind,
+                debounce_ms,
+            )
+            .await
+        }
         Commands::Init {
             name,
             template,

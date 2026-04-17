@@ -12,7 +12,7 @@ What's actively being worked on:
 
 - [x] `request-transformer` plugin — modify headers, query params, path, body before upstream
 - [x] `response-transformer` plugin — modify response status code, headers, body before client
-- [ ] Documentation for transformation plugins
+- [x] Documentation for transformation plugins — **done** (documented in `docs/guide/middlewares.md`)
 
 ---
 
@@ -24,7 +24,7 @@ Near-term items ready to be picked up:
 - [x] Security plugins documentation — **done** (documented in `docs/guide/middlewares.md`)
 - [ ] Structured log format documentation
 - [ ] Integration guides (Datadog, Splunk, ELK)
-- [ ] `barbacane dev` — local dev server with file watching
+- [x] `barbacane dev` — local dev server with file watching — **done**
 - [ ] `barbacane plugin init` — scaffold new plugin projects
 - [ ] Improved error messages
 - [ ] Installation guide update
@@ -124,14 +124,14 @@ Near-term items ready to be picked up:
 | Plugin registry | Central registry for discovering and versioning plugins | P2 |
 | Multi-tenancy | Organization/team isolation with SNI-based routing | P3 |
 | Health metrics collection | Aggregate CPU, memory, request rates from data planes | P2 |
-| MCP server | Native data plane MCP server (ADR-0025): auto-generate MCP tools from compiled `.bca` artifact; tool calls route through the full middleware pipeline (auth, rate limiting, validation); Streamable HTTP transport; `x-barbacane-mcp` spec extension to opt in/out per operation | P1 |
+| ~~MCP server~~ | ~~Native data plane MCP server (ADR-0025): auto-generate MCP tools from compiled `.bca` artifact; tool calls route through the full middleware pipeline (auth, rate limiting, validation); Streamable HTTP transport; `x-barbacane-mcp` spec extension to opt in/out per operation~~ — **done** (v0.6.0) | ~~P1~~ |
 
 ### Developer Experience
 
 | Feature | Description | Priority |
 |---------|-------------|----------|
 | ~~Vacuum ruleset~~ | ~~Publish `vacuum:barbacane` ruleset validating `x-barbacane-*` extensions against plugin JSON schemas — catch upstream refs, plugin config errors, and missing auth opt-outs at lint time instead of compile/runtime~~ — **done** (`docs/rulesets/barbacane.yaml`) | ~~P0~~ |
-| `barbacane dev` | Local development server with file watching | P1 |
+| ~~`barbacane dev`~~ | ~~Local development server with file watching~~ — **done** | ~~P1~~ |
 | `barbacane plugin init` | Scaffold new plugin projects from template | P1 |
 | Plugin template repo | `barbacane-plugin-template` repository with minimal scaffolding | P1 |
 | VS Code extension | Spec editing with validation and autocomplete | P2 |
