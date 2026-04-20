@@ -9,10 +9,10 @@
 <p align="center">
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/unit%20tests-505%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-684%20passing-brightgreen" alt="Plugin Tests">
-  <img src="https://img.shields.io/badge/integration%20tests-267%20passing-brightgreen" alt="Integration Tests">
-  <img src="https://img.shields.io/badge/cli%20tests-16%20passing-brightgreen" alt="CLI Tests">
+  <img src="https://img.shields.io/badge/unit%20tests-517%20passing-brightgreen" alt="Unit Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-777%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/integration%20tests-275%20passing-brightgreen" alt="Integration Tests">
+  <img src="https://img.shields.io/badge/cli%20tests-23%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/ui%20tests-44%20passing-brightgreen" alt="UI Tests">
   <img src="https://img.shields.io/badge/e2e%20tests-11%20passing-brightgreen" alt="E2E Tests">
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
@@ -59,7 +59,7 @@ Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane
 
 - [Getting Started](https://docs.barbacane.dev/guide/getting-started.html) — First steps with Barbacane
 - [Spec Configuration](https://docs.barbacane.dev/guide/spec-configuration.html) — Configure routing and middleware
-- [Middlewares](https://docs.barbacane.dev/guide/middlewares.html) — Authentication, rate limiting, caching
+- [Middlewares](https://docs.barbacane.dev/guide/middlewares/) — Authentication, rate limiting, caching
 - [Dispatchers](https://docs.barbacane.dev/guide/dispatchers.html) — Route requests to backends
 - [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) — REST API for spec and artifact management
 - [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Web-based management interface
@@ -115,6 +115,10 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `response-transformer` | Middleware | Modify status code, headers, and body before client |
 | `observability` | Middleware | SLO monitoring and detailed logging |
 | `http-log` | Middleware | Send request/response logs to HTTP endpoint |
+| `ai-prompt-guard` | Middleware | Validate and constrain LLM prompts under named policy profiles |
+| `ai-token-limit` | Middleware | Token-based sliding-window rate limiting for LLM endpoints |
+| `ai-cost-tracker` | Middleware | Record per-request LLM cost (USD) from a configurable price table |
+| `ai-response-guard` | Middleware | PII redaction and blocked-pattern scanning on LLM responses |
 
 ## Performance
 

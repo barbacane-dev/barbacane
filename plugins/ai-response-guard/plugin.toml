@@ -1,0 +1,12 @@
+[plugin]
+name = "ai-response-guard"
+version = "0.1.0"
+type = "middleware"
+description = "Inspects LLM responses under a named policy profile (redact + blocked patterns). The active profile is selected per-request from a context key written by an upstream `cel` middleware — same composition pattern as `ai-proxy` named targets (ADR-0024). Streamed responses can't be redacted after the fact; the plugin emits `redactions_skipped_streaming_total` when that happens."
+wasm = "ai-response-guard.wasm"
+
+[capabilities]
+log = true
+context_get = true
+body_access = true
+telemetry = true

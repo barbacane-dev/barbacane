@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:ai-response-guard:config",
+  "title": "AI Response Guard Middleware Config",
+  "description": "Configuration for the AI response-guard middleware. Named profiles carry the per-request policy (redaction rules + blocked patterns). The active profile is selected from a request-context key written upstream (typically by a `cel` middleware) — same composition pattern as `ai-proxy` named targets (ADR-0024). When the key is absent or names an unknown profile, `default_profile` applies. For streamed responses the client has already received the body; redactions are skipped and the `redactions_skipped_streaming_total` counter is incremented instead.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["default_profile", "profiles"],
+  "$defs": {
+    "RedactRule": {
+      "type": "object",
+      "required": ["pattern"],
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Rust regex pattern applied to each `choices[].message.content` (and `delta.content`) string."
+        },
+        "replacement": {
+          "type": "string",
+          "description": "Replacement string (supports `$1`/`$2` capture groups per Rust regex semantics).",
+          "default": "[REDACTED]"
+        }
+      }
+    },
+    "GuardProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "redact": {
+          "type": "array",
+          "description": "Ordered list of redaction rules applied to each assistant message content.",
+          "items": { "$ref": "#/$defs/RedactRule" },
+          "default": []
+        },
+        "blocked_patterns": {
+          "type": "array",
+          "description": "Regex patterns that cause the response to be replaced with a 502 Bad Gateway problem+json when matched anywhere in the serialized response body (post-redaction).",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    }
+  },
+  "properties": {
+    "context_key": {
+      "type": "string",
+      "description": "Request-context key read to select the active profile. Defaults to `ai.policy` (shared across AI plugins for consistent CEL-driven policy).",
+      "default": "ai.policy"
+    },
+    "default_profile": {
+      "type": "string",
+      "description": "Profile used when the context key is absent or names an unknown profile. Must be a key of `profiles`."
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Named response-guard profiles.",
+      "additionalProperties": { "$ref": "#/$defs/GuardProfile" },
+      "minProperties": 1
+    }
+  }
+}

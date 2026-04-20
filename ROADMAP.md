@@ -12,7 +12,7 @@ What's actively being worked on:
 
 - [x] `request-transformer` plugin — modify headers, query params, path, body before upstream
 - [x] `response-transformer` plugin — modify response status code, headers, body before client
-- [x] Documentation for transformation plugins — **done** (documented in `docs/guide/middlewares.md`)
+- [x] Documentation for transformation plugins — **done** (documented in `docs/guide/middlewares/`)
 
 ---
 
@@ -21,7 +21,7 @@ What's actively being worked on:
 Near-term items ready to be picked up:
 
 - [ ] `tcp-log` plugin — send logs to TCP endpoint
-- [x] Security plugins documentation — **done** (documented in `docs/guide/middlewares.md`)
+- [x] Security plugins documentation — **done** (documented in `docs/guide/middlewares/`)
 - [ ] Structured log format documentation
 - [ ] Integration guides (Datadog, Splunk, ELK)
 - [x] `barbacane dev` — local dev server with file watching — **done**
@@ -87,10 +87,10 @@ Near-term items ready to be picked up:
 |--------|------|----------|-------------|
 | ~~`cel` routing extension~~ | ~~Middleware~~ | ~~P0~~ | ~~`on_match.set_context` + `context_set` capability for policy-driven model routing~~ — **done** |
 | ~~`ai-proxy`~~ | ~~Dispatcher~~ | ~~P0~~ | ~~Route requests to LLM providers (OpenAI, Anthropic, Ollama); unified OpenAI-compatible API; format translation; provider fallback; policy-driven routing via named targets; token count context propagation~~ — **done** |
-| `ai-token-limit` | Middleware | P1 | Token-based rate limiting per consumer/model/time window (runs on_response, reads token counts from context set by `ai-proxy`) |
-| `ai-cost-tracker` | Middleware | P1 | Records cost metrics per provider/model via configurable price table; emits Prometheus counter for spend dashboards |
-| `ai-prompt-guard` | Middleware | P1 | Validate and constrain prompts: length limits, regex-based prompt injection detection, managed system template injection |
-| `ai-response-guard` | Middleware | P1 | Inspect LLM responses: PII redaction, blocked pattern detection; logs warnings when redaction is needed on already-streamed responses |
+| ~~`ai-token-limit`~~ | ~~Middleware~~ | ~~P1~~ | ~~Token-based rate limiting per consumer/model/time window (runs on_response, reads token counts from context set by `ai-proxy`)~~ — **done** |
+| ~~`ai-cost-tracker`~~ | ~~Middleware~~ | ~~P1~~ | ~~Records cost metrics per provider/model via configurable price table; emits Prometheus counter for spend dashboards~~ — **done** |
+| ~~`ai-prompt-guard`~~ | ~~Middleware~~ | ~~P1~~ | ~~Validate and constrain prompts: length limits, regex-based prompt injection detection, managed system template injection~~ — **done** |
+| ~~`ai-response-guard`~~ | ~~Middleware~~ | ~~P1~~ | ~~Inspect LLM responses: PII redaction, blocked pattern detection; logs warnings when redaction is needed on already-streamed responses~~ — **done** |
 
 ---
 

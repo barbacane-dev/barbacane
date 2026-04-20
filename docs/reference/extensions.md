@@ -472,7 +472,7 @@ Declarative request transformations before upstream dispatch.
 
 Supports variable interpolation: `$client_ip`, `$header.*`, `$query.*`, `$path.*`, `context:*`. Variables resolve against the original request.
 
-See [Middlewares Guide](../guide/middlewares.md#request-transformer) for full documentation.
+See [Middlewares Guide](../guide/middlewares/transformation.md#request-transformer) for full documentation.
 
 ### response-transformer
 
@@ -495,7 +495,7 @@ Declarative response transformations before client delivery.
       rename: { /userName: /user_name }  # JSON Pointer rename
 ```
 
-See [Middlewares Guide](../guide/middlewares.md#response-transformer) for full documentation.
+See [Middlewares Guide](../guide/middlewares/transformation.md#response-transformer) for full documentation.
 
 ### observability
 

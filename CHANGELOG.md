@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **cli**: `barbacane compile` now discovers specs from the manifest's `specs` folder when `--spec` is not provided — `barbacane compile -m barbacane.yaml -o api.bca` works with zero spec args.
 - **cli**: `barbacane init` now scaffolds a `specs/` directory and places the generated spec in `specs/api.yaml` with `specs: ./specs/` in the manifest.
 
+#### AI Gateway middlewares (ADR-0024)
+- **`ai-prompt-guard` middleware plugin**: validates LLM chat-completion requests before dispatch — named profiles carry `max_messages`, `max_message_length`, regex `blocked_patterns`, and managed `system_template` with `{var}` substitution. Short-circuits with 400 + RFC 9457 problem+json on violation.
+- **`ai-token-limit` middleware plugin**: token-based sliding-window rate limiting for LLM endpoints. Named profiles carry `quota` + `window` (seconds); `partition_key` / `policy_name` / `count` stay top-level. Advisory semantics: streaming responses can't be interrupted mid-flight, so overshoots are absorbed and the next request 429s. Emits standard `ratelimit-*` response headers.
+- **`ai-cost-tracker` middleware plugin**: per-request LLM cost in USD from a configurable `provider/model` price table (USD per 1,000 tokens). Emits the Prometheus counter `barbacane_plugin_ai_cost_tracker_cost_dollars` with `provider` and `model` labels for Grafana spend dashboards. No profile map — prices are operator facts, not policy.
+- **`ai-response-guard` middleware plugin**: inspects LLM responses (OpenAI chat-completion format) in on_response. Named profiles carry `redact` rules (regex → replacement, scoped to `choices[].message.content` and `delta.content`) and `blocked_patterns` (match replaces the response with 502). Streamed responses cannot be redacted after the fact; the plugin emits `redactions_skipped_streaming_total` instead.
+- **Named-profile + CEL composition pattern**: all four AI middlewares read a `context_key` (default `ai.policy`, overridable) to select the active profile. A `cel` middleware upstream writes `ai.policy` via `on_match.set_context`; one CEL decision fans out to prompt strictness, token budget, redaction strictness, and the `ai-proxy` dispatcher's named targets (via `ai.target`).
+
+### Changed
+- **plugin**: `ai-token-limit` config now uses `quota` + `window` (seconds) — aligned with the `rate-limit` plugin — instead of `max_tokens_per_minute` / `max_tokens_per_hour`. For multiple concurrent windows (e.g. per-minute and per-hour caps), stack two instances of the middleware with different `policy_name`s.
+- **plugin**: AI guard/limit plugins (`ai-prompt-guard`, `ai-token-limit`, `ai-response-guard`) **fail-closed** on misconfiguration — a missing `default_profile` or invalid regex in a profile returns `500 problem+json` instead of silently letting traffic through. A silently disabled PII rule is precisely the class of bug operators only catch from an incident.
+- **plugin**: `ai-token-limit` now persists the resolved partition key into context between `on_request` and `on_response` (scoped by `policy_name`) so `client_ip` and `header:*` partition sources charge the same bucket the request was admitted against. Previously token consumption leaked into a shared `"unknown"` bucket, effectively disabling per-consumer budgeting for those partition sources.
+
+### Fixed
+- **gateway**: dispatcher plugins now receive the middleware chain's accumulated context — previously `host_context_get` calls inside a dispatcher (e.g. `ai-proxy` reading `ai.target` written by `cel`) returned nothing because the dispatcher instance was started with an empty context. This also means context keys *written* by a dispatcher (e.g. `ai.prompt_tokens` from `ai-proxy`) now flow into the `on_response` middleware chain, which is what makes `ai-cost-tracker` and `ai-token-limit` actually see token usage.
+- **gateway**: stale framing headers (`content-length`, `transfer-encoding`, `connection`, `keep-alive`) from upstream responses are stripped before returning to the client so `on_response` middleware that mutates the body (e.g. `ai-response-guard` PII redaction) doesn't cause `IncompleteMessage` errors from a length mismatch.
+
 ## [0.6.3] - 2026-04-07
 
 ### Fixed
