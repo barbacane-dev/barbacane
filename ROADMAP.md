@@ -1,232 +1,163 @@
 # Roadmap
 
-Prioritized roadmap for Barbacane development.
-
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+Forward-looking priorities for Barbacane. See [CHANGELOG.md](CHANGELOG.md) for what's shipped.
 
 ---
 
-## Current Focus
+## Now
 
-What's actively being worked on:
+Actively being worked on:
 
-- [x] `request-transformer` plugin — modify headers, query params, path, body before upstream
-- [x] `response-transformer` plugin — modify response status code, headers, body before client
-- [x] Documentation for transformation plugins — **done** (documented in `docs/guide/middlewares.md`)
+- _(open — pick up from Next)_
 
 ---
 
-## Up Next
+## Next
 
-Near-term items ready to be picked up:
+Ready to pick up, prioritized roughly top-to-bottom:
 
-- [ ] `tcp-log` plugin — send logs to TCP endpoint
-- [x] Security plugins documentation — **done** (documented in `docs/guide/middlewares.md`)
+- [ ] `barbacane plugin init` — scaffold new plugin projects from a template
+- [ ] Plugin template repo — `barbacane-plugin-template` with minimal scaffolding
+- [ ] `tcp-log` plugin — send structured logs to a TCP endpoint
+- [ ] Integration guides — Datadog / Splunk / ELK recipes for `http-log`
 - [ ] Structured log format documentation
-- [ ] Integration guides (Datadog, Splunk, ELK)
-- [x] `barbacane dev` — local dev server with file watching — **done**
-- [ ] `barbacane plugin init` — scaffold new plugin projects
-- [ ] Improved error messages
+- [ ] Getting-started refresh — align with `barbacane dev` and `specs/` folder layout
 - [ ] Installation guide update
-- [ ] Getting started update
+- [ ] Improved compiler error messages — more actionable validation / compilation errors with spec JSON Pointers
 
 ---
 
-## Plugin Backlog
+## Later
 
-### P0 — High Value, Commonly Used
+Committed but not yet scheduled. Grouped by concern.
 
-| Plugin | Type | Description |
-|--------|------|-------------|
-| ~~`request-transformer`~~ | ~~Middleware~~ | ~~Modify headers, query params, path, body before upstream~~ — **done** |
-| ~~`response-transformer`~~ | ~~Middleware~~ | ~~Modify response status code, headers, body before client~~ — **done** |
-| ~~`ip-restriction`~~ | ~~Middleware~~ | ~~Allow/deny by IP or CIDR range~~ — **done** |
-| ~~`basic-auth`~~ | ~~Middleware~~ | ~~Username/password authentication~~ — **done** |
-| ~~`http-log`~~ | ~~Middleware~~ | ~~Send request/response logs to HTTP endpoint~~ — **done** |
-| ~~`correlation-id`~~ | ~~Middleware~~ | ~~Propagate/generate X-Correlation-ID header~~ — **done** |
+### Data plane
 
-### P1 — Important for Production
+| Feature | Priority | Notes |
+|---|---|---|
+| gRPC support | P2 | Native gRPC proxying |
+| Connection pooling tuning | P2 | Configurable pool sizes and health checks |
+| Certificate hot-reload | P2 | Reload TLS certs without restart |
+| HTTP/3 support | P3 | QUIC-based ingress via `quinn` |
+| HTTP/2 stream config | P3 | Expose stream limits (currently fixed) |
+| Connection idle timeout | P3 | Currently 60s hard-coded |
 
-| Plugin | Type | Description |
-|--------|------|-------------|
-| ~~`s3`~~ | ~~Dispatcher~~ | ~~S3 / S3-compatible object storage proxy with SigV4 signing (virtual-hosted + path-style + custom endpoints)~~ — **done** |
-| ~~`opa-authz`~~ | ~~Middleware~~ | ~~OPA policy evaluation via REST API (`host_http_call`)~~ — **done** |
-| ~~`bot-detection`~~ | ~~Middleware~~ | ~~Block known bots by User-Agent patterns~~ — **done** |
-| `idempotency` | Middleware | Idempotent request processing via `Idempotency-Key` header (requires cache capability) |
-| ~~`redirect`~~ | ~~Middleware~~ | ~~URL redirections (301/302/307/308)~~ — **done** |
-| ~~`observability`~~ | ~~Middleware~~ | ~~Trace sampling, detailed validation logs, latency SLO monitoring~~ — **done** |
-| ~~`acl`~~ | ~~Middleware~~ | ~~Access control by consumer/group after auth~~ — **done** |
-| ~~`request-size-limit`~~ | ~~Middleware~~ | ~~Reject requests exceeding size (per-route)~~ — **done** |
-| ~~`oidc-auth`~~ | ~~Middleware~~ | ~~OpenID Connect discovery + JWKS validation~~ — **done** |
-| ~~`cel`~~ | ~~Middleware~~ | ~~CEL expression-based inline policy evaluation~~ — **done** |
+### Control plane
 
-### P2 — Nice to Have
+| Feature | Priority | Notes |
+|---|---|---|
+| Rollback support | P1 | One-click rollback to previous artifact version |
+| Audit log | P2 | Track all spec/artifact/deployment changes |
+| RBAC | P2 | Role-based access control for control plane API |
+| Plugin registry | P2 | Central registry for discovering and versioning plugins |
+| Data plane groups | P2 | Deploy to specific subsets of data planes |
+| Artifact signing | P2 | GPG/private-key signing + verification on load |
+| Health metrics collection | P2 | Aggregate CPU, memory, request rates from data planes |
+| Multi-tenancy | P3 | Organization/team isolation with SNI-based routing |
 
-| Plugin | Type | Description |
-|--------|------|-------------|
-| `ldap-auth` | Middleware | LDAP/Active Directory authentication — blocked pending a pure-Rust FFI-free LDAP client; HTTP bridge approach rejected as it reduces to existing auth plugins (ADR-0028) |
-| `hmac-auth` | Middleware | Signature-based auth (AWS SigV4 style) |
-| `grpc-web` | Middleware | gRPC-Web to gRPC translation |
-| ~~`ws-upstream`~~ | ~~Dispatcher~~ | ~~WebSocket transparent proxy (ADR-0026): thin WASM plugin calls `host_ws_upgrade`; middleware chain runs on the HTTP Upgrade request (auth, rate-limit, logging); host runtime handles bidirectional frame relay via tokio~~ — **done** |
+### Plugins
 
-### P3 — Specialized / Enterprise
+| Plugin | Type | Priority | Notes |
+|---|---|---|---|
+| `idempotency` | Middleware | P1 | `Idempotency-Key` header via cache capability |
+| `hmac-auth` | Middleware | P2 | Signature-based auth (AWS SigV4 style) |
+| `grpc-web` | Middleware | P2 | gRPC-Web ↔ gRPC translation |
+| `mtls-auth` | Middleware | P3 | Client certificate authentication |
+| `canary` | Middleware | P3 | Traffic splitting by percentage |
+| `graphql-proxy` | Dispatcher | P3 | GraphQL-specific routing and caching |
+| `saml-auth` | Middleware | P3 | SAML (most SSO covered by `oidc-auth`) |
+| `vault-auth` | Middleware | P3 | HashiCorp Vault integration |
 
-| Plugin | Type | Description |
-|--------|------|-------------|
-| `mtls-auth` | Middleware | Client certificate authentication |
-| `canary` | Middleware | Traffic splitting by percentage |
-| `graphql-proxy` | Dispatcher | GraphQL-specific routing and caching |
-| `saml-auth` | Middleware | SAML authentication (most enterprise SSO covered by `oidc-auth`) |
-| `vault-auth` | Middleware | HashiCorp Vault integration for auth |
+### Developer experience
 
-### AI & LLM (ADR-0024)
-
-~~Prerequisite: the `ai-proxy` dispatcher requires a small backwards-compatible extension to the `cel` plugin (`on_match.set_context` + `context_set` capability) to enable policy-driven model routing. WASM plugin streaming (ADR-0023) is already implemented.~~
-
-| Plugin | Type | Priority | Description |
-|--------|------|----------|-------------|
-| ~~`cel` routing extension~~ | ~~Middleware~~ | ~~P0~~ | ~~`on_match.set_context` + `context_set` capability for policy-driven model routing~~ — **done** |
-| ~~`ai-proxy`~~ | ~~Dispatcher~~ | ~~P0~~ | ~~Route requests to LLM providers (OpenAI, Anthropic, Ollama); unified OpenAI-compatible API; format translation; provider fallback; policy-driven routing via named targets; token count context propagation~~ — **done** |
-| `ai-token-limit` | Middleware | P1 | Token-based rate limiting per consumer/model/time window (runs on_response, reads token counts from context set by `ai-proxy`) |
-| `ai-cost-tracker` | Middleware | P1 | Records cost metrics per provider/model via configurable price table; emits Prometheus counter for spend dashboards |
-| `ai-prompt-guard` | Middleware | P1 | Validate and constrain prompts: length limits, regex-based prompt injection detection, managed system template injection |
-| `ai-response-guard` | Middleware | P1 | Inspect LLM responses: PII redaction, blocked pattern detection; logs warnings when redaction is needed on already-streamed responses |
-
----
-
-## Feature Backlog
-
-### Data Plane
-
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| HTTP/3 support | QUIC-based HTTP/3 ingress via `quinn` crate | P3 |
-| gRPC support | Native gRPC proxying | P2 |
-| ~~Response streaming~~ | ~~Stream large responses without buffering; WASM plugin streaming via `host_http_stream` (ADR-0023)~~ — **done** |
-| Connection pooling tuning | Configurable pool sizes and health checks | P2 |
-| Certificate hot-reload | Reload TLS certs without restart | P2 |
-| ~~Hot-reload~~ | ~~Download and swap artifact at runtime without restart~~ — **done** |
-| ~~CORS auto-preflight~~ | ~~Automatic OPTIONS response for CORS preflight requests~~ — **done** |
-| ~~Per-middleware timing metrics~~ | ~~Record execution duration per middleware in Prometheus~~ — **done** |
-| ~~Wildcard path parameters~~ | ~~`{param+}` greedy capture for slash-containing values (S3 keys, CDN paths)~~ — **done** |
-
-### Control Plane
-
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| Rollback support | One-click rollback to previous artifact version | P1 |
-| Artifact signing | GPG/private-key signing + verification on load | P2 |
-| ~~URL plugin source~~ | ~~Load WASM plugins from `url:` in manifests (in addition to `path:`)~~ — **done** (ADR-0029) | ~~P2~~ |
-| ~~Admin introspection endpoints~~ | ~~Dedicated admin port with `/health`, `/metrics`, `/provenance`~~ — **done** (ADR-0022) | ~~P3~~ |
-| Data plane groups | Deploy to specific subsets of data planes | P2 |
-| Audit log | Track all spec/artifact/deployment changes | P2 |
-| RBAC | Role-based access control for control plane API | P2 |
-| Plugin registry | Central registry for discovering and versioning plugins | P2 |
-| Multi-tenancy | Organization/team isolation with SNI-based routing | P3 |
-| Health metrics collection | Aggregate CPU, memory, request rates from data planes | P2 |
-| ~~MCP server~~ | ~~Native data plane MCP server (ADR-0025): auto-generate MCP tools from compiled `.bca` artifact; tool calls route through the full middleware pipeline (auth, rate limiting, validation); Streamable HTTP transport; `x-barbacane-mcp` spec extension to opt in/out per operation~~ — **done** (v0.6.0) | ~~P1~~ |
-
-### Developer Experience
-
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| ~~Vacuum ruleset~~ | ~~Publish `vacuum:barbacane` ruleset validating `x-barbacane-*` extensions against plugin JSON schemas — catch upstream refs, plugin config errors, and missing auth opt-outs at lint time instead of compile/runtime~~ — **done** (`docs/rulesets/barbacane.yaml`) | ~~P0~~ |
-| ~~`barbacane dev`~~ | ~~Local development server with file watching~~ — **done** | ~~P1~~ |
-| `barbacane plugin init` | Scaffold new plugin projects from template | P1 |
-| Plugin template repo | `barbacane-plugin-template` repository with minimal scaffolding | P1 |
-| VS Code extension | Spec editing with validation and autocomplete | P2 |
-| OpenAPI diff | Show changes between spec versions | P2 |
-| Improved error messages | More actionable validation and compilation errors | P2 |
-| Compile-time error catalog | Document all E-codes with examples and remediation | P2 |
-| MCP compile-time validation | Warn on missing `operationId` (required for tool naming); warn on schema constructs that don't map cleanly to MCP; embed MCP tool manifest in `.bca` so `tools/list` requires no runtime schema computation (ADR-0025) | P1 |
-| ~~Extension documentation~~ | ~~Complete `x-barbacane-dispatch` and `x-barbacane-middlewares` reference~~ — **done** (`docs/reference/extensions.md`) | ~~P1~~ |
-| Middleware ordering guide | Best practices for middleware execution order | P2 |
-| ~~Playground environment~~ | ~~Docker Compose development environment~~ — **done** (moved to [barbacane-dev/playground](https://github.com/barbacane-dev/playground)) |
+| Feature | Priority | Notes |
+|---|---|---|
+| MCP compile-time validation | P1 | Warn on missing `operationId`; embed MCP tool manifest in `.bca` (ADR-0025) |
+| VS Code extension | P2 | Spec editing with validation and autocomplete |
+| OpenAPI diff | P2 | Show changes between spec versions |
+| Compile-time error catalog | P2 | Document all E-codes with examples and remediation |
+| Middleware ordering guide | P2 | Best practices for chain order |
 
 ### Integrations
 
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| Vault secrets | `vault://` secret reference scheme | P1 |
-| AWS Secrets Manager | `aws-sm://` secret reference scheme | P2 |
-| Kubernetes secrets | `k8s://` secret reference scheme | P2 |
-| Terraform provider | Infrastructure-as-code for control plane resources | P2 |
-| ArgoCD integration | GitOps deployment patterns documentation | P2 |
+| Feature | Priority | Notes |
+|---|---|---|
+| Vault secrets | P1 | `vault://` secret reference scheme |
+| AWS Secrets Manager | P2 | `aws-sm://` scheme |
+| Kubernetes secrets | P2 | `k8s://` scheme |
+| Terraform provider | P2 | IaC for control plane resources |
+| ArgoCD integration | P2 | GitOps deployment patterns documentation |
 
-### Packaging & Distribution
+### Packaging & distribution
 
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| Helm charts | Kubernetes deployment charts for data/control plane | P2 |
-| Docker Hub | Publish images to Docker Hub (in addition to ghcr.io) | P3 |
-| Homebrew formula | macOS package manager support | P3 |
-| APT/RPM packages | Linux package manager support | P3 |
+| Feature | Priority | Notes |
+|---|---|---|
+| Helm charts | P2 | Kubernetes deployment charts for data/control plane |
+| Docker Hub | P3 | Publish images (in addition to ghcr.io) |
+| Homebrew formula | P3 | macOS package manager |
+| APT/RPM packages | P3 | Linux package managers |
 
-### Security & Config provenance: Trusted Spec-to-Run Pipeline
+### Security & supply-chain provenance
 
-To guarantee that the running gateway is executing the exact specification intended, we will implement a verifiable spec-to-run trust chain. This ensures no unauthorized configuration drift can occur between the source repository and the production edge.
+The first three rungs of the trusted spec-to-run pipeline are shipped (artifact fingerprinting, provenance admin endpoint, drift detection via heartbeat). Remaining:
 
-- [x] **Artifact fingerprinting:** Automatically calculate and embed a cryptographic hash (along with optional metadata like Git commit SHA or S3 Object ID) into the `.bca` artifact during the `barbacane compile` step. — **done**
-- [x] **Provenance API endpoint:** Dedicated admin HTTP listener (ADR-0022) on a separate port with `GET /provenance` returning full artifact provenance data. — **done**
-- [x] **Control Plane drift detection:** Data planes report `artifact_hash` in heartbeats; control plane compares against expected hash and flags drift via `HeartbeatAck`. — **done**
-- [ ] **OCI / SBOM integration:** Surface the specification fingerprint in the software bill of materials (SBOM) and container labels when packaging the Data Plane as an OCI image, completing the end-to-end supply chain verification.
+- [ ] **OCI / SBOM integration** — surface the spec fingerprint in SBOMs and container labels when packaging the data plane as an OCI image.
 
+### Technical debt
 
----
-
-## Technical Debt
-
-### Compile-Time Safety Gaps
-
-| Item | Description | Priority | Status |
-|------|-------------|----------|--------|
-| Spec pointers in errors | Add JSON Pointer (e.g., `#/paths/~1users/get`) to all compile errors | P2 | Open |
-| ~~Ambiguous route detection~~ | ~~E1050: Detect overlapping path templates~~ | ~~P0~~ | **Done** |
-| ~~Schema complexity limits~~ | ~~E1051/E1052: Depth (32) and property (256) limits~~ | ~~P0~~ | **Done** |
-| ~~Circular `$ref` detection~~ | ~~E1053: Detect circular JSON Schema references~~ | ~~P0~~ | **Done** |
-| ~~Move E1011 to compile~~ | ~~E1011: Missing middleware name validation~~ | ~~P1~~ | **Done** |
-| ~~Move E1015 to compile~~ | ~~Move unknown extension warning from `validate` to `compile`~~ | ~~P1~~ | **Done** |
-| ~~Path template syntax validation~~ | ~~E1054: Validate braces, param names, duplicates~~ | ~~P2~~ | **Done** |
-| ~~Duplicate operationId detection~~ | ~~E1055: Detect non-unique operationId~~ | ~~P2~~ | **Done** |
-| ~~Deterministic artifact builds~~ | ~~Sort plugin/spec/route collections before serialization~~ | ~~P2~~ | **Done** |
-
-### Other Technical Debt
-
-| Item | Description | Priority |
-|------|-------------|----------|
-| ~~`$ref` resolution in parser~~ | ~~Resolve local `#/components/*` refs at parse time instead of storing raw `$ref` values; currently users must pre-flatten specs~~ — **done** | ~~P1~~ |
-| Schema composition analysis | Interpret `allOf`/`oneOf`/`anyOf`/`discriminator` at compile time instead of treating them as opaque JSON (runtime validation via `jsonschema` still works) | P2 |
-| E1032 validation | Warn on OpenAPI security scheme without matching auth middleware | P2 |
-| OPA WASM compilation | Define OPA version, compilation flags, error handling | P1 |
-| Auth plugin auditing | Security review process for auth plugins (security-critical WASM) | P1 |
-| Trace volume guidance | Documentation for managing trace volume at scale | P1 |
-| Integration tests | Full control plane API lifecycle tests with PostgreSQL | P2 |
-| Compile safety CI | Add fitness functions: deterministic build verification, fuzz testing for compiler | P2 |
-| CLI subcommands | `barbacane-control spec/artifact/plugin` REST-based commands | P2 |
-| HTTP/2 stream config | Expose configuration for stream limits (currently fixed) | P3 |
-| Connection idle timeout | Make configurable (currently 60s hard-coded) | P3 |
-| ~~JWKS fetch~~ | ~~Load JWT public keys from `jwks_uri`~~ — **done** |
+| Item | Priority | Notes |
+|---|---|---|
+| Spec pointers in errors | P2 | Add JSON Pointer (e.g., `#/paths/~1users/get`) to all compile errors |
+| Schema composition analysis | P2 | Interpret `allOf`/`oneOf`/`anyOf`/`discriminator` at compile time instead of treating as opaque JSON |
+| E1032 validation | P2 | Warn on OpenAPI security scheme without matching auth middleware |
+| OPA WASM compilation | P1 | Define OPA version, compilation flags, error handling |
+| Auth plugin auditing | P1 | Security review process for auth plugins |
+| Trace volume guidance | P1 | Documentation for managing trace volume at scale |
+| Integration tests | P2 | Full control plane API lifecycle tests with PostgreSQL |
+| Compile safety CI | P2 | Fitness functions: deterministic build verification, fuzz testing |
+| CLI subcommands | P2 | `barbacane-control spec/artifact/plugin` REST-based commands |
 
 ---
 
-## Open Questions
+## Someday / maybe
+
+Ideas worth tracking but not committed. Items flagged **`[competitive]`** are on competitors' feature matrices (see Competitive watch).
+
+- **`[competitive]`** Semantic caching for `ai-proxy` — embedding-based response dedup, vector-store-backed via `host_http_call` (Kong 3.8, Portkey)
+- **`[competitive]`** Semantic routing — route by cosine similarity between prompt and per-target descriptions (Kong 3.8)
+- **`[competitive]`** Hard-budget spend enforcement — extend `ai-cost-tracker` from "emit cost metric" to "reject when spend > cap per consumer/window" (Portkey, LiteLLM)
+- **`[competitive]`** OpenAPI Overlay support — env-specific config via overlay spec so one base spec + dev/staging/prod overlays replace copies (Zuplo pattern)
+- **`[competitive]`** Auto-generated developer portal — Scalar/Redocly-backed portal served by the control plane from the compiled spec
+- Multi-modal AI — explicit vision/audio support beyond the OpenAI-compatible image URLs we already carry
+
+---
+
+## Blocked
+
+Waiting on external unblockers:
+
+- **`ldap-auth` plugin** — blocked pending a pure-Rust, FFI-free LDAP client. HTTP bridge approach rejected (ADR-0028) as it reduces to existing auth plugins.
+
+---
+
+## Open questions
 
 | Question | Context |
-|----------|---------|
+|---|---|
 | Hot-reload semantics | How to handle in-flight requests during artifact reload? |
 | Control plane scaling | How many data planes per control plane? WebSocket limits? |
 | Plugin registry design | Trigger for implementing? Discovery and versioning model? |
-| SNI router implementation | Build it, reuse existing (Istio/Envoy), or external? |
-| Gateway API documentation | Which implementations to prioritize (Envoy, Istio, Cilium)? |
+| SNI router implementation | Build it, reuse (Istio/Envoy), or external? |
+| Gateway API prioritisation | Which implementations to prioritise (Envoy, Istio, Cilium)? |
 | Library embedding API | If users want to embed Barbacane, expose more internal crates? |
 | Nightly build demand | User signal for binary nightlies vs container-only? |
 
 ---
 
-## Out of Scope
+## Non-goals
 
 | Item | Reason |
-|------|--------|
+|---|---|
 | Automatic version negotiation | Deferred to spec authors; gateway routes, doesn't negotiate |
 | Request transformation between API versions | Not a gateway concern; backend responsibility |
 | Native Gateway API controller | Complementary positioning chosen (Option C) |
@@ -235,13 +166,85 @@ To guarantee that the running gateway is executing the exact specification inten
 
 ---
 
-## Competitive Features to Monitor
+## Competitive watch
 
-| Feature | Competitors | Notes |
-|---------|-------------|-------|
-| AI Gateway | Kong AI Proxy, APISIX AI plugins | LLM request/response handling, token counting — **planned** (ADR-0024, ADR-0025) |
-| Service Mesh integration | Istio, Linkerd | Sidecar mode for mesh environments |
-| Multi-cluster routing | Kong, Traefik | Route across Kubernetes clusters |
-| API Analytics | Kong, Tyk | Built-in analytics dashboard |
-| Developer Portal | Kong, Tyk, Apigee | Self-service documentation and key management |
-| GraphQL Federation | Apollo, Kong | Federated GraphQL gateway |
+What competitors ship that we might copy. Barbacane is primarily an API gateway; the AI gateway is one feature category among many. Signal only — absence from Barbacane isn't a bug. Landscape refresh: **2026-04-20**.
+
+### Protocol & routing
+
+| Feature | Who | Barbacane status |
+|---|---|---|
+| gRPC proxying / `GRPCRoute` | Envoy Gateway (GA), Kong, Traefik | ➜ Later/P2 (gRPC support) |
+| gRPC-Web ↔ gRPC translation | Envoy Gateway, Kong | ➜ Later/P2 (`grpc-web` middleware) |
+| GraphQL Federation | Apollo, Kong | ➜ Later/P3 (`graphql-proxy` dispatcher) |
+| WebSocket proxy | Envoy Gateway, Kong, Tyk | ✅ `ws-upstream` (ADR-0026) |
+| HTTP/3 (QUIC) ingress | Envoy, Cloudflare, NGINX | ➜ Later/P3 |
+| Weighted / canary routing | Kong (plugin), Envoy (Gateway API native) | ➜ Later/P3 (`canary` middleware) |
+
+### Traffic management
+
+| Feature | Who | Barbacane status |
+|---|---|---|
+| Sliding-window rate limiting | Kong (Rate Limiting Advanced — enterprise for advanced window), Tyk, Envoy local ratelimit | ✅ `rate-limit` |
+| Multi-tier / layered rate limits | Kong, Tyk | ✅ via stacking (cf. `docs/guide/middlewares/traffic-control.md`) |
+| Response caching | Kong, Tyk, Cloudflare | ✅ `cache` |
+| Circuit breaker | Kong, Istio | Partially covered: `ai-proxy` has provider-level fallback on 5xx/timeout. No general circuit breaker; not planned as a separate middleware |
+| Idempotency | Some gateways via custom code | ➜ Later/P1 (`idempotency` middleware) |
+| Request/response transformation | Kong, Tyk (core) | ✅ `request-transformer`, `response-transformer` |
+
+### Authentication & security
+
+| Feature | Who | Barbacane status |
+|---|---|---|
+| JWT / OIDC / OAuth2 | Kong, Tyk, Apigee, Zuplo | ✅ `jwt-auth`, `oidc-auth`, `oauth2-auth` |
+| API keys | Kong, Tyk, Zuplo | ✅ `apikey-auth` |
+| mTLS client auth | Kong (enterprise), Envoy | ➜ Later/P3 (`mtls-auth`) |
+| HMAC / SigV4-style auth | Kong, AWS API Gateway | ➜ Later/P2 (`hmac-auth`) |
+| LDAP | Kong (CE), Tyk | ⛔ Blocked — see Blocked section |
+| CEL / inline policy | Kong (lua), Envoy (CEL), Barbacane | ✅ `cel` with routing mode |
+| OPA integration | Kong, Envoy (ext-authz), Istio | ✅ `opa-authz` |
+| IP restriction / bot detection | Kong, Cloudflare, AWS WAF | ✅ `ip-restriction`, `bot-detection` |
+
+### Observability & developer experience
+
+| Feature | Who | Barbacane status |
+|---|---|---|
+| OpenTelemetry export | Kong (native since 3.x), Envoy, Tyk Pump | ✅ OTLP + Prometheus + structured logs |
+| **Self-service developer portal** | Kong, Tyk (integrated portal), Apigee, Zuplo (auto-generated from spec) | ➜ Not planned — see Someday/maybe |
+| **Analytics dashboard** | Kong (Konnect), Tyk Dashboard, Apigee | Delegated to Prometheus/Grafana — no built-in dashboard planned |
+| Spec linting | Stoplight Spectral, Redocly CLI, Vacuum, Barbacane | ✅ `vacuum:barbacane` ruleset |
+| Local dev / hot-reload loop | Few competitors — most require external compose/operator setups | ✅ `barbacane dev` |
+
+### Spec-driven gateways (closest philosophical cohort)
+
+| Feature | Who | Barbacane status |
+|---|---|---|
+| OpenAPI-native config (spec = source of truth) | Zuplo, Bump.sh, Barbacane | ✅ Core identity |
+| GitOps / PR-driven deploy | Zuplo (PR is the deploy) | ✅ Compile-to-artifact + control plane |
+| **OpenAPI Overlay support** | Zuplo (env-specific overlays on one base spec) | ➜ Someday/maybe |
+| Edge-deployed (300+ POPs) | Zuplo, Cloudflare | ⛔ Non-goal — Barbacane is self-hosted |
+
+### Kubernetes & service mesh
+
+| Feature | Who | Barbacane status |
+|---|---|---|
+| Gateway API controller (full conformance) | Envoy Gateway, Kong Gateway Operator, Cilium, Traefik | ⛔ Non-goal (Option C — complementary positioning); tracking as ecosystem standardizes |
+| Multi-cluster routing | Kong, Traefik, Istio Ambient Multicluster (Beta) | ➜ Later (control-plane "data plane groups") |
+| Sidecarless service mesh | Istio Ambient (GA since 1.24, Nov 2024) | ⛔ Out of scope |
+| Service mesh (sidecar) | Istio, Linkerd | ⛔ Out of scope |
+
+### AI / LLM gateway (one category among the above)
+
+Every serious gateway now ships AI features. Barbacane is competitive on the core (multi-provider routing, guardrails, rate limiting, cost tracking, MCP server); newer differentiators sit in the semantic layer and MCP governance.
+
+| Capability | Who | Barbacane status |
+|---|---|---|
+| Multi-provider LLM proxy + fallback | Kong 3.8+, APISIX 3.15+, Portkey, LiteLLM, Cloudflare AI Gateway (Universal Endpoint), Zuplo | ✅ `ai-proxy` (ADR-0024) |
+| Prompt + response guardrails | Portkey (60+), LiteLLM (built-in), Kong, Zuplo | ✅ `ai-prompt-guard`, `ai-response-guard` |
+| Token-based rate limiting + spend metric | Kong (enterprise for token limits), Portkey, LiteLLM | ✅ `ai-token-limit`, `ai-cost-tracker` |
+| MCP server + MCP traffic governance | Kong (API→MCP conversion), APISIX (`mcp-bridge`), LiteLLM, Portkey, Zuplo | ✅ Native MCP server from spec (ADR-0025) |
+| MCP authentication (OAuth 2.1 / PKCE) | Portkey | Covered via existing auth middlewares on `/__barbacane/mcp` (`oidc-auth` handles PKCE-authenticated JWTs; `apikey-auth` / `oauth2-auth` also apply) |
+| Semantic cache / semantic routing | Kong 3.8 (Redis-backed), Portkey (enterprise) | ➜ Someday/maybe |
+| Hard-budget spend enforcement | Portkey, LiteLLM (per-team budgets) | ➜ Someday/maybe |
+| Agent-to-agent (A2A) governance | Kong 3.14, Istio Agentgateway (experimental) | Watch — new category, unclear if it stabilizes |
+| K8s Gateway API Inference Extension (`InferencePool` / `InferenceModel`) | Envoy Gateway, kgateway, GKE Gateway, NGINX Gateway Fabric | Watch — complementary to our CEL-driven policy routing, not overlapping |
