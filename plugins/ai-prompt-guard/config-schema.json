@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:ai-prompt-guard:config",
+  "title": "AI Prompt Guard Middleware Config",
+  "description": "Configuration for the AI prompt-guard middleware. Named profiles carry the per-request policy (length limits, regex blocks, managed system-template injection). The active profile is selected from a request-context key written upstream (typically by a `cel` middleware) — the same composition pattern as `ai-proxy` named targets (ADR-0024). When the key is absent or names an unknown profile, `default_profile` applies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["default_profile", "profiles"],
+  "$defs": {
+    "PromptProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_messages": {
+          "type": "integer",
+          "description": "Maximum number of messages in the `messages` array.",
+          "minimum": 1
+        },
+        "max_message_length": {
+          "type": "integer",
+          "description": "Maximum characters per message `content` (counted as Unicode scalar values, not bytes).",
+          "minimum": 1
+        },
+        "blocked_patterns": {
+          "type": "array",
+          "description": "Rust regex patterns applied to every message `content`. Any match rejects the request.",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "system_template": {
+          "type": "string",
+          "description": "Managed system prompt. When set, replaces any client-supplied system message(s). Supports `{var}` substitution from `template_vars`."
+        },
+        "template_vars": {
+          "type": "object",
+          "description": "Static variables substituted into `system_template`.",
+          "additionalProperties": { "type": "string" }
+        },
+        "reject_status": {
+          "type": "integer",
+          "description": "HTTP status returned when validation fails.",
+          "default": 400,
+          "minimum": 400,
+          "maximum": 499
+        }
+      }
+    }
+  },
+  "properties": {
+    "context_key": {
+      "type": "string",
+      "description": "Request-context key read to select the active profile. Defaults to `ai.policy` (shared across AI plugins for consistent CEL-driven policy).",
+      "default": "ai.policy"
+    },
+    "default_profile": {
+      "type": "string",
+      "description": "Profile used when the context key is absent or names an unknown profile. Must be a key of `profiles`."
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Named policy profiles.",
+      "additionalProperties": { "$ref": "#/$defs/PromptProfile" },
+      "minProperties": 1
+    }
+  }
+}

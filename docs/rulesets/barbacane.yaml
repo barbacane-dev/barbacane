@@ -78,7 +78,7 @@ rules:
 
   barbacane-middleware-known-plugin:
     description: Middleware name must be a known Barbacane middleware plugin.
-    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares/
     severity: warn
     given: "$['x-barbacane-middlewares'][*].name"
     then:
@@ -86,6 +86,10 @@ rules:
       functionOptions:
         values:
           - acl
+          - ai-cost-tracker
+          - ai-prompt-guard
+          - ai-response-guard
+          - ai-token-limit
           - apikey-auth
           - basic-auth
           - bot-detection
@@ -108,19 +112,16 @@ rules:
 
   barbacane-middleware-config-valid:
     description: Middleware config must validate against the plugin's JSON Schema.
-    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares/
     severity: error
     given: "$['x-barbacane-middlewares'][*]"
     then:
       function: barbacane-validate-middleware-config
 
-  barbacane-middleware-no-duplicate:
-    description: Root middleware chain must not contain duplicate plugin names.
-    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
-    severity: warn
-    given: "$['x-barbacane-middlewares']"
-    then:
-      function: barbacane-no-duplicate-middlewares
+  # Note: no duplicate-name rule. Middlewares are intentionally stackable —
+  # `cel` (routing rules), `rate-limit` (layered keys), `ai-token-limit`
+  # (multi-window) all rely on appearing multiple times with different
+  # configs. See docs/guide/middlewares/index.md#stacking.
 
   # Operation-level middleware rules (same checks)
 
@@ -135,7 +136,7 @@ rules:
 
   barbacane-op-middleware-known-plugin:
     description: Operation-level middleware name must be a known Barbacane middleware plugin.
-    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares/
     severity: warn
     given: "$.paths[*][*]['x-barbacane-middlewares'][*].name"
     then:
@@ -143,6 +144,10 @@ rules:
       functionOptions:
         values:
           - acl
+          - ai-cost-tracker
+          - ai-prompt-guard
+          - ai-response-guard
+          - ai-token-limit
           - apikey-auth
           - basic-auth
           - bot-detection
@@ -165,19 +170,34 @@ rules:
 
   barbacane-op-middleware-config-valid:
     description: Operation-level middleware config must validate against the plugin's JSON Schema.
-    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares/
     severity: error
     given: "$.paths[*][*]['x-barbacane-middlewares'][*]"
     then:
       function: barbacane-validate-middleware-config
 
-  barbacane-op-middleware-no-duplicate:
-    description: Operation-level middleware chain must not contain duplicate plugin names.
-    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
-    severity: warn
-    given: "$.paths[*][*]['x-barbacane-middlewares']"
+  # ---------------------------------------------------------------------------
+  # AI middleware regex validation (shift-left)
+  # ---------------------------------------------------------------------------
+  # Rust `regex` is close enough to JavaScript for the class of mistakes
+  # operators actually write (unclosed brackets, stray quantifiers). Catches
+  # these at lint time instead of at the first 500 from the gateway.
+
+  barbacane-ai-regex-root:
+    description: Regex patterns in ai-prompt-guard / ai-response-guard profiles must compile.
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares/ai-gateway.html
+    severity: error
+    given: "$['x-barbacane-middlewares'][*]"
     then:
-      function: barbacane-no-duplicate-middlewares
+      function: barbacane-validate-ai-regex
+
+  barbacane-ai-regex-op:
+    description: Regex patterns in operation-level ai-prompt-guard / ai-response-guard profiles must compile.
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares/ai-gateway.html
+    severity: error
+    given: "$.paths[*][*]['x-barbacane-middlewares'][*]"
+    then:
+      function: barbacane-validate-ai-regex
 
   # ---------------------------------------------------------------------------
   # MCP validation
@@ -257,7 +277,7 @@ rules:
 
   barbacane-auth-opt-out-explicit:
     description: "When global auth middleware is set, operations without it should explicitly opt out with x-barbacane-middlewares: []."
-    documentationUrl: https://docs.barbacane.dev/guide/middlewares.html
+    documentationUrl: https://docs.barbacane.dev/guide/middlewares/
     severity: info
     given: "$"
     then:

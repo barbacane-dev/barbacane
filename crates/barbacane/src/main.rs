@@ -1626,6 +1626,19 @@ impl Gateway {
         let mut builder = Response::builder().status(status);
 
         for (key, value) in &plugin_response.headers {
+            // Skip framing headers that the plugin (or its upstream) may have
+            // set for a different body. hyper recomputes `content-length` from
+            // the actual `Full<Bytes>` payload; keeping a stale value would
+            // cause the client to see a truncated response (`IncompleteMessage`)
+            // when a middleware — e.g. `ai-response-guard` redaction —
+            // modifies the body length.
+            let key_lc = key.to_ascii_lowercase();
+            if matches!(
+                key_lc.as_str(),
+                "content-length" | "transfer-encoding" | "connection" | "keep-alive"
+            ) {
+                continue;
+            }
             builder = builder.header(key.as_str(), value.as_str());
         }
 
@@ -1690,6 +1703,13 @@ impl Gateway {
         // Inject request body via side-channel before dispatch.
         instance.set_request_body(request_body);
 
+        // Carry the middleware chain's accumulated context into the
+        // dispatcher so it can read keys written upstream (e.g. `ai.target`
+        // set by a `cel` routing instance). The dispatcher may also write
+        // new keys (e.g. `ai.prompt_tokens`); we capture those below and
+        // thread them through to `on_response`.
+        instance.set_context(middleware_context.clone());
+
         // Run WASM dispatch on a blocking thread (WASM execution is synchronous).
         let mut wasm_handle = tokio::task::spawn_blocking(move || {
             let result = instance.dispatch(&request_json);
@@ -1697,7 +1717,15 @@ impl Gateway {
             let output_body = instance.take_output_body();
             let last_http = instance.take_last_http_result();
             let ws_upgrade_request = instance.take_ws_upgrade_request();
-            (result, output, output_body, last_http, ws_upgrade_request)
+            let post_dispatch_context = instance.get_context();
+            (
+                result,
+                output,
+                output_body,
+                last_http,
+                ws_upgrade_request,
+                post_dispatch_context,
+            )
         });
 
         // Race: first stream event vs. WASM completion.
@@ -1752,7 +1780,7 @@ impl Gateway {
                 let metrics = Arc::clone(&self.metrics);
                 tokio::spawn(async move {
                     match wh.await {
-                        Ok((Ok(_), _, _, Some(last_http), _))
+                        Ok((Ok(_), _, _, Some(last_http), _, post_ctx))
                             if !middleware_instances.is_empty() =>
                         {
                             if let Ok(plugin_resp) =
@@ -1769,12 +1797,12 @@ impl Gateway {
                                 barbacane_wasm::execute_on_response_with_metrics(
                                     &mut instances,
                                     &resp_json,
-                                    middleware_context,
+                                    post_ctx,
                                     Some(&cb),
                                 );
                             }
                         }
-                        Ok((Err(e), _, _, _, _)) => {
+                        Ok((Err(e), _, _, _, _, _)) => {
                             tracing::warn!(
                                 error = %e,
                                 "streaming dispatch error (response already sent)"
@@ -1803,14 +1831,21 @@ impl Gateway {
                     None => wasm_handle.await,
                 };
 
-                let (dispatch_result, output, output_body, _, ws_upgrade_request) =
-                    match wasm_result {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Err(self
-                                .dev_error_response(format_args!("plugin task panicked: {}", e)));
-                        }
-                    };
+                let (
+                    dispatch_result,
+                    output,
+                    output_body,
+                    _,
+                    ws_upgrade_request,
+                    post_dispatch_context,
+                ) = match wasm_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(
+                            self.dev_error_response(format_args!("plugin task panicked: {}", e))
+                        );
+                    }
+                };
 
                 if let Err(e) = dispatch_result {
                     return Err(
@@ -1899,7 +1934,7 @@ impl Gateway {
                         let _ = self.execute_middleware_on_response(
                             middleware_instances,
                             sentinel_response,
-                            middleware_context,
+                            post_dispatch_context.clone(),
                         );
                     }
 
@@ -1946,12 +1981,14 @@ impl Gateway {
                     return Ok(response);
                 }
 
-                // Run on_response middleware chain.
+                // Run on_response middleware chain with the post-dispatch
+                // context so middlewares can observe keys written by the
+                // dispatcher (e.g. `ai.prompt_tokens` from `ai-proxy`).
                 let final_response = if !middleware_instances.is_empty() {
                     self.execute_middleware_on_response(
                         middleware_instances,
                         plugin_response,
-                        middleware_context,
+                        post_dispatch_context,
                     )
                 } else {
                     plugin_response

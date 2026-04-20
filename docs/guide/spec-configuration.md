@@ -484,5 +484,5 @@ Errors you might see:
 ## Next Steps
 
 - [Dispatchers](dispatchers.md) - All dispatcher types and options
-- [Middlewares](middlewares.md) - Available middleware plugins
+- [Middlewares](middlewares/index.md) - Available middleware plugins
 - [CLI Reference](../reference/cli.md) - Full command options

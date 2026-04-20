@@ -1,0 +1,11 @@
+[plugin]
+name = "ai-prompt-guard"
+version = "0.1.0"
+type = "middleware"
+description = "Validates and constrains LLM prompts before dispatch. Named profiles (length limits, regex blocks, managed system template) are selected per-request from a context key written by an upstream `cel` middleware — same composition pattern as `ai-proxy` named targets (ADR-0024)."
+wasm = "ai-prompt-guard.wasm"
+
+[capabilities]
+log = true
+context_get = true
+body_access = true

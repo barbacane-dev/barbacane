@@ -76,6 +76,9 @@ assert_has_violations "$SCRIPT_DIR/invalid-upstream-secrets.yaml" "invalid-upstr
 assert_has_violations "$ROOT_DIR/tests/fixtures/invalid-missing-dispatch.yaml" "fixtures/invalid-missing-dispatch" 1
 assert_has_violations "$ROOT_DIR/tests/fixtures/invalid-unknown-extension.yaml" "fixtures/invalid-unknown-extension" 1
 assert_has_violations "$SCRIPT_DIR/invalid-wildcard-paths.yaml" "invalid-wildcard-paths" 2
+# Invalid regex patterns in AI middleware profiles should each trigger one
+# barbacane-ai-regex-root violation (4 bad patterns → 4 violations).
+assert_has_violations "$SCRIPT_DIR/invalid-ai-regex.yaml" "invalid-ai-regex" 4
 echo ""
 
 echo "Results: $PASS passed, $FAIL failed"

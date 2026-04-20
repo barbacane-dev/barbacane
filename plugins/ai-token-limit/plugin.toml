@@ -1,0 +1,12 @@
+[plugin]
+name = "ai-token-limit"
+version = "0.1.0"
+type = "middleware"
+description = "Token-based rate limiting for LLM endpoints (ADR-0024). Budget is enforced against tokens reported by ai-proxy (ai.prompt_tokens / ai.completion_tokens). Advisory-only: an in-flight stream is not interrupted; enforcement kicks in on the next request."
+wasm = "ai-token-limit.wasm"
+
+[capabilities]
+log = true
+context_get = true
+context_set = true
+rate_limit = true
