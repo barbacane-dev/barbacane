@@ -21,14 +21,16 @@
 
 ---
 
-Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it becomes your gateway — routing, validation, authentication, and all. No proprietary config language, no drift between your spec and your infrastructure.
+Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it becomes your gateway — routing, validation, authentication, AI traffic, MCP, and all. No proprietary config language, no drift between your spec and your infrastructure.
 
-- **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. No separate gateway DSL to maintain.
-- **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises.
-- **Secure by default** — Memory-safe runtime, TLS via Rustls, sandboxed WASM plugins, secrets never baked into artifacts.
-- **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation and distribution.
-- **Extensible** — Write plugins in any language that compiles to WebAssembly. They run in a sandbox, so a buggy plugin can't take down the gateway.
-- **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export.
+- **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. The compiler turns it into a sealed `.bca` artifact; no separate gateway DSL to maintain.
+- **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
+- **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
+- **AI gateway built-in** — `ai-proxy` unifies OpenAI / Anthropic / Ollama with provider fallback, plus four dedicated middlewares for prompt guarding, response redaction, token-based rate limiting, and per-call cost tracking ([ADR-0024](adr/0024-ai-gateway-plugin.md)).
+- **MCP from your spec** — Every operation in your OpenAPI spec is automatically exposed as a Model Context Protocol tool at `POST /__barbacane/mcp`, behind the same auth/rate-limit/validation chain ([ADR-0025](adr/0025-mcp-server.md)).
+- **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
+- **Extensible** — 33 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
+- **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export. Per-middleware timing comes for free.
 
 ## Quick Start
 
@@ -38,11 +40,11 @@ git clone https://github.com/barbacane-dev/barbacane.git
 cd barbacane
 cargo build --release
 
-# Initialize a project
+# Initialize a project (scaffolds barbacane.yaml + specs/api.yaml)
 ./target/release/barbacane init my-api --fetch-plugins
 cd my-api
 
-# Start the dev server (auto-compiles and hot-reloads on save)
+# Start the dev server (compiles, serves, and hot-reloads on save)
 ../target/release/barbacane dev
 ```
 
@@ -53,16 +55,73 @@ barbacane compile -m barbacane.yaml -o api.bca
 barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
+### What configuration looks like
+
+Routing, auth, rate limits, AI policy — all declared inline on the operation:
+
+```yaml
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: chatCompletions
+      x-barbacane-middlewares:
+        - name: jwt-auth
+          config:
+            issuer: "https://auth.example/"
+            audience: ai-gateway
+        - name: ai-prompt-guard
+          config:
+            default_profile: standard
+            profiles:
+              standard:
+                max_messages: 50
+                blocked_patterns: ["(?i)ignore previous instructions"]
+        - name: ai-token-limit
+          config:
+            default_profile: standard
+            partition_key: "header:x-auth-sub"
+            profiles:
+              standard: { quota: 100000, window: 60 }
+        - name: ai-response-guard
+          config:
+            default_profile: default
+            profiles:
+              default:
+                redact:
+                  - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+                    replacement: '[SSN]'
+        - name: ai-cost-tracker
+          config:
+            prices:
+              openai/gpt-4o:             { prompt: 0.0025, completion: 0.01 }
+              anthropic/claude-opus-4-6: { prompt: 0.015,  completion: 0.075 }
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          default_target: primary
+          targets:
+            primary: { provider: openai, model: gpt-4o }
+          fallback:
+            - { provider: anthropic, model: claude-opus-4-6 }
+```
+
+The compiler validates the spec against each plugin's JSON schema (`vacuum:barbacane`) and seals everything into a single `.bca` artifact — including pinned plugin WASM. The data plane runs the artifact; nothing is fetched at request time.
+
 ## Documentation
 
 Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane.dev)**.
 
 - [Getting Started](https://docs.barbacane.dev/guide/getting-started.html) — First steps with Barbacane
-- [Spec Configuration](https://docs.barbacane.dev/guide/spec-configuration.html) — Configure routing and middleware
-- [Middlewares](https://docs.barbacane.dev/guide/middlewares/) — Authentication, rate limiting, caching
-- [Dispatchers](https://docs.barbacane.dev/guide/dispatchers.html) — Route requests to backends
-- [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) — REST API for spec and artifact management
-- [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Web-based management interface
+- [Spec Configuration](https://docs.barbacane.dev/guide/spec-configuration.html) — Configure routing and middleware via `x-barbacane-*` extensions
+- [Dispatchers](https://docs.barbacane.dev/guide/dispatchers.html) — Route requests to HTTP, Lambda, S3, Kafka, NATS, LLMs, WebSocket backends
+- **Middlewares** — grouped by concern:
+  - [Authentication](https://docs.barbacane.dev/guide/middlewares/authentication.html) · [Authorization](https://docs.barbacane.dev/guide/middlewares/authorization.html) · [Traffic control](https://docs.barbacane.dev/guide/middlewares/traffic-control.html)
+  - [Caching](https://docs.barbacane.dev/guide/middlewares/caching.html) · [Transformation](https://docs.barbacane.dev/guide/middlewares/transformation.html) · [Observability](https://docs.barbacane.dev/guide/middlewares/observability.html)
+  - [AI Gateway](https://docs.barbacane.dev/guide/middlewares/ai-gateway.html) — prompt guarding, token limits, cost tracking, response redaction
+- [MCP Server](https://docs.barbacane.dev/guide/mcp.html) — Expose your spec as a Model Context Protocol server
+- [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) · [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Manage specs, artifacts, and data planes
+- [Secrets](https://docs.barbacane.dev/guide/secrets.html) · [Vacuum linting](https://docs.barbacane.dev/guide/vacuum.html) · [FIPS](https://docs.barbacane.dev/guide/fips.html)
+- [Extensions reference](https://docs.barbacane.dev/reference/extensions.html) · [CLI reference](https://docs.barbacane.dev/reference/cli.html) · [Artifact format](https://docs.barbacane.dev/reference/artifact.html)
 - [Plugin Development](https://docs.barbacane.dev/contributing/plugins.html) — Build custom WASM plugins
 - [Development Guide](https://docs.barbacane.dev/contributing/development.html) — Setup and contribute
 
@@ -84,41 +143,33 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 
 ## Official Plugins
 
-| Plugin | Type | Description |
-|--------|------|-------------|
-| `http-upstream` | Dispatcher | Reverse proxy to HTTP/HTTPS backends |
-| `mock` | Dispatcher | Return static responses |
-| `lambda` | Dispatcher | Invoke AWS Lambda functions |
-| `kafka` | Dispatcher | Publish messages to Kafka |
-| `nats` | Dispatcher | Publish messages to NATS |
-| `s3` | Dispatcher | Proxy requests to AWS S3 / S3-compatible storage with SigV4 signing |
-| `ai-proxy` | Dispatcher | Unified LLM routing to OpenAI, Anthropic, and Ollama with provider fallback |
-| `ws-upstream` | Dispatcher | WebSocket transparent proxy with full middleware chain on upgrade |
-| `fire-and-forget` | Dispatcher | Forward request to upstream and return immediate static response |
-| `jwt-auth` | Middleware | JWT token validation |
-| `apikey-auth` | Middleware | API key authentication |
-| `basic-auth` | Middleware | HTTP Basic authentication (RFC 7617) |
-| `oauth2-auth` | Middleware | OAuth2 token introspection |
-| `oidc-auth` | Middleware | OpenID Connect (OIDC) authentication |
-| `acl` | Middleware | Consumer-based access control lists |
-| `opa-authz` | Middleware | Open Policy Agent authorization |
-| `cel` | Middleware | Inline CEL expression policy evaluation |
-| `rate-limit` | Middleware | Sliding window rate limiting |
-| `cache` | Middleware | Response caching |
-| `cors` | Middleware | CORS header management |
-| `correlation-id` | Middleware | Request correlation ID propagation |
-| `request-size-limit` | Middleware | Request body size limits |
-| `ip-restriction` | Middleware | IP allowlist/blocklist |
-| `bot-detection` | Middleware | Block bots by User-Agent pattern |
-| `redirect` | Middleware | URL redirections (301/302/307/308) with path matching |
-| `request-transformer` | Middleware | Modify headers, query params, path, and body before upstream |
-| `response-transformer` | Middleware | Modify status code, headers, and body before client |
-| `observability` | Middleware | SLO monitoring and detailed logging |
-| `http-log` | Middleware | Send request/response logs to HTTP endpoint |
-| `ai-prompt-guard` | Middleware | Validate and constrain LLM prompts under named policy profiles |
-| `ai-token-limit` | Middleware | Token-based sliding-window rate limiting for LLM endpoints |
-| `ai-cost-tracker` | Middleware | Record per-request LLM cost (USD) from a configurable price table |
-| `ai-response-guard` | Middleware | PII redaction and blocked-pattern scanning on LLM responses |
+33 production-ready plugins ship with Barbacane. They're built as WASM modules and run in a sandbox.
+
+### Dispatchers — where the request goes
+
+| Plugin | Description |
+|--------|-------------|
+| `http-upstream` | Reverse proxy to HTTP/HTTPS backends |
+| `mock` | Return static responses with `{{placeholder}}` interpolation |
+| `lambda` | Invoke AWS Lambda functions |
+| `kafka` | Publish messages to Kafka |
+| `nats` | Publish messages to NATS |
+| `s3` | Proxy requests to AWS S3 / S3-compatible storage with SigV4 signing |
+| `ai-proxy` | Unified LLM routing to OpenAI, Anthropic, and Ollama with provider fallback |
+| `ws-upstream` | WebSocket transparent proxy with full middleware chain on upgrade |
+| `fire-and-forget` | Forward request to upstream and return immediate static response |
+
+### Middlewares — what happens on the way
+
+| Concern | Plugins |
+|---------|---------|
+| **Authentication** | `jwt-auth`, `apikey-auth`, `basic-auth`, `oauth2-auth`, `oidc-auth` |
+| **Authorization** | `acl`, `opa-authz`, `cel` (CEL policy + policy-driven routing) |
+| **Traffic control** | `rate-limit` (sliding window), `request-size-limit`, `ip-restriction`, `bot-detection`, `redirect` |
+| **Caching** | `cache` (response caching) |
+| **Transformation** | `request-transformer`, `response-transformer`, `cors`, `correlation-id` |
+| **Observability** | `observability` (SLO + detailed logging), `http-log` |
+| **AI gateway** | `ai-prompt-guard`, `ai-token-limit`, `ai-cost-tracker`, `ai-response-guard` |
 
 ## Performance
 
