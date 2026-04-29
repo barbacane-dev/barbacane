@@ -65,17 +65,44 @@ paths:
     post:
       operationId: chatCompletions
       x-barbacane-middlewares:
-        - { name: jwt-auth,         config: { jwks_url: "https://auth.example/.well-known/jwks.json" } }
-        - { name: ai-prompt-guard,  config: { default_profile: standard, profiles: { ... } } }
-        - { name: ai-token-limit,   config: { quota: 100000, window: 60, partition_key: "claims:sub" } }
-        - { name: ai-response-guard, config: { default_profile: default,  profiles: { ... } } }
-        - { name: ai-cost-tracker,  config: { prices: { "openai/gpt-4o": { input: 2.50, output: 10.00 } } } }
+        - name: jwt-auth
+          config:
+            issuer: "https://auth.example/"
+            audience: ai-gateway
+        - name: ai-prompt-guard
+          config:
+            default_profile: standard
+            profiles:
+              standard:
+                max_messages: 50
+                blocked_patterns: ["(?i)ignore previous instructions"]
+        - name: ai-token-limit
+          config:
+            default_profile: standard
+            partition_key: "header:x-auth-sub"
+            profiles:
+              standard: { quota: 100000, window: 60 }
+        - name: ai-response-guard
+          config:
+            default_profile: default
+            profiles:
+              default:
+                redact:
+                  - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+                    replacement: '[SSN]'
+        - name: ai-cost-tracker
+          config:
+            prices:
+              openai/gpt-4o:             { prompt: 0.0025, completion: 0.01 }
+              anthropic/claude-opus-4-6: { prompt: 0.015,  completion: 0.075 }
       x-barbacane-dispatch:
-        plugin: ai-proxy
+        name: ai-proxy
         config:
+          default_target: primary
           targets:
-            - { name: primary,  provider: openai,    model: gpt-4o }
-            - { name: fallback, provider: anthropic, model: claude-sonnet-4-6 }
+            primary: { provider: openai, model: gpt-4o }
+          fallback:
+            - { provider: anthropic, model: claude-opus-4-6 }
 ```
 
 The compiler validates the spec against each plugin's JSON schema (`vacuum:barbacane`) and seals everything into a single `.bca` artifact — including pinned plugin WASM. The data plane runs the artifact; nothing is fetched at request time.
