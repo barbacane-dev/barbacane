@@ -1,4 +1,4 @@
-# Control Plane
+# Control plane
 
 The Barbacane Control Plane provides a REST API for managing API specifications, plugins, and compiled artifacts. It enables centralized management of your API gateway configuration with PostgreSQL-backed storage and async compilation.
 
@@ -319,9 +319,9 @@ The control plane notifies all connected data planes, which download the new art
 
 ## Web UI
 
-The control plane includes a web-based management interface at `http://localhost:5173` (when running the UI development server).
+The control plane includes a web-based management interface at `http://localhost:5173` (once the dev server is running locally).
 
-### Running the UI
+### Starting the web UI dev server
 
 ```bash
 # Using Makefile

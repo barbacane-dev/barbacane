@@ -1,4 +1,4 @@
-# CLI Reference
+# CLI reference
 
 Barbacane provides two command-line tools:
 - **barbacane** - Data plane (gateway) for compiling specs and serving traffic

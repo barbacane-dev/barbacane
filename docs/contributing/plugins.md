@@ -1,4 +1,4 @@
-# Plugin Development Guide
+# WASM plugin development
 
 This guide explains how to create WASM plugins for Barbacane.
 

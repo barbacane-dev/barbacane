@@ -4,10 +4,10 @@
 
 # User Guide
 
-- [Getting Started](guide/getting-started.md)
-- [Spec Configuration](guide/spec-configuration.md)
-- [Dispatchers](guide/dispatchers.md)
-- [Middlewares](guide/middlewares/index.md)
+- [Getting started](guide/getting-started.md)
+- [Spec configuration](guide/spec-configuration.md)
+- [Dispatchers (request routing)](guide/dispatchers.md)
+- [Middlewares (auth, rate limit, AI)](guide/middlewares/index.md)
   - [Authentication](guide/middlewares/authentication.md)
   - [Authorization](guide/middlewares/authorization.md)
   - [Traffic Control](guide/middlewares/traffic-control.md)
@@ -17,7 +17,7 @@
   - [AI Gateway](guide/middlewares/ai-gateway.md)
 - [Secrets](guide/secrets.md)
 - [Observability](guide/observability.md)
-- [Control Plane](guide/control-plane.md)
+- [Control plane (REST API)](guide/control-plane.md)
 - [Web UI](guide/web-ui.md)
 - [MCP Server](guide/mcp.md)
 - [Linting with Vacuum](guide/vacuum.md)
@@ -25,7 +25,7 @@
 
 # Reference
 
-- [CLI Reference](reference/cli.md)
+- [CLI reference](reference/cli.md)
 - [Spec Extensions](reference/extensions.md)
 - [Artifact Format](reference/artifact.md)
 - [Reserved Endpoints](reference/endpoints.md)
@@ -33,5 +33,5 @@
 # Contributing
 
 - [Architecture](contributing/architecture.md)
-- [Development Guide](contributing/development.md)
-- [Plugin Development](contributing/plugins.md)
+- [Development setup](contributing/development.md)
+- [WASM plugin development](contributing/plugins.md)
