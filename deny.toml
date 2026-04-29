@@ -9,6 +9,12 @@ ignore = [
     # CRL Distribution Point matching logic in rustls-webpki 0.102.x — pinned by async-nats
     "RUSTSEC-2026-0049",
 
+    # Name constraints for URI names incorrectly accepted in rustls-webpki — pinned by async-nats (0.102.8 + 0.103.11)
+    "RUSTSEC-2026-0098",
+
+    # Name constraints accepted for certificates asserting a wildcard name in rustls-webpki — pinned by async-nats
+    "RUSTSEC-2026-0099",
+
     # instant crate unmaintained — pinned by notify 7.x (transitive via notify-types), no safe upgrade
     "RUSTSEC-2024-0384",
 ]

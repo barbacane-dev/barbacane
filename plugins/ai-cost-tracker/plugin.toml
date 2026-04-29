@@ -1,0 +1,11 @@
+[plugin]
+name = "ai-cost-tracker"
+version = "0.1.0"
+type = "middleware"
+description = "Records per-request LLM cost (USD) based on token usage and a configurable price table. Emits the `cost_dollars` Prometheus counter labelled by provider/model (ADR-0024)."
+wasm = "ai-cost-tracker.wasm"
+
+[capabilities]
+log = true
+context_get = true
+telemetry = true

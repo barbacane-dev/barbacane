@@ -122,3 +122,48 @@ async fn test_fixture_compiles_ai_proxy() {
     let resp = gateway.get("/__barbacane/health").await.unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+#[tokio::test]
+async fn test_fixture_compiles_ai_prompt_guard() {
+    let gateway = TestGateway::from_spec(&fixture("ai-prompt-guard.yaml"))
+        .await
+        .expect("ai-prompt-guard fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_fixture_compiles_ai_token_limit() {
+    let gateway = TestGateway::from_spec(&fixture("ai-token-limit.yaml"))
+        .await
+        .expect("ai-token-limit fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_fixture_compiles_ai_cost_tracker() {
+    let gateway = TestGateway::from_spec(&fixture("ai-cost-tracker.yaml"))
+        .await
+        .expect("ai-cost-tracker fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_fixture_compiles_ai_response_guard() {
+    let gateway = TestGateway::from_spec(&fixture("ai-response-guard.yaml"))
+        .await
+        .expect("ai-response-guard fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_fixture_compiles_ai_gateway_composition() {
+    let gateway = TestGateway::from_spec(&fixture("ai-gateway.yaml"))
+        .await
+        .expect("ai-gateway composition fixture failed to compile");
+    let resp = gateway.get("/__barbacane/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+}

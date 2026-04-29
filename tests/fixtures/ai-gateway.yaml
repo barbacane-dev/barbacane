@@ -1,0 +1,114 @@
+openapi: "3.0.3"
+info:
+  title: AI Gateway Composition Test API
+  version: "1.0.0"
+  description: >
+    Full ADR-0024 AI gateway composition — one CEL decision writes
+    `ai.policy` into context, every AI middleware below reads it to
+    select its profile, and `ai-proxy` uses `ai.target` to pick a provider.
+
+x-barbacane-middlewares:
+  # Tier-based policy routing. Premium clients get the strict-but-generous
+  # profile; trial clients get the tight profile. Everyone else gets
+  # `default_profile: standard` on each downstream plugin.
+  - name: cel
+    config:
+      expression: "request.headers['x-tier'] == 'premium'"
+      on_match:
+        set_context:
+          ai.policy: premium
+          ai.target: premium
+  - name: cel
+    config:
+      expression: "request.headers['x-tier'] == 'trial'"
+      on_match:
+        set_context:
+          ai.policy: trial
+          ai.target: local
+
+  # Prompt validation — strictness per tier.
+  - name: ai-prompt-guard
+    config:
+      default_profile: standard
+      profiles:
+        standard:
+          max_messages: 50
+          blocked_patterns:
+            - "(?i)ignore previous instructions"
+        premium:
+          max_messages: 100
+        trial:
+          max_messages: 5
+          max_message_length: 2000
+          blocked_patterns:
+            - "(?i)ignore previous instructions"
+            - "(?i)system prompt"
+
+  # Token-based rate limit — quota per tier.
+  - name: ai-token-limit
+    config:
+      default_profile: standard
+      partition_key: "context:auth.sub"
+      profiles:
+        standard: { quota: 10000, window: 60 }
+        premium:  { quota: 100000, window: 60 }
+        trial:    { quota: 1000, window: 3600 }
+
+  # Cost tracking — operator-managed price table.
+  - name: ai-cost-tracker
+    config:
+      prices:
+        openai/gpt-4o:                      { prompt: 0.0025, completion: 0.01 }
+        anthropic/claude-opus-4-6:          { prompt: 0.015,  completion: 0.075 }
+        ollama/mistral:                     { prompt: 0.0,    completion: 0.0 }
+
+  # PII redaction + content policy — strictness per tier.
+  - name: ai-response-guard
+    config:
+      default_profile: default
+      profiles:
+        default:
+          redact:
+            - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+              replacement: '[SSN]'
+        premium:
+          # Premium tier is trusted; no redaction.
+          redact: []
+        trial:
+          redact:
+            - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+              replacement: '[SSN]'
+            - pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+              replacement: '[EMAIL]'
+          blocked_patterns:
+            - '(?i)CONFIDENTIAL'
+
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: chatCompletions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          default_target: local
+          targets:
+            local:
+              provider: ollama
+              model: mistral
+              base_url: "http://ollama.internal:11434"
+            premium:
+              provider: anthropic
+              model: claude-opus-4-6
+              # Fixture: dummy string (runtime replaces with real secret ref).
+              api_key: "test-key"
+          timeout: 120
+          max_tokens: 4096
+      responses:
+        "200":
+          description: Completion

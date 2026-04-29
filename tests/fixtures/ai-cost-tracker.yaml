@@ -1,0 +1,50 @@
+openapi: "3.0.3"
+info:
+  title: AI Cost Tracker Middleware Test API
+  version: "1.0.0"
+  description: >
+    Fixture for the ai-cost-tracker middleware. Exercises the flat price
+    table (USD per 1,000 tokens) keyed by `provider/model`. Cost is computed
+    from ai.prompt_tokens / ai.completion_tokens context written by ai-proxy
+    and emitted as the `cost_dollars` Prometheus counter.
+
+paths:
+  /v1/chat/completions:
+    post:
+      summary: Chat completions with cost tracking
+      operationId: trackedChatCompletions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-middlewares:
+        - name: ai-cost-tracker
+          config:
+            warn_unknown_model: true
+            prices:
+              openai/gpt-4o:
+                prompt: 0.0025
+                completion: 0.01
+              openai/gpt-4o-mini:
+                prompt: 0.00015
+                completion: 0.0006
+              anthropic/claude-sonnet-4-20250514:
+                prompt: 0.003
+                completion: 0.015
+              anthropic/claude-opus-4-6:
+                prompt: 0.015
+                completion: 0.075
+              ollama/mistral:
+                prompt: 0.0
+                completion: 0.0
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"object":"chat.completion","choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Completion

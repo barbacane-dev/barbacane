@@ -1,0 +1,78 @@
+openapi: "3.0.3"
+info:
+  title: AI Token Limit Middleware Test API
+  version: "1.0.0"
+  description: >
+    Fixture for the ai-token-limit middleware. Shows a single-window setup
+    and the "stacked instances with distinct policy_name" pattern used for
+    multi-window enforcement (e.g. per-minute and per-hour caps).
+
+paths:
+  /v1/chat/completions:
+    post:
+      summary: Token-budgeted chat completions (per-minute only)
+      operationId: tokenLimitedChatCompletions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-middlewares:
+        - name: ai-token-limit
+          config:
+            default_profile: standard
+            partition_key: "context:auth.sub"
+            count: total
+            profiles:
+              standard: { quota: 10000, window: 60 }
+              premium:  { quota: 100000, window: 60 }
+              trial:    { quota: 1000, window: 60 }
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"object":"chat.completion","choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Completion
+        "429":
+          description: Token budget exhausted
+
+  /v1/chat/completions/stacked:
+    post:
+      summary: Stacked instances enforcing per-minute AND per-hour caps
+      operationId: stackedTokenLimits
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-middlewares:
+        - name: ai-token-limit
+          config:
+            policy_name: ai-tokens-minute
+            default_profile: standard
+            partition_key: "context:auth.sub"
+            profiles:
+              standard: { quota: 10000, window: 60 }
+        - name: ai-token-limit
+          config:
+            policy_name: ai-tokens-hour
+            default_profile: standard
+            partition_key: "context:auth.sub"
+            profiles:
+              standard: { quota: 500000, window: 3600 }
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"object":"chat.completion","choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Completion
+        "429":
+          description: Token budget exhausted (either window)

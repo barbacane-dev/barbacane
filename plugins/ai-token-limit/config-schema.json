@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:ai-token-limit:config",
+  "title": "AI Token Limit Middleware Config",
+  "description": "Token-based sliding-window rate limiting for LLM endpoints (ADR-0024). Budget is charged against the token counts written by `ai-proxy` (`ai.prompt_tokens`, `ai.completion_tokens` in context). Named profiles carry the `quota`+`window` tier; the active profile is selected per-request from a context key written upstream (typically by a `cel` middleware) — same composition pattern as `ai-proxy` named targets. Consumer partitioning stays top-level (`partition_key`). Advisory-only: a streamed response already in flight is not interrupted; exhausting the budget blocks subsequent requests with 429.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["default_profile", "profiles"],
+  "$defs": {
+    "TokenProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quota", "window"],
+      "properties": {
+        "quota": {
+          "type": "integer",
+          "description": "Maximum tokens allowed per sliding window.",
+          "minimum": 1
+        },
+        "window": {
+          "type": "integer",
+          "description": "Sliding-window duration in seconds.",
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "properties": {
+    "context_key": {
+      "type": "string",
+      "description": "Request-context key read to select the active profile. Defaults to `ai.policy` (shared across AI plugins for consistent CEL-driven policy).",
+      "default": "ai.policy"
+    },
+    "default_profile": {
+      "type": "string",
+      "description": "Profile used when the context key is absent or names an unknown profile. Must be a key of `profiles`."
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Named token-budget profiles (`quota` + `window` each).",
+      "additionalProperties": { "$ref": "#/$defs/TokenProfile" },
+      "minProperties": 1
+    },
+    "policy_name": {
+      "type": "string",
+      "description": "Identifier used in `ratelimit-policy` response headers and as the rate-limit bucket-key prefix. Lets operators distinguish multiple stacked instances.",
+      "default": "ai-tokens"
+    },
+    "partition_key": {
+      "type": "string",
+      "description": "Source of the per-consumer partition key. Accepted forms: `client_ip`, `header:<name>`, `context:<key>`, or a literal string (shared budget across all requests). Matches the `rate-limit` plugin's semantics.",
+      "default": "client_ip"
+    },
+    "count": {
+      "type": "string",
+      "description": "Which token counts charge against the budget. `prompt` counts input tokens only, `completion` counts output tokens only, `total` counts both.",
+      "enum": ["prompt", "completion", "total"],
+      "default": "total"
+    }
+  }
+}
