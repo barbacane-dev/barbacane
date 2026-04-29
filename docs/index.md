@@ -77,7 +77,7 @@ barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 - [Getting Started](guide/getting-started.md) - First steps with Barbacane
 - [Spec Configuration](guide/spec-configuration.md) - Configure routing and middleware in your OpenAPI spec
 - [Dispatchers](guide/dispatchers.md) - Route requests to backends
-- [Middlewares](guide/middlewares.md) - Add authentication, rate limiting, and more
+- [Middlewares](guide/middlewares/index.md) - Add authentication, rate limiting, and more
 - [Secrets](guide/secrets.md) - Manage secrets in plugin configurations
 - [Observability](guide/observability.md) - Metrics, logging, and distributed tracing
 - [Control Plane](guide/control-plane.md) - REST API for spec and artifact management

@@ -1,0 +1,44 @@
+openapi: "3.0.3"
+info:
+  title: Invalid AI regex patterns
+  version: "1.0.0"
+  description: >
+    Negative fixture for barbacane-validate-ai-regex. Every regex here is
+    syntactically broken — the linter should flag each one so operators
+    catch the typo in CI instead of at the first production 500.
+
+x-barbacane-middlewares:
+  - name: ai-prompt-guard
+    config:
+      default_profile: default
+      profiles:
+        default:
+          blocked_patterns:
+            # Unclosed character class
+            - "[unclosed"
+            # Dangling quantifier
+            - "*bad-start"
+  - name: ai-response-guard
+    config:
+      default_profile: default
+      profiles:
+        default:
+          redact:
+            # Unclosed group
+            - pattern: "(unterminated"
+              replacement: "[REDACTED]"
+          blocked_patterns:
+            # Double quantifier
+            - "a**"
+
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: chatCompletions
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: ok

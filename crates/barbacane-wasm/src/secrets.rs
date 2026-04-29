@@ -116,10 +116,8 @@ pub fn collect_secret_references(value: &serde_json::Value) -> Vec<String> {
 
 fn collect_refs_recursive(value: &serde_json::Value, refs: &mut Vec<String>) {
     match value {
-        serde_json::Value::String(s) => {
-            if is_secret_reference(s) {
-                refs.push(s.clone());
-            }
+        serde_json::Value::String(s) if is_secret_reference(s) => {
+            refs.push(s.clone());
         }
         serde_json::Value::Array(arr) => {
             for item in arr {

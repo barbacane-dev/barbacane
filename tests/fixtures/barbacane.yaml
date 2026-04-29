@@ -60,3 +60,11 @@ plugins:
     path: ../../plugins/ws-upstream/ws-upstream.wasm
   fire-and-forget:
     path: ../../plugins/fire-and-forget/fire-and-forget.wasm
+  ai-prompt-guard:
+    path: ../../plugins/ai-prompt-guard/ai-prompt-guard.wasm
+  ai-token-limit:
+    path: ../../plugins/ai-token-limit/ai-token-limit.wasm
+  ai-cost-tracker:
+    path: ../../plugins/ai-cost-tracker/ai-cost-tracker.wasm
+  ai-response-guard:
+    path: ../../plugins/ai-response-guard/ai-response-guard.wasm

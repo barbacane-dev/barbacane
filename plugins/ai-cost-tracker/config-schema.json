@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:ai-cost-tracker:config",
+  "title": "AI Cost Tracker Middleware Config",
+  "description": "Configuration for the AI cost-tracker middleware. Computes per-request cost from tokens reported by `ai-proxy` (context keys `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens`) and a price table keyed by `provider/model`. Emits the Prometheus counter `barbacane_plugin_ai_cost_tracker_cost_dollars` with `provider`/`model` labels. Prices are expressed in USD per 1,000 tokens — standard LLM provider notation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["prices"],
+  "$defs": {
+    "ModelPrice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "number",
+          "description": "USD per 1,000 prompt (input) tokens.",
+          "minimum": 0
+        },
+        "completion": {
+          "type": "number",
+          "description": "USD per 1,000 completion (output) tokens.",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "properties": {
+    "prices": {
+      "type": "object",
+      "description": "Map of `provider/model` → price entry. Provider/model values must match what `ai-proxy` writes into context (`ai.provider` / `ai.model`). Entries with no match are logged once and the request flows through with no cost recorded.",
+      "additionalProperties": { "$ref": "#/$defs/ModelPrice" }
+    },
+    "warn_unknown_model": {
+      "type": "boolean",
+      "description": "Log a warning when a request's provider/model is not in the price table. Defaults to true.",
+      "default": true
+    }
+  }
+}

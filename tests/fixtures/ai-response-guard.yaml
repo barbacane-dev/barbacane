@@ -1,0 +1,57 @@
+openapi: "3.0.3"
+info:
+  title: AI Response Guard Middleware Test API
+  version: "1.0.0"
+  description: >
+    Fixture for the ai-response-guard middleware. Exercises both redact
+    rules (regex → replacement on every `choices[].message.content`) and
+    blocked_patterns (post-redaction body scan that replaces the response
+    with 502) across multiple named profiles.
+
+paths:
+  /v1/chat/completions:
+    post:
+      summary: Chat completions with PII redaction
+      operationId: guardedResponses
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-middlewares:
+        - name: ai-response-guard
+          config:
+            default_profile: default
+            profiles:
+              default:
+                redact:
+                  - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+                    replacement: '[SSN]'
+                  - pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+                    replacement: '[EMAIL]'
+              strict:
+                redact:
+                  - pattern: '\b\d{3}-\d{2}-\d{4}\b'
+                    replacement: '[SSN]'
+                  - pattern: 'sk-[A-Za-z0-9]+'
+                    replacement: '[API_KEY]'
+                blocked_patterns:
+                  - '(?i)CONFIDENTIAL'
+                  - '(?i)internal error.*stack trace'
+              permissive:
+                # No rules — passes through untouched. Useful for admin-tier
+                # consumers selected via `ai.policy: permissive`.
+                redact: []
+                blocked_patterns: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"object":"chat.completion","choices":[{"message":{"role":"assistant","content":"hi"}}]}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Completion (possibly redacted)
+        "502":
+          description: Blocked by content policy

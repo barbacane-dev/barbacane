@@ -865,6 +865,19 @@ After a successful dispatch, the following context keys are set:
 
 Token counts are unavailable for streamed responses.
 
+#### Composing with AI Middlewares
+
+Four middlewares (see [AI Gateway](middlewares/ai-gateway.md) in the middlewares guide) consume the context keys above and add guardrails around the dispatcher:
+
+| Middleware | Role | Context it reads |
+|---|---|---|
+| [`ai-prompt-guard`](middlewares/ai-gateway.md#ai-prompt-guard) | Validate prompts before dispatch | `ai.policy` (profile selection) |
+| [`ai-token-limit`](middlewares/ai-gateway.md#ai-token-limit) | Token-based sliding-window rate limiting | `ai.policy`, `ai.prompt_tokens`, `ai.completion_tokens` |
+| [`ai-cost-tracker`](middlewares/ai-gateway.md#ai-cost-tracker) | Per-request USD cost metric | `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens` |
+| [`ai-response-guard`](middlewares/ai-gateway.md#ai-response-guard) | PII redaction + blocked-pattern scanning | `ai.policy` (profile selection) |
+
+All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself: each plugin defines named profiles; a `cel` middleware upstream writes `ai.policy` (and/or `ai.target`) into the request context to select the active profile. One CEL decision (for example, consumer tier) can fan out to provider routing, prompt strictness, token budget, and redaction strictness.
+
 #### Metrics
 
 | Metric | Labels | Description |

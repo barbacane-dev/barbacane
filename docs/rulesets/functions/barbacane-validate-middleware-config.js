@@ -16,6 +16,48 @@ const schemas = {
     additionalProperties: false,
   },
 
+  "ai-cost-tracker": {
+    required: ["prices"],
+    properties: {
+      prices: { type: "object" },
+      warn_unknown_model: { type: "boolean" },
+    },
+    additionalProperties: false,
+  },
+
+  "ai-prompt-guard": {
+    required: ["default_profile","profiles"],
+    properties: {
+      context_key: { type: "string" },
+      default_profile: { type: "string" },
+      profiles: { type: "object" },
+    },
+    additionalProperties: false,
+  },
+
+  "ai-response-guard": {
+    required: ["default_profile","profiles"],
+    properties: {
+      context_key: { type: "string" },
+      default_profile: { type: "string" },
+      profiles: { type: "object" },
+    },
+    additionalProperties: false,
+  },
+
+  "ai-token-limit": {
+    required: ["default_profile","profiles"],
+    properties: {
+      context_key: { type: "string" },
+      default_profile: { type: "string" },
+      profiles: { type: "object" },
+      policy_name: { type: "string" },
+      partition_key: { type: "string" },
+      count: { type: "string" },
+    },
+    additionalProperties: false,
+  },
+
   "apikey-auth": {
     required: [],
     properties: {
