@@ -1,4 +1,4 @@
-# Getting Started
+# Getting started
 
 This guide walks you through creating your first Barbacane-powered API gateway.
 

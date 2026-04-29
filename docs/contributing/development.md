@@ -1,4 +1,4 @@
-# Development Guide
+# Development setup
 
 This guide helps you set up a development environment for contributing to Barbacane.
 

@@ -1,4 +1,4 @@
-# Spec Configuration
+# Spec configuration
 
 Barbacane extends OpenAPI and AsyncAPI specs with custom `x-barbacane-*` extensions. These tell the gateway how to route requests, apply middleware, and connect to backends.
 
