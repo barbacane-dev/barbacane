@@ -11,13 +11,42 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Context keys to set when the expression matches.
-/// Used by `on_match` to route requests to named AI targets or set other context.
+/// Actions to take when the expression matches (evaluates to `true`).
+///
+/// Either or both fields can be present. When both are set, `deny` wins —
+/// a denied request shouldn't also have its context mutated.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct OnMatch {
     /// Context key-value pairs to write via `host_context_set` when expression is true.
     #[serde(default)]
     set_context: BTreeMap<String, String>,
+    /// Reject the request with the configured status / code when expression is true.
+    #[serde(default)]
+    deny: Option<DenyAction>,
+}
+
+/// Configurable deny response for `on_match.deny`. The error code is embedded
+/// into a `urn:barbacane:error:<code>` problem+json type and exposed alongside
+/// `status` and `detail` so clients can introspect the policy decision.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DenyAction {
+    /// HTTP status code. Defaults to 403; must be 4xx (5xx would mask a policy
+    /// decision as a server fault).
+    #[serde(default = "default_deny_status")]
+    status: u16,
+    /// Machine-readable error code, snake_case. Becomes the URN suffix and the
+    /// `code` field on the response body — the convention used by `ai-proxy`
+    /// for `model_not_permitted` and similar.
+    code: String,
+    /// Human-readable detail message. Falls back to `code` when omitted.
+    #[serde(default)]
+    message: Option<String>,
+}
+
+fn default_deny_status() -> u16 {
+    403
 }
 
 /// CEL policy evaluation middleware configuration.
@@ -71,6 +100,11 @@ impl CelPolicy {
         match program.execute(&context) {
             Ok(cel::Value::Bool(true)) => {
                 if let Some(on_match) = &self.on_match {
+                    if let Some(deny) = &on_match.deny {
+                        // Deny wins over set_context — a denied request shouldn't
+                        // also have its context mutated.
+                        return Action::ShortCircuit(self.deny_action_response(deny));
+                    }
                     for (key, value) in &on_match.set_context {
                         host::context_set(key, value);
                     }
@@ -174,6 +208,43 @@ impl CelPolicy {
 
         Response {
             status: 403,
+            headers,
+            body: Some(body.to_string().into_bytes()),
+        }
+    }
+
+    /// problem+json response for `on_match.deny`. The configured `code` becomes
+    /// the URN suffix and the `code` field on the body. Status defaults to 403
+    /// and is clamped into the 4xx range — a `cel` policy denial that returned
+    /// 5xx would mask an operator decision as a server fault.
+    fn deny_action_response(&self, action: &DenyAction) -> Response {
+        let status = if (400..500).contains(&action.status) {
+            action.status
+        } else {
+            403
+        };
+        let title = http_reason_phrase(status);
+        let detail = action
+            .message
+            .clone()
+            .unwrap_or_else(|| action.code.clone());
+
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "content-type".to_string(),
+            "application/problem+json".to_string(),
+        );
+
+        let body = serde_json::json!({
+            "type": format!("urn:barbacane:error:{}", action.code),
+            "title": title,
+            "status": status,
+            "code": action.code,
+            "detail": detail,
+        });
+
+        Response {
+            status,
             headers,
             body: Some(body.to_string().into_bytes()),
         }
@@ -307,6 +378,23 @@ fn json_to_cel(value: serde_json::Value) -> cel::Value {
     }
 }
 
+/// HTTP reason-phrase for the small set of 4xx codes a `cel` deny is likely
+/// to use (RFC 9110 §15.5). Falls back to "Forbidden" — denying access is the
+/// dominant case and the reason-phrase is not load-bearing for clients anyway.
+fn http_reason_phrase(status: u16) -> &'static str {
+    match status {
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        422 => "Unprocessable Entity",
+        429 => "Too Many Requests",
+        _ => "Forbidden",
+    }
+}
+
 /// Get a human-readable type name for a CEL value (for error messages).
 fn value_type_name(value: &cel::Value) -> &'static str {
     match value {
@@ -411,7 +499,10 @@ mod tests {
             expression: expression.to_string(),
             deny_message: default_deny_message(),
             compiled: None,
-            on_match: Some(OnMatch { set_context }),
+            on_match: Some(OnMatch {
+                set_context,
+                deny: None,
+            }),
         }
     }
 
@@ -719,13 +810,19 @@ mod tests {
 
     #[test]
     fn eval_body_json_ai_consumer_policy_example() {
-        // The motivating ADR-0030 example: per-tier model gating. CEL access-control
-        // mode treats `true` as allow / `false` as deny, so the policy is the
-        // negation of "non-premium asks for gpt-4o".
-        let mut config = create_config(
-            "!(request.body_json.model.startsWith('gpt-4o') && request.claims.tier != 'premium')",
-        );
+        // The motivating ADR-0030 example: per-tier model gating using `on_match.deny`.
+        let json = r#"{
+            "expression": "request.body_json.model.startsWith('gpt-4o') && request.claims.tier != 'premium'",
+            "on_match": {
+                "deny": {
+                    "status": 403,
+                    "code": "model_not_permitted"
+                }
+            }
+        }"#;
+        let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
 
+        // Free tier asking for gpt-4o-mini → expression matches → 403 model_not_permitted.
         let mut req_blocked = create_request();
         req_blocked.headers.insert(
             "x-auth-claims".to_string(),
@@ -734,9 +831,17 @@ mod tests {
         req_blocked.body = Some(br#"{"model":"gpt-4o-mini"}"#.to_vec());
         match config.on_request(req_blocked) {
             Action::Continue(_) => panic!("expected 403 for free tier on gpt-4o-mini"),
-            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+            Action::ShortCircuit(resp) => {
+                assert_eq!(resp.status, 403);
+                let body: serde_json::Value =
+                    serde_json::from_slice(&resp.body.unwrap()).expect("problem+json");
+                assert_eq!(body["code"], "model_not_permitted");
+                assert_eq!(body["type"], "urn:barbacane:error:model_not_permitted");
+                assert_eq!(body["status"], 403);
+            }
         }
 
+        // Premium tier asking for gpt-4o → expression false → continue.
         let mut req_allowed = create_request();
         req_allowed.headers.insert(
             "x-auth-claims".to_string(),
@@ -747,6 +852,164 @@ mod tests {
             Action::Continue(_) => {}
             Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
         }
+    }
+
+    #[test]
+    fn on_match_deny_default_status_is_403() {
+        // `status` omitted → defaults to 403.
+        let json = r#"{
+            "expression": "true",
+            "on_match": { "deny": { "code": "model_not_permitted" } }
+        }"#;
+        let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
+        match config.on_request(create_request()) {
+            Action::Continue(_) => panic!("expected deny"),
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+        }
+    }
+
+    #[test]
+    fn on_match_deny_honors_custom_status() {
+        // Operator can pick a non-403 status (e.g. 429 for budget exhaustion).
+        let json = r#"{
+            "expression": "true",
+            "on_match": { "deny": { "status": 429, "code": "budget_exhausted" } }
+        }"#;
+        let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
+        match config.on_request(create_request()) {
+            Action::Continue(_) => panic!("expected deny"),
+            Action::ShortCircuit(resp) => {
+                assert_eq!(resp.status, 429);
+                let body: serde_json::Value =
+                    serde_json::from_slice(&resp.body.unwrap()).expect("problem+json");
+                assert_eq!(body["title"], "Too Many Requests");
+                assert_eq!(body["code"], "budget_exhausted");
+            }
+        }
+    }
+
+    #[test]
+    fn on_match_deny_falls_back_to_403_for_non_4xx_status() {
+        // 500 would mask a policy decision as a server fault — clamp to 403.
+        let mut config = CelPolicy {
+            expression: "true".to_string(),
+            deny_message: default_deny_message(),
+            compiled: None,
+            on_match: Some(OnMatch {
+                set_context: BTreeMap::new(),
+                deny: Some(DenyAction {
+                    status: 500,
+                    code: "oops".to_string(),
+                    message: None,
+                }),
+            }),
+        };
+        match config.on_request(create_request()) {
+            Action::Continue(_) => panic!("expected deny"),
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+        }
+    }
+
+    #[test]
+    fn on_match_deny_uses_message_when_provided() {
+        let json = r#"{
+            "expression": "true",
+            "on_match": {
+                "deny": {
+                    "code": "model_not_permitted",
+                    "message": "gpt-4o is reserved for premium tier"
+                }
+            }
+        }"#;
+        let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
+        match config.on_request(create_request()) {
+            Action::Continue(_) => panic!("expected deny"),
+            Action::ShortCircuit(resp) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&resp.body.unwrap()).expect("problem+json");
+                assert_eq!(body["detail"], "gpt-4o is reserved for premium tier");
+            }
+        }
+    }
+
+    #[test]
+    fn on_match_deny_falls_back_to_code_for_detail_when_message_omitted() {
+        let json = r#"{
+            "expression": "true",
+            "on_match": { "deny": { "code": "model_not_permitted" } }
+        }"#;
+        let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
+        match config.on_request(create_request()) {
+            Action::Continue(_) => panic!("expected deny"),
+            Action::ShortCircuit(resp) => {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&resp.body.unwrap()).expect("problem+json");
+                assert_eq!(body["detail"], "model_not_permitted");
+            }
+        }
+    }
+
+    #[test]
+    fn on_match_deny_wins_over_set_context() {
+        // When both are configured, a denied request must NOT have its context
+        // mutated — operators rely on this to avoid leaking partial state to
+        // downstream plugins for a request that was rejected.
+        host::reset_context();
+        let json = r#"{
+            "expression": "true",
+            "on_match": {
+                "set_context": { "ai.policy": "should-not-be-set" },
+                "deny": { "code": "model_not_permitted" }
+            }
+        }"#;
+        let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
+        match config.on_request(create_request()) {
+            Action::Continue(_) => panic!("expected deny"),
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+        }
+        let ctx = host::get_context();
+        assert!(
+            !ctx.contains_key("ai.policy"),
+            "deny should not write context, found {:?}",
+            ctx
+        );
+    }
+
+    #[test]
+    fn on_match_deny_no_op_when_expression_false() {
+        // Expression false → continue regardless of `on_match.deny`. Matches the
+        // existing `set_context` semantics and the ADR's "match-and-take-action"
+        // reading.
+        let json = r#"{
+            "expression": "false",
+            "on_match": { "deny": { "code": "model_not_permitted" } }
+        }"#;
+        let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
+        match config.on_request(create_request()) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got {}", resp.status),
+        }
+    }
+
+    #[test]
+    fn on_match_unknown_field_is_rejected() {
+        // Regression test: previously OnMatch silently accepted unknown fields,
+        // so `on_match: { deny: {...} }` was a no-op against a plugin that only
+        // knew `set_context`. Now both OnMatch and DenyAction reject unknown
+        // fields explicitly so operator typos surface at config-load time.
+        let json = r#"{
+            "expression": "true",
+            "on_match": { "deny_typo": { "code": "x" } }
+        }"#;
+        let err = match serde_json::from_str::<CelPolicy>(json) {
+            Ok(_) => panic!("expected unknown field rejection"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("deny_typo"),
+            "error should mention the unknown field: {}",
+            err
+        );
     }
 
     #[test]

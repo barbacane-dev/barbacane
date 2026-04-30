@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:barbacane:plugin:cel:config",
   "title": "CEL Policy Evaluation Middleware Config",
-  "description": "Configuration for the CEL policy evaluation middleware plugin. Evaluates inline CEL expressions against request context.\n\nTwo modes:\n- **Access-control** (default, no `on_match`): `true` → continue, `false` → 403 Forbidden.\n- **Routing** (`on_match` present): `true` → write context keys and continue, `false` → continue unchanged (no 403). Used with the `ai-proxy` dispatcher to implement policy-driven model routing.",
+  "description": "Configuration for the CEL policy evaluation middleware plugin. Evaluates inline CEL expressions against request context.\n\nTwo modes:\n- **Access-control** (default, no `on_match`): `true` → continue, `false` → 403 Forbidden.\n- **`on_match`** (present): on `true`, take the configured actions — write context keys (`set_context`) and/or reject with a configured status + code (`deny`). On `false`, continue unchanged (no 403). When both `set_context` and `deny` are present, `deny` wins on a match — a denied request is not also written to context.",
   "type": "object",
   "required": ["expression"],
   "additionalProperties": false,
@@ -18,7 +18,7 @@
     },
     "on_match": {
       "type": "object",
-      "description": "When present, switches from access-control mode to routing mode. On a `true` result, the configured context keys are written and the request continues. On a `false` result, the request continues unchanged (no 403). Stack multiple `cel` instances to implement multiple routing rules.",
+      "description": "Actions to take when the expression evaluates to `true`. On a `false` result the request continues unchanged (no 403). Stack multiple `cel` instances to compose multiple match rules. When both `set_context` and `deny` are configured, a matched request is denied without context being written.",
       "additionalProperties": false,
       "properties": {
         "set_context": {
@@ -26,6 +26,30 @@
           "description": "Key-value pairs written into the request context when the expression is true. The `ai-proxy` dispatcher reads `ai.target` to select the active provider target.",
           "additionalProperties": {
             "type": "string"
+          }
+        },
+        "deny": {
+          "type": "object",
+          "description": "Reject the request with the given problem+json status and code when the expression is true. The `code` becomes the URN suffix on the `type` field and is exposed as the `code` field on the response body — the convention used by `ai-proxy` for `model_not_permitted` and similar.",
+          "required": ["code"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "integer",
+              "description": "HTTP status code. Must be 4xx — denying as 5xx would mask a policy decision as a server fault. Out-of-range values fall back to 403.",
+              "minimum": 400,
+              "maximum": 499,
+              "default": 403
+            },
+            "code": {
+              "type": "string",
+              "description": "Machine-readable error code, snake_case by convention. Becomes the URN suffix on the response `type` field.",
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "message": {
+              "type": "string",
+              "description": "Human-readable detail message. Falls back to `code` when omitted."
+            }
           }
         }
       }
