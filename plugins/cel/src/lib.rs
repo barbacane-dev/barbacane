@@ -125,6 +125,7 @@ impl CelPolicy {
             "body".to_string(),
             str_val(req.body_str().unwrap_or("")),
         );
+        request_map.insert("body_json".to_string(), parse_body_json(req));
         request_map.insert("client_ip".to_string(), str_val(&req.client_ip));
 
         // Headers as a map
@@ -239,6 +240,44 @@ fn btree_to_cel_map(map: &BTreeMap<String, String>) -> cel::Value {
     cel_map.into()
 }
 
+/// Empty CEL map. Returned as the `request.body_json` value when the body
+/// can't be parsed as JSON — keeps `has(request.body_json.x)` semantics clean.
+fn empty_cel_map() -> cel::Value {
+    HashMap::<String, cel::Value>::new().into()
+}
+
+/// Parse the request body as JSON when the inbound `content-type` advertises it
+/// (`application/json` or any `application/*+json` vendor type, ignoring `;`-suffixed
+/// parameters). Returns an empty map for non-JSON content-types and for malformed
+/// bodies; the latter logs a warning so operators see policy mis-applies, but never
+/// short-circuits the request — a CEL plugin that rejected on every malformed JSON
+/// would let an attacker take down every downstream policy by sending one bad byte.
+fn parse_body_json(req: &Request) -> cel::Value {
+    let content_type = match req.headers.get("content-type") {
+        Some(v) => v.split(';').next().unwrap_or("").trim().to_ascii_lowercase(),
+        None => return empty_cel_map(),
+    };
+    let is_json = content_type == "application/json"
+        || (content_type.starts_with("application/") && content_type.ends_with("+json"));
+    if !is_json {
+        return empty_cel_map();
+    }
+    let body = match req.body_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => return empty_cel_map(),
+    };
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(v) => json_to_cel(v),
+        Err(e) => {
+            host::log_warn(&format!(
+                "cel: request body advertised {} but could not be parsed as JSON: {}",
+                content_type, e
+            ));
+            empty_cel_map()
+        }
+    }
+}
+
 /// Convert a serde_json::Value to a CEL value.
 fn json_to_cel(value: serde_json::Value) -> cel::Value {
     match value {
@@ -304,6 +343,14 @@ mod host {
             );
         }
     }
+
+    pub fn log_warn(msg: &str) {
+        #[link(wasm_import_module = "barbacane")]
+        extern "C" {
+            fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
+        }
+        unsafe { host_log(2, msg.as_ptr() as i32, msg.len() as i32) }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -313,12 +360,17 @@ mod host {
 
     thread_local! {
         static CONTEXT: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
+        static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     pub fn context_set(key: &str, value: &str) {
         CONTEXT.with(|ctx| {
             ctx.borrow_mut().insert(key.to_string(), value.to_string());
         });
+    }
+
+    pub fn log_warn(msg: &str) {
+        WARNINGS.with(|w| w.borrow_mut().push(msg.to_string()));
     }
 
     #[cfg(test)]
@@ -329,6 +381,11 @@ mod host {
     #[cfg(test)]
     pub fn reset_context() {
         CONTEXT.with(|ctx| ctx.borrow_mut().clear());
+    }
+
+    #[cfg(test)]
+    pub fn take_warnings() -> Vec<String> {
+        WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()))
     }
 }
 
@@ -641,6 +698,128 @@ mod tests {
     fn eval_body_empty_when_none() {
         let mut config = create_config("request.body == ''");
         let req = create_request(); // body is None → ""
+        match config.on_request(req) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+    }
+
+    // --- request.body_json access (ADR-0030) ---
+
+    #[test]
+    fn eval_body_json_field_access() {
+        let mut config = create_config("request.body_json.foo == 'bar'");
+        let mut req = create_request();
+        req.body = Some(br#"{"foo":"bar"}"#.to_vec());
+        match config.on_request(req) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+    }
+
+    #[test]
+    fn eval_body_json_ai_consumer_policy_example() {
+        // The motivating ADR-0030 example: per-tier model gating. CEL access-control
+        // mode treats `true` as allow / `false` as deny, so the policy is the
+        // negation of "non-premium asks for gpt-4o".
+        let mut config = create_config(
+            "!(request.body_json.model.startsWith('gpt-4o') && request.claims.tier != 'premium')",
+        );
+
+        let mut req_blocked = create_request();
+        req_blocked.headers.insert(
+            "x-auth-claims".to_string(),
+            r#"{"tier":"free"}"#.to_string(),
+        );
+        req_blocked.body = Some(br#"{"model":"gpt-4o-mini"}"#.to_vec());
+        match config.on_request(req_blocked) {
+            Action::Continue(_) => panic!("expected 403 for free tier on gpt-4o-mini"),
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+        }
+
+        let mut req_allowed = create_request();
+        req_allowed.headers.insert(
+            "x-auth-claims".to_string(),
+            r#"{"tier":"premium"}"#.to_string(),
+        );
+        req_allowed.body = Some(br#"{"model":"gpt-4o"}"#.to_vec());
+        match config.on_request(req_allowed) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+    }
+
+    #[test]
+    fn eval_body_json_vendor_plus_json_content_type() {
+        let mut config = create_config("request.body_json.kind == 'event'");
+        let mut req = create_request();
+        req.headers.insert(
+            "content-type".to_string(),
+            "application/vnd.api+json".to_string(),
+        );
+        req.body = Some(br#"{"kind":"event"}"#.to_vec());
+        match config.on_request(req) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+    }
+
+    #[test]
+    fn eval_body_json_content_type_with_charset_param() {
+        let mut config = create_config("request.body_json.foo == 'bar'");
+        let mut req = create_request();
+        req.headers.insert(
+            "content-type".to_string(),
+            "application/json; charset=utf-8".to_string(),
+        );
+        req.body = Some(br#"{"foo":"bar"}"#.to_vec());
+        match config.on_request(req) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+    }
+
+    #[test]
+    fn eval_body_json_non_json_content_type_yields_empty_map() {
+        // text/plain → body_json is an empty map → has() returns false, not an error.
+        let mut config = create_config("!has(request.body_json.foo)");
+        let mut req = create_request();
+        req.headers
+            .insert("content-type".to_string(), "text/plain".to_string());
+        req.body = Some(b"this is not json".to_vec());
+        match config.on_request(req) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+    }
+
+    #[test]
+    fn eval_body_json_malformed_body_logs_warning_and_yields_empty_map() {
+        // Malformed JSON with a JSON content-type must NOT short-circuit the request —
+        // a CEL plugin that 500s on every garbled body would let an attacker take down
+        // every downstream policy with one bad byte. Instead: empty map + log warning.
+        let _ = host::take_warnings(); // clear any prior test's warnings
+
+        let mut config = create_config("!has(request.body_json.foo)");
+        let mut req = create_request();
+        req.body = Some(b"not-actually-json{".to_vec());
+        match config.on_request(req) {
+            Action::Continue(_) => {}
+            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
+        }
+
+        let warnings = host::take_warnings();
+        assert!(
+            warnings.iter().any(|w| w.contains("could not be parsed as JSON")),
+            "expected a parse-failure warning, got {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn eval_body_json_empty_body_yields_empty_map() {
+        let mut config = create_config("!has(request.body_json.foo)");
+        let req = create_request(); // body is None
         match config.on_request(req) {
             Action::Continue(_) => {}
             Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
