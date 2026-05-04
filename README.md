@@ -10,7 +10,7 @@
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/unit%20tests-517%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-824%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-848%20passing-brightgreen" alt="Plugin Tests">
   <img src="https://img.shields.io/badge/integration%20tests-288%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/cli%20tests-23%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/ui%20tests-44%20passing-brightgreen" alt="UI Tests">
