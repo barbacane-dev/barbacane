@@ -60,3 +60,67 @@ paths:
             application/json:
               schema:
                 type: object
+
+  /ai/routed/chat/completions:
+    post:
+      summary: Routes table — glob-based dynamic model routing (ADR-0030 §3)
+      operationId: chatCompletionsRoutes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          routes:
+            - pattern: "claude-*"
+              provider: anthropic
+              api_key: "sk-placeholder"
+              deny: ["claude-opus-*"]
+            - pattern: "gpt-*"
+              provider: openai
+              api_key: "sk-placeholder"
+              allow: ["gpt-4o", "gpt-4o-mini"]
+            - pattern: "*"
+              provider: ollama
+              base_url: "http://localhost:11434"
+          timeout: 30
+          max_tokens: 512
+      responses:
+        "200":
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /ai/restricted/chat/completions:
+    post:
+      summary: Named target with catalog deny — proves allow/deny on targets compiles
+      operationId: chatCompletionsCatalogDeny
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          default_target: standard
+          targets:
+            standard:
+              provider: anthropic
+              api_key: "sk-placeholder"
+              deny: ["claude-opus-*"]
+          timeout: 30
+          max_tokens: 512
+      responses:
+        "200":
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                type: object
