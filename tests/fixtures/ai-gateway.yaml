@@ -100,11 +100,9 @@ paths:
           targets:
             local:
               provider: ollama
-              model: mistral
               base_url: "http://ollama.internal:11434"
             premium:
               provider: anthropic
-              model: claude-opus-4-6
               # Fixture: dummy string (runtime replaces with real secret ref).
               api_key: "test-key"
           timeout: 120

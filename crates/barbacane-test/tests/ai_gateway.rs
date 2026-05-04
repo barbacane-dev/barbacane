@@ -118,7 +118,6 @@ paths:
         name: ai-proxy
         config:
           provider: ollama
-          model: llama3
           base_url: "{base_url}"
           timeout: 10
           max_tokens: 512
@@ -206,7 +205,6 @@ paths:
         name: ai-proxy
         config:
           provider: ollama
-          model: llama3
           base_url: "{base_url}"
           timeout: 10
           max_tokens: 512
@@ -343,7 +341,6 @@ paths:
         name: ai-proxy
         config:
           provider: ollama
-          model: llama3
           base_url: "{base_url}"
           timeout: 10
           max_tokens: 512
