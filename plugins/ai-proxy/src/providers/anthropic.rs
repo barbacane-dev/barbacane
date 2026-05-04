@@ -1,6 +1,7 @@
-//! Anthropic Messages API transport. The Chat Completions ↔ Messages
-//! translation lives in [`crate::protocols::chat_completion`]; this module
-//! only handles the wire format and request building.
+//! Anthropic Messages API transport. The protocol-specific translation
+//! (Chat Completions, Responses) lives in [`crate::protocols`]; this module
+//! handles only the wire format — building the request, sending it, and
+//! returning the raw upstream response.
 //!
 //! API version pinned to 2024-10-22 (ADR-0024 contract-test-and-bump).
 
@@ -15,12 +16,14 @@ use std::collections::BTreeMap;
 pub(crate) const ANTHROPIC_API_VERSION: &str = "2024-10-22";
 
 impl AiProxy {
-    pub(crate) fn anthropic_call(
+    /// Send a pre-built Anthropic Messages body to the target's `/v1/messages`
+    /// endpoint and return the raw upstream `Response` (status + headers +
+    /// body). Translation in/out lives in the calling protocol module — this
+    /// helper only handles authentication, the version header, and transport.
+    pub(crate) fn anthropic_messages_call_raw(
         &self,
         target: &TargetConfig,
-        req: &Request,
-        client_model: &str,
-        stream: bool,
+        body: &[u8],
     ) -> Result<Response, String> {
         let base = target.effective_base_url().trim_end_matches('/');
         let url = format!("{}/v1/messages", base);
@@ -35,8 +38,7 @@ impl AiProxy {
             headers.insert("x-api-key".to_string(), key.clone());
         }
 
-        let body = translate_to_anthropic(&req.body, client_model, stream, self.max_tokens)?;
-        set_http_request_body(body.as_bytes());
+        set_http_request_body(body);
 
         let http_req = HttpRequest {
             method: "POST".to_string(),
@@ -46,7 +48,21 @@ impl AiProxy {
         };
 
         let resp_bytes = http_call(&http_req)?;
-        let resp = build_response(resp_bytes);
+        Ok(build_response(resp_bytes))
+    }
+
+    /// Chat Completions ↔ Messages dispatch entrypoint. Builds the Anthropic
+    /// Messages body from the OpenAI-format request, calls the upstream, and
+    /// translates the response back. Used by [`crate::protocols::chat_completion`].
+    pub(crate) fn anthropic_call(
+        &self,
+        target: &TargetConfig,
+        req: &Request,
+        client_model: &str,
+        stream: bool,
+    ) -> Result<Response, String> {
+        let body = translate_to_anthropic(&req.body, client_model, stream, self.max_tokens)?;
+        let resp = self.anthropic_messages_call_raw(target, body.as_bytes())?;
 
         // Only translate 2xx responses; pass error responses through as-is
         if resp.status >= 200 && resp.status < 300 {
