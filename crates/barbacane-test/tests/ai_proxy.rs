@@ -594,3 +594,314 @@ paths:
 
     assert_eq!(resp.status(), 403, "deny must return 403, not escalate");
 }
+
+// =========================================================================
+// ADR-0030 §2 — Responses API at POST /v1/responses
+// =========================================================================
+
+/// Build a temp spec exposing `/v1/responses` bound to `ai-proxy` with the
+/// given provider + base_url. The path is the canonical OpenAI Responses
+/// path so the dispatcher's path-match (PR-4) routes through the Responses
+/// adapter.
+fn create_responses_spec(
+    provider: &str,
+    base_url: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let plugins_dir = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("plugins");
+    let ai_proxy_path = plugins_dir.join("ai-proxy/ai-proxy.wasm");
+
+    std::fs::write(
+        temp_dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  ai-proxy:\n    path: {}\n",
+            ai_proxy_path.display()
+        ),
+    )
+    .unwrap();
+
+    let spec_path = temp_dir.path().join("responses.yaml");
+    let api_key_line = match provider {
+        "anthropic" | "openai" => "          api_key: \"sk-test\"\n",
+        _ => "",
+    };
+    std::fs::write(
+        &spec_path,
+        format!(
+            r#"openapi: "3.0.3"
+info:
+  title: Responses API integration
+  version: "1.0.0"
+paths:
+  /v1/responses:
+    post:
+      operationId: responses
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          provider: {provider}
+{api_key_line}          base_url: "{base_url}"
+          timeout: 10
+          max_tokens: 1024
+      responses:
+        "200":
+          description: ok
+        "400":
+          description: client error
+"#,
+            provider = provider,
+            api_key_line = api_key_line,
+            base_url = base_url,
+        ),
+    )
+    .unwrap();
+    (temp_dir, spec_path)
+}
+
+#[tokio::test]
+async fn test_ai_proxy_responses_openai_passthrough() {
+    // Mock the canonical OpenAI Responses endpoint upstream and verify the
+    // gateway just passes through (no translation for the OpenAI provider).
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(
+                    r#"{"id":"resp_abc","object":"response","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}"#,
+                )
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_responses_spec("openai", &mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .post(
+            "/v1/responses",
+            r#"{"model":"gpt-4o","input":[{"type":"input_text","role":"user","content":"hi"}]}"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "response");
+}
+
+#[tokio::test]
+async fn test_ai_proxy_responses_400_on_previous_response_id() {
+    // The mock must NOT be reached — the preflight check rejects this body
+    // before target resolution.
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_responses_spec("openai", &mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .post(
+            "/v1/responses",
+            r#"{"model":"gpt-4o","input":[],"previous_response_id":"resp_old"}"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "previous_response_id_not_supported");
+}
+
+#[tokio::test]
+async fn test_ai_proxy_responses_400_on_ollama_provider() {
+    let mock_server = MockServer::start().await;
+    // Ollama doesn't have a Responses surface — the mock must NOT be reached.
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_responses_spec("ollama", &mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .post(
+            "/v1/responses",
+            r#"{"model":"mistral","input":[{"type":"input_text","role":"user","content":"hi"}]}"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "responses_not_supported_for_provider");
+}
+
+#[tokio::test]
+async fn test_ai_proxy_responses_anthropic_translation_roundtrip() {
+    // Mock Anthropic /v1/messages returning a Messages-format response. The
+    // gateway must translate it into Responses format for the client.
+    let mock_server = MockServer::start().await;
+    let messages_response = r#"{
+        "id":"msg_xyz","type":"message","role":"assistant","model":"claude-sonnet-4-6",
+        "content":[{"type":"text","text":"Hello!"}],
+        "stop_reason":"end_turn",
+        "usage":{"input_tokens":4,"output_tokens":2}
+    }"#;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(messages_response)
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_responses_spec("anthropic", &mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .post(
+            "/v1/responses",
+            r#"{
+                "model":"claude-sonnet-4-6",
+                "store":false,
+                "input":[{"type":"input_text","role":"user","content":"Hi"}]
+            }"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "response");
+    let id = body["id"].as_str().unwrap();
+    assert!(id.starts_with("resp_"), "synthetic id: {}", id);
+    assert_eq!(body["model"], "claude-sonnet-4-6");
+    assert_eq!(body["output"][0]["type"], "output_text");
+    assert_eq!(body["output"][0]["text"], "Hello!");
+    assert_eq!(body["usage"]["input_tokens"], 4);
+    assert_eq!(body["usage"]["output_tokens"], 2);
+}
+
+#[tokio::test]
+async fn test_ai_proxy_responses_warning_header_on_store_downgrade() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(
+                    r#"{"id":"msg","model":"claude","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}"#,
+                )
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_responses_spec("anthropic", &mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    // store: true is the OpenAI default — gateway downgrades and tells the client.
+    let resp = gateway
+        .post(
+            "/v1/responses",
+            r#"{
+                "model":"claude-sonnet-4-6",
+                "store":true,
+                "input":[{"type":"input_text","role":"user","content":"hi"}]
+            }"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let warning = resp
+        .headers()
+        .get("warning")
+        .expect("warning header set")
+        .to_str()
+        .unwrap();
+    assert!(
+        warning.contains("store ignored"),
+        "warning should announce the store downgrade: {}",
+        warning
+    );
+}
+
+#[tokio::test]
+async fn test_ai_proxy_responses_warning_header_on_reasoning_dropped() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(
+                    r#"{"id":"msg","model":"claude","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}"#,
+                )
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_responses_spec("anthropic", &mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .post(
+            "/v1/responses",
+            r#"{
+                "model":"claude-sonnet-4-6",
+                "store":false,
+                "input":[
+                    {"type":"reasoning","summary":"thinking..."},
+                    {"type":"input_text","role":"user","content":"hi"}
+                ]
+            }"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let warning = resp
+        .headers()
+        .get("warning")
+        .expect("warning header set")
+        .to_str()
+        .unwrap();
+    assert!(
+        warning.contains("reasoning items dropped"),
+        "warning should announce reasoning drop: {}",
+        warning
+    );
+}

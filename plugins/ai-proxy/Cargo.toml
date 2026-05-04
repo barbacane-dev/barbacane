@@ -15,6 +15,11 @@ barbacane-plugin-sdk = { path = "../../crates/barbacane-plugin-sdk" }
 globset = { version = "0.4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Used only for formatting bytes as the UUID dashed-hex form. v7 is built
+# manually from `host_time_now` + a per-instance counter — the wasm32-
+# unknown-unknown target has no system RNG, and the v7 spec only requires
+# monotonicity within a node, which the counter provides. ADR-0030 §2.
+uuid = { version = "1", default-features = false }
 
 [profile.release]
 opt-level = "s"
