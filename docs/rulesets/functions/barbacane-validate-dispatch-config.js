@@ -6,7 +6,6 @@ const schemas = {
     required: [],
     properties: {
       provider: { type: "string" },
-      model: { type: "string" },
       api_key: { type: "string" },
       base_url: { type: "string" },
       timeout: { type: "integer", minimum: 1 },
