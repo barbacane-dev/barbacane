@@ -28,6 +28,12 @@ use crate::{
 use barbacane_plugin_sdk::prelude::*;
 use std::collections::BTreeMap;
 
+/// Context key that carries the preflight `store_downgrade` flag from
+/// `dispatch_responses` (where the body was first parsed) into [`handle`]
+/// (where the response is built). Avoids a second parse of the inbound body
+/// solely to recover this one boolean.
+pub(crate) const CTX_STORE_DOWNGRADE: &str = "ai.responses.store_downgrade";
+
 // ---------------------------------------------------------------------------
 // Preflight: the cheap, pre-target-resolution checks
 // ---------------------------------------------------------------------------
@@ -84,17 +90,19 @@ pub(crate) fn handle(
 ) -> Result<Response, String> {
     match target.provider {
         Provider::OpenAI => openai_passthrough(plugin, target, req, streaming),
-        Provider::Ollama => Ok(responses_not_supported_for_provider_response("ollama")),
+        Provider::Ollama => Ok(responses_not_supported_for_provider_response(Provider::Ollama)),
         Provider::Anthropic => {
-            // Re-parse the body for translation. The preflight already
-            // confirmed previous_response_id is absent and captured the
-            // store flag, but the translator needs the full document.
+            // Parse the body for translation. The preflight already confirmed
+            // `previous_response_id` is absent and stashed `store_downgrade`
+            // on context (read back below), so this is the only parse we
+            // need on the Anthropic path.
             let raw = req.body.as_deref().unwrap_or(b"{}");
             let body: serde_json::Value = serde_json::from_slice(raw)
                 .map_err(|e| format!("invalid Responses request body: {}", e))?;
 
-            let preflight = ResponsesPreflight::from_body(&req.body)
-                .expect("preflight already ran in dispatch");
+            let store_downgrade = host::context_get(CTX_STORE_DOWNGRADE)
+                .map(|v| v == "true")
+                .unwrap_or(true);
 
             let translation = ResponsesToAnthropic::translate(
                 &body,
@@ -118,20 +126,15 @@ pub(crate) fn handle(
             }
 
             let body_str = raw_resp.body_str().unwrap_or("").to_string();
-            let translated = AnthropicToResponses::translate(
-                &body_str,
-                client_model,
-                preflight.store_downgrade,
-                translation.dropped_reasoning_count,
-            )?;
+            let translated = AnthropicToResponses::translate(&body_str, client_model)?;
 
             // Annotate the response with Warning headers + emit counters so
             // operators can quantify both "this client sends store: true" and
             // "this client sends reasoning items we dropped".
             let mut headers = raw_resp.headers;
-            attach_warnings(&mut headers, preflight.store_downgrade, translation.dropped_reasoning_count > 0);
+            attach_warnings(&mut headers, store_downgrade, translation.dropped_reasoning_count > 0);
 
-            if preflight.store_downgrade {
+            if store_downgrade {
                 host::metric_counter_inc(
                     "responses_store_downgrades_total",
                     &crate::labels1("provider", target.provider.name()),
@@ -185,6 +188,12 @@ fn openai_passthrough(
     };
 
     if streaming {
+        // Known gap: ADR-0030 §2 requires the response `id` to be a synthetic
+        // `resp_<uuid-v7>` so the gateway's stateless contract holds uniformly.
+        // For non-streaming we rewrite the id post-call (below); for streaming
+        // SSE the id is buried in `response.created` SSE event payloads which
+        // we'd need to parse and rewrite mid-stream. True SSE handling is
+        // already deferred for both protocols — see ADR-0030 §2 "Streaming".
         let req_json = serde_json::to_vec(&http_req).map_err(|e| e.to_string())?;
         let result =
             unsafe { host_http_stream(req_json.as_ptr() as i32, req_json.len() as i32) };
@@ -194,7 +203,42 @@ fn openai_passthrough(
         Ok(streamed_response())
     } else {
         let resp_bytes = http_call(&http_req)?;
-        Ok(crate::build_response(resp_bytes))
+        let resp = crate::build_response(resp_bytes);
+        // Stateless contract: rewrite the upstream `id` to a synthetic
+        // `resp_<uuid-v7>`. Without this, OpenAI's real id leaks to the
+        // client, who could then send it back as `previous_response_id`
+        // and get 400 — the rejection lands consistently for every provider.
+        Ok(rewrite_response_id_if_2xx(resp))
+    }
+}
+
+/// On a 2xx upstream Responses payload, replace the `id` field with a
+/// synthetic `resp_<uuid-v7>`. Non-2xx and unparseable bodies pass through
+/// untouched (errors carry their own shape; we don't risk mangling them).
+fn rewrite_response_id_if_2xx(resp: Response) -> Response {
+    if !(200..300).contains(&resp.status) {
+        return resp;
+    }
+    let body_bytes = match resp.body.as_ref() {
+        Some(b) => b,
+        None => return resp,
+    };
+    let mut v: serde_json::Value = match serde_json::from_slice(body_bytes) {
+        Ok(v) => v,
+        Err(_) => return resp,
+    };
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert(
+            "id".to_string(),
+            serde_json::Value::String(format!("resp_{}", make_uuid_v7())),
+        );
+    } else {
+        return resp;
+    }
+    Response {
+        status: resp.status,
+        headers: resp.headers,
+        body: Some(serde_json::to_vec(&v).unwrap_or(body_bytes.clone())),
     }
 }
 
@@ -239,21 +283,6 @@ impl ResponsesToAnthropic {
         let mut current_blocks: Vec<serde_json::Value> = Vec::new();
         let mut dropped_reasoning_count = 0usize;
 
-        // Helper: flush the buffer into a message when the role changes.
-        let flush =
-            |role: Option<&String>,
-             blocks: &mut Vec<serde_json::Value>,
-             messages: &mut Vec<serde_json::Value>| {
-                if let Some(r) = role {
-                    if !blocks.is_empty() {
-                        messages.push(serde_json::json!({
-                            "role": r,
-                            "content": std::mem::take(blocks),
-                        }));
-                    }
-                }
-            };
-
         for item in input_items {
             let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
@@ -272,7 +301,7 @@ impl ResponsesToAnthropic {
                         }
                     } else {
                         if current_role.as_deref() != Some(role) {
-                            flush(current_role.as_ref(), &mut current_blocks, &mut messages);
+                            flush_message(current_role.as_deref(), &mut current_blocks, &mut messages);
                             current_role = Some(role.to_string());
                         }
                         current_blocks.extend(blocks);
@@ -285,7 +314,7 @@ impl ResponsesToAnthropic {
                     // the client if the format is wrong.
                     let block = build_image_block(item);
                     if current_role.as_deref() != Some(role) {
-                        flush(current_role.as_ref(), &mut current_blocks, &mut messages);
+                        flush_message(current_role.as_deref(), &mut current_blocks, &mut messages);
                         current_role = Some(role.to_string());
                     }
                     current_blocks.push(block);
@@ -303,7 +332,7 @@ impl ResponsesToAnthropic {
                             .unwrap_or(serde_json::Value::Object(Default::default())),
                     });
                     if current_role.as_deref() != Some("assistant") {
-                        flush(current_role.as_ref(), &mut current_blocks, &mut messages);
+                        flush_message(current_role.as_deref(), &mut current_blocks, &mut messages);
                         current_role = Some("assistant".to_string());
                     }
                     current_blocks.push(tool_use);
@@ -316,7 +345,7 @@ impl ResponsesToAnthropic {
                         "content": item.get("output").cloned().unwrap_or(serde_json::Value::String(String::new())),
                     });
                     if current_role.as_deref() != Some("user") {
-                        flush(current_role.as_ref(), &mut current_blocks, &mut messages);
+                        flush_message(current_role.as_deref(), &mut current_blocks, &mut messages);
                         current_role = Some("user".to_string());
                     }
                     current_blocks.push(tool_result);
@@ -337,7 +366,7 @@ impl ResponsesToAnthropic {
                 }
             }
         }
-        flush(current_role.as_ref(), &mut current_blocks, &mut messages);
+        flush_message(current_role.as_deref(), &mut current_blocks, &mut messages);
 
         // Anthropic requires `max_tokens`. The translator falls back to the
         // dispatcher's default; if that's also unset, we use 4096 — same
@@ -381,6 +410,27 @@ impl ResponsesToAnthropic {
     }
 }
 
+/// Push a `{role, content}` message into `messages` if there are any blocks
+/// buffered for the current role, and clear the buffer. Used by the
+/// translator to flush out a message when the role changes.
+fn flush_message(
+    role: Option<&str>,
+    blocks: &mut Vec<serde_json::Value>,
+    messages: &mut Vec<serde_json::Value>,
+) {
+    let r = match role {
+        Some(r) => r,
+        None => return,
+    };
+    if blocks.is_empty() {
+        return;
+    }
+    messages.push(serde_json::json!({
+        "role": r,
+        "content": std::mem::take(blocks),
+    }));
+}
+
 /// Convert `input_text`'s `content` field into a vec of Anthropic text blocks.
 /// Accepts either a plain string or the OpenAI array-of-parts shape.
 fn build_text_or_array_blocks(value: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
@@ -398,7 +448,17 @@ fn build_text_or_array_blocks(value: Option<&serde_json::Value>) -> Vec<serde_js
                         .and_then(|v| v.as_str())
                         .map(|t| serde_json::json!({ "type": "text", "text": t })),
                     "input_image" => Some(build_image_block(part)),
-                    _ => None,
+                    other => {
+                        // Match the top-level item handler — unknown part-types
+                        // log a warning rather than dropping silently. Future
+                        // OpenAI part-types we don't know yet stay diagnosable
+                        // without breaking translation.
+                        host::log_warn(&format!(
+                            "ai-proxy: unknown Responses content part type {:?}; dropping",
+                            other
+                        ));
+                        None
+                    }
                 }
             })
             .collect(),
@@ -429,13 +489,12 @@ fn build_image_block(part: &serde_json::Value) -> serde_json::Value {
 struct AnthropicToResponses;
 
 impl AnthropicToResponses {
-    fn translate(
-        body: &str,
-        client_model: &str,
-        store_downgrade: bool,
-        dropped_reasoning_count: usize,
-    ) -> Result<String, String> {
-        let _ = (store_downgrade, dropped_reasoning_count); // signaled via headers/metrics, not body
+    /// Translate a 2xx Anthropic Messages-format response body into an
+    /// equivalent OpenAI Responses payload. Warning headers and counters for
+    /// `store_downgrade` and dropped reasoning items are surfaced by the
+    /// caller via [`attach_warnings`] / `metric_counter_inc`; nothing about
+    /// them flows into the response body.
+    fn translate(body: &str, client_model: &str) -> Result<String, String> {
         let anthropic: serde_json::Value =
             serde_json::from_str(body).map_err(|e| format!("invalid Anthropic response: {}", e))?;
 
@@ -520,9 +579,15 @@ fn now_secs() -> u64 {
 /// the Barbacane runtime) or adding a `host_random_bytes` capability. We
 /// don't need cryptographic randomness for a non-retrievable opaque
 /// identifier — the v7 spec only requires monotonicity within a node, which
-/// the counter satisfies. Two ids generated in the same millisecond differ
-/// in their counter portion; ids in successive milliseconds order
-/// chronologically by the timestamp.
+/// the counter satisfies.
+///
+/// **Scope.** The counter is per-plugin-instance and resets to 0 on instance
+/// restart; it wraps with `wrapping_add` at 2^64. Two ids generated in the
+/// same millisecond **by the same plugin instance** differ in their counter
+/// portion. Two instances starting in the same millisecond can theoretically
+/// collide on early ids, and a single instance running 1.8×10^19 requests
+/// would collide on wrap — both inconsequential for a non-retrievable
+/// opaque tracking handle, but worth knowing.
 fn make_uuid_v7() -> uuid::Uuid {
     use std::cell::Cell;
     thread_local! {
@@ -620,7 +685,7 @@ fn previous_response_id_not_supported_response() -> Response {
     }
 }
 
-fn responses_not_supported_for_provider_response(provider: &str) -> Response {
+fn responses_not_supported_for_provider_response(provider: Provider) -> Response {
     let body = serde_json::json!({
         "type": "urn:barbacane:error:responses_not_supported_for_provider",
         "title": "Bad Request",
@@ -630,7 +695,7 @@ fn responses_not_supported_for_provider_response(provider: &str) -> Response {
             "ai-proxy: provider {:?} does not implement the OpenAI Responses API \
              (no upstream surface to translate to or passthrough). Use \
              `/v1/chat/completions` instead, or route to OpenAI/Anthropic.",
-            provider
+            provider.name()
         ),
     });
     let mut headers = BTreeMap::new();
@@ -817,10 +882,114 @@ mod tests {
         assert_eq!(v["model"], "claude-sonnet-4-6");
     }
 
+    #[test]
+    fn translate_in_interleaved_roles_preserve_order() {
+        // R8: the role-switching `flush_message` logic is the most plausible
+        // regression site. Send an interleaved [user, assistant, user]
+        // sequence and verify each segment becomes its own message in order
+        // — not collapsed or reordered.
+        let res = translate_in(
+            r#"{"input":[
+                {"type":"input_text","role":"user","content":"first user"},
+                {"type":"input_text","role":"assistant","content":"first assistant"},
+                {"type":"input_text","role":"user","content":"second user"}
+            ]}"#,
+        );
+        let body: serde_json::Value = serde_json::from_str(&res.body).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["text"], "first user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"][0]["text"], "first assistant");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][0]["text"], "second user");
+    }
+
+    #[test]
+    fn translate_in_consecutive_same_role_items_coalesce() {
+        // The flip side of the role-switch test: two `user` items in a row
+        // should land in the same message's `content` array, not produce two
+        // separate messages.
+        let res = translate_in(
+            r#"{"input":[
+                {"type":"input_text","role":"user","content":"part one"},
+                {"type":"input_text","role":"user","content":"part two"}
+            ]}"#,
+        );
+        let body: serde_json::Value = serde_json::from_str(&res.body).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        let blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["text"], "part one");
+        assert_eq!(blocks[1]["text"], "part two");
+    }
+
+    #[test]
+    fn flush_message_helper_is_a_no_op_with_empty_buffer() {
+        let mut blocks: Vec<serde_json::Value> = Vec::new();
+        let mut messages: Vec<serde_json::Value> = Vec::new();
+        flush_message(Some("user"), &mut blocks, &mut messages);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn flush_message_helper_is_a_no_op_with_no_role() {
+        let mut blocks = vec![serde_json::json!({"type":"text","text":"orphaned"})];
+        let mut messages: Vec<serde_json::Value> = Vec::new();
+        flush_message(None, &mut blocks, &mut messages);
+        assert!(messages.is_empty());
+    }
+
+    // --- R1: id rewriter on the OpenAI passthrough path ---
+
+    #[test]
+    fn rewrite_response_id_replaces_2xx_id_with_synthetic() {
+        let upstream = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some(br#"{"id":"resp_real_openai","object":"response"}"#.to_vec()),
+        };
+        let out = rewrite_response_id_if_2xx(upstream);
+        let body: serde_json::Value = serde_json::from_slice(out.body.as_ref().unwrap()).unwrap();
+        let id = body["id"].as_str().unwrap();
+        assert!(id.starts_with("resp_"), "{}", id);
+        assert_ne!(id, "resp_real_openai");
+        assert_eq!(body["object"], "response");
+    }
+
+    #[test]
+    fn rewrite_response_id_passes_4xx_through_unchanged() {
+        // Don't mangle upstream errors — they have their own shape.
+        let upstream = Response {
+            status: 400,
+            headers: BTreeMap::new(),
+            body: Some(br#"{"error":{"code":"invalid_request","message":"bad"}}"#.to_vec()),
+        };
+        let out = rewrite_response_id_if_2xx(upstream);
+        let body: serde_json::Value = serde_json::from_slice(out.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert!(body.get("id").is_none());
+    }
+
+    #[test]
+    fn rewrite_response_id_passes_unparseable_body_through_unchanged() {
+        // Some upstreams (or middleboxes) return non-JSON. Don't fail —
+        // pass through and let the client see what we saw.
+        let upstream = Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some(b"not even json".to_vec()),
+        };
+        let out = rewrite_response_id_if_2xx(upstream);
+        assert_eq!(out.body.as_ref().unwrap(), b"not even json");
+    }
+
     // --- Anthropic → Responses translation ---
 
     fn translate_out(body: &str) -> serde_json::Value {
-        let s = AnthropicToResponses::translate(body, "claude-sonnet-4-6", false, 0).unwrap();
+        let s = AnthropicToResponses::translate(body, "claude-sonnet-4-6").unwrap();
         serde_json::from_str(&s).unwrap()
     }
 
@@ -905,7 +1074,7 @@ mod tests {
 
     #[test]
     fn responses_not_supported_for_provider_shape() {
-        let resp = responses_not_supported_for_provider_response("ollama");
+        let resp = responses_not_supported_for_provider_response(Provider::Ollama);
         assert_eq!(resp.status, 400);
         let body: serde_json::Value =
             serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();

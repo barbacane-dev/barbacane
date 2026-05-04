@@ -257,11 +257,17 @@ impl AiProxy {
     fn dispatch_responses(&mut self, req: Request) -> Response {
         // Reject `previous_response_id` and parse `store` upfront — this is
         // the spec-level surface the gateway can validate before resolving a
-        // target, and it produces stable 4xx responses.
-        match protocols::responses::ResponsesPreflight::from_body(&req.body) {
-            Ok(_) => {}
+        // target, and it produces stable 4xx responses. Stash the
+        // `store_downgrade` flag on context so the protocol handler can read
+        // it back without re-parsing the body.
+        let preflight = match protocols::responses::ResponsesPreflight::from_body(&req.body) {
+            Ok(p) => p,
             Err(resp) => return resp,
-        }
+        };
+        host::context_set(
+            protocols::responses::CTX_STORE_DOWNGRADE,
+            if preflight.store_downgrade { "true" } else { "false" },
+        );
 
         let client_model = match extract_client_model(&req.body) {
             Some(m) => m,

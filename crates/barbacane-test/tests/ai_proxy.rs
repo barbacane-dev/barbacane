@@ -671,17 +671,21 @@ paths:
 }
 
 #[tokio::test]
-async fn test_ai_proxy_responses_openai_passthrough() {
-    // Mock the canonical OpenAI Responses endpoint upstream and verify the
-    // gateway just passes through (no translation for the OpenAI provider).
+async fn test_ai_proxy_responses_openai_passthrough_rewrites_id() {
+    // ADR-0030 §2 — the gateway is uniformly stateless. Even on the OpenAI
+    // passthrough path we must rewrite the upstream `id` to a synthetic
+    // `resp_<uuid-v7>`; otherwise OpenAI's real id leaks to the client and
+    // they could send it back as `previous_response_id` (which we 400 on).
     let mock_server = MockServer::start().await;
+    let upstream_id = "resp_real_openai_should_not_leak";
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_string(
-                    r#"{"id":"resp_abc","object":"response","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}"#,
-                )
+                .set_body_string(format!(
+                    r#"{{"id":"{}","object":"response","output":[],"usage":{{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}"#,
+                    upstream_id
+                ))
                 .insert_header("content-type", "application/json"),
         )
         .expect(1)
@@ -703,6 +707,16 @@ async fn test_ai_proxy_responses_openai_passthrough() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["object"], "response");
+    let id = body["id"].as_str().unwrap();
+    assert!(
+        id.starts_with("resp_"),
+        "id should be a synthetic resp_<uuid>: {}",
+        id
+    );
+    assert_ne!(
+        id, upstream_id,
+        "upstream id leaked to client — gateway is no longer stateless"
+    );
 }
 
 #[tokio::test]
