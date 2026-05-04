@@ -144,6 +144,82 @@ paths:
       responses:
         "500":
           description: Misconfiguration error
+
+  /chat/routes:
+    post:
+      operationId: chatRoutes
+      summary: Routes table — model glob picks the upstream base_url (ADR-0030 §3)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          routes:
+            - pattern: "claude-*"
+              provider: ollama
+              base_url: "{base_url}/route-claude"
+            - pattern: "gpt-*"
+              provider: ollama
+              base_url: "{base_url}/route-gpt"
+            - pattern: "*"
+              provider: ollama
+              base_url: "{base_url}/route-catchall"
+          timeout: 10
+          max_tokens: 512
+      responses:
+        "200":
+          description: Completion via the matched route
+
+  /chat/routes-no-fallthrough:
+    post:
+      operationId: chatRoutesNoFallthrough
+      summary: Routes without catch-all and no default — non-matching model gets 400 no_route
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          routes:
+            - pattern: "claude-*"
+              provider: ollama
+              base_url: "{base_url}/route-claude"
+          timeout: 10
+      responses:
+        "400":
+          description: no_route
+
+  /chat/route-with-deny:
+    post:
+      operationId: chatRouteWithDeny
+      summary: Route's deny list — blocks claude-opus-* with 403 model_not_permitted
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          routes:
+            - pattern: "claude-*"
+              provider: ollama
+              base_url: "{base_url}/route-claude"
+              deny: ["claude-opus-*"]
+          timeout: 10
+      responses:
+        "200":
+          description: Allowed
+        "403":
+          description: model_not_permitted
 "#,
         base_url = base_url
     );
@@ -275,4 +351,246 @@ async fn test_ai_proxy_no_provider_returns_500() {
         500,
         "misconfigured dispatcher must return 500"
     );
+}
+
+// =========================================================================
+// ADR-0030 §3 — routes-based dispatch end-to-end
+// =========================================================================
+
+/// Send a chat request whose `model` field matches the given glob pattern's
+/// example, and assert it landed at the right route's base_url. Used by the
+/// `routes` test to exercise each pattern in turn.
+async fn assert_routes_to(
+    gateway: &TestGateway,
+    mock_server: &MockServer,
+    model: &str,
+    expected_path_prefix: &str,
+) {
+    let body = format!(
+        r#"{{"model":"{}","messages":[{{"role":"user","content":"hi"}}]}}"#,
+        model
+    );
+    let resp = gateway.post("/chat/routes", &body).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "routes dispatch for model {:?} should succeed",
+        model
+    );
+    // wiremock records every received request; assert the most recent one
+    // landed at the expected route's path prefix.
+    let received = mock_server.received_requests().await.unwrap();
+    let last = received
+        .last()
+        .unwrap_or_else(|| panic!("no upstream request received for model {:?}", model));
+    assert!(
+        last.url.path().starts_with(expected_path_prefix),
+        "model {:?} should route to {}, hit {} instead",
+        model,
+        expected_path_prefix,
+        last.url.path()
+    );
+}
+
+#[tokio::test]
+async fn test_ai_proxy_routes_first_match_wins() {
+    let mock_server = MockServer::start().await;
+
+    // One mock per route prefix. Each path matches anything under it so
+    // /route-claude/v1/chat/completions, /route-gpt/v1/chat/completions, etc.
+    for prefix in ["/route-claude", "/route-gpt", "/route-catchall"] {
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path_regex(format!("^{}/", prefix)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(OPENAI_COMPLETION_BODY)
+                    .insert_header("content-type", "application/json"),
+            )
+            .mount(&mock_server)
+            .await;
+    }
+
+    let (_tmp, spec_path) = create_ai_proxy_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // claude-* glob → /route-claude
+    assert_routes_to(&gateway, &mock_server, "claude-sonnet-4-6", "/route-claude").await;
+    // gpt-* glob → /route-gpt
+    assert_routes_to(&gateway, &mock_server, "gpt-4o", "/route-gpt").await;
+    // anything else → catch-all
+    assert_routes_to(&gateway, &mock_server, "mistral", "/route-catchall").await;
+}
+
+#[tokio::test]
+async fn test_ai_proxy_400_when_body_omits_model() {
+    let mock_server = MockServer::start().await;
+    let (_tmp, spec_path) = create_ai_proxy_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // No `model` field in the request body — caller-owned-model says 400.
+    let resp = gateway
+        .post(
+            "/chat/flat",
+            r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "model_required");
+    assert_eq!(body["type"], "urn:barbacane:error:model_required");
+}
+
+#[tokio::test]
+async fn test_ai_proxy_400_no_route_when_model_does_not_match() {
+    let mock_server = MockServer::start().await;
+    let (_tmp, spec_path) = create_ai_proxy_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // Spec configures `routes: [{pattern: "claude-*"}]` and nothing else —
+    // no catch-all, no default_target, no flat. A request with `model: gpt-4o`
+    // hits the no_route case.
+    let resp = gateway
+        .post(
+            "/chat/routes-no-fallthrough",
+            r#"{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "no_route");
+    assert_eq!(body["type"], "urn:barbacane:error:no_route");
+}
+
+#[tokio::test]
+async fn test_ai_proxy_403_model_not_permitted_does_not_reach_upstream() {
+    let mock_server = MockServer::start().await;
+
+    // Mount the upstream mock with `expect(0)` — if the deny check fails
+    // and the request leaks through, this assertion fires on drop.
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::path_regex("^/route-claude/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(OPENAI_COMPLETION_BODY))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_ai_proxy_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // Route's deny: ["claude-opus-*"] should reject this model.
+    let resp = gateway
+        .post(
+            "/chat/route-with-deny",
+            r#"{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 403);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "model_not_permitted");
+    assert_eq!(body["type"], "urn:barbacane:error:model_not_permitted");
+}
+
+#[tokio::test]
+async fn test_ai_proxy_403_does_not_fall_through_to_next_route() {
+    // Spec: `claude-*` route with deny on opus, then a `*` catch-all to ollama.
+    // A claude-opus model must return 403 — NOT escalate to the catch-all.
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::path_regex("^/route-catchall/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(OPENAI_COMPLETION_BODY))
+        .expect(0) // catch-all must NOT be reached
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::path_regex("^/route-claude/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(OPENAI_COMPLETION_BODY))
+        .expect(0) // claude route also must NOT be reached (denied before dispatch)
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let plugins_dir = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("plugins");
+    let ai_proxy_path = plugins_dir.join("ai-proxy/ai-proxy.wasm");
+    let manifest_path = temp_dir.path().join("barbacane.yaml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "plugins:\n  ai-proxy:\n    path: {}\n",
+            ai_proxy_path.display()
+        ),
+    )
+    .unwrap();
+
+    let spec_path = temp_dir.path().join("spec.yaml");
+    std::fs::write(
+        &spec_path,
+        format!(
+            r#"openapi: "3.0.3"
+info:
+  title: routes-deny-no-fallthrough
+  version: "1.0.0"
+paths:
+  /chat:
+    post:
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          routes:
+            - pattern: "claude-*"
+              provider: ollama
+              base_url: "{base}/route-claude"
+              deny: ["claude-opus-*"]
+            - pattern: "*"
+              provider: ollama
+              base_url: "{base}/route-catchall"
+          timeout: 10
+      responses:
+        "200":
+          description: ok
+"#,
+            base = mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .post(
+            "/chat",
+            r#"{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 403, "deny must return 403, not escalate");
 }

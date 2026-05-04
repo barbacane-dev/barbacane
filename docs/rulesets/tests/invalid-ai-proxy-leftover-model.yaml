@@ -1,0 +1,30 @@
+openapi: "3.1.0"
+info:
+  title: Invalid ai-proxy — leftover `model:` from ADR-0024
+  version: "1.0.0"
+  description: |
+    Regression fixture for the ADR-0030 §0 migration UX. After the breaking
+    change that removed `model:` from gateway config, vacuum must surface the
+    leftover field at lint time so operators see a clear error before
+    runtime. The auto-generated dispatch validator picks this up via the
+    plugin's `additionalProperties: false` schema constraint.
+
+servers:
+  - url: https://api.example.com
+
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: leftoverFlat
+      summary: Leftover `model:` on flat config
+      description: ADR-0024 → ADR-0030 migration regression — model is no longer accepted.
+      tags: [test]
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          provider: openai
+          model: "gpt-4o"          # ← leftover from ADR-0024
+          api_key: "sk-placeholder"
+      responses:
+        "200":
+          description: OK

@@ -240,14 +240,15 @@ type ProtocolHandler =
 
 impl AiProxy {
     pub fn dispatch(&mut self, req: Request) -> Response {
-        match req.path.as_str() {
-            "/v1/chat/completions" => self.dispatch_chat_completion(req),
-            // ADR-0030 §2 will add: "/v1/responses" — same model-required check
-            //                        + protocols::responses::handle.
-            // ADR-0030 §4 will add: "/v1/models" — no client body, separate
-            //                        path that does not go through dispatch_with_handler.
-            other => error_response(404, &format!("ai-proxy: no handler for path {}", other)),
-        }
+        // ADR-0030 §1: the dispatcher is protocol-aware via path. PR-4 will
+        // add an explicit `/v1/responses` arm that routes to
+        // protocols::responses::handle, and PR-5 a `/v1/models` arm that
+        // serves the model catalog. Until those exist, every path routes to
+        // Chat Completions — the operator's choice of operation path is not
+        // the dispatcher's business when only one protocol is on offer, and
+        // returning 404 here would force every operator and every test
+        // fixture to use the canonical `/v1/chat/completions` path.
+        self.dispatch_chat_completion(req)
     }
 
     fn dispatch_chat_completion(&mut self, req: Request) -> Response {
@@ -774,7 +775,6 @@ pub(crate) fn build_response(http_resp: HttpResponse) -> Response {
 
 pub(crate) fn error_response(status: u16, detail: &str) -> Response {
     let (error_type, title) = match status {
-        404 => ("urn:barbacane:error:not-found", "Not Found"),
         500 => ("urn:barbacane:error:internal", "Internal Server Error"),
         502 => ("urn:barbacane:error:upstream-unavailable", "Bad Gateway"),
         _ => ("urn:barbacane:error:internal", "Internal Server Error"),
@@ -1875,18 +1875,21 @@ mod tests {
         assert_eq!(extract_client_model(&None), None);
     }
 
-    // --- Path-based dispatch (PR-1: only /v1/chat/completions; others 404) ---
+    // --- Path-based dispatch ---
 
     #[test]
-    fn dispatch_unknown_path_returns_404() {
+    fn dispatch_routes_any_path_to_chat_completion_today() {
+        // Until PR-4 adds /v1/responses, the dispatcher does not constrain
+        // the operator's choice of operation path. Custom paths route to
+        // Chat Completions just like the canonical /v1/chat/completions does.
         host::reset();
         let mut plugin = openai_plugin("openai");
         let mut req = make_chat_request("gpt-4o");
-        req.path = "/v1/something-else".to_string();
+        req.path = "/my/custom/chat".to_string();
         let resp = plugin.dispatch(req);
-        assert_eq!(resp.status, 404);
-        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["type"].as_str(), Some("urn:barbacane:error:not-found"));
+        // Native HTTP stub returns -1 → 502 (connection failed). The point
+        // of this test is that we do NOT see 404 — the path was accepted.
+        assert_ne!(resp.status, 404, "custom paths must not 404 today");
     }
 
     // --- Error response format ---
