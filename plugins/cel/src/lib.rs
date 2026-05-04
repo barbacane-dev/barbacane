@@ -45,10 +45,6 @@ struct DenyAction {
     message: Option<String>,
 }
 
-fn default_deny_status() -> u16 {
-    403
-}
-
 /// CEL policy evaluation middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
@@ -65,8 +61,9 @@ pub struct CelPolicy {
     #[serde(skip)]
     compiled: Option<cel::Program>,
 
-    /// When present, switches from access-control mode to context-routing mode:
-    /// - true  → write `set_context` keys into request context, then continue
+    /// When present, switches from access-control mode to match-and-act mode:
+    /// - true  → take the configured `on_match` actions (`set_context` and/or
+    ///           `deny`); `deny` wins when both are set
     /// - false → continue unchanged (no 403)
     ///
     /// When absent (default), the original access-control behaviour applies:
@@ -78,6 +75,10 @@ pub struct CelPolicy {
 
 fn default_deny_message() -> String {
     "Access denied by policy".to_string()
+}
+
+fn default_deny_status() -> u16 {
+    403
 }
 
 // ---------------------------------------------------------------------------
@@ -132,9 +133,22 @@ impl CelPolicy {
         resp
     }
 
-    /// Compile the CEL expression once, reuse on subsequent calls.
+    /// Compile the CEL expression once, reuse on subsequent calls. Also
+    /// validates `on_match.deny.code` against the snake_case rule that the
+    /// JSON schema declares — vacuum's auto-generated validator only recurses
+    /// to top-level fields, so nested-field constraints are enforced here.
     fn ensure_compiled(&mut self) -> Result<(), String> {
         if self.compiled.is_none() {
+            if let Some(on_match) = &self.on_match {
+                if let Some(deny) = &on_match.deny {
+                    if !is_snake_case_code(&deny.code) {
+                        return Err(format!(
+                            "on_match.deny.code must match ^[a-z][a-z0-9_]*$, got {:?}",
+                            deny.code
+                        ));
+                    }
+                }
+            }
             let program = cel::Program::compile(&self.expression)
                 .map_err(|e| format!("CEL parse error: {}", e))?;
             self.compiled = Some(program);
@@ -376,6 +390,17 @@ fn json_to_cel(value: serde_json::Value) -> cel::Value {
             map.into()
         }
     }
+}
+
+/// Validate a `code` value against the schema-declared `^[a-z][a-z0-9_]*$`.
+/// Local function rather than pulling in `regex` for one tiny check.
+fn is_snake_case_code(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// HTTP reason-phrase for the small set of 4xx codes a `cel` deny is likely
@@ -988,6 +1013,74 @@ mod tests {
         match config.on_request(create_request()) {
             Action::Continue(_) => {}
             Action::ShortCircuit(resp) => panic!("expected continue, got {}", resp.status),
+        }
+    }
+
+    #[test]
+    fn on_match_deny_invalid_code_returns_500() {
+        // Schema declares ^[a-z][a-z0-9_]*$ for code, but the auto-generated
+        // vacuum validator doesn't recurse into on_match.deny — so the regex
+        // is enforced in Rust at first-request time. Returns a config error.
+        for bad in [
+            "Bad-Code",          // hyphen
+            "BadCode",           // PascalCase
+            "1leading_digit",    // digit start
+            "_leading_underscore",
+            "has space",
+            "",
+        ] {
+            let mut config = CelPolicy {
+                expression: "true".to_string(),
+                deny_message: default_deny_message(),
+                compiled: None,
+                on_match: Some(OnMatch {
+                    set_context: BTreeMap::new(),
+                    deny: Some(DenyAction {
+                        status: 403,
+                        code: bad.to_string(),
+                        message: None,
+                    }),
+                }),
+            };
+            match config.on_request(create_request()) {
+                Action::Continue(_) => panic!("expected 500 for invalid code {:?}", bad),
+                Action::ShortCircuit(resp) => {
+                    assert_eq!(resp.status, 500, "code {:?} should be rejected", bad);
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&resp.body.unwrap()).expect("problem+json");
+                    assert_eq!(body["type"], "urn:barbacane:error:cel-config");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn on_match_deny_accepts_valid_snake_case_codes() {
+        for ok in [
+            "model_not_permitted",
+            "x",
+            "a1",
+            "z9_a_b_c",
+        ] {
+            let mut config = CelPolicy {
+                expression: "true".to_string(),
+                deny_message: default_deny_message(),
+                compiled: None,
+                on_match: Some(OnMatch {
+                    set_context: BTreeMap::new(),
+                    deny: Some(DenyAction {
+                        status: 403,
+                        code: ok.to_string(),
+                        message: None,
+                    }),
+                }),
+            };
+            match config.on_request(create_request()) {
+                Action::Continue(_) => panic!("expected deny short-circuit for code {:?}", ok),
+                Action::ShortCircuit(resp) => {
+                    assert_eq!(resp.status, 403, "code {:?} should be accepted", ok);
+                }
+            }
         }
     }
 

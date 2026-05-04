@@ -43,7 +43,7 @@
             },
             "code": {
               "type": "string",
-              "description": "Machine-readable error code, snake_case by convention. Becomes the URN suffix on the response `type` field.",
+              "description": "Machine-readable error code. snake_case to match the `error.type` convention used by `ai-proxy` and OpenAI-style APIs (e.g. `model_not_permitted`, `invalid_request_error`). Becomes the URN suffix on the response `type` field.",
               "pattern": "^[a-z][a-z0-9_]*$"
             },
             "message": {
