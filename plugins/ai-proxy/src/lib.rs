@@ -15,10 +15,22 @@
 //! - **Streaming** — OpenAI-compatible providers use `host_http_stream`; for
 //!   Anthropic, streaming is forced non-streaming in this version (buffered
 //!   response is returned; see ADR-0024 for the planned SSE translation).
+//!
+//! ## Source layout
+//!
+//! - [`mod@protocols`] — per-protocol translation adapters (Chat Completions
+//!   today; ADR-0030 will add `/v1/responses` here).
+//! - [`mod@providers`] — per-provider transport (OpenAI passthrough, Anthropic
+//!   Messages, Ollama via OpenAI passthrough).
+//! - This file — orchestration: target resolution, fallback chain, metrics,
+//!   context propagation. Path-based dispatch picks the protocol handler.
 
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+pub mod protocols;
+pub mod providers;
 
 // ---------------------------------------------------------------------------
 // Provider type
@@ -26,14 +38,14 @@ use std::collections::BTreeMap;
 
 #[derive(Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
-enum Provider {
+pub(crate) enum Provider {
     OpenAI,
     Anthropic,
     Ollama,
 }
 
 impl Provider {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Provider::OpenAI => "openai",
             Provider::Anthropic => "anthropic",
@@ -41,7 +53,7 @@ impl Provider {
         }
     }
 
-    fn default_base_url(&self) -> &'static str {
+    pub(crate) fn default_base_url(&self) -> &'static str {
         match self {
             Provider::OpenAI => "https://api.openai.com",
             Provider::Anthropic => "https://api.anthropic.com",
@@ -49,7 +61,7 @@ impl Provider {
         }
     }
 
-    fn is_openai_compatible(&self) -> bool {
+    pub(crate) fn is_openai_compatible(&self) -> bool {
         matches!(self, Provider::OpenAI | Provider::Ollama)
     }
 }
@@ -60,18 +72,18 @@ impl Provider {
 
 /// A single named provider target (provider + model + credentials).
 #[derive(Deserialize, Clone)]
-struct TargetConfig {
-    provider: Provider,
-    model: String,
+pub(crate) struct TargetConfig {
+    pub provider: Provider,
+    pub model: String,
     #[serde(default)]
-    api_key: Option<String>,
+    pub api_key: Option<String>,
     /// Custom base URL (Azure, self-hosted, Ollama remote, etc.).
     #[serde(default)]
-    base_url: Option<String>,
+    pub base_url: Option<String>,
 }
 
 impl TargetConfig {
-    fn effective_base_url(&self) -> &str {
+    pub(crate) fn effective_base_url(&self) -> &str {
         self.base_url
             .as_deref()
             .unwrap_or_else(|| self.provider.default_base_url())
@@ -88,36 +100,36 @@ fn default_timeout() -> u64 {
 pub struct AiProxy {
     // --- Flat single-provider config (used when no `targets` map is defined) ---
     #[serde(default)]
-    provider: Option<Provider>,
+    pub(crate) provider: Option<Provider>,
     #[serde(default)]
-    model: Option<String>,
+    pub(crate) model: Option<String>,
     #[serde(default)]
-    api_key: Option<String>,
+    pub(crate) api_key: Option<String>,
     #[serde(default)]
-    base_url: Option<String>,
+    pub(crate) base_url: Option<String>,
 
     /// Request timeout in seconds. LLM calls can be slow; default is 120s.
     #[serde(default = "default_timeout")]
-    timeout: u64,
+    pub(crate) timeout: u64,
 
     /// Default `max_tokens` applied when the client request omits it.
     #[serde(default)]
-    max_tokens: Option<u32>,
+    pub(crate) max_tokens: Option<u32>,
 
     /// Provider fallback chain. Tried in order when the primary target returns
     /// a 5xx or a connection error. 4xx responses are returned directly.
     #[serde(default)]
-    fallback: Vec<TargetConfig>,
+    pub(crate) fallback: Vec<TargetConfig>,
 
     /// Named provider targets for policy-driven routing. The `cel` middleware
     /// selects a target by writing `ai.target` into the request context before
     /// this dispatcher runs.
     #[serde(default)]
-    targets: BTreeMap<String, TargetConfig>,
+    pub(crate) targets: BTreeMap<String, TargetConfig>,
 
     /// Target name to use when no `ai.target` context key is present.
     #[serde(default)]
-    default_target: Option<String>,
+    pub(crate) default_target: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -126,45 +138,45 @@ pub struct AiProxy {
 
 /// Body travels via side-channel (`set_http_request_body`), not in JSON.
 #[derive(Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: Option<u64>,
+pub(crate) struct HttpRequest {
+    pub method: String,
+    pub url: String,
+    pub headers: BTreeMap<String, String>,
+    pub timeout_ms: Option<u64>,
 }
 
 /// Body is read separately via `read_http_response_body()`.
 #[derive(Deserialize)]
-struct HttpResponse {
-    status: u16,
-    headers: BTreeMap<String, String>,
-}
-
-// ---------------------------------------------------------------------------
-// Anthropic wire types (for request/response translation)
-// ---------------------------------------------------------------------------
-
-#[derive(Serialize)]
-struct AnthropicRequest {
-    model: String,
-    messages: Vec<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    top_p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
+pub(crate) struct HttpResponse {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------
 // Dispatcher implementation
 // ---------------------------------------------------------------------------
 
+/// Function signature every protocol handler implements: given a resolved
+/// target and the request, return a `Response` or a connection-level error
+/// the orchestration loop can fall back on.
+type ProtocolHandler = fn(&AiProxy, &TargetConfig, &Request, bool) -> Result<Response, String>;
+
 impl AiProxy {
     pub fn dispatch(&mut self, req: Request) -> Response {
+        let handler: ProtocolHandler = match req.path.as_str() {
+            "/v1/chat/completions" => protocols::chat_completion::handle,
+            // ADR-0030 §1 will add: "/v1/responses" => protocols::responses::handle,
+            // ADR-0030 §4 will add: "/v1/models"    => protocols::models::handle,
+            other => {
+                return error_response(404, &format!("ai-proxy: no handler for path {}", other));
+            }
+        };
+        self.dispatch_with_handler(req, handler)
+    }
+
+    /// Shared orchestration loop: resolve target, run the protocol handler,
+    /// fall back on 5xx / connection error, emit metrics, propagate context.
+    fn dispatch_with_handler(&mut self, req: Request, handler: ProtocolHandler) -> Response {
         let start_ms = host::time_now_ms();
 
         let primary = match self.resolve_target() {
@@ -190,7 +202,12 @@ impl AiProxy {
                 let prev = &targets[idx - 1];
                 host::metric_counter_inc(
                     "fallback_total",
-                    &labels2("from_provider", prev.provider.name(), "to_provider", target.provider.name()),
+                    &labels2(
+                        "from_provider",
+                        prev.provider.name(),
+                        "to_provider",
+                        target.provider.name(),
+                    ),
                     1,
                 );
                 host::log_warn(&format!(
@@ -200,7 +217,7 @@ impl AiProxy {
                 ));
             }
 
-            match self.try_dispatch(target, &req, streaming) {
+            match handler(self, target, &req, streaming) {
                 Ok(resp) => {
                     let elapsed_ms = host::time_now_ms().saturating_sub(start_ms);
 
@@ -209,7 +226,12 @@ impl AiProxy {
 
                     host::metric_counter_inc(
                         "requests_total",
-                        &labels2("provider", target.provider.name(), "status", &metric_status.to_string()),
+                        &labels2(
+                            "provider",
+                            target.provider.name(),
+                            "status",
+                            &metric_status.to_string(),
+                        ),
                         1,
                     );
                     host::metric_histogram_observe(
@@ -247,7 +269,7 @@ impl AiProxy {
     /// 1. `ai.target` context key (set by upstream middleware, e.g. `cel`)
     /// 2. `default_target` name
     /// 3. Flat `provider`/`model` config
-    fn resolve_target(&self) -> Option<TargetConfig> {
+    pub(crate) fn resolve_target(&self) -> Option<TargetConfig> {
         // 1. Context-set target name
         if let Some(name) = host::context_get("ai.target") {
             if let Some(t) = self.targets.get(&name) {
@@ -274,250 +296,6 @@ impl AiProxy {
             base_url: self.base_url.clone(),
         })
     }
-
-    fn try_dispatch(&self, target: &TargetConfig, req: &Request, streaming: bool) -> Result<Response, String> {
-        if target.provider.is_openai_compatible() {
-            if streaming {
-                self.openai_stream(target, req)
-            } else {
-                self.openai_call(target, req)
-            }
-        } else {
-            // Anthropic: ADR-0024 SSE translation is future work; buffer the response.
-            if streaming {
-                host::log_warn(
-                    "ai-proxy: Anthropic streaming not yet supported; buffering response",
-                );
-            }
-            self.anthropic_call(target, req, false)
-        }
-    }
-
-    // --- OpenAI-compatible (passthrough) ---
-
-    fn openai_call(&self, target: &TargetConfig, req: &Request) -> Result<Response, String> {
-        let url = openai_url(target, &req.path);
-        let headers = openai_headers(target);
-
-        let body = self.maybe_inject_max_tokens(&req.body);
-        if let Some(ref b) = body {
-            set_http_request_body(b);
-        }
-
-        let http_req = HttpRequest {
-            method: req.method.clone(),
-            url,
-            headers,
-            timeout_ms: Some(self.timeout * 1000),
-        };
-
-        let resp_bytes = http_call(&http_req)?;
-        Ok(build_response(resp_bytes))
-    }
-
-    fn openai_stream(&self, target: &TargetConfig, req: &Request) -> Result<Response, String> {
-        let url = openai_url(target, &req.path);
-        let mut headers = openai_headers(target);
-        // Ensure Accept header for SSE
-        headers.insert("accept".to_string(), "text/event-stream".to_string());
-
-        let body = self.maybe_inject_max_tokens(&req.body);
-        if let Some(ref b) = body {
-            set_http_request_body(b);
-        }
-
-        let http_req = HttpRequest {
-            method: req.method.clone(),
-            url,
-            headers,
-            timeout_ms: Some(self.timeout * 1000),
-        };
-
-        let req_json = serde_json::to_vec(&http_req).map_err(|e| e.to_string())?;
-        let result = unsafe { host_http_stream(req_json.as_ptr() as i32, req_json.len() as i32) };
-
-        if result < 0 {
-            return Err("upstream stream failed".to_string());
-        }
-
-        Ok(streamed_response())
-    }
-
-    // --- Anthropic (with request/response translation) ---
-
-    fn anthropic_call(
-        &self,
-        target: &TargetConfig,
-        req: &Request,
-        stream: bool,
-    ) -> Result<Response, String> {
-        let base = target.effective_base_url().trim_end_matches('/');
-        let url = format!("{}/v1/messages", base);
-
-        let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-        headers.insert("anthropic-version".to_string(), "2024-10-22".to_string());
-        if let Some(key) = &target.api_key {
-            headers.insert("x-api-key".to_string(), key.clone());
-        }
-
-        let body = translate_to_anthropic(&req.body, &target.model, stream, self.max_tokens)?;
-        set_http_request_body(body.as_bytes());
-
-        let http_req = HttpRequest {
-            method: "POST".to_string(),
-            url,
-            headers,
-            timeout_ms: Some(self.timeout * 1000),
-        };
-
-        let resp_bytes = http_call(&http_req)?;
-        let resp = build_response(resp_bytes);
-
-        // Only translate 2xx responses; pass error responses through as-is
-        if resp.status >= 200 && resp.status < 300 {
-            let translated_body = resp
-                .body_str()
-                .map(translate_from_anthropic)
-                .transpose()?
-                .map(|s| s.into_bytes());
-            Ok(Response {
-                status: resp.status,
-                headers: resp.headers,
-                body: translated_body,
-            })
-        } else {
-            Ok(resp)
-        }
-    }
-
-    /// Inject a default `max_tokens` into the request body when the client
-    /// didn't send one — required for Anthropic (field is mandatory) and
-    /// useful as a cost guardrail for OpenAI.
-    fn maybe_inject_max_tokens(&self, body: &Option<Vec<u8>>) -> Option<Vec<u8>> {
-        let Some(max) = self.max_tokens else {
-            return body.clone();
-        };
-        let Some(raw) = body.as_deref() else {
-            return body.clone();
-        };
-        let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(raw) else {
-            return body.clone();
-        };
-        if let Some(obj) = v.as_object_mut() {
-            if !obj.contains_key("max_tokens") {
-                obj.insert("max_tokens".to_string(), serde_json::json!(max));
-                return Some(serde_json::to_vec(&v).unwrap_or_default());
-            }
-        }
-        body.clone()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Translation helpers
-// ---------------------------------------------------------------------------
-
-/// Translate an OpenAI chat completion request body to Anthropic Messages API format.
-/// Pinned to Anthropic API version 2024-10-22 (ADR-0024).
-fn translate_to_anthropic(
-    body: &Option<Vec<u8>>,
-    model: &str,
-    stream: bool,
-    default_max_tokens: Option<u32>,
-) -> Result<String, String> {
-    let raw = body.as_deref().unwrap_or(b"{}");
-    let openai: serde_json::Value =
-        serde_json::from_slice(raw).map_err(|e| format!("invalid request body: {}", e))?;
-
-    let messages = openai["messages"]
-        .as_array()
-        .ok_or("missing or invalid messages array")?;
-
-    // Split system messages out; Anthropic takes them as a top-level field
-    let mut system_parts: Vec<&str> = Vec::new();
-    let mut chat_messages: Vec<serde_json::Value> = Vec::new();
-
-    for msg in messages {
-        if msg["role"].as_str() == Some("system") {
-            if let Some(content) = msg["content"].as_str() {
-                system_parts.push(content);
-            }
-        } else {
-            chat_messages.push(msg.clone());
-        }
-    }
-
-    let max_tokens = openai["max_tokens"]
-        .as_u64()
-        .map(|v| v as u32)
-        .or(default_max_tokens)
-        .unwrap_or(4096);
-
-    let anthropic = AnthropicRequest {
-        model: openai["model"]
-            .as_str()
-            .unwrap_or(model)
-            .to_string(),
-        messages: chat_messages,
-        system: if system_parts.is_empty() {
-            None
-        } else {
-            Some(system_parts.join("\n"))
-        },
-        max_tokens,
-        temperature: openai["temperature"].as_f64(),
-        top_p: openai["top_p"].as_f64(),
-        stream: if stream { Some(true) } else { None },
-    };
-
-    serde_json::to_string(&anthropic).map_err(|e| e.to_string())
-}
-
-/// Translate an Anthropic Messages API response body to OpenAI chat completion format.
-/// Pinned to Anthropic API version 2024-10-22 (ADR-0024).
-fn translate_from_anthropic(body: &str) -> Result<String, String> {
-    let anthropic: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("invalid Anthropic response: {}", e))?;
-
-    // Extract text content from the first text block
-    let content_text = anthropic["content"]
-        .as_array()
-        .and_then(|arr| arr.iter().find(|c| c["type"].as_str() == Some("text")))
-        .and_then(|c| c["text"].as_str())
-        .unwrap_or("");
-
-    let input_tokens = anthropic["usage"]["input_tokens"].as_u64().unwrap_or(0);
-    let output_tokens = anthropic["usage"]["output_tokens"].as_u64().unwrap_or(0);
-
-    // Map Anthropic stop reason to OpenAI finish_reason
-    let finish_reason = match anthropic["stop_reason"].as_str() {
-        Some("end_turn") => "stop",
-        Some("max_tokens") => "length",
-        Some("tool_use") => "tool_calls",
-        _ => "stop",
-    };
-
-    let openai = serde_json::json!({
-        "id": anthropic["id"],
-        "object": "chat.completion",
-        "model": anthropic["model"],
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": content_text
-            },
-            "finish_reason": finish_reason
-        }],
-        "usage": {
-            "prompt_tokens": input_tokens,
-            "completion_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens
-        }
-    });
-
-    serde_json::to_string(&openai).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +304,7 @@ fn translate_from_anthropic(body: &str) -> Result<String, String> {
 
 /// Write AI context keys so downstream middlewares can read them.
 /// For streamed responses (status=0), token counts are unavailable.
-fn propagate_context(target: &TargetConfig, resp: &Response) {
+pub(crate) fn propagate_context(target: &TargetConfig, resp: &Response) {
     host::context_set("ai.provider", target.provider.name());
     host::context_set("ai.model", &target.model);
 
@@ -535,7 +313,11 @@ fn propagate_context(target: &TargetConfig, resp: &Response) {
         return;
     }
 
-    if let Some(tokens) = extract_tokens(resp.body.as_deref().and_then(|b| std::str::from_utf8(b).ok())) {
+    if let Some(tokens) = extract_tokens(
+        resp.body
+            .as_deref()
+            .and_then(|b| std::str::from_utf8(b).ok()),
+    ) {
         let prompt = tokens.0.to_string();
         let completion = tokens.1.to_string();
 
@@ -556,7 +338,7 @@ fn propagate_context(target: &TargetConfig, resp: &Response) {
 }
 
 /// Extract (prompt_tokens, completion_tokens) from an OpenAI-format response body.
-fn extract_tokens(body: Option<&str>) -> Option<(u64, u64)> {
+pub(crate) fn extract_tokens(body: Option<&str>) -> Option<(u64, u64)> {
     let body = body?;
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     let prompt = v["usage"]["prompt_tokens"].as_u64()?;
@@ -568,39 +350,23 @@ fn extract_tokens(body: Option<&str>) -> Option<(u64, u64)> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn openai_url(target: &TargetConfig, req_path: &str) -> String {
-    let base = target.effective_base_url().trim_end_matches('/');
-    format!("{}{}", base, req_path)
-}
-
-fn openai_headers(target: &TargetConfig) -> BTreeMap<String, String> {
-    let mut headers = BTreeMap::new();
-    headers.insert("content-type".to_string(), "application/json".to_string());
-    if let Some(key) = &target.api_key {
-        headers.insert("authorization".to_string(), format!("Bearer {}", key));
-    }
-    headers
-}
-
-fn is_streaming_request(body: &Option<Vec<u8>>) -> bool {
+pub(crate) fn is_streaming_request(body: &Option<Vec<u8>>) -> bool {
     body.as_ref()
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
         .and_then(|v| v["stream"].as_bool())
         .unwrap_or(false)
 }
 
-fn http_call(req: &HttpRequest) -> Result<HttpResponse, String> {
+pub(crate) fn http_call(req: &HttpRequest) -> Result<HttpResponse, String> {
     let req_json = serde_json::to_vec(req).map_err(|e| e.to_string())?;
-    let result_len =
-        unsafe { host_http_call(req_json.as_ptr() as i32, req_json.len() as i32) };
+    let result_len = unsafe { host_http_call(req_json.as_ptr() as i32, req_json.len() as i32) };
 
     if result_len < 0 {
         return Err("upstream connection failed".to_string());
     }
 
     let mut buf = vec![0u8; result_len as usize];
-    let bytes_read =
-        unsafe { host_http_read_result(buf.as_mut_ptr() as i32, result_len) };
+    let bytes_read = unsafe { host_http_read_result(buf.as_mut_ptr() as i32, result_len) };
 
     if bytes_read <= 0 {
         return Err("failed to read upstream response".to_string());
@@ -610,7 +376,7 @@ fn http_call(req: &HttpRequest) -> Result<HttpResponse, String> {
         .map_err(|e| format!("invalid upstream response: {}", e))
 }
 
-fn build_response(http_resp: HttpResponse) -> Response {
+pub(crate) fn build_response(http_resp: HttpResponse) -> Response {
     let response_body = read_http_response_body();
     let mut headers = BTreeMap::new();
     for (k, v) in http_resp.headers {
@@ -629,20 +395,24 @@ fn build_response(http_resp: HttpResponse) -> Response {
     }
 }
 
-fn error_response(status: u16, detail: &str) -> Response {
-    let error_type = if status == 502 {
-        "urn:barbacane:error:upstream-unavailable"
-    } else {
-        "urn:barbacane:error:internal"
+pub(crate) fn error_response(status: u16, detail: &str) -> Response {
+    let (error_type, title) = match status {
+        404 => ("urn:barbacane:error:not-found", "Not Found"),
+        500 => ("urn:barbacane:error:internal", "Internal Server Error"),
+        502 => ("urn:barbacane:error:upstream-unavailable", "Bad Gateway"),
+        _ => ("urn:barbacane:error:internal", "Internal Server Error"),
     };
     let body = serde_json::json!({
         "type": error_type,
-        "title": if status == 502 { "Bad Gateway" } else { "Internal Server Error" },
+        "title": title,
         "status": status,
         "detail": detail
     });
     let mut headers = BTreeMap::new();
-    headers.insert("content-type".to_string(), "application/problem+json".to_string());
+    headers.insert(
+        "content-type".to_string(),
+        "application/problem+json".to_string(),
+    );
     Response {
         status,
         headers,
@@ -651,12 +421,12 @@ fn error_response(status: u16, detail: &str) -> Response {
 }
 
 /// Build a JSON labels string with one key-value pair.
-fn labels1(k1: &str, v1: &str) -> String {
+pub(crate) fn labels1(k1: &str, v1: &str) -> String {
     format!("{{\"{}\":\"{}\"}}", k1, v1)
 }
 
 /// Build a JSON labels string with two key-value pairs.
-fn labels2(k1: &str, v1: &str, k2: &str, v2: &str) -> String {
+pub(crate) fn labels2(k1: &str, v1: &str, k2: &str, v2: &str) -> String {
     format!("{{\"{}\":\"{}\",\"{}\":\"{}\"}}", k1, v1, k2, v2)
 }
 
@@ -667,26 +437,26 @@ fn labels2(k1: &str, v1: &str, k2: &str, v2: &str) -> String {
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "barbacane")]
 extern "C" {
-    fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-    fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    fn host_http_stream(req_ptr: i32, req_len: i32) -> i32;
+    pub(crate) fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
+    pub(crate) fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
+    pub(crate) fn host_http_stream(req_ptr: i32, req_len: i32) -> i32;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
+pub(crate) unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
     -1
 }
 #[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
+pub(crate) unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
     0
 }
 #[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_stream(_req_ptr: i32, _req_len: i32) -> i32 {
+pub(crate) unsafe fn host_http_stream(_req_ptr: i32, _req_len: i32) -> i32 {
     -1
 }
 
 #[cfg(target_arch = "wasm32")]
-mod host {
+pub(crate) mod host {
     pub fn context_get(key: &str) -> Option<String> {
         #[link(wasm_import_module = "barbacane")]
         extern "C" {
@@ -726,15 +496,19 @@ mod host {
         #[link(wasm_import_module = "barbacane")]
         extern "C" {
             fn host_metric_counter_inc(
-                name_ptr: i32, name_len: i32,
-                labels_ptr: i32, labels_len: i32,
+                name_ptr: i32,
+                name_len: i32,
+                labels_ptr: i32,
+                labels_len: i32,
                 value: f64,
             );
         }
         unsafe {
             host_metric_counter_inc(
-                name.as_ptr() as i32, name.len() as i32,
-                labels_json.as_ptr() as i32, labels_json.len() as i32,
+                name.as_ptr() as i32,
+                name.len() as i32,
+                labels_json.as_ptr() as i32,
+                labels_json.len() as i32,
                 value as f64,
             );
         }
@@ -744,15 +518,19 @@ mod host {
         #[link(wasm_import_module = "barbacane")]
         extern "C" {
             fn host_metric_histogram_observe(
-                name_ptr: i32, name_len: i32,
-                labels_ptr: i32, labels_len: i32,
+                name_ptr: i32,
+                name_len: i32,
+                labels_ptr: i32,
+                labels_len: i32,
                 value: f64,
             );
         }
         unsafe {
             host_metric_histogram_observe(
-                name.as_ptr() as i32, name.len() as i32,
-                labels_json.as_ptr() as i32, labels_json.len() as i32,
+                name.as_ptr() as i32,
+                name.len() as i32,
+                labels_json.as_ptr() as i32,
+                labels_json.len() as i32,
                 value,
             );
         }
@@ -776,7 +554,7 @@ mod host {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-mod host {
+pub(crate) mod host {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -799,11 +577,17 @@ mod host {
     }
 
     pub fn metric_counter_inc(name: &str, labels_json: &str, value: u64) {
-        COUNTERS.with(|c| c.borrow_mut().push((name.to_string(), labels_json.to_string(), value)));
+        COUNTERS.with(|c| {
+            c.borrow_mut()
+                .push((name.to_string(), labels_json.to_string(), value))
+        });
     }
 
     pub fn metric_histogram_observe(name: &str, labels_json: &str, value: f64) {
-        HISTOGRAMS.with(|h| h.borrow_mut().push((name.to_string(), labels_json.to_string(), value)));
+        HISTOGRAMS.with(|h| {
+            h.borrow_mut()
+                .push((name.to_string(), labels_json.to_string(), value))
+        });
     }
 
     pub fn log_warn(msg: &str) {
@@ -816,7 +600,9 @@ mod host {
 
     #[cfg(test)]
     pub fn set_context(key: &str, value: &str) {
-        CONTEXT.with(|ctx| { ctx.borrow_mut().insert(key.to_string(), value.to_string()); });
+        CONTEXT.with(|ctx| {
+            ctx.borrow_mut().insert(key.to_string(), value.to_string());
+        });
     }
 
     #[cfg(test)]
@@ -849,6 +635,7 @@ mod host {
 
 #[cfg(test)]
 mod tests {
+    use super::protocols::chat_completion::{translate_from_anthropic, translate_to_anthropic};
     use super::*;
 
     fn make_request(body: Option<&str>) -> Request {
@@ -867,7 +654,11 @@ mod tests {
 
     fn openai_plugin(provider: &str, model: &str) -> AiProxy {
         AiProxy {
-            provider: Some(if provider == "anthropic" { Provider::Anthropic } else { Provider::OpenAI }),
+            provider: Some(if provider == "anthropic" {
+                Provider::Anthropic
+            } else {
+                Provider::OpenAI
+            }),
             model: Some(model.to_string()),
             api_key: Some("test-key".to_string()),
             base_url: None,
@@ -953,12 +744,15 @@ mod tests {
     fn resolve_default_target() {
         host::reset();
         let mut targets = BTreeMap::new();
-        targets.insert("local".to_string(), TargetConfig {
-            provider: Provider::Ollama,
-            model: "mistral".to_string(),
-            api_key: None,
-            base_url: None,
-        });
+        targets.insert(
+            "local".to_string(),
+            TargetConfig {
+                provider: Provider::Ollama,
+                model: "mistral".to_string(),
+                api_key: None,
+                base_url: None,
+            },
+        );
         let plugin = AiProxy {
             provider: None,
             model: None,
@@ -981,18 +775,24 @@ mod tests {
         host::set_context("ai.target", "premium");
 
         let mut targets = BTreeMap::new();
-        targets.insert("local".to_string(), TargetConfig {
-            provider: Provider::Ollama,
-            model: "mistral".to_string(),
-            api_key: None,
-            base_url: None,
-        });
-        targets.insert("premium".to_string(), TargetConfig {
-            provider: Provider::Anthropic,
-            model: "claude-opus-4-6".to_string(),
-            api_key: Some("sk-ant".to_string()),
-            base_url: None,
-        });
+        targets.insert(
+            "local".to_string(),
+            TargetConfig {
+                provider: Provider::Ollama,
+                model: "mistral".to_string(),
+                api_key: None,
+                base_url: None,
+            },
+        );
+        targets.insert(
+            "premium".to_string(),
+            TargetConfig {
+                provider: Provider::Anthropic,
+                model: "claude-opus-4-6".to_string(),
+                api_key: Some("sk-ant".to_string()),
+                base_url: None,
+            },
+        );
 
         let plugin = AiProxy {
             provider: None,
@@ -1031,12 +831,16 @@ mod tests {
 
     #[test]
     fn streaming_detection_true() {
-        assert!(is_streaming_request(&Some(br#"{"stream":true,"messages":[]}"#.to_vec())));
+        assert!(is_streaming_request(&Some(
+            br#"{"stream":true,"messages":[]}"#.to_vec()
+        )));
     }
 
     #[test]
     fn streaming_detection_false() {
-        assert!(!is_streaming_request(&Some(br#"{"stream":false,"messages":[]}"#.to_vec())));
+        assert!(!is_streaming_request(&Some(
+            br#"{"stream":false,"messages":[]}"#.to_vec()
+        )));
     }
 
     #[test]
@@ -1060,8 +864,13 @@ mod tests {
             ],
             "max_tokens": 1024
         }"#;
-        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "claude-opus-4-6", false, None)
-            .expect("should translate");
+        let result = translate_to_anthropic(
+            &Some(body.as_bytes().to_vec()),
+            "claude-opus-4-6",
+            false,
+            None,
+        )
+        .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
 
         assert_eq!(v["model"].as_str(), Some("claude-opus-4-6"));
@@ -1080,8 +889,13 @@ mod tests {
                 {"role": "user", "content": "Hi"}
             ]
         }"#;
-        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "claude-opus-4-6", false, None)
-            .expect("should translate");
+        let result = translate_to_anthropic(
+            &Some(body.as_bytes().to_vec()),
+            "claude-opus-4-6",
+            false,
+            None,
+        )
+        .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
 
         assert_eq!(v["system"].as_str(), Some("You are helpful."));
@@ -1108,8 +922,9 @@ mod tests {
     #[test]
     fn translate_to_anthropic_uses_default_max_tokens() {
         let body = r#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        let result = translate_to_anthropic(&Some(body.as_bytes().to_vec()), "m", false, Some(2048))
-            .expect("should translate");
+        let result =
+            translate_to_anthropic(&Some(body.as_bytes().to_vec()), "m", false, Some(2048))
+                .expect("should translate");
         let v: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(v["max_tokens"].as_u64(), Some(2048));
     }
@@ -1166,7 +981,10 @@ mod tests {
         assert_eq!(v["object"].as_str(), Some("chat.completion"));
         let choices = v["choices"].as_array().expect("choices");
         assert_eq!(choices.len(), 1);
-        assert_eq!(choices[0]["message"]["content"].as_str(), Some("Hello there!"));
+        assert_eq!(
+            choices[0]["message"]["content"].as_str(),
+            Some("Hello there!")
+        );
         assert_eq!(choices[0]["message"]["role"].as_str(), Some("assistant"));
         assert_eq!(choices[0]["finish_reason"].as_str(), Some("stop"));
         assert_eq!(v["usage"]["prompt_tokens"].as_u64(), Some(10));
@@ -1303,10 +1121,26 @@ mod tests {
     fn anthropic_streaming_logs_warning() {
         host::reset();
         let mut plugin = openai_plugin("anthropic", "claude-opus-4-6");
-        let req = make_request(Some(r#"{"messages":[{"role":"user","content":"hi"}],"stream":true}"#));
+        let req = make_request(Some(
+            r#"{"messages":[{"role":"user","content":"hi"}],"stream":true}"#,
+        ));
         let _ = plugin.dispatch(req);
         let warnings = host::get_warnings();
         assert!(warnings.iter().any(|w| w.contains("buffering")));
+    }
+
+    // --- Path-based dispatch (PR-1: only /v1/chat/completions; others 404) ---
+
+    #[test]
+    fn dispatch_unknown_path_returns_404() {
+        host::reset();
+        let mut plugin = openai_plugin("openai", "gpt-4o");
+        let mut req = make_request(Some(r#"{"messages":[]}"#));
+        req.path = "/v1/something-else".to_string();
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.status, 404);
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["type"].as_str(), Some("urn:barbacane:error:not-found"));
     }
 
     // --- Error response format ---
@@ -1315,9 +1149,15 @@ mod tests {
     fn error_response_502_format() {
         let resp = error_response(502, "all providers failed");
         assert_eq!(resp.status, 502);
-        assert_eq!(resp.headers.get("content-type").map(|s| s.as_str()), Some("application/problem+json"));
+        assert_eq!(
+            resp.headers.get("content-type").map(|s| s.as_str()),
+            Some("application/problem+json")
+        );
         let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["type"].as_str(), Some("urn:barbacane:error:upstream-unavailable"));
+        assert_eq!(
+            body["type"].as_str(),
+            Some("urn:barbacane:error:upstream-unavailable")
+        );
         assert_eq!(body["status"].as_u64(), Some(502));
     }
 
@@ -1338,7 +1178,10 @@ mod tests {
 
     #[test]
     fn labels2_format() {
-        assert_eq!(labels2("provider", "openai", "status", "200"), r#"{"provider":"openai","status":"200"}"#);
+        assert_eq!(
+            labels2("provider", "openai", "status", "200"),
+            r#"{"provider":"openai","status":"200"}"#
+        );
     }
 
     // --- Context propagation ---
@@ -1355,7 +1198,10 @@ mod tests {
         let resp = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some(br#"{"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#.to_vec()),
+            body: Some(
+                br#"{"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}"#
+                    .to_vec(),
+            ),
         };
         propagate_context(&target, &resp);
 
@@ -1363,7 +1209,10 @@ mod tests {
         assert_eq!(ctx.get("ai.provider").map(|s| s.as_str()), Some("openai"));
         assert_eq!(ctx.get("ai.model").map(|s| s.as_str()), Some("gpt-4o"));
         assert_eq!(ctx.get("ai.prompt_tokens").map(|s| s.as_str()), Some("10"));
-        assert_eq!(ctx.get("ai.completion_tokens").map(|s| s.as_str()), Some("20"));
+        assert_eq!(
+            ctx.get("ai.completion_tokens").map(|s| s.as_str()),
+            Some("20")
+        );
     }
 
     #[test]
@@ -1397,20 +1246,29 @@ mod tests {
         let resp = Response {
             status: 200,
             headers: BTreeMap::new(),
-            body: Some(br#"{"usage":{"prompt_tokens":5,"completion_tokens":15,"total_tokens":20}}"#.to_vec()),
+            body: Some(
+                br#"{"usage":{"prompt_tokens":5,"completion_tokens":15,"total_tokens":20}}"#
+                    .to_vec(),
+            ),
         };
         propagate_context(&target, &resp);
 
         let counters = host::get_counters();
-        let prompt_counter = counters.iter().find(|(name, labels, _)| {
-            name == "tokens_total" && labels.contains("prompt")
-        });
-        let completion_counter = counters.iter().find(|(name, labels, _)| {
-            name == "tokens_total" && labels.contains("completion")
-        });
-        assert!(prompt_counter.is_some(), "prompt tokens counter should be recorded");
+        let prompt_counter = counters
+            .iter()
+            .find(|(name, labels, _)| name == "tokens_total" && labels.contains("prompt"));
+        let completion_counter = counters
+            .iter()
+            .find(|(name, labels, _)| name == "tokens_total" && labels.contains("completion"));
+        assert!(
+            prompt_counter.is_some(),
+            "prompt tokens counter should be recorded"
+        );
         assert_eq!(prompt_counter.unwrap().2, 5);
-        assert!(completion_counter.is_some(), "completion tokens counter should be recorded");
+        assert!(
+            completion_counter.is_some(),
+            "completion tokens counter should be recorded"
+        );
         assert_eq!(completion_counter.unwrap().2, 15);
     }
 
@@ -1425,9 +1283,18 @@ mod tests {
 
     #[test]
     fn provider_default_base_urls() {
-        assert_eq!(Provider::OpenAI.default_base_url(), "https://api.openai.com");
-        assert_eq!(Provider::Anthropic.default_base_url(), "https://api.anthropic.com");
-        assert_eq!(Provider::Ollama.default_base_url(), "http://localhost:11434");
+        assert_eq!(
+            Provider::OpenAI.default_base_url(),
+            "https://api.openai.com"
+        );
+        assert_eq!(
+            Provider::Anthropic.default_base_url(),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            Provider::Ollama.default_base_url(),
+            "http://localhost:11434"
+        );
     }
 
     #[test]
