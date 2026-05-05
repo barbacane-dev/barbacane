@@ -22,6 +22,17 @@
 # and edit your copy. The spec is just a regular OpenAPI document —
 # Barbacane treats every `*.yaml` in `specs/` as part of the compilation.
 #
+# ## The catch-all `*` route — be intentional
+#
+# The fragment ships with `pattern: "*"` → Ollama as the last route, so any
+# `model` not matching `claude-*` / `gpt-*` / `o[1-4]*` (the OpenAI reasoning
+# series) falls through to Ollama. This is convenient for the local-dev case
+# where Ollama is the dev-time backend, but in production it means typos in
+# `model` (e.g. `gtp-4o`) silently route to Ollama instead of returning a
+# clean `400 no_route`. If you want strict validation, drop the catch-all
+# from your copy of the fragment — non-matching models will then 400 with
+# `code: no_route` per ADR-0030 §3.
+#
 # ## Stateless contract (ADR-0030 §2)
 #
 # `/v1/responses` is stateless: the gateway never persists conversation

@@ -38,9 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle(plugin: &AiProxy, req: &Request) -> Response {
-    if req.method.eq_ignore_ascii_case("get") {
-        // happy path
-    } else {
+    if !req.method.eq_ignore_ascii_case("GET") {
         return method_not_allowed_response();
     }
 
@@ -109,17 +107,27 @@ pub(crate) fn handle(plugin: &AiProxy, req: &Request) -> Response {
 // ---------------------------------------------------------------------------
 
 /// One upstream the aggregator will query. Two routes pointing at the same
-/// `(provider, base_url)` produce one [`UpstreamProvider`]; multiple
-/// `api_key`s on the same upstream are not a useful distinction here (a
-/// model list isn't sensitive to which key called it).
-#[derive(Clone)]
-pub(crate) struct UpstreamProvider {
-    pub provider: Provider,
-    pub base_url: String,
-    pub api_key: Option<String>,
+/// `(provider, base_url)` produce one [`UpstreamProvider`].
+///
+/// The dedup key is `(provider, base_url)` only — `api_key` is intentionally
+/// excluded. A model list isn't sensitive to which key called it (the same
+/// upstream account returns the same catalog regardless of which key
+/// authenticates). The trade-off: in multi-tenant configurations where
+/// different routes deliberately use different keys against the same
+/// upstream account (e.g. for billing splits), the aggregator picks
+/// whichever key sorted first into the dedup. If that key is revoked or
+/// rate-limited and the other isn't, `/v1/models` warnings will name the
+/// provider but not the offending key — operators have to correlate via
+/// the upstream's own logs. Acceptable for v1; the partial-response shape
+/// makes the failure visible without breaking the aggregator.
+#[derive(Clone, Debug)]
+struct UpstreamProvider {
+    provider: Provider,
+    base_url: String,
+    api_key: Option<String>,
 }
 
-pub(crate) fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
+fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
     let mut out: Vec<UpstreamProvider> = Vec::new();
 
@@ -179,12 +187,12 @@ pub(crate) fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider
 
 /// Failure surfaced into the aggregator's `warnings[]` array. `status: 0`
 /// means the connection itself failed (no HTTP response received).
-pub(crate) struct UpstreamFailure {
-    pub status: u16,
-    pub detail: String,
+struct UpstreamFailure {
+    status: u16,
+    detail: String,
 }
 
-pub(crate) fn fetch_provider_models(
+fn fetch_provider_models(
     plugin: &AiProxy,
     upstream: &UpstreamProvider,
 ) -> Result<Vec<serde_json::Value>, UpstreamFailure> {
@@ -224,7 +232,12 @@ pub(crate) fn fetch_provider_models(
         method: "GET".to_string(),
         url,
         headers,
-        timeout_ms: Some(plugin.timeout * 1000),
+        // Use the dedicated discovery timeout — `plugin.timeout` is sized
+        // for LLM completions (default 120 s), which is far too patient
+        // for a model-catalog GET. With the default 5 s here, a single
+        // hung upstream caps its contribution to the aggregate latency
+        // at 5 s instead of two minutes.
+        timeout_ms: Some(plugin.models_timeout_ms),
     };
 
     let raw = http_call(&req).map_err(|e| UpstreamFailure {
@@ -344,6 +357,7 @@ mod tests {
             api_key: None,
             base_url: None,
             timeout: 120,
+            models_timeout_ms: 5_000,
             max_tokens: None,
             fallback: vec![],
             routes: vec![],
@@ -488,6 +502,19 @@ mod tests {
         assert!(translate_models_response(Provider::OpenAI, &body).is_empty());
         assert!(translate_models_response(Provider::Anthropic, &body).is_empty());
         assert!(translate_models_response(Provider::Ollama, &body).is_empty());
+    }
+
+    #[test]
+    fn translate_handles_empty_arrays() {
+        // Edge case: an operator just installed Ollama with no models pulled,
+        // or an OpenAI account with `data: []`. The aggregator must handle
+        // the empty list cleanly (no models contributed, but also no warning
+        // — the upstream succeeded, it just has nothing to advertise).
+        let openai_empty = serde_json::json!({"object": "list", "data": []});
+        assert!(translate_models_response(Provider::OpenAI, &openai_empty).is_empty());
+
+        let ollama_empty = serde_json::json!({"models": []});
+        assert!(translate_models_response(Provider::Ollama, &ollama_empty).is_empty());
     }
 
     // --- handle / dispatch shape ---

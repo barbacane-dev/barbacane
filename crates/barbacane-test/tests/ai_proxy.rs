@@ -1127,6 +1127,79 @@ async fn test_ai_proxy_models_partial_response_on_provider_failure() {
     assert_eq!(warnings[0]["status"], 503);
 }
 
+#[tokio::test]
+async fn test_ai_proxy_models_handles_empty_body_from_upstream() {
+    // Edge case: a misbehaving upstream (or middlebox) returns 200 OK with
+    // a Content-Length: 0 body. The aggregator must record this as a
+    // warning ("invalid JSON from upstream") rather than crash, and other
+    // providers should still contribute to `data[]`.
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/openai/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("")
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/anthropic/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"data":[{"id":"claude-sonnet-4-6"}]}"#)
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/ollama/api/tags"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"models":[]}"#)
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_models_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/v1/models")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    // Ollama contributed nothing (empty models[]), Anthropic contributed
+    // claude-sonnet-4-6, OpenAI failed to parse → warning.
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    assert_eq!(ids, vec!["claude-sonnet-4-6"]);
+
+    assert_eq!(body["partial"], true);
+    let warnings = body["warnings"].as_array().expect("warnings array");
+    let warning_providers: Vec<&str> = warnings
+        .iter()
+        .filter_map(|w| w["provider"].as_str())
+        .collect();
+    assert!(warning_providers.contains(&"openai"));
+    assert!(warnings
+        .iter()
+        .any(|w| w["detail"].as_str().unwrap_or("").contains("invalid JSON")));
+}
+
 // =========================================================================
 // schemas/ai-gateway.yaml — end-to-end test of the shipped fragment.
 //
