@@ -78,7 +78,7 @@ plugins:
   http-upstream:
     path: ./plugins/http-upstream.wasm
   jwt-auth:
-    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.6.3/jwt-auth.wasm
+    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.7.0/jwt-auth.wasm
     sha256: abc123...
 ```
 
