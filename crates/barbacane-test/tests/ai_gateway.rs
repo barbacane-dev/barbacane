@@ -405,3 +405,158 @@ async fn token_limit_charges_client_ip_bucket_across_request_and_response() {
         Some("urn:barbacane:error:ai-token-limit-exceeded")
     );
 }
+
+// =========================================================================
+// ADR-0030 §3: catalog policy fires even when the target is selected via
+// context (cel-driven), not via the `routes` table. This is the load-bearing
+// subtlety the ADR calls out — "catalog policy is attached to the target,
+// not to the resolution path." A `cel` misconfig that picks a deny-listed
+// model can't sneak past by going through `ai.target` instead of `routes`.
+// =========================================================================
+
+fn create_cel_target_deny_spec(base_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let spec_path = temp_dir.path().join("cel-target-deny.yaml");
+    let plugins = plugins_dir();
+
+    let manifest_path = temp_dir.path().join("barbacane.yaml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "plugins:\n  ai-proxy:\n    path: {}\n  cel:\n    path: {}\n",
+            plugins.join("ai-proxy/ai-proxy.wasm").display(),
+            plugins.join("cel/cel.wasm").display(),
+        ),
+    )
+    .expect("manifest");
+
+    // CEL writes ai.target = "anthropic-tier" when the x-tier header says so.
+    // The named target carries deny: ["claude-opus-*"]. A request with
+    // model: claude-opus-* must hit 403 — the deny applies even though the
+    // target was picked via ai.target, not via a routes glob.
+    let spec_content = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: cel-target-deny
+  version: "1.0.0"
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-middlewares:
+        - name: cel
+          config:
+            expression: "request.headers['x-tier'] == 'premium'"
+            on_match:
+              set_context:
+                ai.target: anthropic-tier
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          targets:
+            anthropic-tier:
+              provider: ollama
+              base_url: "{base_url}"
+              deny: ["claude-opus-*"]
+          # No default_target / flat — the only resolution path is via
+          # ai.target. Proves the test exercises the context-driven path.
+          timeout: 10
+          max_tokens: 512
+      responses:
+        "200":
+          description: ok
+        "403":
+          description: model_not_permitted
+"#,
+        base_url = base_url,
+    );
+    std::fs::write(&spec_path, spec_content).expect("spec");
+    (temp_dir, spec_path)
+}
+
+#[tokio::test]
+async fn cel_driven_target_deny_fires_403_not_silent_pass() {
+    // The mock should NEVER be reached — deny must short-circuit before dispatch.
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(MOCK_COMPLETION))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_cel_target_deny_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    // x-tier: premium → cel writes ai.target = anthropic-tier.
+    // model: claude-opus-4-6 → matches the target's deny list → 403.
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/v1/chat/completions")
+        .header("content-type", "application/json")
+        .header("x-tier", "premium")
+        .body(
+            serde_json::json!({
+                "model": "claude-opus-4-6",
+                "messages": [{ "role": "user", "content": "hi" }]
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .expect("send");
+
+    assert_eq!(
+        resp.status(),
+        403,
+        "deny on the cel-selected target must fire, not silently pass"
+    );
+    let body: serde_json::Value = resp.json().await.expect("json");
+    assert_eq!(body["code"], "model_not_permitted");
+    assert_eq!(body["type"], "urn:barbacane:error:model_not_permitted");
+}
+
+#[tokio::test]
+async fn cel_driven_target_deny_passes_when_model_does_not_match_deny() {
+    // Same spec, but the request's model passes the deny — should reach upstream.
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(MOCK_COMPLETION)
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_cel_target_deny_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/v1/chat/completions")
+        .header("content-type", "application/json")
+        .header("x-tier", "premium")
+        .body(
+            serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "messages": [{ "role": "user", "content": "hi" }]
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .expect("send");
+
+    assert_eq!(resp.status(), 200, "non-denied model must reach upstream");
+}
