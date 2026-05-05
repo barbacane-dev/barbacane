@@ -1052,7 +1052,7 @@ All errors are RFC 9457 `application/problem+json`.
             - { key: "env://PAID_KEY", name: paid }
       - name: cel
         config:
-          expression: "request.headers['x-auth-consumer'] == 'paid'"
+          expression: "request.consumer == 'paid'"
           on_match:
             set_context:
               ai.target: premium

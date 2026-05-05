@@ -46,6 +46,8 @@ To customise (Azure target, restricted catalog, named tiers), copy the fragment 
 
 The dispatcher owns *provider routing* and *catalog policy*. Layer middlewares on the same operation for *content* and *cost* policy:
 
+> **Order of evaluation.** Middlewares run **before** the dispatcher, in declaration order. A `cel` `on_match.deny` short-circuits the chain — the dispatcher never sees the request — so `cel` body-gating fires before `routes` and per-target `allow`/`deny`. Use this when the dispatcher's static lists can't express the rule (e.g. it depends on JWT claims); otherwise prefer `allow`/`deny` so the policy applies on every resolution path.
+
 ```yaml
 # Stack on top of the operations declared in schemas/ai-gateway.yaml
 paths:
