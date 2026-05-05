@@ -11,6 +11,7 @@ const schemas = {
       timeout: { type: "integer", minimum: 1 },
       max_tokens: { type: "integer", minimum: 1 },
       fallback: { type: "array" },
+      routes: { type: "array" },
       targets: { type: "object" },
       default_target: { type: "string" },
     },

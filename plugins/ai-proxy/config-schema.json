@@ -2,12 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:barbacane:plugin:ai-proxy:config",
   "title": "AI Proxy Dispatcher Config",
-  "description": "Configuration for the AI proxy dispatcher plugin. Exposes a unified OpenAI-compatible API and routes to LLM providers (OpenAI, Anthropic, Ollama). Supports named targets for policy-driven routing (via the `cel` middleware), provider fallback on 5xx, and token count propagation into context for downstream middlewares.\n\nThe model identifier is **always** taken from the client's `model` field on the request body (ADR-0030 §0 — caller-owned model). Gateway config declares **providers** (where to go, with what credentials), never an authoritative model list. A request that omits `model` is rejected with 400 problem+json (`urn:barbacane:error:model_required`).\n\nTwo configuration modes:\n- **Flat**: set `provider` (+ optional `api_key`, `base_url`) for a single provider.\n- **Targets map**: define named `targets` and optionally a `default_target`; the `cel` middleware selects the active target by writing `ai.target` into context.\n\nThe `fallback` list is tried in order when the resolved target returns a 5xx or a connection error.",
+  "description": "Configuration for the AI proxy dispatcher plugin. Exposes a unified OpenAI-compatible API and routes to LLM providers (OpenAI, Anthropic, Ollama). Supports named targets for policy-driven routing (via the `cel` middleware), glob-based dynamic model routing (`routes`), provider fallback on 5xx, and token count propagation into context for downstream middlewares.\n\nThe model identifier is **always** taken from the client's `model` field on the request body (ADR-0030 §0 — caller-owned model). Gateway config declares **providers** (where to go, with what credentials), never an authoritative model list. A request that omits `model` is rejected with 400 problem+json (`urn:barbacane:error:model_required`).\n\nThree resolution modes (evaluated in order):\n- **Context** (`ai.target`): a `cel` middleware writes `ai.target: <name>` into context; the dispatcher uses `targets[<name>]`.\n- **Routes**: each entry's glob `pattern` is matched against the client's `model`; first match wins.\n- **Default / flat**: `default_target` → `targets[<name>]`, else the top-level `provider` config.\n\nCatalog policy is attached to the **target** via `allow` / `deny` glob lists. They apply on every resolution path that produces a target carrying them — including context-driven dispatch — so a `cel` misconfig cannot leak a denied model. A denied model returns 403 (`urn:barbacane:error:model_not_permitted`) and does not fall through to a different provider.\n\nThe `fallback` list is tried in order when the resolved target returns a 5xx or a connection error.",
   "type": "object",
   "$defs": {
+    "GlobPattern": {
+      "type": "string",
+      "description": "Glob pattern (`*`, `?`, `[...]`). Matched case-sensitively against the client's `model` field. Restricted character set so vacuum surfaces nonsense like regex syntax at lint time; runtime uses the `globset` crate.",
+      "pattern": "^[A-Za-z0-9_*?\\[\\]\\-:.+/]+$"
+    },
     "TargetConfig": {
       "type": "object",
-      "description": "A named provider target: provider type, credentials, and optional custom endpoint. The model identifier comes from the client request body, never from this config (ADR-0030 §0).",
+      "description": "A named provider target: provider type, credentials, optional custom endpoint, and optional catalog `allow` / `deny` policy. The model identifier comes from the client request body, never from this config (ADR-0030 §0).",
       "required": ["provider"],
       "additionalProperties": false,
       "properties": {
@@ -24,6 +29,48 @@
           "type": "string",
           "format": "uri",
           "description": "Custom provider base URL. Defaults: OpenAI → `https://api.openai.com`, Anthropic → `https://api.anthropic.com`, Ollama → `http://localhost:11434`. Use this for Azure OpenAI, self-hosted vLLM, remote Ollama, etc."
+        },
+        "allow": {
+          "type": "array",
+          "description": "Catalog allow-list of glob patterns. When set, the client's `model` must match at least one entry, otherwise 403 `model_not_permitted`. Combine with `deny` if needed (`deny` is evaluated after `allow`).",
+          "items": { "$ref": "#/$defs/GlobPattern" }
+        },
+        "deny": {
+          "type": "array",
+          "description": "Catalog deny-list of glob patterns. When set, the client's `model` must not match any entry, otherwise 403 `model_not_permitted`. Evaluated after `allow`.",
+          "items": { "$ref": "#/$defs/GlobPattern" }
+        }
+      }
+    },
+    "RouteEntry": {
+      "type": "object",
+      "description": "Glob-pattern routing rule: when the client's `model` matches `pattern`, dispatch to the configured `provider`. First match wins; a denied model does not fall through to the next route. Has its own `allow` / `deny` for catalog policy on the route's provider.",
+      "required": ["pattern", "provider"],
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "$ref": "#/$defs/GlobPattern",
+          "description": "Glob pattern matched against the client's `model` (e.g. `claude-*`, `gpt-4o*`, `o[1-4]*`, `*` as a catch-all)."
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["openai", "anthropic", "ollama"]
+        },
+        "api_key": {
+          "type": "string",
+          "description": "Provider API key. Supports `env://VAR` substitution."
+        },
+        "base_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "allow": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GlobPattern" }
+        },
+        "deny": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GlobPattern" }
         }
       }
     }
@@ -61,6 +108,12 @@
       "items": { "$ref": "#/$defs/TargetConfig" },
       "default": []
     },
+    "routes": {
+      "type": "array",
+      "description": "Ordered glob-pattern routing rules evaluated against the client's `model` after `ai.target` context lookup but before `default_target` and the flat config. First match wins; a denied model does not fall through to the next route.",
+      "items": { "$ref": "#/$defs/RouteEntry" },
+      "default": []
+    },
     "targets": {
       "type": "object",
       "description": "Named provider targets for policy-driven routing. The `cel` middleware selects the active target by writing `ai.target` into context before this dispatcher runs. Example: `cel` sets `ai.target: premium` → dispatcher uses the `premium` target config.",
@@ -68,7 +121,7 @@
     },
     "default_target": {
       "type": "string",
-      "description": "Name of the target to use when no `ai.target` context key is present. Must match a key in `targets`. When omitted and no context target is set, falls back to the flat `provider` config."
+      "description": "Name of the target to use when no `ai.target` context key is present and no route matched. Must match a key in `targets`. When omitted and no context target is set, falls back to the flat `provider` config."
     }
   }
 }
