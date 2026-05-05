@@ -28,11 +28,15 @@ pub(crate) struct AnthropicRequest {
 
 /// Per-protocol handler invoked by [`crate::dispatch`] after the orchestration
 /// layer has resolved a target. Picks the OpenAI-compatible passthrough or the
-/// Anthropic translation based on the resolved provider.
+/// Anthropic translation based on the resolved provider. The `client_model`
+/// is the caller-supplied model identifier (ADR-0030 §0); it travels with the
+/// request body for the OpenAI passthrough, and is plumbed into the Anthropic
+/// translation explicitly.
 pub(crate) fn handle(
     plugin: &AiProxy,
     target: &TargetConfig,
     req: &Request,
+    client_model: &str,
     streaming: bool,
 ) -> Result<Response, String> {
     if target.provider.is_openai_compatible() {
@@ -46,15 +50,20 @@ pub(crate) fn handle(
         if streaming {
             host::log_warn("ai-proxy: Anthropic streaming not yet supported; buffering response");
         }
-        plugin.anthropic_call(target, req, false)
+        plugin.anthropic_call(target, req, client_model, false)
     }
 }
 
 /// Translate an OpenAI chat completion request body to Anthropic Messages API format.
 /// Pinned to Anthropic API version 2024-10-22 (ADR-0024).
+///
+/// `client_model` is the caller-supplied model identifier (ADR-0030 §0).
+/// `dispatch()` validates it is non-empty before this function is called, so
+/// no fallback is needed here — passing it explicitly keeps the caller-owned
+/// invariant local to the call site.
 pub(crate) fn translate_to_anthropic(
     body: &Option<Vec<u8>>,
-    model: &str,
+    client_model: &str,
     stream: bool,
     default_max_tokens: Option<u32>,
 ) -> Result<String, String> {
@@ -87,7 +96,7 @@ pub(crate) fn translate_to_anthropic(
         .unwrap_or(4096);
 
     let anthropic = AnthropicRequest {
-        model: openai["model"].as_str().unwrap_or(model).to_string(),
+        model: client_model.to_string(),
         messages: chat_messages,
         system: if system_parts.is_empty() {
             None

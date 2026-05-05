@@ -19,6 +19,7 @@ impl AiProxy {
         &self,
         target: &TargetConfig,
         req: &Request,
+        client_model: &str,
         stream: bool,
     ) -> Result<Response, String> {
         let base = target.effective_base_url().trim_end_matches('/');
@@ -34,7 +35,7 @@ impl AiProxy {
             headers.insert("x-api-key".to_string(), key.clone());
         }
 
-        let body = translate_to_anthropic(&req.body, &target.model, stream, self.max_tokens)?;
+        let body = translate_to_anthropic(&req.body, client_model, stream, self.max_tokens)?;
         set_http_request_body(body.as_bytes());
 
         let http_req = HttpRequest {

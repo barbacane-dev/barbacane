@@ -85,7 +85,6 @@ paths:
         name: ai-proxy
         config:
           provider: "openai"
-          model: "gpt-4o"
           api_key: "env://OPENAI_API_KEY"
           timeout: 120
           max_tokens: 4096

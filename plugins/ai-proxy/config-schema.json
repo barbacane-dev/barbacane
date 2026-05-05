@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:barbacane:plugin:ai-proxy:config",
   "title": "AI Proxy Dispatcher Config",
-  "description": "Configuration for the AI proxy dispatcher plugin. Exposes a unified OpenAI-compatible API and routes to LLM providers (OpenAI, Anthropic, Ollama). Supports named targets for policy-driven routing (via the `cel` middleware), provider fallback on 5xx, and token count propagation into context for downstream middlewares.\n\nTwo configuration modes:\n- **Flat**: set `provider` + `model` (+ optional `api_key`, `base_url`) for a single provider.\n- **Targets map**: define named `targets` and optionally a `default_target`; the `cel` middleware selects the active target by writing `ai.target` into context.\n\nThe `fallback` list is tried in order when the resolved target returns a 5xx or a connection error.",
+  "description": "Configuration for the AI proxy dispatcher plugin. Exposes a unified OpenAI-compatible API and routes to LLM providers (OpenAI, Anthropic, Ollama). Supports named targets for policy-driven routing (via the `cel` middleware), provider fallback on 5xx, and token count propagation into context for downstream middlewares.\n\nThe model identifier is **always** taken from the client's `model` field on the request body (ADR-0030 §0 — caller-owned model). Gateway config declares **providers** (where to go, with what credentials), never an authoritative model list. A request that omits `model` is rejected with 400 problem+json (`urn:barbacane:error:model_required`).\n\nTwo configuration modes:\n- **Flat**: set `provider` (+ optional `api_key`, `base_url`) for a single provider.\n- **Targets map**: define named `targets` and optionally a `default_target`; the `cel` middleware selects the active target by writing `ai.target` into context.\n\nThe `fallback` list is tried in order when the resolved target returns a 5xx or a connection error.",
   "type": "object",
   "$defs": {
     "TargetConfig": {
       "type": "object",
-      "description": "A named provider target: provider type, model, credentials, and optional custom endpoint.",
-      "required": ["provider", "model"],
+      "description": "A named provider target: provider type, credentials, and optional custom endpoint. The model identifier comes from the client request body, never from this config (ADR-0030 §0).",
+      "required": ["provider"],
       "additionalProperties": false,
       "properties": {
         "provider": {
@@ -16,13 +16,9 @@
           "enum": ["openai", "anthropic", "ollama"],
           "description": "LLM provider. `openai` and `ollama` are OpenAI-compatible (passthrough). `anthropic` uses the Messages API with automatic request/response translation."
         },
-        "model": {
-          "type": "string",
-          "description": "Model identifier sent to the provider (e.g. `gpt-4o`, `claude-opus-4-6`, `mistral`)."
-        },
         "api_key": {
           "type": "string",
-          "description": "Provider API key. Supports `${ENV_VAR}` substitution. Omit for Ollama (unauthenticated local endpoint)."
+          "description": "Provider API key. Supports `env://VAR` substitution. Omit for Ollama (unauthenticated local endpoint)."
         },
         "base_url": {
           "type": "string",
@@ -39,13 +35,9 @@
       "enum": ["openai", "anthropic", "ollama"],
       "description": "Provider for the flat single-provider config. Required when `targets` is not defined."
     },
-    "model": {
-      "type": "string",
-      "description": "Model identifier for the flat config (e.g. `gpt-4o`, `claude-opus-4-6`, `llama3`)."
-    },
     "api_key": {
       "type": "string",
-      "description": "API key for the flat config. Supports `${ENV_VAR}` substitution."
+      "description": "API key for the flat config. Supports `env://VAR` substitution."
     },
     "base_url": {
       "type": "string",
@@ -76,7 +68,7 @@
     },
     "default_target": {
       "type": "string",
-      "description": "Name of the target to use when no `ai.target` context key is present. Must match a key in `targets`. When omitted and no context target is set, falls back to the flat `provider`/`model` config."
+      "description": "Name of the target to use when no `ai.target` context key is present. Must match a key in `targets`. When omitted and no context target is set, falls back to the flat `provider` config."
     }
   }
 }

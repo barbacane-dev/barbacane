@@ -19,7 +19,6 @@ paths:
         name: ai-proxy
         config:
           provider: ollama
-          model: llama3
           base_url: "http://localhost:11434"
           timeout: 30
           max_tokens: 512
@@ -48,11 +47,9 @@ paths:
           targets:
             local:
               provider: ollama
-              model: llama3
               base_url: "http://localhost:11434"
             openai:
               provider: openai
-              model: gpt-4o
               api_key: "sk-placeholder"
           timeout: 30
           max_tokens: 512

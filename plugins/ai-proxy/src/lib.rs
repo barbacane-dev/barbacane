@@ -70,11 +70,12 @@ impl Provider {
 // Config
 // ---------------------------------------------------------------------------
 
-/// A single named provider target (provider + model + credentials).
+/// A single named provider target (provider + credentials). The model is
+/// always the client-supplied value (ADR-0030 §0 — caller-owned model).
 #[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TargetConfig {
     pub provider: Provider,
-    pub model: String,
     #[serde(default)]
     pub api_key: Option<String>,
     /// Custom base URL (Azure, self-hosted, Ollama remote, etc.).
@@ -97,12 +98,12 @@ fn default_timeout() -> u64 {
 /// AI proxy dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiProxy {
     // --- Flat single-provider config (used when no `targets` map is defined) ---
+    // The model is always the client-supplied value (ADR-0030 §0).
     #[serde(default)]
     pub(crate) provider: Option<Provider>,
-    #[serde(default)]
-    pub(crate) model: Option<String>,
     #[serde(default)]
     pub(crate) api_key: Option<String>,
     #[serde(default)]
@@ -157,26 +158,46 @@ pub(crate) struct HttpResponse {
 // ---------------------------------------------------------------------------
 
 /// Function signature every protocol handler implements: given a resolved
-/// target and the request, return a `Response` or a connection-level error
-/// the orchestration loop can fall back on.
-type ProtocolHandler = fn(&AiProxy, &TargetConfig, &Request, bool) -> Result<Response, String>;
+/// target, the request, and the client-supplied model, return a `Response`
+/// or a connection-level error the orchestration loop can fall back on.
+///
+/// The `client_model` is the value of the `model` field on the request body —
+/// extracted upstream by `dispatch()` and passed through verbatim. The
+/// caller-owned-model principle (ADR-0030 §0) means the gateway never picks
+/// a model for the client; this argument is the only model identifier any
+/// downstream component (Anthropic translation, context propagation, metrics)
+/// is allowed to use.
+type ProtocolHandler =
+    fn(&AiProxy, &TargetConfig, &Request, &str, bool) -> Result<Response, String>;
 
 impl AiProxy {
     pub fn dispatch(&mut self, req: Request) -> Response {
-        let handler: ProtocolHandler = match req.path.as_str() {
-            "/v1/chat/completions" => protocols::chat_completion::handle,
-            // ADR-0030 §1 will add: "/v1/responses" => protocols::responses::handle,
-            // ADR-0030 §4 will add: "/v1/models"    => protocols::models::handle,
-            other => {
-                return error_response(404, &format!("ai-proxy: no handler for path {}", other));
-            }
+        match req.path.as_str() {
+            "/v1/chat/completions" => self.dispatch_chat_completion(req),
+            // ADR-0030 §2 will add: "/v1/responses" — same model-required check
+            //                        + protocols::responses::handle.
+            // ADR-0030 §4 will add: "/v1/models" — no client body, separate
+            //                        path that does not go through dispatch_with_handler.
+            other => error_response(404, &format!("ai-proxy: no handler for path {}", other)),
+        }
+    }
+
+    fn dispatch_chat_completion(&mut self, req: Request) -> Response {
+        let client_model = match extract_client_model(&req.body) {
+            Some(m) => m,
+            None => return model_required_response(),
         };
-        self.dispatch_with_handler(req, handler)
+        self.dispatch_with_handler(req, &client_model, protocols::chat_completion::handle)
     }
 
     /// Shared orchestration loop: resolve target, run the protocol handler,
     /// fall back on 5xx / connection error, emit metrics, propagate context.
-    fn dispatch_with_handler(&mut self, req: Request, handler: ProtocolHandler) -> Response {
+    fn dispatch_with_handler(
+        &mut self,
+        req: Request,
+        client_model: &str,
+        handler: ProtocolHandler,
+    ) -> Response {
         let start_ms = host::time_now_ms();
 
         let primary = match self.resolve_target() {
@@ -217,7 +238,7 @@ impl AiProxy {
                 ));
             }
 
-            match handler(self, target, &req, streaming) {
+            match handler(self, target, &req, client_model, streaming) {
                 Ok(resp) => {
                     let elapsed_ms = host::time_now_ms().saturating_sub(start_ms);
 
@@ -251,7 +272,7 @@ impl AiProxy {
                     }
 
                     // Propagate context: provider/model/tokens
-                    propagate_context(target, &resp);
+                    propagate_context(target, client_model, &resp);
 
                     return resp;
                 }
@@ -268,7 +289,7 @@ impl AiProxy {
     /// Resolve the active target using the priority chain defined in ADR-0024:
     /// 1. `ai.target` context key (set by upstream middleware, e.g. `cel`)
     /// 2. `default_target` name
-    /// 3. Flat `provider`/`model` config
+    /// 3. Flat `provider` config
     pub(crate) fn resolve_target(&self) -> Option<TargetConfig> {
         // 1. Context-set target name
         if let Some(name) = host::context_get("ai.target") {
@@ -291,7 +312,6 @@ impl AiProxy {
         // 3. Flat config
         self.provider.as_ref().map(|p| TargetConfig {
             provider: p.clone(),
-            model: self.model.clone().unwrap_or_default(),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
         })
@@ -302,11 +322,13 @@ impl AiProxy {
 // Context propagation and metrics
 // ---------------------------------------------------------------------------
 
-/// Write AI context keys so downstream middlewares can read them.
-/// For streamed responses (status=0), token counts are unavailable.
-pub(crate) fn propagate_context(target: &TargetConfig, resp: &Response) {
+/// Write AI context keys so downstream middlewares can read them. The
+/// `client_model` is the model string the client supplied on the request
+/// body (ADR-0030 §0 — caller-owned model); the gateway never substitutes
+/// its own. For streamed responses (status=0), token counts are unavailable.
+pub(crate) fn propagate_context(target: &TargetConfig, client_model: &str, resp: &Response) {
     host::context_set("ai.provider", target.provider.name());
-    host::context_set("ai.model", &target.model);
+    host::context_set("ai.model", client_model);
 
     // status=0 means streamed — token counts not available
     if resp.status == 0 {
@@ -355,6 +377,44 @@ pub(crate) fn is_streaming_request(body: &Option<Vec<u8>>) -> bool {
         .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
         .and_then(|v| v["stream"].as_bool())
         .unwrap_or(false)
+}
+
+/// Extract the client-supplied `model` field from an OpenAI-format request
+/// body. Returns `None` for an absent body, malformed JSON, missing field,
+/// non-string value, or empty string. Caller-owned model (ADR-0030 §0) — the
+/// gateway never substitutes a default.
+pub(crate) fn extract_client_model(body: &Option<Vec<u8>>) -> Option<String> {
+    let raw = body.as_deref()?;
+    let v: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    let s = v.get("model")?.as_str()?;
+    if s.is_empty() {
+        return None;
+    }
+    Some(s.to_string())
+}
+
+/// 400 problem+json for a request that omits `model`. Matches both upstream
+/// provider contracts (OpenAI Chat Completions and Responses both require
+/// `model`) and ADR-0030 §0's caller-owned-model principle.
+pub(crate) fn model_required_response() -> Response {
+    let body = serde_json::json!({
+        "type": "urn:barbacane:error:model_required",
+        "title": "Bad Request",
+        "status": 400,
+        "code": "model_required",
+        "detail": "ai-proxy: request body is missing a non-empty `model` field. \
+                   The gateway does not pick a default model — see ADR-0030 §0.",
+    });
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "application/problem+json".to_string(),
+    );
+    Response {
+        status: 400,
+        headers,
+        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
+    }
 }
 
 pub(crate) fn http_call(req: &HttpRequest) -> Result<HttpResponse, String> {
@@ -652,14 +712,13 @@ mod tests {
         }
     }
 
-    fn openai_plugin(provider: &str, model: &str) -> AiProxy {
+    fn openai_plugin(provider: &str) -> AiProxy {
         AiProxy {
             provider: Some(if provider == "anthropic" {
                 Provider::Anthropic
             } else {
                 Provider::OpenAI
             }),
-            model: Some(model.to_string()),
             api_key: Some("test-key".to_string()),
             base_url: None,
             timeout: 120,
@@ -670,29 +729,72 @@ mod tests {
         }
     }
 
+    fn make_chat_request(model: &str) -> Request {
+        let body = format!(
+            r#"{{"model":"{}","messages":[{{"role":"user","content":"hi"}}]}}"#,
+            model
+        );
+        make_request(Some(&body))
+    }
+
     // --- Config deserialization ---
 
     #[test]
     fn config_flat_minimal() {
         let json = r#"{
             "provider": "openai",
-            "model": "gpt-4o",
             "api_key": "sk-test"
         }"#;
         let cfg: AiProxy = serde_json::from_str(json).expect("should parse");
         assert!(matches!(cfg.provider, Some(Provider::OpenAI)));
-        assert_eq!(cfg.model.as_deref(), Some("gpt-4o"));
         assert_eq!(cfg.timeout, 120);
         assert!(cfg.fallback.is_empty());
         assert!(cfg.targets.is_empty());
     }
 
     #[test]
+    fn config_rejects_legacy_model_at_top_level() {
+        // ADR-0030 §0: model is removed from gateway config; serde
+        // deny_unknown_fields surfaces leftover `model:` at config-load time.
+        let json = r#"{
+            "provider": "openai",
+            "model": "gpt-4o"
+        }"#;
+        match serde_json::from_str::<AiProxy>(json) {
+            Ok(_) => panic!("legacy model: at top level must be rejected"),
+            Err(e) => assert!(
+                e.to_string().contains("model"),
+                "error should name the offending field: {}",
+                e
+            ),
+        }
+    }
+
+    #[test]
+    fn config_rejects_legacy_model_on_target() {
+        // Same migration check applied to nested targets — the runtime safety
+        // net for the schema gap that vacuum doesn't recurse into yet.
+        let json = r#"{
+            "targets": {
+                "premium": { "provider": "anthropic", "model": "claude-opus-4-6" }
+            }
+        }"#;
+        match serde_json::from_str::<AiProxy>(json) {
+            Ok(_) => panic!("legacy model: on a target must be rejected"),
+            Err(e) => assert!(
+                e.to_string().contains("model"),
+                "error should name the offending field: {}",
+                e
+            ),
+        }
+    }
+
+    #[test]
     fn config_with_targets() {
         let json = r#"{
             "targets": {
-                "local": { "provider": "ollama", "model": "mistral" },
-                "premium": { "provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant" }
+                "local": { "provider": "ollama" },
+                "premium": { "provider": "anthropic", "api_key": "sk-ant" }
             },
             "default_target": "local"
         }"#;
@@ -706,10 +808,9 @@ mod tests {
     fn config_with_fallback() {
         let json = r#"{
             "provider": "openai",
-            "model": "gpt-4o",
             "api_key": "sk-openai",
             "fallback": [
-                { "provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "sk-ant" }
+                { "provider": "anthropic", "api_key": "sk-ant" }
             ]
         }"#;
         let cfg: AiProxy = serde_json::from_str(json).expect("should parse");
@@ -720,9 +821,9 @@ mod tests {
     #[test]
     fn config_provider_variants() {
         for (s, expected) in &[
-            (r#"{"provider":"openai","model":"m"}"#, "openai"),
-            (r#"{"provider":"anthropic","model":"m"}"#, "anthropic"),
-            (r#"{"provider":"ollama","model":"m"}"#, "ollama"),
+            (r#"{"provider":"openai"}"#, "openai"),
+            (r#"{"provider":"anthropic"}"#, "anthropic"),
+            (r#"{"provider":"ollama"}"#, "ollama"),
         ] {
             let cfg: AiProxy = serde_json::from_str(s).expect("should parse");
             assert_eq!(cfg.provider.as_ref().expect("provider").name(), *expected);
@@ -734,10 +835,9 @@ mod tests {
     #[test]
     fn resolve_flat_config() {
         host::reset();
-        let plugin = openai_plugin("openai", "gpt-4o");
+        let plugin = openai_plugin("openai");
         let target = plugin.resolve_target().expect("should resolve");
         assert!(matches!(target.provider, Provider::OpenAI));
-        assert_eq!(target.model, "gpt-4o");
     }
 
     #[test]
@@ -748,14 +848,12 @@ mod tests {
             "local".to_string(),
             TargetConfig {
                 provider: Provider::Ollama,
-                model: "mistral".to_string(),
                 api_key: None,
                 base_url: None,
             },
         );
         let plugin = AiProxy {
             provider: None,
-            model: None,
             api_key: None,
             base_url: None,
             timeout: 120,
@@ -766,7 +864,6 @@ mod tests {
         };
         let target = plugin.resolve_target().expect("should resolve");
         assert!(matches!(target.provider, Provider::Ollama));
-        assert_eq!(target.model, "mistral");
     }
 
     #[test]
@@ -779,7 +876,6 @@ mod tests {
             "local".to_string(),
             TargetConfig {
                 provider: Provider::Ollama,
-                model: "mistral".to_string(),
                 api_key: None,
                 base_url: None,
             },
@@ -788,7 +884,6 @@ mod tests {
             "premium".to_string(),
             TargetConfig {
                 provider: Provider::Anthropic,
-                model: "claude-opus-4-6".to_string(),
                 api_key: Some("sk-ant".to_string()),
                 base_url: None,
             },
@@ -796,7 +891,6 @@ mod tests {
 
         let plugin = AiProxy {
             provider: None,
-            model: None,
             api_key: None,
             base_url: None,
             timeout: 120,
@@ -807,7 +901,6 @@ mod tests {
         };
         let target = plugin.resolve_target().expect("should resolve");
         assert!(matches!(target.provider, Provider::Anthropic));
-        assert_eq!(target.model, "claude-opus-4-6");
     }
 
     #[test]
@@ -815,7 +908,6 @@ mod tests {
         host::reset();
         let plugin = AiProxy {
             provider: None,
-            model: None,
             api_key: None,
             base_url: None,
             timeout: 120,
@@ -1039,7 +1131,6 @@ mod tests {
     fn inject_max_tokens_when_missing() {
         let plugin = AiProxy {
             provider: Some(Provider::OpenAI),
-            model: Some("gpt-4o".to_string()),
             api_key: None,
             base_url: None,
             timeout: 120,
@@ -1058,7 +1149,6 @@ mod tests {
     fn inject_max_tokens_skipped_when_present() {
         let plugin = AiProxy {
             provider: Some(Provider::OpenAI),
-            model: Some("gpt-4o".to_string()),
             api_key: None,
             base_url: None,
             timeout: 120,
@@ -1080,7 +1170,6 @@ mod tests {
         host::reset();
         let mut plugin = AiProxy {
             provider: None,
-            model: None,
             api_key: None,
             base_url: None,
             timeout: 120,
@@ -1089,8 +1178,7 @@ mod tests {
             targets: BTreeMap::new(),
             default_target: None,
         };
-        let req = make_request(Some(r#"{"messages":[]}"#));
-        let resp = plugin.dispatch(req);
+        let resp = plugin.dispatch(make_chat_request("gpt-4o"));
         assert_eq!(resp.status, 500);
     }
 
@@ -1099,9 +1187,8 @@ mod tests {
     #[test]
     fn dispatch_502_on_connection_failure() {
         host::reset();
-        let mut plugin = openai_plugin("openai", "gpt-4o");
-        let req = make_request(Some(r#"{"messages":[{"role":"user","content":"hi"}]}"#));
-        let resp = plugin.dispatch(req);
+        let mut plugin = openai_plugin("openai");
+        let resp = plugin.dispatch(make_chat_request("gpt-4o"));
         // Native stub returns -1, so all targets fail → 502
         assert_eq!(resp.status, 502);
     }
@@ -1109,9 +1196,8 @@ mod tests {
     #[test]
     fn dispatch_502_anthropic_on_connection_failure() {
         host::reset();
-        let mut plugin = openai_plugin("anthropic", "claude-opus-4-6");
-        let req = make_request(Some(r#"{"messages":[{"role":"user","content":"hi"}]}"#));
-        let resp = plugin.dispatch(req);
+        let mut plugin = openai_plugin("anthropic");
+        let resp = plugin.dispatch(make_chat_request("claude-opus-4-6"));
         assert_eq!(resp.status, 502);
     }
 
@@ -1120,13 +1206,64 @@ mod tests {
     #[test]
     fn anthropic_streaming_logs_warning() {
         host::reset();
-        let mut plugin = openai_plugin("anthropic", "claude-opus-4-6");
+        let mut plugin = openai_plugin("anthropic");
         let req = make_request(Some(
-            r#"{"messages":[{"role":"user","content":"hi"}],"stream":true}"#,
+            r#"{"model":"claude-opus-4-6","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
         ));
         let _ = plugin.dispatch(req);
         let warnings = host::get_warnings();
         assert!(warnings.iter().any(|w| w.contains("buffering")));
+    }
+
+    // --- Caller-owned model (ADR-0030 §0) ---
+
+    #[test]
+    fn dispatch_400_when_body_missing_model() {
+        host::reset();
+        let mut plugin = openai_plugin("openai");
+        // No `model` field — the gateway never picks a default.
+        let req = make_request(Some(r#"{"messages":[{"role":"user","content":"hi"}]}"#));
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.status, 400);
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["code"].as_str(), Some("model_required"));
+        assert_eq!(
+            body["type"].as_str(),
+            Some("urn:barbacane:error:model_required")
+        );
+    }
+
+    #[test]
+    fn dispatch_400_when_model_is_empty_string() {
+        host::reset();
+        let mut plugin = openai_plugin("openai");
+        let req = make_request(Some(r#"{"model":"","messages":[]}"#));
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.status, 400);
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["code"].as_str(), Some("model_required"));
+    }
+
+    #[test]
+    fn dispatch_400_when_body_is_missing_entirely() {
+        host::reset();
+        let mut plugin = openai_plugin("openai");
+        let req = make_request(None);
+        let resp = plugin.dispatch(req);
+        assert_eq!(resp.status, 400);
+    }
+
+    #[test]
+    fn extract_client_model_helper() {
+        assert_eq!(
+            extract_client_model(&Some(br#"{"model":"gpt-4o"}"#.to_vec())),
+            Some("gpt-4o".to_string())
+        );
+        assert_eq!(extract_client_model(&Some(br#"{"model":""}"#.to_vec())), None);
+        assert_eq!(extract_client_model(&Some(br#"{"model":42}"#.to_vec())), None);
+        assert_eq!(extract_client_model(&Some(br#"{"messages":[]}"#.to_vec())), None);
+        assert_eq!(extract_client_model(&Some(b"not-json".to_vec())), None);
+        assert_eq!(extract_client_model(&None), None);
     }
 
     // --- Path-based dispatch (PR-1: only /v1/chat/completions; others 404) ---
@@ -1134,8 +1271,8 @@ mod tests {
     #[test]
     fn dispatch_unknown_path_returns_404() {
         host::reset();
-        let mut plugin = openai_plugin("openai", "gpt-4o");
-        let mut req = make_request(Some(r#"{"messages":[]}"#));
+        let mut plugin = openai_plugin("openai");
+        let mut req = make_chat_request("gpt-4o");
         req.path = "/v1/something-else".to_string();
         let resp = plugin.dispatch(req);
         assert_eq!(resp.status, 404);
@@ -1191,7 +1328,6 @@ mod tests {
         host::reset();
         let target = TargetConfig {
             provider: Provider::OpenAI,
-            model: "gpt-4o".to_string(),
             api_key: None,
             base_url: None,
         };
@@ -1203,10 +1339,11 @@ mod tests {
                     .to_vec(),
             ),
         };
-        propagate_context(&target, &resp);
+        propagate_context(&target, "gpt-4o", &resp);
 
         let ctx = host::get_context();
         assert_eq!(ctx.get("ai.provider").map(|s| s.as_str()), Some("openai"));
+        // ai.model is the client-supplied model (ADR-0030 §0), not target-derived.
         assert_eq!(ctx.get("ai.model").map(|s| s.as_str()), Some("gpt-4o"));
         assert_eq!(ctx.get("ai.prompt_tokens").map(|s| s.as_str()), Some("10"));
         assert_eq!(
@@ -1220,12 +1357,11 @@ mod tests {
         host::reset();
         let target = TargetConfig {
             provider: Provider::Ollama,
-            model: "mistral".to_string(),
             api_key: None,
             base_url: None,
         };
         let resp = streamed_response(); // status = 0
-        propagate_context(&target, &resp);
+        propagate_context(&target, "mistral", &resp);
 
         let ctx = host::get_context();
         assert_eq!(ctx.get("ai.provider").map(|s| s.as_str()), Some("ollama"));
@@ -1239,7 +1375,6 @@ mod tests {
         host::reset();
         let target = TargetConfig {
             provider: Provider::Anthropic,
-            model: "claude-opus-4-6".to_string(),
             api_key: None,
             base_url: None,
         };
@@ -1251,7 +1386,7 @@ mod tests {
                     .to_vec(),
             ),
         };
-        propagate_context(&target, &resp);
+        propagate_context(&target, "claude-opus-4-6", &resp);
 
         let counters = host::get_counters();
         let prompt_counter = counters
@@ -1308,7 +1443,6 @@ mod tests {
     fn target_effective_base_url_custom() {
         let t = TargetConfig {
             provider: Provider::OpenAI,
-            model: "gpt-4o".to_string(),
             api_key: None,
             base_url: Some("https://my-azure.openai.com".to_string()),
         };
@@ -1319,7 +1453,6 @@ mod tests {
     fn target_effective_base_url_default() {
         let t = TargetConfig {
             provider: Provider::Anthropic,
-            model: "claude-opus-4-6".to_string(),
             api_key: None,
             base_url: None,
         };
