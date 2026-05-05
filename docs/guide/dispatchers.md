@@ -725,39 +725,135 @@ paths:
 
 ### ai-proxy
 
-AI gateway dispatcher — exposes a unified OpenAI-compatible API to clients and routes to LLM providers (OpenAI, Anthropic, Ollama). Supports named targets for policy-driven routing, provider fallback on failure, and token count propagation for downstream middlewares.
+AI gateway dispatcher (ADR-0030). One plugin serves three OpenAI-compatible surfaces — Chat Completions, Responses, and Models — across OpenAI, Anthropic, and Ollama upstreams. Supports glob-based routing on the client's `model`, named targets for `cel`-driven policy, catalog `allow`/`deny`, provider fallback on 5xx, and token-count propagation into request context for downstream middlewares.
+
+> **Easy button:** Barbacane ships [`schemas/ai-gateway.yaml`](https://github.com/barbacane-dev/barbacane/blob/main/schemas/ai-gateway.yaml) with all three operations pre-bound. Drop it into your `specs/` folder, set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OLLAMA_BASE_URL`, and you have a working AI gateway. See the [AI Gateway quickstart](ai-gateway.md).
+
+#### Caller-owned model
+
+The `model` identifier is part of the **client's** contract, not the gateway's (ADR-0030 §0). Gateway config declares **providers** (where to go, with what credentials), never an authoritative model list. The client's `model` field is passed to the upstream verbatim.
+
+- A request that omits `model` (or sends an empty string) is rejected with `400 problem+json` and `code: "model_required"`.
+- The legacy `model:` field on dispatcher config is **rejected** at lint time by `vacuum:barbacane` (`Unknown config field "model" for dispatcher "ai-proxy"`) and at runtime by the WASM plugin's deserializer. If you're upgrading from a pre-ADR-0030 spec, delete `model:` from every `ai-proxy` config block.
 
 ```yaml
 x-barbacane-dispatch:
   name: ai-proxy
   config:
     provider: openai
-    model: gpt-4o
-    api_key: "${OPENAI_API_KEY}"
+    api_key: "env://OPENAI_API_KEY"
 ```
 
-#### How It Works
+#### Protocol surfaces
 
-Clients always send requests in [OpenAI chat completion format](https://platform.openai.com/docs/api-reference/chat). The dispatcher handles provider differences transparently:
+The dispatcher selects behavior from `req.path`:
 
-- **OpenAI / Ollama** — requests are passed through as-is (both are OpenAI-compatible).
-- **Anthropic** — requests and responses are automatically translated between OpenAI format and the [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) (system messages extracted, stop reasons mapped, usage fields normalized).
+| Path | Surface | Notes |
+|---|---|---|
+| `POST /v1/chat/completions` | Chat Completions | Translated for Anthropic; passthrough for OpenAI/Ollama. |
+| `POST /v1/responses` | Responses API | Stateless (ADR-0030 §2). `previous_response_id` returns 400; `store: true` is permissive but emits `Warning: 299`. Synthetic id is `resp_<uuid-v7>`. Ollama not supported. |
+| `GET /v1/models` | Model catalog aggregator | Walks every unique provider, queries each upstream's `/v1/models` (or `/api/tags` for Ollama). Partial-failure response on per-provider error. |
+| _other_ | Routes through Chat Completions for backward compatibility with operator-defined custom paths. | |
 
-After each successful call, the dispatcher writes context keys (`ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens`) for downstream middlewares to consume (e.g. for cost tracking or token budgets).
+#### Resolution chain
+
+For each request the dispatcher resolves a target via this 4-step ladder:
+
+1. **`ai.target` context key** — set by an upstream middleware (typically `cel`). Resolves to `targets[<name>]`.
+2. **Routes** — first `routes[].pattern` glob that matches the client's `model` wins.
+3. **`default_target`** — when no context key is present and no route matched.
+4. **Flat config** — the top-level `provider` field.
+
+If `routes` is configured but no entry matched and there's no fallthrough, the dispatcher returns `400 problem+json` with `code: "no_route"`. If nothing is configured at all, it returns `500`.
+
+The dispatcher emits `resolution_total{resolution=context|routes|default|flat}` so operators can debug *"why did my request go to provider X?"*.
+
+#### Routes table — glob-based dynamic model routing
+
+The headline ADR-0030 §3 feature. Each entry binds a glob `pattern` (`*`, `?`, `[...]`) to a provider; first match wins.
+
+```yaml
+x-barbacane-dispatch:
+  name: ai-proxy
+  config:
+    routes:
+      - pattern: "claude-*"
+        provider: anthropic
+        api_key: "env://ANTHROPIC_API_KEY"
+      - pattern: "gpt-*"
+        provider: openai
+        api_key: "env://OPENAI_API_KEY"
+      - pattern: "o[1-4]*"           # OpenAI reasoning models
+        provider: openai
+        api_key: "env://OPENAI_API_KEY"
+      - pattern: "*"                 # catch-all → local Ollama
+        provider: ollama
+        base_url: "env://OLLAMA_BASE_URL"
+```
+
+Patterns are case-sensitive, anchored full-string matches via the `globset` crate. Glob syntax (`*`, `?`, `[...]`) is enforced at lint time by the plugin's JSON schema; brace alternation (`{a,b}`) and regex constructs are rejected.
+
+#### Catalog policy — `allow` / `deny`
+
+Optional glob lists on a target restrict which models the client may dispatch. Evaluated **after** target resolution, against the client's `model` field. A denied model returns `403 problem+json` with `code: "model_not_permitted"` and **does not fall through** to another route — silent escalation to a different provider would be a security hole.
+
+```yaml
+routes:
+  - pattern: "claude-*"
+    provider: anthropic
+    api_key: "env://ANTHROPIC_API_KEY"
+    deny: ["claude-opus-*"]          # cost guardrail: no Opus on this gateway
+  - pattern: "gpt-*"
+    provider: openai
+    api_key: "env://OPENAI_API_KEY"
+    allow: ["gpt-4o", "gpt-4o-mini"] # only these from OpenAI
+```
+
+> **Subtlety (ADR-0030 §3):** catalog policy applies on **every resolution path** that produces a target carrying `allow`/`deny`. A `cel` misconfig that sets `ai.target: anthropic-tier` cannot leak a denied model — the deny on that target still fires.
+
+`allow` / `deny` are also valid on `targets.<name>.{allow,deny}` for the named-target / context-driven path.
+
+##### `allow` no-fallthrough escape hatch
+
+```yaml
+routes:
+  - pattern: "gpt-*"
+    provider: openai
+    allow: ["gpt-4o", "gpt-4o-mini"]
+  - pattern: "*"
+    provider: ollama
+    base_url: "env://OLLAMA_BASE_URL"
+```
+
+A request for `gpt-3.5-turbo` returns `403`, **not** the catch-all ollama route — the operator's `allow` list is a promise, not a filter. To send anything-else-from-OpenAI to ollama instead, tighten the pattern so non-matching models miss the route entirely:
+
+```yaml
+routes:
+  - pattern: "gpt-4o*"           # only matches what allow would have permitted
+    provider: openai
+  - pattern: "*"
+    provider: ollama
+    base_url: "env://OLLAMA_BASE_URL"
+```
+
+Now `gpt-3.5-turbo` falls through to ollama; `gpt-4o-mini` still routes to OpenAI.
 
 #### Configuration
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `provider` | string | If no `targets` | - | Provider type: `openai`, `anthropic`, or `ollama` |
-| `model` | string | If no `targets` | - | Model identifier (e.g. `gpt-4o`, `claude-opus-4-6`, `mistral`) |
-| `api_key` | string | No | - | API key. Supports `${ENV_VAR}` substitution. Omit for Ollama |
+| `provider` | string | If no `targets`/`routes` | - | Provider type: `openai`, `anthropic`, or `ollama` |
+| `api_key` | string | No | - | API key. Supports `env://VAR` substitution. Omit for Ollama |
 | `base_url` | string | No | Provider default | Custom endpoint URL (Azure OpenAI, self-hosted vLLM, remote Ollama, etc.) |
-| `timeout` | integer | No | 120 | Request timeout in seconds |
-| `max_tokens` | integer | No | - | Default `max_tokens` injected when the client omits it. Required for Anthropic (enforced by their API). Acts as a cost guardrail for OpenAI/Ollama |
-| `fallback` | array | No | `[]` | Ordered list of fallback providers (see below) |
-| `targets` | object | No | - | Named provider targets for policy-driven routing (see below) |
-| `default_target` | string | No | - | Target to use when no `ai.target` context key is set. Must match a key in `targets` |
+| `timeout` | integer | No | 120 | LLM request timeout (seconds) for chat completions and responses |
+| `models_timeout_ms` | integer | No | 5000 | Per-provider timeout (**milliseconds**) for the `/v1/models` aggregator only — separate from `timeout` because discovery doesn't need 120s of patience |
+| `max_tokens` | integer | No | - | Default `max_tokens` injected when the client omits it. Required for Anthropic (enforced by their API). Cost guardrail for OpenAI/Ollama |
+| `routes` | array | No | `[]` | Glob-pattern routing entries (see above) |
+| `fallback` | array | No | `[]` | Ordered list of fallback providers tried on 5xx / connection error |
+| `targets` | object | No | - | Named provider targets selectable via `ai.target` context |
+| `default_target` | string | No | - | Target to use when no `ai.target` context key is set and no route matched |
+
+`TargetConfig` (entries in `targets` map and `fallback` array): `provider` (required), `api_key`, `base_url`, `allow`, `deny`. Same shape as `routes[]` minus the `pattern`.
 
 **Provider defaults:**
 
@@ -767,105 +863,68 @@ After each successful call, the dispatcher writes context keys (`ai.provider`, `
 | `anthropic` | `https://api.anthropic.com` |
 | `ollama` | `http://localhost:11434` |
 
-#### Configuration Modes
+#### Provider fallback
 
-**Flat (single provider):**
-
-```yaml
-x-barbacane-dispatch:
-  name: ai-proxy
-  config:
-    provider: openai
-    model: gpt-4o
-    api_key: "${OPENAI_API_KEY}"
-    max_tokens: 4096
-```
-
-**Named targets (policy-driven routing):**
-
-Define named provider profiles. The `cel` middleware selects the active target by writing `ai.target` into context before the dispatcher runs.
-
-```yaml
-x-barbacane-dispatch:
-  name: ai-proxy
-  config:
-    default_target: standard
-    targets:
-      standard:
-        provider: ollama
-        model: mistral
-      premium:
-        provider: anthropic
-        model: claude-opus-4-6
-        api_key: "${ANTHROPIC_API_KEY}"
-    max_tokens: 4096
-```
-
-With a `cel` middleware routing by API key tier:
-
-```yaml
-x-barbacane-middlewares:
-  - name: apikey-auth
-    config:
-      keys: [{ key: "${FREE_KEY}", name: free }, { key: "${PAID_KEY}", name: paid }]
-  - name: cel
-    config:
-      rules:
-        - expr: 'context["apikey.name"] == "paid"'
-          set_context:
-            ai.target: premium
-```
-
-#### Target Resolution
-
-The dispatcher resolves the active target using this priority chain:
-
-1. **`ai.target` context key** — set by an upstream middleware (e.g. `cel`)
-2. **`default_target`** — the named target to use when no context key is present
-3. **Flat config** — the top-level `provider`/`model` fields
-
-If none resolve, the dispatcher returns 500.
-
-#### Provider Fallback
-
-The `fallback` list is tried in order when the primary target returns a 5xx or a connection error. 4xx responses (client errors) are returned directly without fallback.
+The `fallback` list is tried in order when the primary target returns a 5xx or a connection error. 4xx responses (client errors) — including `model_not_permitted` (403) and `model_required` (400) — are returned directly without fallback.
 
 ```yaml
 x-barbacane-dispatch:
   name: ai-proxy
   config:
     provider: openai
-    model: gpt-4o
-    api_key: "${OPENAI_API_KEY}"
+    api_key: "env://OPENAI_API_KEY"
     fallback:
       - provider: anthropic
-        model: claude-sonnet-4-20250514
-        api_key: "${ANTHROPIC_API_KEY}"
+        api_key: "env://ANTHROPIC_API_KEY"
       - provider: ollama
-        model: mistral
         base_url: "http://ollama.internal:11434"
 ```
 
 #### Streaming
 
-For OpenAI-compatible providers (OpenAI, Ollama), streaming is supported natively — set `"stream": true` in the client request body and the dispatcher uses `host_http_stream` to relay SSE chunks.
+OpenAI-compatible providers (OpenAI, Ollama) stream natively via `host_http_stream` — set `"stream": true` in the client request body.
 
-Anthropic streaming is not yet supported; when `"stream": true` is sent to an Anthropic target, the dispatcher buffers the full response and returns it non-streamed (a warning is logged).
+Anthropic streaming is buffered: the dispatcher waits for the full response and returns it non-streamed (a warning is logged). True SSE translation is deferred per ADR-0024 / ADR-0030 §2.
 
-#### Context Propagation
+#### Responses API specifics
 
-After a successful dispatch, the following context keys are set:
+`POST /v1/responses` is **stateless-only** (ADR-0030 §2):
+
+| Body field | Behavior |
+|---|---|
+| `previous_response_id: <non-null>` | `400 previous_response_id_not_supported` — the gateway has no session storage. |
+| `store: true` (or absent — OpenAI's server-side default) | Permissive: request flows statelessly. The response carries `Warning: 299 - "store ignored; gateway is stateless, see ADR-0030"` and increments `barbacane_plugin_ai_proxy_responses_store_downgrades_total`. |
+| `store: false` | No warning, no counter. |
+| `model` missing / empty | `400 model_required`. |
+
+The synthetic `id` on the response is `resp_<uuid-v7>` (time-ordered, opaque). The OpenAI passthrough rewrites the upstream's id to a synthetic one too — clients only ever see gateway-issued ids, so the stateless contract is uniform.
+
+For Anthropic, `input[]` items translate to Messages API `content` blocks: `input_text` / `input_image` → `text` / `image`; `function_call` + `function_call_output` → `tool_use` + `tool_result`. `reasoning` items are dropped (Anthropic doesn't accept client-supplied reasoning input); the response carries `Warning: 299 - "reasoning items dropped..."` and increments `barbacane_plugin_ai_proxy_responses_reasoning_dropped_total`.
+
+For Ollama: `400 responses_not_supported_for_provider` — Ollama's OpenAI-compat surface is Chat Completions only as of 2026-04.
+
+#### Models endpoint specifics
+
+`GET /v1/models` walks every unique `(provider, base_url)` declared in `routes`, `targets`, and the flat config; queries each upstream's `/v1/models` (or `/api/tags` for Ollama, then translates the shape); returns OpenAI-compatible `{ object: "list", data: [...] }`.
+
+Per-provider failures (5xx, timeout, connection error) are non-fatal: response is `200 OK` with `partial: true` and a `warnings: [{provider, status, detail}]` array. Each failure increments `barbacane_plugin_ai_proxy_models_provider_failures_total{provider}`.
+
+The aggregator is sequential — one hung upstream blocks subsequent ones. The `models_timeout_ms` config (default 5 s) caps each provider's worst-case contribution to the aggregate response.
+
+#### Context propagation
+
+After a successful Chat Completions / Responses dispatch, these context keys are written for downstream middlewares:
 
 | Context Key | Description |
 |-------------|-------------|
 | `ai.provider` | Provider name (`openai`, `anthropic`, `ollama`) |
-| `ai.model` | Model identifier used |
+| `ai.model` | Caller-supplied model identifier (ADR-0030 §0) |
 | `ai.prompt_tokens` | Input token count (non-streamed responses only) |
 | `ai.completion_tokens` | Output token count (non-streamed responses only) |
 
 Token counts are unavailable for streamed responses.
 
-#### Composing with AI Middlewares
+#### Composing with AI middlewares
 
 Four middlewares (see [AI Gateway](middlewares/ai-gateway.md) in the middlewares guide) consume the context keys above and add guardrails around the dispatcher:
 
@@ -876,7 +935,22 @@ Four middlewares (see [AI Gateway](middlewares/ai-gateway.md) in the middlewares
 | [`ai-cost-tracker`](middlewares/ai-gateway.md#ai-cost-tracker) | Per-request USD cost metric | `ai.provider`, `ai.model`, `ai.prompt_tokens`, `ai.completion_tokens` |
 | [`ai-response-guard`](middlewares/ai-gateway.md#ai-response-guard) | PII redaction + blocked-pattern scanning | `ai.policy` (profile selection) |
 
-All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself: each plugin defines named profiles; a `cel` middleware upstream writes `ai.policy` (and/or `ai.target`) into the request context to select the active profile. One CEL decision (for example, consumer tier) can fan out to provider routing, prompt strictness, token budget, and redaction strictness.
+All four adopt the same **named-profile + CEL** composition: each plugin defines named profiles; a `cel` middleware upstream writes `ai.policy` (and/or `ai.target`) into context to select the active profile. One CEL decision (e.g. consumer tier) can fan out to provider routing, prompt strictness, token budget, and redaction strictness.
+
+For consumer-policy on the model itself (e.g. *"free-tier can't use `gpt-4o`"*), use `cel` with `request.body_json` access and `on_match.deny`:
+
+```yaml
+x-barbacane-middlewares:
+  - name: cel
+    config:
+      expression: "request.body_json.model.startsWith('gpt-4o') && request.claims.tier != 'premium'"
+      on_match:
+        deny:
+          status: 403
+          code: model_not_permitted
+```
+
+See [Authorization](middlewares/authorization.md#cel) for the full `cel` reference.
 
 #### Metrics
 
@@ -886,6 +960,27 @@ All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself
 | `request_duration_seconds` | `provider` | Latency histogram per provider |
 | `tokens_total` | `provider`, `type` (`prompt`/`completion`) | Token usage counters |
 | `fallback_total` | `from_provider`, `to_provider` | Fallback events between providers |
+| `resolution_total` | `resolution` (`context`/`routes`/`default`/`flat`) | Which step of the resolution chain picked the target |
+| `responses_store_downgrades_total` | `provider` | Requests where `store ≠ false` was downgraded to stateless |
+| `responses_reasoning_dropped_total` | `provider` | Responses translations that dropped a `reasoning` input item |
+| `models_provider_failures_total` | `provider` | `/v1/models` aggregator per-provider failures |
+
+Metric names are prefixed by the host runtime as `barbacane_plugin_ai_proxy_<name>`.
+
+#### Error handling
+
+All errors are RFC 9457 `application/problem+json`.
+
+| Status | Code | Condition |
+|---|---|---|
+| 400 | `model_required` | Request body missing a non-empty `model` field |
+| 400 | `no_route` | `routes` configured but no entry matched and no fallthrough |
+| 400 | `previous_response_id_not_supported` | Stateful Responses feature; gateway is stateless (ADR-0030 §2) |
+| 400 | `responses_not_supported_for_provider` | `POST /v1/responses` against an Ollama target |
+| 403 | `model_not_permitted` | The resolved target's `allow`/`deny` rejected the model |
+| 405 | `method_not_allowed` | `/v1/models` accepts only `GET` |
+| 500 | (no code) | Misconfiguration: no `provider`, no `routes`, no `targets`, no `default_target` |
+| 502 | (no code) | All providers (primary + fallback chain) failed |
 
 #### Examples
 
@@ -897,8 +992,7 @@ All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself
       name: ai-proxy
       config:
         provider: openai
-        model: gpt-4o
-        api_key: "${OPENAI_API_KEY}"
+        api_key: "env://OPENAI_API_KEY"
         max_tokens: 4096
 ```
 
@@ -910,8 +1004,7 @@ All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself
       name: ai-proxy
       config:
         provider: anthropic
-        model: claude-sonnet-4-20250514
-        api_key: "${ANTHROPIC_API_KEY}"
+        api_key: "env://ANTHROPIC_API_KEY"
         max_tokens: 2048
         timeout: 180
 ```
@@ -924,10 +1017,30 @@ All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself
       name: ai-proxy
       config:
         provider: ollama
-        model: mistral
 ```
 
-**Multi-provider with fallback and tier-based routing:**
+**Routes-driven multi-provider (ADR-0030 §3):**
+```yaml
+/v1/chat/completions:
+  post:
+    x-barbacane-dispatch:
+      name: ai-proxy
+      config:
+        routes:
+          - pattern: "claude-*"
+            provider: anthropic
+            api_key: "env://ANTHROPIC_API_KEY"
+            deny: ["claude-opus-*"]      # catalog policy
+          - pattern: "gpt-*"
+            provider: openai
+            api_key: "env://OPENAI_API_KEY"
+          - pattern: "*"
+            provider: ollama
+            base_url: "env://OLLAMA_BASE_URL"
+        max_tokens: 4096
+```
+
+**Tier-based context routing (`cel` writes `ai.target`):**
 ```yaml
 /v1/chat/completions:
   post:
@@ -935,14 +1048,14 @@ All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself
       - name: apikey-auth
         config:
           keys:
-            - { key: "${FREE_KEY}", name: free }
-            - { key: "${PAID_KEY}", name: paid }
+            - { key: "env://FREE_KEY", name: free }
+            - { key: "env://PAID_KEY", name: paid }
       - name: cel
         config:
-          rules:
-            - expr: 'context["apikey.name"] == "paid"'
-              set_context:
-                ai.target: premium
+          expression: "request.consumer == 'paid'"
+          on_match:
+            set_context:
+              ai.target: premium
     x-barbacane-dispatch:
       name: ai-proxy
       config:
@@ -950,15 +1063,9 @@ All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself
         targets:
           standard:
             provider: ollama
-            model: mistral
           premium:
             provider: anthropic
-            model: claude-opus-4-6
-            api_key: "${ANTHROPIC_API_KEY}"
-        fallback:
-          - provider: openai
-            model: gpt-4o
-            api_key: "${OPENAI_API_KEY}"
+            api_key: "env://ANTHROPIC_API_KEY"
         max_tokens: 4096
 ```
 
@@ -970,19 +1077,9 @@ All four adopt the same **named-profile + CEL** composition as `ai-proxy` itself
       name: ai-proxy
       config:
         provider: openai
-        model: gpt-4o
-        api_key: "${AZURE_OPENAI_KEY}"
+        api_key: "env://AZURE_OPENAI_KEY"
         base_url: "https://my-resource.openai.azure.com"
 ```
-
-#### Error Handling
-
-| Status | Condition |
-|--------|-----------|
-| 500 Internal Server Error | No provider configured (missing `provider` and no `targets`) |
-| 502 Bad Gateway | All providers (primary + fallback chain) failed |
-
-Error responses use RFC 9457 `application/problem+json` format.
 
 ### ws-upstream
 

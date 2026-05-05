@@ -26,7 +26,7 @@ Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or 
 - **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. The compiler turns it into a sealed `.bca` artifact; no separate gateway DSL to maintain.
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
-- **AI gateway built-in** — `ai-proxy` unifies OpenAI / Anthropic / Ollama with provider fallback, plus four dedicated middlewares for prompt guarding, response redaction, token-based rate limiting, and per-call cost tracking ([ADR-0024](adr/0024-ai-gateway-plugin.md)).
+- **AI gateway built-in** — `ai-proxy` unifies OpenAI / Anthropic / Ollama behind one OpenAI-compatible surface: Chat Completions, the stateless Responses API (`POST /v1/responses`), and an aggregated model catalog (`GET /v1/models`). Glob-based `routes` pick the upstream from the client's `model`, per-target `allow`/`deny` lists gate the catalog, and provider fallback handles 5xx/timeout. Four dedicated middlewares add prompt guarding, response redaction, token-based rate limiting, and per-call cost tracking ([ADR-0024](adr/0024-ai-gateway-plugin.md), [ADR-0030](adr/0030-ai-gateway-responses-api.md)).
 - **MCP from your spec** — Every operation in your OpenAPI spec is automatically exposed as a Model Context Protocol tool at `POST /__barbacane/mcp`, behind the same auth/rate-limit/validation chain ([ADR-0025](adr/0025-mcp-server.md)).
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
 - **Extensible** — 33 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
@@ -98,11 +98,13 @@ paths:
       x-barbacane-dispatch:
         name: ai-proxy
         config:
-          default_target: primary
-          targets:
-            primary: { provider: openai, model: gpt-4o }
+          # Caller-owned model: the gateway never declares one — clients pick.
+          # Glob routes match the client's `model` field; first match wins.
+          routes:
+            - { pattern: "claude-*", provider: anthropic, api_key: "env://ANTHROPIC_API_KEY" }
+            - { pattern: "gpt-*",    provider: openai,    api_key: "env://OPENAI_API_KEY" }
           fallback:
-            - { provider: anthropic, model: claude-opus-4-6 }
+            - { provider: anthropic, api_key: "env://ANTHROPIC_API_KEY" }
 ```
 
 The compiler validates the spec against each plugin's JSON schema (`vacuum:barbacane`) and seals everything into a single `.bca` artifact — including pinned plugin WASM. The data plane runs the artifact; nothing is fetched at request time.
@@ -155,7 +157,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `kafka` | Publish messages to Kafka |
 | `nats` | Publish messages to NATS |
 | `s3` | Proxy requests to AWS S3 / S3-compatible storage with SigV4 signing |
-| `ai-proxy` | Unified LLM routing to OpenAI, Anthropic, and Ollama with provider fallback |
+| `ai-proxy` | OpenAI-compatible LLM gateway — Chat Completions, stateless Responses API, aggregated `/v1/models`, glob-based routing, per-target `allow`/`deny`, fallback |
 | `ws-upstream` | WebSocket transparent proxy with full middleware chain on upgrade |
 | `fire-and-forget` | Forward request to upstream and return immediate static response |
 

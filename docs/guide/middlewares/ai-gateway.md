@@ -2,6 +2,8 @@
 
 Four middlewares extend the [`ai-proxy` dispatcher](../dispatchers.md#ai-proxy) into a full LLM gateway. They share a **named-profile + CEL** composition pattern: each plugin defines policy *tiers* in its config, and a [`cel`](authorization.md#policy-driven-routing-cel-stacking) middleware earlier in the chain writes `ai.policy` into the request context to select the active tier. The same CEL decision fans out to prompt validation, token budgeting, response redaction, and (via `ai.target`) the dispatcher's named provider targets.
 
+> **Where each concern lives.** The dispatcher (`ai-proxy`) owns *provider* routing and *catalog* policy: glob-based `routes` pick the upstream by `model`, and per-target `allow` / `deny` lists gate which models a target will serve (returns `403 model_not_permitted`). The middlewares on this page own *content* and *cost* policy — what a request may contain, how many tokens it may burn, what the response may leak, and what it costs. Reach for the dispatcher's `routes`/`allow`/`deny` when the decision is "which provider, which model"; reach for these middlewares when the decision is "what is allowed in the prompt or response, and at what budget". See [`ai-proxy`](../dispatchers.md#ai-proxy) for the dispatcher-side rules.
+
 ```yaml
 # One CEL decision drives all AI middlewares
 x-barbacane-middlewares:
@@ -26,6 +28,21 @@ x-barbacane-middlewares:
     config: { prices: { ... } }
 ```
 
+CEL can also branch on the **request body** itself — the `request.body_json` binding (available when `Content-Type` is `application/json` or `*+json`) lets a single decision read both the caller's identity *and* the model they asked for:
+
+```yaml
+- name: cel
+  config:
+    expression: "request.body_json.model.startsWith('gpt-4') && request.claims.tier != 'premium'"
+    on_match:
+      deny:
+        status: 403
+        code: model_not_permitted_for_tier
+        message: "gpt-4* is restricted to the premium tier"
+```
+
+For static "model X is allowed on target Y" rules, prefer the dispatcher's `allow`/`deny` lists ([`ai-proxy`](../dispatchers.md#ai-proxy)) — they apply on every resolution path, including context-driven dispatch, so a `cel` misconfig cannot leak a denied model. Reach for `cel` + `body_json` when the decision depends on caller attributes the dispatcher doesn't see (claims, headers, time-of-day) or when you want a custom error code.
+
 Each plugin's active profile is resolved as:
 
 1. If the context key (default `ai.policy`, overridable via `context_key`) is set **and** names a profile that exists, use it.
@@ -44,6 +61,8 @@ Written by `ai-proxy` (after dispatch) or by a routing-mode `cel` (before dispat
 | `ai.completion_tokens` | `ai-proxy` after dispatch | `ai-token-limit`, `ai-cost-tracker` |
 | `ai.policy` | upstream `cel` (policy) | `ai-prompt-guard`, `ai-token-limit`, `ai-response-guard` |
 | `ai.target` | upstream `cel` (routing) | `ai-proxy` named-target selection |
+
+`ai.target` is one of three resolution inputs the dispatcher consults — see the [resolution chain](../dispatchers.md#resolution-chain) for how it interacts with `routes` and `default_target`.
 
 ---
 

@@ -7,6 +7,7 @@
 - [Getting started](guide/getting-started.md)
 - [Spec configuration](guide/spec-configuration.md)
 - [Dispatchers (request routing)](guide/dispatchers.md)
+- [AI Gateway (quickstart)](guide/ai-gateway.md)
 - [Middlewares (auth, rate limit, AI)](guide/middlewares/index.md)
   - [Authentication](guide/middlewares/authentication.md)
   - [Authorization](guide/middlewares/authorization.md)

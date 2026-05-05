@@ -59,6 +59,8 @@ The Barbacane ruleset includes the following rules, grouped by category.
 | `barbacane-dispatch-has-config` | error | Dispatch block must include a `config` object |
 | `barbacane-dispatch-config-valid` | error | Config must validate against the plugin's JSON Schema (required fields, types, no unknown fields) |
 
+The `no unknown fields` clause is what catches `model:` on `ai-proxy` configs. ADR-0030 §0 made the `model` identifier caller-owned (taken from the request body, never from the gateway config), and the JSON schema for `ai-proxy` no longer accepts a `model` key on the flat block, on `targets.<name>`, or on `fallback[]` entries. Any leftover `model:` fails at lint time as `Unknown config field "model" for dispatcher "ai-proxy"` — and at runtime as a `serde(deny_unknown_fields)` error during WASM instance load. Fix by deleting the field; clients send `model` in the request body as they always did.
+
 ### Middleware Validation
 
 | Rule | Severity | Description |
