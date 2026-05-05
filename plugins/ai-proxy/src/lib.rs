@@ -240,15 +240,40 @@ type ProtocolHandler =
 
 impl AiProxy {
     pub fn dispatch(&mut self, req: Request) -> Response {
-        // ADR-0030 §1: the dispatcher is protocol-aware via path. PR-4 will
-        // add an explicit `/v1/responses` arm that routes to
-        // protocols::responses::handle, and PR-5 a `/v1/models` arm that
-        // serves the model catalog. Until those exist, every path routes to
-        // Chat Completions — the operator's choice of operation path is not
-        // the dispatcher's business when only one protocol is on offer, and
-        // returning 404 here would force every operator and every test
-        // fixture to use the canonical `/v1/chat/completions` path.
-        self.dispatch_chat_completion(req)
+        // ADR-0030 §1: the dispatcher is protocol-aware via path. The
+        // canonical OpenAI Responses path takes the Responses adapter; every
+        // other path (including the canonical /v1/chat/completions and any
+        // operator-defined custom path) routes to Chat Completions. This
+        // matches how operators bind ai-proxy via the shipped spec fragment
+        // (canonical paths) while still supporting custom-path Chat
+        // Completions fixtures.
+        match req.path.as_str() {
+            "/v1/responses" => self.dispatch_responses(req),
+            // PR-5 will add: "/v1/models" => protocols::models::handle
+            _ => self.dispatch_chat_completion(req),
+        }
+    }
+
+    fn dispatch_responses(&mut self, req: Request) -> Response {
+        // Reject `previous_response_id` and parse `store` upfront — this is
+        // the spec-level surface the gateway can validate before resolving a
+        // target, and it produces stable 4xx responses. Stash the
+        // `store_downgrade` flag on context so the protocol handler can read
+        // it back without re-parsing the body.
+        let preflight = match protocols::responses::ResponsesPreflight::from_body(&req.body) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
+        host::context_set(
+            protocols::responses::CTX_STORE_DOWNGRADE,
+            if preflight.store_downgrade { "true" } else { "false" },
+        );
+
+        let client_model = match extract_client_model(&req.body) {
+            Some(m) => m,
+            None => return model_required_response(),
+        };
+        self.dispatch_with_handler(req, &client_model, protocols::responses::handle)
     }
 
     fn dispatch_chat_completion(&mut self, req: Request) -> Response {
