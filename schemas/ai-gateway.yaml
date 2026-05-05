@@ -1,0 +1,176 @@
+# Barbacane AI Gateway spec fragment (ADR-0030 §4).
+#
+# Declares the three OpenAI-compatible AI gateway operations bound to the
+# `ai-proxy` dispatcher: chat completions, responses, and the model catalog.
+# Drop this file into your project's `specs/` folder and the multi-file
+# compiler discovers it automatically alongside your tenant spec.
+#
+# ## Configuration
+#
+# Provider credentials and base URLs are read from environment variables at
+# runtime via the `env://VAR` secret reference scheme — no plaintext keys in
+# source. Set the variables in your deployment environment:
+#
+#   OPENAI_API_KEY     — OpenAI / Azure OpenAI bearer token
+#   ANTHROPIC_API_KEY  — Anthropic Messages API key
+#   OLLAMA_BASE_URL    — Ollama server URL (defaults to localhost:11434)
+#
+# ## Customising
+#
+# To change provider catalog (e.g. add an Azure OpenAI target, restrict
+# models via `allow`/`deny`), copy this file into your `specs/` folder
+# and edit your copy. The spec is just a regular OpenAPI document —
+# Barbacane treats every `*.yaml` in `specs/` as part of the compilation.
+#
+# ## The catch-all `*` route — be intentional
+#
+# The fragment ships with `pattern: "*"` → Ollama as the last route, so any
+# `model` not matching `claude-*` / `gpt-*` / `o[1-4]*` (the OpenAI reasoning
+# series) falls through to Ollama. This is convenient for the local-dev case
+# where Ollama is the dev-time backend, but in production it means typos in
+# `model` (e.g. `gtp-4o`) silently route to Ollama instead of returning a
+# clean `400 no_route`. If you want strict validation, drop the catch-all
+# from your copy of the fragment — non-matching models will then 400 with
+# `code: no_route` per ADR-0030 §3.
+#
+# ## Stateless contract (ADR-0030 §2)
+#
+# `/v1/responses` is stateless: the gateway never persists conversation
+# state. `previous_response_id` returns 400; `store: true` is permissive
+# but emits a `Warning: 299` header. Synthetic ids on the response body
+# are `resp_<uuid-v7>` regardless of provider.
+
+openapi: "3.0.3"
+info:
+  title: Barbacane AI Gateway
+  version: "1.0.0"
+  description: |
+    OpenAI-compatible AI gateway with Anthropic translation, glob-based
+    routing, and a stateless Responses API. See ADR-0030.
+
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: chatCompletions
+      summary: OpenAI Chat Completions
+      description: |
+        Routes requests to the provider matching the request body's `model`
+        glob (claude-* → Anthropic; gpt-*, o[1-4]* → OpenAI; * → Ollama).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config: &ai_proxy_config
+          timeout: 120
+          max_tokens: 4096
+          routes:
+            - pattern: "claude-*"
+              provider: anthropic
+              api_key: "env://ANTHROPIC_API_KEY"
+            - pattern: "gpt-*"
+              provider: openai
+              api_key: "env://OPENAI_API_KEY"
+            - pattern: "o[1-4]*"
+              provider: openai
+              api_key: "env://OPENAI_API_KEY"
+            - pattern: "*"
+              provider: ollama
+              base_url: "env://OLLAMA_BASE_URL"
+      responses:
+        "200":
+          description: Chat completion (OpenAI Chat Completions shape).
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: |
+            `model_required` (no `model` field) or `no_route` (`model`
+            doesn't match any configured route).
+          content:
+            application/problem+json:
+              schema:
+                type: object
+        "403":
+          description: |
+            `model_not_permitted` — the resolved target's `allow`/`deny`
+            rejected the request's `model`.
+          content:
+            application/problem+json:
+              schema:
+                type: object
+
+  /v1/responses:
+    post:
+      operationId: responses
+      summary: OpenAI Responses API (stateless)
+      description: |
+        Stateless implementation of the Responses API (ADR-0030 §2).
+        `previous_response_id` returns 400; `store: true` is permissive
+        with a `Warning: 299` header. Anthropic targets translate
+        `input[]` items to Messages content blocks; Ollama returns 400
+        (no upstream Responses surface).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config: *ai_proxy_config
+      responses:
+        "200":
+          description: Response (OpenAI Responses shape, synthetic `resp_<uuid-v7>` id).
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: |
+            `model_required`, `no_route`, `previous_response_id_not_supported`,
+            or `responses_not_supported_for_provider` (Ollama).
+          content:
+            application/problem+json:
+              schema:
+                type: object
+        "403":
+          description: model_not_permitted
+          content:
+            application/problem+json:
+              schema:
+                type: object
+
+  /v1/models:
+    get:
+      operationId: listModels
+      summary: Aggregated model catalog
+      description: |
+        Walks every unique provider declared in `routes`, queries each
+        upstream's `/v1/models` (or `/api/tags` for Ollama), and returns
+        an OpenAI-compatible `{object: "list", data: [...]}` payload. On
+        per-provider failure returns 200 with `partial: true` and a
+        `warnings[]` array — discovery clients should handle the partial
+        case rather than retry on the aggregator.
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config: *ai_proxy_config
+      responses:
+        "200":
+          description: |
+            Model catalog. May include `partial: true` and `warnings[]` if
+            any provider's `/models` call failed.
+          content:
+            application/json:
+              schema:
+                type: object
+        "405":
+          description: method_not_allowed
+          content:
+            application/problem+json:
+              schema:
+                type: object

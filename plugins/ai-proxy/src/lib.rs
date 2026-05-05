@@ -36,7 +36,7 @@ pub mod providers;
 // Provider type
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, Clone, PartialEq)]
+#[derive(Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Provider {
     OpenAI,
@@ -140,6 +140,10 @@ fn default_timeout() -> u64 {
     120
 }
 
+fn default_models_timeout_ms() -> u64 {
+    5_000
+}
+
 /// AI proxy dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
@@ -154,9 +158,20 @@ pub struct AiProxy {
     #[serde(default)]
     pub(crate) base_url: Option<String>,
 
-    /// Request timeout in seconds. LLM calls can be slow; default is 120s.
+    /// Request timeout in seconds for LLM dispatch (chat completions,
+    /// responses). LLM calls can be slow; default is 120s.
     #[serde(default = "default_timeout")]
     pub(crate) timeout: u64,
+
+    /// Per-provider request timeout in **milliseconds** for the `/v1/models`
+    /// aggregator (ADR-0030 §4). The model catalog is sequentially queried
+    /// across every unique provider; using the LLM `timeout` here means a
+    /// single hung upstream blocks the aggregate response for `timeout`
+    /// seconds × number of hung providers. Discovery doesn't need that much
+    /// patience — default 5_000 ms makes the worst case bounded and keeps
+    /// `/v1/models` responsive even when one provider is degraded.
+    #[serde(default = "default_models_timeout_ms")]
+    pub(crate) models_timeout_ms: u64,
 
     /// Default `max_tokens` applied when the client request omits it.
     #[serde(default)]
@@ -240,16 +255,16 @@ type ProtocolHandler =
 
 impl AiProxy {
     pub fn dispatch(&mut self, req: Request) -> Response {
-        // ADR-0030 §1: the dispatcher is protocol-aware via path. The
-        // canonical OpenAI Responses path takes the Responses adapter; every
-        // other path (including the canonical /v1/chat/completions and any
-        // operator-defined custom path) routes to Chat Completions. This
-        // matches how operators bind ai-proxy via the shipped spec fragment
-        // (canonical paths) while still supporting custom-path Chat
-        // Completions fixtures.
+        // ADR-0030 §1 / §4: the dispatcher is protocol-aware via path. The
+        // canonical OpenAI Responses and Models paths take their own
+        // adapters; every other path (including the canonical
+        // /v1/chat/completions and any operator-defined custom path) routes
+        // to Chat Completions. This matches how operators bind ai-proxy via
+        // the shipped spec fragment (canonical paths) while still supporting
+        // custom-path Chat Completions fixtures.
         match req.path.as_str() {
             "/v1/responses" => self.dispatch_responses(req),
-            // PR-5 will add: "/v1/models" => protocols::models::handle
+            "/v1/models" => protocols::models::handle(self, &req),
             _ => self.dispatch_chat_completion(req),
         }
     }
@@ -1064,6 +1079,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             base_url: None,
             timeout: 120,
+            models_timeout_ms: 5_000,
             max_tokens: None,
             fallback: vec![],
             routes: vec![],
@@ -1082,6 +1098,7 @@ mod tests {
             api_key: None,
             base_url: None,
             timeout: 120,
+            models_timeout_ms: 5_000,
             max_tokens: None,
             fallback: vec![],
             routes: vec![],

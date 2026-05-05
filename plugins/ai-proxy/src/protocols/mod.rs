@@ -6,4 +6,5 @@
 //! layer up in [`crate::dispatch`] so they're shared across protocols.
 
 pub mod chat_completion;
+pub mod models;
 pub mod responses;
