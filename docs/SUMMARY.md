@@ -15,6 +15,7 @@
   - [Transformation](guide/middlewares/transformation.md)
   - [Caching](guide/middlewares/caching.md)
   - [AI Gateway](guide/middlewares/ai-gateway.md)
+- [AI Gateway (quickstart)](guide/ai-gateway.md)
 - [Secrets](guide/secrets.md)
 - [Observability](guide/observability.md)
 - [Control plane (REST API)](guide/control-plane.md)

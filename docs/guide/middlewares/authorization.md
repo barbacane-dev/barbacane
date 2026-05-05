@@ -201,7 +201,7 @@ Inline policy evaluation using [CEL (Common Expression Language)](https://cel.de
 Two modes:
 
 - **Access-control mode** (default, no `on_match`): `true` → continue, `false` → **403**.
-- **Routing mode** (`on_match` present): `true` → write context keys and continue, `false` → continue unchanged (no 403). Used to drive [policy-driven routing](#policy-driven-routing-cel-stacking).
+- **`on_match` mode** (`on_match` present): on `true`, take the configured actions — write context keys (`set_context`) and/or reject with a configured status + code (`deny`). On `false`, continue unchanged (no 403). Used to drive [policy-driven routing](#policy-driven-routing-cel-stacking) and per-tier resource gating (e.g. block `gpt-4*` for the free tier without standing up a separate target — see [example](#match-and-deny-per-tier-model-gating)).
 
 ```yaml
 x-barbacane-middlewares:
@@ -221,7 +221,21 @@ x-barbacane-middlewares:
 |----------|------|---------|-------------|
 | `expression` | string | *(required)* | CEL expression that must evaluate to a boolean |
 | `deny_message` | string | `Access denied by policy` | Custom message returned in the 403 response (access-control mode only; ignored when `on_match` is set) |
-| `on_match` | object | - | Enables routing mode. Contains `set_context: { key: value, ... }` |
+| `on_match` | object | - | Enables match-and-act mode. Holds `set_context` (write context keys), `deny` (reject with a configured 4xx + code), or both. When both are present, `deny` wins — a denied request is not also written to context |
+
+#### `on_match.set_context`
+
+| Property | Type | Description |
+|----------|------|-------------|
+| *(map)* | `string → string` | Key-value pairs written into the request context when the expression is true. The `ai-proxy` dispatcher reads `ai.target`; the [AI gateway middlewares](ai-gateway.md) read `ai.policy` |
+
+#### `on_match.deny`
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `status` | integer | `403` | HTTP status code. Must be 4xx — a `cel` denial returning 5xx would mask a policy decision as a server fault. Out-of-range values fall back to `403` |
+| `code` | string | *(required)* | Machine-readable error code, `snake_case`. Becomes the URN suffix on the `type` field and the `code` field on the response body — the convention `ai-proxy` uses for `model_not_permitted` and similar |
+| `message` | string | falls back to `code` | Human-readable `detail` message returned in the problem+json body |
 
 ### Request context
 
@@ -234,6 +248,7 @@ The expression has access to a `request` object with these fields:
 | `request.query` | string | Query string (empty string if none) |
 | `request.headers` | map | Request headers (e.g., `request.headers.authorization`) |
 | `request.body` | string | Request body (empty string if none) |
+| `request.body_json` | map | Request body parsed as JSON when `Content-Type` is `application/json` or `application/*+json`; empty map otherwise. A malformed body is logged and yields an empty map (a CEL plugin that 500'd on every malformed body would let an attacker take down every downstream policy with one bad byte). Use `has(...)` to test field presence safely |
 | `request.client_ip` | string | Client IP address |
 | `request.path_params` | map | Path parameters (e.g., `request.path_params.id`) |
 | `request.consumer` | string | Consumer identity from `x-auth-consumer` header (empty if absent) |
@@ -264,9 +279,9 @@ request.method in ['GET', 'HEAD', 'OPTIONS']
 
 ### Decision logic
 
-| Expression result | Access-control mode | Routing mode |
+| Expression result | Access-control mode | `on_match` mode |
 |------------------|-----|-----|
-| `true` | Continue | Set context keys, continue |
+| `true` | Continue | Run configured actions: `set_context` writes keys, `deny` short-circuits with the configured 4xx + code; if both are set, `deny` wins |
 | `false` | **403** Forbidden | Continue unchanged |
 | Non-boolean | **500** Internal Server Error | **500** |
 | Parse/evaluation error | **500** | **500** |
@@ -294,6 +309,43 @@ request.method in ['GET', 'HEAD', 'OPTIONS']
   "detail": "expression returned string, expected bool"
 }
 ```
+
+**Configured 4xx** — `on_match.deny` fires:
+
+```json
+{
+  "type": "urn:barbacane:error:model_not_permitted",
+  "title": "Forbidden",
+  "status": 403,
+  "code": "model_not_permitted",
+  "detail": "gpt-4* is restricted to the premium tier"
+}
+```
+
+The URN type, response `code`, and (optionally) `title` are derived from `on_match.deny.code` + `status`; `detail` is the configured `message` or, if absent, the `code` itself.
+
+### Match-and-deny: per-tier model gating
+
+The `on_match.deny` action turns `cel` into a fully programmable gate — useful when access depends on a combination of caller attributes *and* request body that the dispatcher's static `allow`/`deny` lists can't express. The canonical case is "block expensive models for the free tier":
+
+```yaml
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "https://auth.example.com"
+  - name: cel
+    config:
+      expression: >
+        request.body_json.model.startsWith('gpt-4')
+        && request.claims.tier != 'premium'
+      on_match:
+        deny:
+          status: 403
+          code: model_not_permitted_for_tier
+          message: "gpt-4* is restricted to the premium tier"
+```
+
+The expression sees both the parsed JSON body and the JWT claims, so a single rule covers what would otherwise need two layers (a custom auth filter plus a separate routing config). Pair with [`ai-proxy`'s `routes`](../dispatchers.md#ai-proxy) for static catalog policy and reach for `cel` only when the rule depends on caller context.
 
 ### Policy-driven routing (cel stacking)
 

@@ -90,6 +90,8 @@ Used by:
 - `barbacane dev` — auto-discovers specs for compilation and file watching
 - `barbacane compile` — falls back to this folder when `--spec` is not provided
 
+> **Drop-in spec fragments.** Multi-file discovery means you can ship operator-facing fragments alongside the gateway and pull them in with a copy. The repository's `schemas/ai-gateway.yaml` is the canonical example — copy it into `specs/` to bring up the full OpenAI-compatible AI gateway (`/v1/chat/completions`, `/v1/responses`, `/v1/models`) with one `ai-proxy` config shared via a YAML anchor. See [AI Gateway](ai-gateway.md) for the walkthrough.
+
 ### `plugins` (required)
 
 Declares all WASM plugins used by your specs. Each plugin maps a name to a source:

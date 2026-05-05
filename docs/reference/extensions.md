@@ -174,7 +174,38 @@ x-barbacane-dispatch:
     path: string            # Optional. Upstream path template with {param} substitution
 ```
 
-### Examples
+### Dispatcher: `ai-proxy`
+
+OpenAI-compatible LLM gateway. Surfaces three protocol endpoints — Chat Completions, the stateless Responses API, and an aggregated `/v1/models` catalog — and routes by glob match against the **client-supplied `model` field** (ADR-0030 §0; the gateway never declares a `model:` of its own). See [`ai-proxy`](../guide/dispatchers.md#ai-proxy) for the full reference.
+
+```yaml
+x-barbacane-dispatch:
+  name: ai-proxy
+  config:
+    routes:                 # Optional. Glob → provider routing rules; first match wins
+      - pattern: "claude-*"
+        provider: anthropic
+        api_key: env://ANTHROPIC_API_KEY
+      - pattern: "gpt-*"
+        provider: openai
+        api_key: env://OPENAI_API_KEY
+    targets:                # Optional. Named provider targets selected via ai.target context
+      premium:
+        provider: openai
+        api_key: env://OPENAI_API_KEY
+        allow: ["gpt-4*"]   # Catalog policy — 403 model_not_permitted on miss
+    default_target: string  # Optional. Target used when no ai.target context and no route match
+    fallback: array         # Optional. Tried in order on 5xx / connection error from primary
+    timeout: integer        # Optional. LLM call timeout in seconds (default: 120)
+    models_timeout_ms: int  # Optional. Per-provider timeout for /v1/models (ms, default: 5000)
+    max_tokens: integer     # Optional. Default max_tokens; required for Anthropic
+    # Flat single-provider mode — only when neither `routes` nor `targets` is set:
+    provider: string        # Optional. openai | anthropic | ollama
+    api_key: string         # Optional. env://VAR supported
+    base_url: string        # Optional. Override provider default (Azure, vLLM, etc.)
+```
+
+The dispatcher also ships as a multi-file spec fragment under [`schemas/ai-gateway.yaml`](../guide/spec-configuration.md) — drop it into a project's `specs/` folder to bind all three operations to the same `ai-proxy` config via a YAML anchor.
 
 **Mock response:**
 ```yaml

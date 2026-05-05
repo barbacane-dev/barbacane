@@ -129,6 +129,9 @@ Ideas worth tracking but not committed. Items flagged **`[competitive]`** are on
 - **`[competitive]`** OpenAPI Overlay support — env-specific config via overlay spec so one base spec + dev/staging/prod overlays replace copies (Zuplo pattern)
 - **`[competitive]`** Auto-generated developer portal — Scalar/Redocly-backed portal served by the control plane from the compiled spec
 - Multi-modal AI — explicit vision/audio support beyond the OpenAI-compatible image URLs we already carry
+- **Stateful Responses API** — `previous_response_id` + `GET /v1/responses/{id}` retrieval (ADR-0030 §2 deferred). Requires session-scoped storage (artifact-bound vs. external KV is the open call); the stateless build emits a `Warning: 299` header on `store: true` and increments `responses_store_downgrades_total` so operators can quantify demand before we commit to a backend
+- **Responses SSE re-encoding** — rewrite the in-event `id` in the OpenAI passthrough's text/event-stream so synthetic `resp_<uuid-v7>` ids hold under streaming (ADR-0030 §2 "Streaming"). Anthropic translation for streamed Responses also lands here
+- **`/v1/models` caching + single-flight** — v1 hits upstreams on every call; on hot deployments, cache the aggregated catalog with a short TTL and coalesce concurrent fetches. Endpoint is intentionally off the data-plane critical path, so this is a polish item not a correctness one
 
 ---
 
@@ -239,11 +242,14 @@ Every serious gateway now ships AI features. Barbacane is competitive on the cor
 
 | Capability | Who | Barbacane status |
 |---|---|---|
-| Multi-provider LLM proxy + fallback | Kong 3.8+, APISIX 3.15+, Portkey, LiteLLM, Cloudflare AI Gateway (Universal Endpoint), Zuplo | ✅ `ai-proxy` (ADR-0024) |
+| Multi-provider LLM proxy + fallback | Kong 3.8+, APISIX 3.15+, Portkey, LiteLLM, Cloudflare AI Gateway (Universal Endpoint), Zuplo | ✅ `ai-proxy` (ADR-0024, ADR-0030) — caller-owned `model`, glob `routes`, per-target `allow`/`deny` |
 | Prompt + response guardrails | Portkey (60+), LiteLLM (built-in), Kong, Zuplo | ✅ `ai-prompt-guard`, `ai-response-guard` |
 | Token-based rate limiting + spend metric | Kong (enterprise for token limits), Portkey, LiteLLM | ✅ `ai-token-limit`, `ai-cost-tracker` |
+| OpenAI Responses API (stateless) | OpenAI native, Cloudflare AI Gateway, Portkey | ✅ `POST /v1/responses` (ADR-0030 §2) — synthetic `resp_<uuid-v7>` ids, Anthropic Messages translation, Ollama 400. Stateful (`previous_response_id`, `GET /v1/responses/{id}`) deferred |
+| Aggregated `/v1/models` discovery | OpenAI clients, Continue.dev, LiteLLM | ✅ `GET /v1/models` (ADR-0030 §4) — aggregates every unique provider declared in `routes` / `targets` / flat, partial-failure response with `partial: true` + `warnings[]` |
 | MCP server + MCP traffic governance | Kong (API→MCP conversion), APISIX (`mcp-bridge`), LiteLLM, Portkey, Zuplo | ✅ Native MCP server from spec (ADR-0025) |
 | MCP authentication (OAuth 2.1 / PKCE) | Portkey | Covered via existing auth middlewares on `/__barbacane/mcp` (`oidc-auth` handles PKCE-authenticated JWTs; `apikey-auth` / `oauth2-auth` also apply) |
+| Streaming Responses API (SSE event-stream rewrites) | OpenAI native, Cloudflare AI Gateway | Partial — non-streaming JSON path complete; SSE re-encoding for synthetic ids deferred (ADR-0030 §2 "Streaming") |
 | Semantic cache / semantic routing | Kong 3.8 (Redis-backed), Portkey (enterprise) | ➜ Someday/maybe |
 | Hard-budget spend enforcement | Portkey, LiteLLM (per-team budgets) | ➜ Someday/maybe |
 | Agent-to-agent (A2A) governance | Kong 3.14, Istio Agentgateway (experimental) | Watch — new category, unclear if it stabilizes |
