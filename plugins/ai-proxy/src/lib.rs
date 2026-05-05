@@ -240,16 +240,16 @@ type ProtocolHandler =
 
 impl AiProxy {
     pub fn dispatch(&mut self, req: Request) -> Response {
-        // ADR-0030 §1: the dispatcher is protocol-aware via path. The
-        // canonical OpenAI Responses path takes the Responses adapter; every
-        // other path (including the canonical /v1/chat/completions and any
-        // operator-defined custom path) routes to Chat Completions. This
-        // matches how operators bind ai-proxy via the shipped spec fragment
-        // (canonical paths) while still supporting custom-path Chat
-        // Completions fixtures.
+        // ADR-0030 §1 / §4: the dispatcher is protocol-aware via path. The
+        // canonical OpenAI Responses and Models paths take their own
+        // adapters; every other path (including the canonical
+        // /v1/chat/completions and any operator-defined custom path) routes
+        // to Chat Completions. This matches how operators bind ai-proxy via
+        // the shipped spec fragment (canonical paths) while still supporting
+        // custom-path Chat Completions fixtures.
         match req.path.as_str() {
             "/v1/responses" => self.dispatch_responses(req),
-            // PR-5 will add: "/v1/models" => protocols::models::handle
+            "/v1/models" => protocols::models::handle(self, &req),
             _ => self.dispatch_chat_completion(req),
         }
     }

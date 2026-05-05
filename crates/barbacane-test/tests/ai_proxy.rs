@@ -919,3 +919,337 @@ async fn test_ai_proxy_responses_warning_header_on_reasoning_dropped() {
         warning
     );
 }
+
+// =========================================================================
+// ADR-0030 §4 — Models aggregator at GET /v1/models
+// =========================================================================
+
+/// Build a temp spec exposing `GET /v1/models` bound to ai-proxy with one
+/// route per provider, each pointing at a path-prefixed mock URL so the
+/// test can assert the gateway aggregates from each upstream.
+fn create_models_spec(base_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let plugins_dir = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("plugins");
+    let ai_proxy_path = plugins_dir.join("ai-proxy/ai-proxy.wasm");
+
+    std::fs::write(
+        temp_dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  ai-proxy:\n    path: {}\n",
+            ai_proxy_path.display()
+        ),
+    )
+    .unwrap();
+
+    let spec_path = temp_dir.path().join("models.yaml");
+    std::fs::write(
+        &spec_path,
+        format!(
+            r#"openapi: "3.0.3"
+info:
+  title: Models aggregator integration
+  version: "1.0.0"
+paths:
+  /v1/models:
+    get:
+      operationId: listModels
+      x-barbacane-dispatch:
+        name: ai-proxy
+        config:
+          routes:
+            - pattern: "claude-*"
+              provider: anthropic
+              api_key: "sk-anthropic"
+              base_url: "{base}/anthropic"
+            - pattern: "gpt-*"
+              provider: openai
+              api_key: "sk-openai"
+              base_url: "{base}/openai"
+            - pattern: "*"
+              provider: ollama
+              base_url: "{base}/ollama"
+          timeout: 10
+      responses:
+        "200":
+          description: ok
+"#,
+            base = base_url,
+        ),
+    )
+    .unwrap();
+    (temp_dir, spec_path)
+}
+
+#[tokio::test]
+async fn test_ai_proxy_models_aggregates_three_providers() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/openai/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(
+                    r#"{"object":"list","data":[
+                        {"id":"gpt-4o","object":"model"},
+                        {"id":"gpt-4o-mini","object":"model"}
+                    ]}"#,
+                )
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/anthropic/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(
+                    r#"{"data":[{"id":"claude-sonnet-4-6","display_name":"Claude Sonnet 4.6"}]}"#,
+                )
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/ollama/api/tags"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(
+                    r#"{"models":[{"name":"llama3","size":4661211808},{"name":"mistral","size":4109865159}]}"#,
+                )
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_models_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/v1/models")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "list");
+    let data = body["data"].as_array().unwrap();
+    let ids: Vec<&str> = data.iter().filter_map(|m| m["id"].as_str()).collect();
+    assert!(ids.contains(&"gpt-4o"));
+    assert!(ids.contains(&"gpt-4o-mini"));
+    assert!(ids.contains(&"claude-sonnet-4-6"));
+    assert!(ids.contains(&"llama3"));
+    assert!(ids.contains(&"mistral"));
+    assert!(body.get("partial").is_none());
+    assert!(body.get("warnings").is_none());
+
+    let llama = data.iter().find(|m| m["id"] == "llama3").unwrap();
+    assert_eq!(llama["object"], "model");
+    assert_eq!(llama["owned_by"], "ollama");
+
+    let claude = data
+        .iter()
+        .find(|m| m["id"] == "claude-sonnet-4-6")
+        .unwrap();
+    assert_eq!(claude["owned_by"], "anthropic");
+}
+
+#[tokio::test]
+async fn test_ai_proxy_models_partial_response_on_provider_failure() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/openai/v1/models"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"data":[{"id":"gpt-4o","object":"model"}]}"#)
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/anthropic/v1/models"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("upstream down"))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/ollama/api/tags"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"models":[{"name":"llama3"}]}"#)
+                .insert_header("content-type", "application/json"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = create_models_spec(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/v1/models")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "partial failure must still return 200, not 502"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"gpt-4o"));
+    assert!(ids.contains(&"llama3"));
+    assert_eq!(body["partial"], true);
+    let warnings = body["warnings"].as_array().expect("warnings array");
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["provider"], "anthropic");
+    assert_eq!(warnings[0]["status"], 503);
+}
+
+// =========================================================================
+// schemas/ai-gateway.yaml — end-to-end test of the shipped fragment.
+//
+// The fragment ships with `env://`-resolved provider keys + OLLAMA_BASE_URL.
+// OpenAI and Anthropic use the provider defaults (api.openai.com, etc.) so
+// we can't redirect them at wiremock without modifying the fragment. This
+// test exercises the only path we can fully isolate end-to-end:
+//
+// - OLLAMA_BASE_URL → wiremock (the catch-all route in the fragment)
+// - send a request with `model: mistral` → matches catch-all → reaches
+//   wiremock at /v1/chat/completions → returns the canned completion.
+//
+// The /v1/models partial-response path is also verified end-to-end: with
+// OLLAMA up but OpenAI/Anthropic unreachable, the aggregator returns 200
+// with `partial: true` + warnings for the two failing providers. This is
+// the operator's most-likely real-world experience the first time they
+// drop the fragment in (real OpenAI/Anthropic keys not yet wired).
+// =========================================================================
+
+fn copy_shipped_fragment_to_temp(ollama_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let fragment = repo_root.join("schemas/ai-gateway.yaml");
+    let plugins = repo_root.join("plugins");
+
+    std::fs::copy(&fragment, temp.path().join("ai-gateway.yaml")).expect("copy fragment");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  ai-proxy:\n    path: {}\n",
+            plugins.join("ai-proxy/ai-proxy.wasm").display()
+        ),
+    )
+    .expect("manifest");
+
+    // Set the env vars the fragment reads via env://. Placeholder strings
+    // for the API keys (we never actually call those upstreams in this
+    // test); OLLAMA_BASE_URL points at the wiremock so the catch-all
+    // route can be exercised.
+    std::env::set_var("OPENAI_API_KEY", "sk-test-openai");
+    std::env::set_var("ANTHROPIC_API_KEY", "sk-test-anthropic");
+    std::env::set_var("OLLAMA_BASE_URL", ollama_url);
+
+    let path = temp.path().join("ai-gateway.yaml");
+    (temp, path)
+}
+
+/// Combined into a single test because the shipped fragment reads env vars
+/// (OPENAI_API_KEY / ANTHROPIC_API_KEY / OLLAMA_BASE_URL); separate
+/// `#[tokio::test]`s race on those globals when run in parallel and overwrite
+/// each other's wiremock URLs. One test setting up one wiremock + asserting
+/// both behaviors sequentially avoids the racy env-var state.
+#[tokio::test]
+async fn test_shipped_fragment_chat_completions_and_models_via_ollama() {
+    let mock_server = MockServer::start().await;
+
+    // Ollama-as-OpenAI-compatible chat completions endpoint.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(OPENAI_COMPLETION_BODY)
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // Ollama-as-/api/tags for the /v1/models aggregator.
+    Mock::given(method("GET"))
+        .and(path("/api/tags"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"models":[{"name":"mistral"},{"name":"llama3"}]}"#)
+                .insert_header("content-type", "application/json"),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let (_tmp, spec_path) = copy_shipped_fragment_to_temp(&mock_server.uri());
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("shipped fragment failed to load");
+
+    // (1) Chat Completions via the fragment's catch-all `*` route → Ollama.
+    let resp = gateway
+        .post(
+            "/v1/chat/completions",
+            r#"{"model":"mistral","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "chat.completion");
+
+    // (2) /v1/models — Ollama reachable, OpenAI + Anthropic not. The
+    //     aggregator returns 200 with `partial: true` + 2 warnings.
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/v1/models")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "partial response, not 502");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"mistral"));
+    assert!(ids.contains(&"llama3"));
+    assert_eq!(body["partial"], true);
+    let providers: Vec<&str> = body["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| w["provider"].as_str())
+        .collect();
+    assert!(providers.contains(&"openai"));
+    assert!(providers.contains(&"anthropic"));
+}
