@@ -1,0 +1,84 @@
+# Standalone fuzz crate for Barbacane (Layer 2 of the security testing framework).
+#
+# This crate is deliberately NOT part of the parent Cargo workspace: the empty
+# `[workspace]` table below makes Cargo treat `fuzz/` as its own workspace root,
+# so `cargo build`/`cargo test` at the repo root never pulls it in (cargo-fuzz
+# and a nightly toolchain are only needed here). This is the recommended
+# cargo-fuzz layout and keeps the framework self-contained — no edit to the root
+# Cargo.toml `exclude` list is required.
+#
+# Build / run (requires nightly + cargo-fuzz):
+#   rustup toolchain install nightly
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run spec_parser
+#
+# See docs/contributing/security-testing.md for the full runbook.
+
+[package]
+name = "barbacane-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Empty workspace table → standalone crate, excluded from the parent workspace.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Crates under test. Paths are relative to this fuzz/ directory.
+barbacane-compiler = { path = "../crates/barbacane-compiler" }
+# The data-plane crate exposes a library target named `barbacane_lib`
+# (see crates/barbacane/Cargo.toml `[lib] name = "barbacane_lib"`), which is how
+# we reach the validator and MCP JSON-RPC parser.
+barbacane = { path = "../crates/barbacane" }
+
+# Used by the artifact_loader target to materialise fuzz input as a temp .bca
+# (the loader API takes a &Path, not bytes).
+tempfile = "3"
+
+[profile.release]
+debug = 1
+
+# Each fuzz target is its own binary. `test = false` / `doc = false` keep
+# `cargo test` from trying to build them as ordinary tests.
+
+[[bin]]
+name = "spec_parser"
+path = "fuzz_targets/spec_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "artifact_loader"
+path = "fuzz_targets/artifact_loader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jsonrpc"
+path = "fuzz_targets/jsonrpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validator"
+path = "fuzz_targets/validator.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wasm_host_memory"
+path = "fuzz_targets/wasm_host_memory.rs"
+test = false
+doc = false
+bench = false

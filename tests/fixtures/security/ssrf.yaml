@@ -1,0 +1,92 @@
+openapi: "3.1.0"
+info:
+  title: SSRF Test API
+  version: "1.0.0"
+  description: >
+    Exercises the WASM host HTTP client against SSRF targets. Each endpoint
+    drives the opa-authz middleware, whose `opa_url` is a plugin-controlled
+    outbound HTTP call. The secure behaviour (BARB-SEC-002) is that the host
+    refuses to connect to loopback / link-local / private / metadata addresses,
+    so the protected upstream response (HTTP 200 "reached") is NEVER returned.
+
+paths:
+  # AWS/GCP/Azure instance metadata service.
+  /ssrf-metadata:
+    get:
+      operationId: ssrfMetadata
+      x-barbacane-middlewares:
+        - name: opa-authz
+          config:
+            opa_url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+            timeout: 2
+            deny_message: "blocked"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"reached":"metadata"}'
+          content_type: application/json
+      responses:
+        "200": { description: reached }
+        "403": { description: denied }
+        "503": { description: blocked or unavailable }
+
+  # Loopback.
+  /ssrf-loopback:
+    get:
+      operationId: ssrfLoopback
+      x-barbacane-middlewares:
+        - name: opa-authz
+          config:
+            opa_url: "http://127.0.0.1:9/v1/data/authz/allow"
+            timeout: 2
+            deny_message: "blocked"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"reached":"loopback"}'
+          content_type: application/json
+      responses:
+        "200": { description: reached }
+        "503": { description: blocked or unavailable }
+
+  # RFC1918 private address.
+  /ssrf-private:
+    get:
+      operationId: ssrfPrivate
+      x-barbacane-middlewares:
+        - name: opa-authz
+          config:
+            opa_url: "http://10.0.0.1/v1/data/authz/allow"
+            timeout: 2
+            deny_message: "blocked"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"reached":"private"}'
+          content_type: application/json
+      responses:
+        "200": { description: reached }
+        "503": { description: blocked or unavailable }
+
+  # link-local hostname that resolves to the metadata IP via DNS (DNS-rebind shape).
+  /ssrf-dns-metadata:
+    get:
+      operationId: ssrfDnsMetadata
+      x-barbacane-middlewares:
+        - name: opa-authz
+          config:
+            opa_url: "http://metadata.google.internal/computeMetadata/v1/"
+            timeout: 2
+            deny_message: "blocked"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"reached":"dns-metadata"}'
+          content_type: application/json
+      responses:
+        "200": { description: reached }
+        "503": { description: blocked or unavailable }

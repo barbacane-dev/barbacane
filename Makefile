@@ -78,7 +78,7 @@ clean:
 # Test & Lint
 # -----------------------------------------------------------------------------
 
-.PHONY: test test-verbose test-one check clippy fmt fmt-check
+.PHONY: test test-verbose test-one check clippy fmt fmt-check security-test security-test-build fuzz-build
 
 test:
 	cargo test --workspace
@@ -88,6 +88,24 @@ test-verbose:
 
 test-one:
 	cargo test --workspace $(TEST) -- --nocapture
+
+# Adversarial security suite (Layer 1). Tests assert hardened behaviour, so they
+# are RED until each finding is fixed. Needs the binaries the harness drives:
+# `barbacane` (data plane), `barbacane-control` (control plane, needs Postgres +
+# DATABASE_URL), and the WASM plugins (`make plugins`).
+# See docs/contributing/security-testing.md.
+security-test: plugins
+	cargo build -p barbacane -p barbacane-control
+	cargo test -p barbacane-test --test security -- --nocapture
+
+# Compile-only check of the security suite (does not require running services).
+security-test-build:
+	cargo test -p barbacane-test --test security --no-run
+
+# Build (not run) the standalone cargo-fuzz targets on stable, to catch bit-rot.
+# Actually fuzzing needs nightly + cargo-fuzz: `cd fuzz && cargo +nightly fuzz run <target>`.
+fuzz-build:
+	cd fuzz && cargo build --bins
 
 check: fmt-check clippy
 
@@ -189,6 +207,8 @@ help:
 	@echo "  make release        Build release"
 	@echo "  make test           Run all tests"
 	@echo "  make test-verbose   Run tests with output"
+	@echo "  make security-test  Run the adversarial security suite (RED until fixed)"
+	@echo "  make fuzz-build     Build the cargo-fuzz targets (run with +nightly)"
 	@echo "  make test-one TEST=name"
 	@echo "  make check          Run fmt-check + clippy"
 	@echo "  make clippy         Run clippy lints"

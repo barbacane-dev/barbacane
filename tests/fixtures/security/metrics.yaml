@@ -1,0 +1,16 @@
+openapi: "3.1.0"
+info:
+  title: Metrics Cardinality Test API
+  version: "1.0.0"
+paths:
+  /ok:
+    get:
+      operationId: getOk
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      responses:
+        "200":
+          description: OK

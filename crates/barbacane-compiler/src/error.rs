@@ -74,4 +74,8 @@ pub enum CompileError {
     /// JSON serialization error.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// Artifact signing failed (bad/missing signing key).
+    #[error("artifact signing error: {0}")]
+    Signing(String),
 }

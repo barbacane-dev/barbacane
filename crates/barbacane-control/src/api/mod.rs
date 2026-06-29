@@ -2,6 +2,7 @@
 
 mod api_keys;
 mod artifacts;
+mod auth;
 mod compilations;
 mod data_planes;
 mod health;
@@ -15,6 +16,7 @@ mod router;
 mod specs;
 pub mod ws;
 
+pub use auth::AdminAuth;
 pub use router::create_router;
 pub use ws::ConnectionManager;
 

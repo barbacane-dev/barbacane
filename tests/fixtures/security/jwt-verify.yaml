@@ -1,0 +1,38 @@
+openapi: "3.1.0"
+info:
+  title: JWT Signature Verification Test API
+  version: "1.0.0"
+  description: >
+    Unlike jwt-auth.yaml (which sets skip_signature_validation: true), this
+    fixture ENFORCES signature validation so we can assert that a validly-signed
+    token is accepted while a tampered one is rejected (BARB-SEC-005).
+
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "test-issuer"
+      audience: "test-audience"
+      clock_skew_seconds: 60
+      skip_signature_validation: false
+      # An inline public key the plugin must use to verify RS256 signatures.
+      # (public_key_pem support is part of the BARB-SEC-005 fix.)
+      public_key_pem: |
+        -----BEGIN PUBLIC KEY-----
+        MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtest-placeholder-key
+        -----END PUBLIC KEY-----
+
+paths:
+  /protected:
+    get:
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized

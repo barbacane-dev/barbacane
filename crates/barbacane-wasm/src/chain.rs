@@ -347,10 +347,14 @@ pub fn parse_middleware_output(
             let data = serde_json::to_vec(&parsed.data)
                 .map_err(|e| WasmError::InitFailed(format!("failed to serialize output: {}", e)))?;
 
-            if parsed.action == 0 || result_code == 0 {
-                Ok(OnRequestResult::Continue(data))
-            } else {
+            // Fail safe: short-circuit if EITHER the structured action or the
+            // ABI result code signals it. Continue only when both agree, so a
+            // deny-intent middleware (action != 0) is never downgraded to
+            // Continue just because its return code happened to be 0.
+            if parsed.action != 0 || result_code != 0 {
                 Ok(OnRequestResult::ShortCircuit(data))
+            } else {
+                Ok(OnRequestResult::Continue(data))
             }
         }
         Err(_) => {
@@ -426,6 +430,20 @@ mod tests {
         .unwrap();
 
         let result = parse_middleware_output(&output, 1).unwrap();
+        assert!(matches!(result, OnRequestResult::ShortCircuit(_)));
+    }
+
+    #[test]
+    fn parse_deny_action_not_downgraded_when_result_code_zero() {
+        // WA-10 regression: a deny-intent middleware (action != 0) must
+        // short-circuit even if its ABI return code is 0 — never fail open.
+        let output = serde_json::to_vec(&json!({
+            "action": 1,
+            "data": {"status": 403, "body": "Forbidden"}
+        }))
+        .unwrap();
+
+        let result = parse_middleware_output(&output, 0).unwrap();
         assert!(matches!(result, OnRequestResult::ShortCircuit(_)));
     }
 

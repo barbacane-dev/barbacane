@@ -36,3 +36,4 @@
 - [Architecture](contributing/architecture.md)
 - [Development setup](contributing/development.md)
 - [WASM plugin development](contributing/plugins.md)
+- [Security testing](contributing/security-testing.md)

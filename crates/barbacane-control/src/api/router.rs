@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::{
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderValue, Method, StatusCode},
     response::{Html, IntoResponse},
     routing::{delete, get, patch, post, put},
     Router,
@@ -11,7 +11,7 @@ use axum::{
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
     set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use scalar_api_reference::scalar_html_default;
 
+use super::auth::{require_admin, AdminAuth};
 use super::ws::ConnectionManager;
 use super::{
     api_keys, artifacts, compilations, data_planes, health, init, operations, plugins,
@@ -65,11 +66,41 @@ async fn api_docs() -> Html<String> {
     Html(scalar_html_default(&config))
 }
 
+/// Build a CORS layer from the `BARBACANE_CONTROL_ALLOWED_ORIGINS` environment
+/// variable (a comma-separated allowlist of origins). When unset or empty, no
+/// cross-origin requests are permitted — the admin API is same-origin by
+/// default. Credentials are never combined with a wildcard origin.
+fn cors_layer() -> CorsLayer {
+    let origins: Vec<HeaderValue> = std::env::var("BARBACANE_CONTROL_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| HeaderValue::from_str(s).ok())
+        .collect();
+
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(origins))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+}
+
 /// Create the API router with all routes.
+///
+/// `admin_auth` is enforced on every route except `/health` and the data-plane
+/// WebSocket (`/ws/data-plane`), which authenticates with its own per-data-plane
+/// API key.
 pub fn create_router(
     pool: PgPool,
     compilation_tx: Option<mpsc::Sender<Uuid>>,
     connection_manager: Arc<ConnectionManager>,
+    admin_auth: AdminAuth,
 ) -> Router {
     let state = AppState {
         pool,
@@ -77,12 +108,18 @@ pub fn create_router(
         connection_manager,
     };
 
-    Router::new()
+    // Public routes: liveness, and the data-plane WebSocket (which performs its
+    // own API-key authentication inside the handler).
+    let public = Router::new()
+        .route("/health", get(health::health_check))
+        // WebSocket for data plane connections
+        .route("/ws/data-plane", get(ws::ws_handler));
+
+    // Protected routes: everything else requires the admin bearer token.
+    let protected = Router::new()
         // OpenAPI spec and documentation
         .route("/openapi", get(openapi_spec))
         .route("/docs", get(api_docs))
-        // Health
-        .route("/health", get(health::health_check))
         // Init
         .route("/init", post(init::init_project))
         // Specs
@@ -194,16 +231,18 @@ pub fn create_router(
             "/projects/{id}/deploy",
             post(data_planes::deploy_to_data_planes),
         )
-        // WebSocket for data plane connections
-        .route("/ws/data-plane", get(ws::ws_handler))
-        // Middleware
+        // Admin authentication on every protected route.
+        .layer(axum::middleware::from_fn_with_state(
+            admin_auth,
+            require_admin,
+        ));
+
+    Router::new()
+        .merge(public)
+        .merge(protected)
+        // Middleware applied to all routes
         .layer(TraceLayer::new_for_http())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(cors_layer())
         // API versioning: set Content-Type to versioned media type for JSON responses
         .layer(SetResponseHeaderLayer::if_not_present(
             axum::http::header::CONTENT_TYPE,

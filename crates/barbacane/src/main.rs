@@ -44,6 +44,12 @@ use uuid::Uuid;
 /// Server version for the Server header.
 const SERVER_VERSION: &str = concat!("barbacane/", env!("CARGO_PKG_VERSION"));
 
+/// Metric `path` label used for requests that never matched a declared route
+/// (unmatched, method-not-allowed, or rejected before routing). Using a fixed
+/// sentinel instead of the raw request path keeps Prometheus series cardinality
+/// bounded — a scanner hitting random URLs cannot create unbounded time-series.
+const UNMATCHED_ROUTE_LABEL: &str = "<unmatched>";
+
 use barbacane_telemetry::MetricsRegistry;
 use std::collections::HashMap;
 
@@ -718,6 +724,29 @@ impl Gateway {
             tracing::warn!("no plugins bundled in artifact - ensure barbacane.yaml manifest was used during compilation");
         }
 
+        // AR-1: verify artifact integrity before instantiating any plugin.
+        // The hash/checksum checks always run (detect tampering or corruption);
+        // an Ed25519 signature is additionally required when a trusted public
+        // key is pinned via BARBACANE_TRUSTED_PUBKEY.
+        barbacane_compiler::verify_artifact_hash(&manifest)
+            .map_err(|e| format!("artifact integrity check failed: {}", e))?;
+        for (name, loaded) in &bundled_plugins {
+            barbacane_compiler::verify_plugin_checksum(&manifest, name, &loaded.wasm_bytes)
+                .map_err(|e| format!("artifact integrity check failed: {}", e))?;
+        }
+        match std::env::var("BARBACANE_TRUSTED_PUBKEY") {
+            Ok(pubkey) if !pubkey.trim().is_empty() => {
+                barbacane_compiler::verify_artifact_signature(&manifest, &pubkey)
+                    .map_err(|e| format!("artifact signature verification failed: {}", e))?;
+                tracing::info!("artifact Ed25519 signature verified");
+            }
+            _ => {
+                tracing::warn!(
+                    "artifact signature verification disabled; set BARBACANE_TRUSTED_PUBKEY to require a valid Ed25519 signature"
+                );
+            }
+        }
+
         // Compile all plugin modules first (we'll register them after creating the final pool)
         let mut compiled_modules = Vec::new();
         for (name, loaded) in bundled_plugins {
@@ -897,15 +926,18 @@ impl Gateway {
     ) -> Response<B> {
         let headers = response.headers_mut();
 
-        // Observability headers
+        // Observability headers. `request_id`/`trace_id` may originate from
+        // client-supplied headers, so never panic on a value that isn't a legal
+        // header value — fall back to a placeholder instead.
         headers.insert("server", HeaderValue::from_static(SERVER_VERSION));
         headers.insert(
             "x-request-id",
-            HeaderValue::from_str(request_id).expect("uuid is valid ASCII"),
+            HeaderValue::from_str(request_id)
+                .unwrap_or_else(|_| HeaderValue::from_static("invalid")),
         );
         headers.insert(
             "x-trace-id",
-            HeaderValue::from_str(trace_id).expect("uuid is valid ASCII"),
+            HeaderValue::from_str(trace_id).unwrap_or_else(|_| HeaderValue::from_static("invalid")),
         );
 
         // Security headers (enabled by default)
@@ -953,11 +985,14 @@ impl Gateway {
         let method = req.method().clone();
         let method_str = method.as_str().to_string();
 
-        // Generate or extract request ID (from incoming header or new UUID)
+        // Generate or extract request ID (from incoming header or new UUID).
+        // Only accept a client-supplied id if it is a legal, non-empty header
+        // value; otherwise generate one (prevents header-injection / panics).
         let request_id = req
             .headers()
             .get("x-request-id")
             .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty() && HeaderValue::from_str(s).is_ok())
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
@@ -982,7 +1017,8 @@ impl Gateway {
             let response = self.validation_error_response(&[e]);
             self.record_request_metrics(
                 &method_str,
-                &path,
+                // Bounded label: raw paths would let a scanner explode metric cardinality.
+                UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
                 0,
@@ -1025,7 +1061,7 @@ impl Gateway {
             let response = self.validation_error_response(&[e]);
             self.record_request_metrics(
                 &method_str,
-                &path,
+                UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
                 0,
@@ -1045,7 +1081,7 @@ impl Gateway {
                     let response = self.validation_error_response(&[e]);
                     self.record_request_metrics(
                         &method_str,
-                        &path,
+                        UNMATCHED_ROUTE_LABEL,
                         response.status().as_u16(),
                         0,
                         0,
@@ -1212,7 +1248,7 @@ impl Gateway {
                                     .await;
                                 self.record_request_metrics(
                                     &method_str,
-                                    &path,
+                                    UNMATCHED_ROUTE_LABEL,
                                     response.status().as_u16(),
                                     0,
                                     0,
@@ -1228,7 +1264,7 @@ impl Gateway {
                 let response = self.method_not_allowed_response(allowed, &method_str, &path);
                 self.record_request_metrics(
                     &method_str,
-                    &path,
+                    UNMATCHED_ROUTE_LABEL,
                     response.status().as_u16(),
                     0,
                     0,
@@ -1244,7 +1280,7 @@ impl Gateway {
                 let response = self.not_found_response();
                 self.record_request_metrics(
                     &method_str,
-                    &path,
+                    UNMATCHED_ROUTE_LABEL,
                     response.status().as_u16(),
                     0,
                     0,

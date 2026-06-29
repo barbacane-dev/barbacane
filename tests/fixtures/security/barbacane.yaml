@@ -1,0 +1,19 @@
+# Manifest for the security fixtures (one directory deeper than tests/fixtures,
+# so plugin paths gain one extra `../`).
+plugins:
+  mock:
+    path: ../../../plugins/mock/mock.wasm
+  opa-authz:
+    path: ../../../plugins/opa-authz/opa-authz.wasm
+  jwt-auth:
+    path: ../../../plugins/jwt-auth/jwt-auth.wasm
+  oidc-auth:
+    path: ../../../plugins/oidc-auth/oidc-auth.wasm
+  ip-restriction:
+    path: ../../../plugins/ip-restriction/ip-restriction.wasm
+  rate-limit:
+    path: ../../../plugins/rate-limit/rate-limit.wasm
+  request-size-limit:
+    path: ../../../plugins/request-size-limit/request-size-limit.wasm
+  http-log:
+    path: ../../../plugins/http-log/http-log.wasm

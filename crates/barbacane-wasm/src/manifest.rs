@@ -154,6 +154,8 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "generate_uuid",
     "verify_signature",
     "ws_upgrade",
+    "cache",
+    "rate_limit",
 ];
 
 /// Check if a capability name is known.
@@ -169,9 +171,11 @@ pub fn capability_to_imports(capability: &str) -> &'static [&'static str] {
         "context_set" => &["host_context_set"],
         "clock_now" => &["host_clock_now"],
         "get_secret" => &["host_get_secret", "host_secret_read_result"],
-        "http_call" => &["host_http_call", "host_http_read_result"],
+        "http_call" => &["host_http_call", "host_http_read_result", "host_http_stream"],
         "kafka_publish" => &["host_kafka_publish"],
         "nats_publish" => &["host_nats_publish"],
+        "cache" => &["host_cache_get", "host_cache_set", "host_cache_read_result"],
+        "rate_limit" => &["host_rate_limit_check", "host_rate_limit_read_result"],
         "telemetry" => &[
             "host_metric_counter_inc",
             "host_metric_histogram_observe",

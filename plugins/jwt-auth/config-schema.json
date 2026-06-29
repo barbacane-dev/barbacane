@@ -21,12 +21,12 @@
     },
     "skip_signature_validation": {
       "type": "boolean",
-      "description": "Whether to skip signature validation (for testing only)",
+      "description": "Skip signature validation. TEST ONLY: ignored by the compiled plugin, so it cannot disable verification in production.",
       "default": false
     },
     "jwks_url": {
       "type": "string",
-      "description": "JWKS URL for fetching public keys (not yet implemented)",
+      "description": "JWKS URL. Not handled by jwt-auth; use the oidc-auth plugin for JWKS-based verification.",
       "format": "uri"
     },
     "groups_claim": {
@@ -35,7 +35,23 @@
     },
     "public_key_pem": {
       "type": "string",
-      "description": "Inline public key in PEM format for signature validation (not yet implemented)"
+      "description": "Inline public key in PEM format. Not handled by jwt-auth; supply public_key_jwk instead, or use oidc-auth."
+    },
+    "public_key_jwk": {
+      "type": "object",
+      "description": "Inline public key as a JWK, used to verify the token signature (RSA RS256/384/512, EC ES256/384). When set, every token must carry a valid signature under this key.",
+      "properties": {
+        "kty": { "type": "string", "enum": ["RSA", "EC"] },
+        "kid": { "type": "string" },
+        "alg": { "type": "string" },
+        "use": { "type": "string" },
+        "n": { "type": "string" },
+        "e": { "type": "string" },
+        "x": { "type": "string" },
+        "y": { "type": "string" },
+        "crv": { "type": "string" }
+      },
+      "required": ["kty"]
     }
   },
   "additionalProperties": false
