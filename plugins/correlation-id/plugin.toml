@@ -6,7 +6,4 @@ description = "Propagates or generates correlation IDs for distributed tracing"
 wasm = "correlation-id.wasm"
 
 [capabilities]
-log = true
-generate_uuid = true
-context_get = true
-context_set = true
+host_functions = ["log", "context_get", "context_set", "generate_uuid"]

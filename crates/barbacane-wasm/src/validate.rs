@@ -49,8 +49,18 @@ pub fn validate_imports(
     // Build the set of allowed imports
     let mut allowed: HashSet<&str> = HashSet::new();
 
-    // host_set_output is always allowed (not a capability)
-    allowed.insert("host_set_output");
+    // Core ABI functions are always allowed — they are part of the plugin
+    // contract (output + the request/response body side-channel governed by the
+    // manifest `body_access` flag), not capability-gated host functions.
+    for core in [
+        "host_set_output",
+        "host_body_len",
+        "host_body_read",
+        "host_body_set",
+        "host_body_clear",
+    ] {
+        allowed.insert(core);
+    }
 
     // Add imports for each declared capability
     for capability in declared_capabilities {
@@ -209,5 +219,35 @@ mod tests {
     fn unknown_capability_returns_empty() {
         let imports = capability_to_imports("unknown");
         assert!(imports.is_empty());
+    }
+
+    fn module_with_import(import: &str) -> wasmtime::Module {
+        let engine = wasmtime::Engine::default();
+        let wat = format!(
+            r#"(module
+                 (import "barbacane" "{import}" (func (param i32 i32)))
+                 (memory (export "memory") 1))"#
+        );
+        let wasm = wat::parse_str(&wat).expect("valid wat");
+        wasmtime::Module::new(&engine, &wasm).expect("valid module")
+    }
+
+    #[test]
+    fn validate_imports_rejects_undeclared_capability() {
+        // A plugin that declares only `log` must not be able to import
+        // host_http_call (the http_call capability) — default-deny.
+        let module = module_with_import("host_http_call");
+        let declared = vec!["log".to_string()];
+        let err = validate_imports(&module, &declared).unwrap_err();
+        assert!(matches!(err, WasmError::UndeclaredImport(name) if name == "host_http_call"));
+    }
+
+    #[test]
+    fn validate_imports_allows_declared_capability_and_core_abi() {
+        // host_log is covered by the declared `log` capability...
+        assert!(validate_imports(&module_with_import("host_log"), &["log".to_string()]).is_ok());
+        // ...and the core body ABI is always allowed regardless of capabilities.
+        assert!(validate_imports(&module_with_import("host_body_read"), &[]).is_ok());
+        assert!(validate_imports(&module_with_import("host_set_output"), &[]).is_ok());
     }
 }

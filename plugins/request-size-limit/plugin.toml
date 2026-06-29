@@ -6,5 +6,5 @@ description = "Rejects requests that exceed a configurable size limit"
 wasm = "request-size-limit.wasm"
 
 [capabilities]
-log = true
+host_functions = []
 body_access = true

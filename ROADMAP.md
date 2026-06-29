@@ -19,10 +19,11 @@ A security review drove a hardening pass. Landed on `security/hardening-and-test
 - [x] **`jwt-auth` real verification** — signatures verified via the host `verify_signature` capability (inline JWK); the test-only skip flag is ignored in production builds.
 - [x] **Secret confinement** — `file://` secret references confined to `BARBACANE_SECRETS_DIR`.
 - [x] **Security test framework** — adversarial integration suite (`crates/barbacane-test/tests/security/`) + `cargo-fuzz` targets (`fuzz/`). See `docs/contributing/security-testing.md`.
+- [x] **WASM capability enforcement** — all 33 official `plugin.toml`s migrated to the canonical `host_functions` dialect (verified against each plugin's real wasm imports); the data plane runs `validate_imports` on load and rejects any plugin importing a host function outside its declared capabilities. Enforced when the artifact's capabilities are authoritative (`capabilities_enforced`), i.e. compiled from `plugin.toml`.
 
 In flight:
 
-- [ ] **WASM capability enforcement** — capability map corrected (`cache`/`rate_limit`/`http_stream`); per-plugin default-deny linker + `validate_imports` gate pending the plugin-manifest migration (most official `plugin.toml`s use a legacy capability dialect) and the wasm/Docker integration run.
+- [ ] **Control-plane capability persistence** — the registry does not yet store plugin capabilities, so control-plane-compiled artifacts are capability-less and load without enforcement. Add a capabilities column + parse `plugin.toml` on plugin upload/seed so control-plane artifacts are enforced too.
 
 ---
 

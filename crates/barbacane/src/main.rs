@@ -694,9 +694,18 @@ impl Gateway {
         let specs =
             load_specs(artifact_path).map_err(|e| format!("failed to load specs: {}", e))?;
 
-        // Initialize HTTP client for upstream requests and plugin outbound calls
+        // Initialize HTTP client for upstream requests and plugin outbound calls.
+        // SSRF guard is on by default; operators opt out for trusted internal
+        // upstreams via BARBACANE_ALLOW_INTERNAL_EGRESS.
+        let allow_internal_egress = matches!(
+            std::env::var("BARBACANE_ALLOW_INTERNAL_EGRESS")
+                .ok()
+                .as_deref(),
+            Some("1" | "true" | "TRUE" | "yes")
+        );
         let http_client_config = HttpClientConfig {
             allow_plaintext: allow_plaintext_upstream,
+            allow_internal_egress,
             ..Default::default()
         };
         let http_client = HttpClient::new(http_client_config)
@@ -747,6 +756,17 @@ impl Gateway {
             }
         }
 
+        // WA-1: capability enforcement only applies to artifacts whose per-plugin
+        // capabilities are authoritative (compiled from plugin.toml). Artifacts
+        // built without them (e.g. via the control-plane registry, which does
+        // not yet persist capabilities) are loaded without enforcement.
+        let enforce_capabilities = manifest.capabilities_enforced;
+        if !enforce_capabilities {
+            tracing::warn!(
+                "plugin capability enforcement disabled: artifact has no authoritative capabilities"
+            );
+        }
+
         // Compile all plugin modules first (we'll register them after creating the final pool)
         let mut compiled_modules = Vec::new();
         for (name, loaded) in bundled_plugins {
@@ -758,6 +778,26 @@ impl Gateway {
                     loaded.body_access,
                 )
                 .map_err(|e| format!("failed to compile plugin '{}': {}", name, e))?;
+
+            // WA-1: enforce the capability contract. The plugin may only import
+            // host functions covered by the capabilities it declared in
+            // plugin.toml (carried in the artifact manifest); anything else is a
+            // hard load failure (default-deny).
+            if enforce_capabilities {
+                let declared = manifest
+                    .plugins
+                    .iter()
+                    .find(|p| p.name == name)
+                    .map(|p| p.capabilities.host_functions.clone())
+                    .unwrap_or_default();
+                barbacane_wasm::validate_imports(module.module(), &declared).map_err(|e| {
+                    format!(
+                        "plugin '{}' violates its declared capabilities: {}",
+                        name, e
+                    )
+                })?;
+            }
+
             compiled_modules.push((name, loaded.version, module));
         }
 

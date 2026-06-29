@@ -4,3 +4,6 @@ version = "0.1.0"
 type = "middleware"
 description = "HTTP Basic authentication middleware (RFC 7617)"
 wasm = "basic-auth.wasm"
+
+[capabilities]
+host_functions = []

@@ -185,6 +185,7 @@ mod tests {
             mcp: barbacane_compiler::McpConfig::default(),
             signature: None,
             signing_public_key: None,
+            capabilities_enforced: false,
         }
     }
 
@@ -283,6 +284,7 @@ mod tests {
             mcp: barbacane_compiler::McpConfig::default(),
             signature: None,
             signing_public_key: None,
+            capabilities_enforced: false,
         };
         let state = Arc::new(AdminState {
             manifest: Arc::new(ArcSwap::new(Arc::new(manifest))),
@@ -323,6 +325,7 @@ mod tests {
             mcp: barbacane_compiler::McpConfig::default(),
             signature: None,
             signing_public_key: None,
+            capabilities_enforced: false,
         };
         let state = Arc::new(AdminState {
             manifest: Arc::new(ArcSwap::new(Arc::new(manifest))),

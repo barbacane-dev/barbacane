@@ -20,7 +20,12 @@ use crate::error::{CompileError, CompileWarning};
 use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
-pub const ARTIFACT_VERSION: u32 = 3;
+///
+/// v4 adds Ed25519 signing fields and records each plugin's declared capability
+/// `host_functions` in the manifest. Whether those capabilities are enforced on
+/// load is gated by the manifest `capabilities_enforced` flag (WA-1), not by the
+/// version, so older artifacts and capability-less builds load without rejection.
+pub const ARTIFACT_VERSION: u32 = 4;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
@@ -104,6 +109,11 @@ pub struct Manifest {
     /// (informational; verification uses the operator's pinned trusted key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing_public_key: Option<String>,
+    /// Whether per-plugin `capabilities.host_functions` are authoritative (read
+    /// from plugin.toml). The data plane enforces the capability contract on
+    /// load only when this is true (WA-1).
+    #[serde(default)]
+    pub capabilities_enforced: bool,
 }
 
 /// MCP server configuration extracted from `x-barbacane-mcp`.
@@ -151,6 +161,10 @@ pub struct PluginCapabilities {
     /// Whether the middleware receives the request body in `on_request`.
     #[serde(default)]
     pub body_access: bool,
+    /// Declared capability host-function names from plugin.toml. The data plane
+    /// enforces these against the module's actual imports at load (WA-1).
+    #[serde(default)]
+    pub host_functions: Vec<String>,
 }
 
 /// A plugin loaded from a .bca artifact, ready for compilation.
@@ -245,7 +259,11 @@ pub fn compile(
     options: &CompileOptions,
 ) -> Result<CompileResult, CompileError> {
     let specs = parse_specs(spec_paths)?;
-    compile_inner(&specs, plugins, output, options)
+    // Plain `compile` receives caller-built bundles whose declared capabilities
+    // may not have been read from plugin.toml (e.g. the control plane builds
+    // bundles from the registry, which does not yet persist capabilities), so
+    // the resulting artifact is not marked capability-authoritative.
+    compile_inner(&specs, plugins, output, options, false)
 }
 
 /// Compile specs with a project manifest into a .bca artifact.
@@ -288,10 +306,13 @@ pub fn compile_with_manifest(
             plugin_type: p.plugin_type.unwrap_or_else(|| "plugin".to_string()),
             wasm_bytes: p.wasm_bytes,
             body_access: p.body_access,
+            host_functions: p.host_functions,
         })
         .collect();
 
-    compile_inner(&specs, &plugin_bundles, output, options)
+    // Bundles were resolved from plugin.toml, so their declared capabilities are
+    // authoritative and the artifact is eligible for load-time enforcement.
+    compile_inner(&specs, &plugin_bundles, output, options, true)
 }
 
 /// Load a manifest from a .bca artifact.
@@ -419,6 +440,8 @@ pub struct PluginBundle {
     pub wasm_bytes: Vec<u8>,
     /// Whether this plugin needs the request body.
     pub body_access: bool,
+    /// Declared capability host-function names from plugin.toml.
+    pub host_functions: Vec<String>,
 }
 
 /// Parse spec files into (ApiSpec, content, sha256) tuples.
@@ -463,6 +486,7 @@ fn compile_inner(
     plugins: &[PluginBundle],
     output: &Path,
     options: &CompileOptions,
+    capabilities_authoritative: bool,
 ) -> Result<CompileResult, CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut operations: Vec<CompiledOperation> = Vec::new();
@@ -691,6 +715,7 @@ fn compile_inner(
             sha256,
             capabilities: PluginCapabilities {
                 body_access: plugin.body_access,
+                host_functions: plugin.host_functions.clone(),
             },
         });
     }
@@ -752,6 +777,7 @@ fn compile_inner(
         mcp,
         signature: None,
         signing_public_key: None,
+        capabilities_enforced: capabilities_authoritative,
     };
 
     // AR-1: sign the artifact when a signing key is configured. The signature
@@ -1579,6 +1605,7 @@ paths:
             plugin_type: "middleware".to_string(),
             wasm_bytes: fake_wasm.clone(),
             body_access: false,
+            host_functions: vec![],
         }];
 
         let result = compile(
@@ -2868,6 +2895,7 @@ paths:
             mcp: McpConfig::default(),
             signature: None,
             signing_public_key: None,
+            capabilities_enforced: false,
         }
     }
 

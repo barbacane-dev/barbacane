@@ -6,6 +6,4 @@ description = "Records per-request LLM cost (USD) based on token usage and a con
 wasm = "ai-cost-tracker.wasm"
 
 [capabilities]
-log = true
-context_get = true
-telemetry = true
+host_functions = ["log", "context_get", "telemetry"]

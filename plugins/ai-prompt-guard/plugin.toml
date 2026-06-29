@@ -6,6 +6,5 @@ description = "Validates and constrains LLM prompts before dispatch. Named profi
 wasm = "ai-prompt-guard.wasm"
 
 [capabilities]
-log = true
-context_get = true
+host_functions = ["log", "context_get"]
 body_access = true

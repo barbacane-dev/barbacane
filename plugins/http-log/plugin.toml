@@ -6,8 +6,4 @@ description = "HTTP logging middleware that sends request/response logs to an HT
 wasm = "http-log.wasm"
 
 [capabilities]
-log = true
-time = true
-context_get = true
-context_set = true
-host_functions = ["host_http_call"]
+host_functions = ["log", "context_get", "context_set", "http_call", "clock_now"]

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::RwLock;
@@ -231,7 +231,7 @@ impl HttpClient {
             .to_string();
 
         // SSRF guard: reject internal/loopback/link-local/metadata targets.
-        ssrf_guard(&url).await?;
+        ssrf_guard(&url, self.base_config.allow_internal_egress).await?;
 
         let circuit_state = self.get_circuit_state(&host);
         if circuit_state == crate::circuit_breaker::CircuitState::Open {
@@ -293,7 +293,7 @@ impl HttpClient {
             .to_string();
 
         // SSRF guard: reject internal/loopback/link-local/metadata targets.
-        ssrf_guard(&url).await?;
+        ssrf_guard(&url, self.base_config.allow_internal_egress).await?;
 
         // Check circuit breaker
         let circuit_state = self.get_circuit_state(&host);
@@ -401,22 +401,6 @@ impl HttpClient {
     }
 }
 
-/// Whether plugins may reach internal/loopback/link-local/metadata targets.
-///
-/// SSRF protection is on by default. Operators with legitimate internal
-/// upstreams can opt out with `BARBACANE_ALLOW_INTERNAL_EGRESS=1`.
-fn internal_egress_allowed() -> bool {
-    static ALLOW: OnceLock<bool> = OnceLock::new();
-    *ALLOW.get_or_init(|| {
-        matches!(
-            std::env::var("BARBACANE_ALLOW_INTERNAL_EGRESS")
-                .ok()
-                .as_deref(),
-            Some("1" | "true" | "TRUE" | "yes")
-        )
-    })
-}
-
 /// Whether an IP address points at an internal / non-routable / metadata range
 /// that an untrusted plugin must not be able to reach.
 fn ip_is_internal(ip: &IpAddr) -> bool {
@@ -456,8 +440,8 @@ fn ip_is_internal(ip: &IpAddr) -> bool {
 /// Note: a separate connect-time resolution still occurs inside reqwest, so a
 /// rebinding attacker could in theory return a different address; pinning the
 /// vetted IP via a custom resolver is tracked as follow-up hardening.
-async fn ssrf_guard(url: &reqwest::Url) -> Result<(), HttpClientError> {
-    if internal_egress_allowed() {
+async fn ssrf_guard(url: &reqwest::Url, allow_internal: bool) -> Result<(), HttpClientError> {
+    if allow_internal {
         return Ok(());
     }
 
@@ -508,6 +492,10 @@ pub struct HttpClientConfig {
     pub default_timeout: Duration,
     /// Allow plaintext HTTP (development only).
     pub allow_plaintext: bool,
+    /// Allow plugin egress to internal/loopback/link-local/metadata targets,
+    /// disabling the SSRF guard. Off by default; operators opt in for trusted
+    /// internal upstreams.
+    pub allow_internal_egress: bool,
 }
 
 impl Default for HttpClientConfig {
@@ -518,6 +506,7 @@ impl Default for HttpClientConfig {
             connect_timeout: Duration::from_secs(10),
             default_timeout: Duration::from_secs(30),
             allow_plaintext: false,
+            allow_internal_egress: false,
         }
     }
 }
@@ -650,11 +639,11 @@ mod tests {
             "192.168.1.1",
             "172.16.0.1",
             "0.0.0.0",
-            "100.64.0.1",          // CGNAT
-            "::1",                 // IPv6 loopback
-            "fc00::1",             // IPv6 ULA
-            "fe80::1",             // IPv6 link-local
-            "::ffff:127.0.0.1",    // IPv4-mapped loopback
+            "100.64.0.1",       // CGNAT
+            "::1",              // IPv6 loopback
+            "fc00::1",          // IPv6 ULA
+            "fe80::1",          // IPv6 link-local
+            "::ffff:127.0.0.1", // IPv4-mapped loopback
             "::ffff:169.254.169.254",
         ];
         for s in blocked {
@@ -662,7 +651,12 @@ mod tests {
             assert!(ip_is_internal(&ip), "{s} should be classified internal");
         }
 
-        let allowed = ["8.8.8.8", "1.1.1.1", "93.184.216.34", "2606:4700:4700::1111"];
+        let allowed = [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+        ];
         for s in allowed {
             let ip: IpAddr = s.parse().unwrap();
             assert!(!ip_is_internal(&ip), "{s} should be classified external");
@@ -678,12 +672,15 @@ mod tests {
             "http://10.1.2.3/",
         ] {
             let parsed = url.parse::<reqwest::Url>().unwrap();
-            let err = ssrf_guard(&parsed).await.unwrap_err();
+            let err = ssrf_guard(&parsed, false).await.unwrap_err();
             assert!(
                 matches!(err, HttpClientError::BlockedTarget(_)),
                 "{url} should be blocked, got {err:?}"
             );
         }
+        // With internal egress allowed, the same targets pass the guard.
+        let parsed = "http://127.0.0.1:8081/".parse::<reqwest::Url>().unwrap();
+        assert!(ssrf_guard(&parsed, true).await.is_ok());
     }
 
     #[test]
@@ -846,6 +843,7 @@ mod tests {
     async fn stream_raw_rejects_invalid_method() {
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");
@@ -866,6 +864,7 @@ mod tests {
     async fn stream_raw_connection_refused() {
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");
@@ -896,6 +895,7 @@ mod tests {
 
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");
@@ -935,6 +935,7 @@ mod tests {
 
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");

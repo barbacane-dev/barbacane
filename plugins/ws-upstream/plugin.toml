@@ -6,4 +6,4 @@ description = "Transparent WebSocket proxy"
 wasm = "ws-upstream.wasm"
 
 [capabilities]
-host_functions = ["ws_upgrade", "log"]
+host_functions = ["ws_upgrade"]

@@ -6,6 +6,5 @@ description = "CEL policy evaluation middleware — inline expression-based acce
 wasm = "cel.wasm"
 
 [capabilities]
-log = true
-context_set = true
+host_functions = ["log", "context_set"]
 body_access = true

@@ -6,4 +6,4 @@ description = "URL redirections (301/302/307/308) with path matching and query s
 wasm = "redirect.wasm"
 
 [capabilities]
-log = true
+host_functions = []

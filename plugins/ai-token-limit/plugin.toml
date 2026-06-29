@@ -6,7 +6,4 @@ description = "Token-based rate limiting for LLM endpoints (ADR-0024). Budget is
 wasm = "ai-token-limit.wasm"
 
 [capabilities]
-log = true
-context_get = true
-context_set = true
-rate_limit = true
+host_functions = ["log", "context_get", "context_set", "rate_limit"]

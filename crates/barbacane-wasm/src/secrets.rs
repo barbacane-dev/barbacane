@@ -78,9 +78,9 @@ fn confine_secret_path(path: &str) -> Result<std::path::PathBuf, SecretsError> {
             "file:// secret references require BARBACANE_SECRETS_DIR to be set".to_string(),
         )
     })?;
-    let base = std::path::Path::new(&base).canonicalize().map_err(|e| {
-        SecretsError::FileReadError(format!("invalid BARBACANE_SECRETS_DIR: {e}"))
-    })?;
+    let base = std::path::Path::new(&base)
+        .canonicalize()
+        .map_err(|e| SecretsError::FileReadError(format!("invalid BARBACANE_SECRETS_DIR: {e}")))?;
 
     let requested = std::path::Path::new(path);
     let joined = if requested.is_absolute() {

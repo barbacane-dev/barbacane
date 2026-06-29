@@ -33,6 +33,8 @@ struct PluginMeta {
 struct PluginTomlCapabilities {
     #[serde(default)]
     body_access: bool,
+    #[serde(default)]
+    host_functions: Vec<String>,
 }
 
 /// Plugin metadata extracted from plugin.toml.
@@ -40,6 +42,7 @@ struct PluginMetadata {
     version: String,
     plugin_type: String,
     body_access: bool,
+    host_functions: Vec<String>,
 }
 
 /// Parse plugin metadata from TOML content.
@@ -49,6 +52,7 @@ fn parse_plugin_metadata(content: &str) -> Option<PluginMetadata> {
         version: parsed.plugin.version,
         plugin_type: parsed.plugin.plugin_type,
         body_access: parsed.capabilities.body_access,
+        host_functions: parsed.capabilities.host_functions,
     })
 }
 
@@ -120,6 +124,10 @@ fn resolve_plugin(
         version: metadata.as_ref().map(|m| m.version.clone()),
         plugin_type: metadata.as_ref().map(|m| m.plugin_type.clone()),
         body_access: metadata.as_ref().is_some_and(|m| m.body_access),
+        host_functions: metadata
+            .as_ref()
+            .map(|m| m.host_functions.clone())
+            .unwrap_or_default(),
     })
 }
 
@@ -241,6 +249,8 @@ pub struct ResolvedPlugin {
     pub plugin_type: Option<String>,
     /// Whether this plugin needs the request body in `on_request`.
     pub body_access: bool,
+    /// Declared capability host-function names from plugin.toml.
+    pub host_functions: Vec<String>,
 }
 
 impl ProjectManifest {

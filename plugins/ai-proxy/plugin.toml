@@ -6,9 +6,4 @@ description = "AI gateway dispatcher — routes to LLM providers (OpenAI, Anthro
 wasm = "ai-proxy.wasm"
 
 [capabilities]
-log = true
-context_get = true
-context_set = true
-http_call = true
-telemetry = true
-clock_now = true
+host_functions = ["log", "context_get", "context_set", "http_call", "telemetry", "clock_now"]
