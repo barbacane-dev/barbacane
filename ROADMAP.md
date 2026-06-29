@@ -8,7 +8,22 @@ Forward-looking priorities for Barbacane. See [CHANGELOG.md](CHANGELOG.md) for w
 
 Actively being worked on:
 
-- _(open — pick up from Next)_
+### Security hardening (in progress)
+
+A security review drove a hardening pass. Landed on `security/hardening-and-test-framework`:
+
+- [x] **Control-plane authentication** — admin bearer token (`BARBACANE_CONTROL_ADMIN_TOKEN`) required on all routes except `/health` and the data-plane WebSocket; server fails closed without it. CORS tightened to an allowlist (`BARBACANE_CONTROL_ALLOWED_ORIGINS`).
+- [x] **Artifact integrity & signing** — `.bca` now carries an Ed25519 signature over its content hash; the data plane recomputes every plugin/spec/route checksum and verifies the signature against a pinned key (`BARBACANE_TRUSTED_PUBKEY`) on load. Sign at compile with `BARBACANE_SIGNING_KEY`.
+- [x] **MCP session enforcement** — non-`initialize` requests without a valid session are rejected (no more header-omission bypass).
+- [x] **Plugin egress SSRF guard** — the WASM host HTTP client rejects loopback/link-local/private/metadata targets and no longer follows redirects (override with `BARBACANE_ALLOW_INTERNAL_EGRESS`).
+- [x] **`jwt-auth` real verification** — signatures verified via the host `verify_signature` capability (inline JWK); the test-only skip flag is ignored in production builds.
+- [x] **Secret confinement** — `file://` secret references confined to `BARBACANE_SECRETS_DIR`.
+- [x] **Security test framework** — adversarial integration suite (`crates/barbacane-test/tests/security/`) + `cargo-fuzz` targets (`fuzz/`). See `docs/contributing/security-testing.md`.
+- [x] **WASM capability enforcement** — all 33 official `plugin.toml`s migrated to the canonical `host_functions` dialect (verified against each plugin's real wasm imports); the data plane runs `validate_imports` on load and rejects any plugin importing a host function outside its declared capabilities. Enforced when the artifact's capabilities are authoritative (`capabilities_enforced`), i.e. compiled from `plugin.toml`.
+
+In flight:
+
+- [ ] **Control-plane capability persistence** — the registry does not yet store plugin capabilities, so control-plane-compiled artifacts are capability-less and load without enforcement. Add a capabilities column + parse `plugin.toml` on plugin upload/seed so control-plane artifacts are enforced too.
 
 ---
 
@@ -51,7 +66,7 @@ Committed but not yet scheduled. Grouped by concern.
 | RBAC | P2 | Role-based access control for control plane API |
 | Plugin registry | P2 | Central registry for discovering and versioning plugins |
 | Data plane groups | P2 | Deploy to specific subsets of data planes |
-| Artifact signing | P2 | GPG/private-key signing + verification on load |
+| Artifact signing | ✅ | Ed25519 signing + verify-on-load shipped (security hardening); remaining: key distribution/rotation tooling, optional Sigstore/transparency-log |
 | Health metrics collection | P2 | Aggregate CPU, memory, request rates from data planes |
 | Multi-tenancy | P3 | Organization/team isolation with SNI-based routing |
 
@@ -112,6 +127,12 @@ The first three rungs of the trusted spec-to-run pipeline are shipped (artifact 
 | E1032 validation | P2 | Warn on OpenAPI security scheme without matching auth middleware |
 | OPA WASM compilation | P1 | Define OPA version, compilation flags, error handling |
 | Auth plugin auditing | P1 | Security review process for auth plugins |
+| Ingress timeouts & limits | P1 | Header-read/idle/handshake timeouts, connection cap, streaming body-size limit on the data plane (wire the parsed `--keepalive-timeout`) |
+| Per-plugin secret & capability scope | P1 | Scope resolved secrets per plugin; complete the per-plugin default-deny host-function linker + migrate official `plugin.toml` capability dialects |
+| Plugin SDK hardening helpers | P2 | Shared SDK helpers: constant-time secret compare, trusted-proxy client-IP extraction, RFC-9457 errors, CRLF-safe headers (removes per-plugin drift) |
+| WASM execution budget | P2 | Epoch-interruption wall-clock deadline + host-imposed timeouts/body caps on blocking host calls |
+| CI/supply-chain hardening | P2 | SHA-pin third-party Actions, scope job token permissions, `cargo deny check` (licenses/bans/sources) as a gate, SBOM + image signing |
+| Control-plane container non-root | P2 | Run `barbacane-control` (nginx) as non-root (high port or capability) |
 | Trace volume guidance | P1 | Documentation for managing trace volume at scale |
 | Integration tests | P2 | Full control plane API lifecycle tests with PostgreSQL |
 | Compile safety CI | P2 | Fitness functions: deterministic build verification, fuzz testing |

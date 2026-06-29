@@ -6,5 +6,4 @@ description = "Rate limiting middleware with IETF draft headers support"
 wasm = "rate-limit.wasm"
 
 [capabilities]
-rate_limit = true
-log = true
+host_functions = ["log", "rate_limit"]

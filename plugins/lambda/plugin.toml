@@ -5,4 +5,4 @@ type = "dispatcher"
 wasm = "lambda.wasm"
 
 [capabilities]
-host_functions = ["host_http_call", "host_log"]
+host_functions = ["http_call"]

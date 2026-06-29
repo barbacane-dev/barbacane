@@ -6,4 +6,4 @@ description = "CORS middleware for cross-origin resource sharing"
 wasm = "cors.wasm"
 
 [capabilities]
-log = true
+host_functions = ["log"]

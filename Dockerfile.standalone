@@ -76,9 +76,17 @@ RUN mkdir -p /plugins && \
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim
 
+# OCI labels
+LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"
+LABEL org.opencontainers.image.description="Barbacane API Gateway - Standalone"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r barbacane && useradd -r -g barbacane barbacane
 
 # Binary
 COPY --from=binary-builder /usr/local/bin/barbacane /usr/local/bin/barbacane
@@ -90,4 +98,9 @@ COPY --from=plugin-builder /plugins/ /plugins/
 COPY docker/plugins.yaml /etc/barbacane/plugins.yaml
 
 WORKDIR /workspace
+RUN chown -R barbacane:barbacane /workspace
+
+# Run as non-root (gateway listens on a high port; no privileged bind needed)
+USER barbacane
+
 ENTRYPOINT ["barbacane"]

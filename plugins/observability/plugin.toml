@@ -6,8 +6,4 @@ description = "Per-operation observability middleware for SLO monitoring, detail
 wasm = "observability.wasm"
 
 [capabilities]
-log = true
-telemetry = true
-time = true
-context_get = true
-context_set = true
+host_functions = ["log", "context_get", "context_set", "telemetry", "clock_now"]

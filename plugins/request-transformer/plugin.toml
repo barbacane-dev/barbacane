@@ -6,6 +6,5 @@ description = "Transform HTTP requests: headers, query parameters, path, and bod
 wasm = "request-transformer.wasm"
 
 [capabilities]
-log = true
-context_get = true
+host_functions = ["log", "context_get"]
 body_access = true

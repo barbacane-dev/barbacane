@@ -38,7 +38,7 @@ FROM debian:bookworm-slim
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"
 LABEL org.opencontainers.image.description="Barbacane API Gateway - Control Plane"
-LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 
 # Install runtime dependencies and nginx for serving UI
 RUN apt-get update && apt-get install -y --no-install-recommends \

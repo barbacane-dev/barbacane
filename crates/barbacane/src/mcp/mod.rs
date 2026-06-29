@@ -108,20 +108,22 @@ impl McpServer {
 
         let is_notification = req.id.is_none();
 
-        // Session validation for non-initialize, non-notification requests
+        // Session validation for non-initialize, non-notification requests.
+        // Fail closed: a missing session header is rejected exactly like an
+        // invalid one. Otherwise a client could skip the check entirely (and
+        // reach `tools/list` / `tools/call`) simply by omitting `Mcp-Session-Id`.
         if req.method != "initialize" && !is_notification {
-            if let Some(sid) = session_id {
-                if !self.session_store.touch(sid) {
-                    let resp = JsonRpcResponse::error(
-                        req.id,
-                        INVALID_REQUEST,
-                        "invalid or expired session",
-                    );
-                    return McpResult::Response {
-                        body: serde_json::to_vec(&resp).unwrap_or_default(),
-                        session_id: None,
-                    };
-                }
+            let session_ok = session_id.is_some_and(|sid| self.session_store.touch(sid));
+            if !session_ok {
+                let resp = JsonRpcResponse::error(
+                    req.id,
+                    INVALID_REQUEST,
+                    "missing, invalid, or expired session; call initialize first",
+                );
+                return McpResult::Response {
+                    body: serde_json::to_vec(&resp).unwrap_or_default(),
+                    session_id: None,
+                };
             }
         }
 
@@ -361,8 +363,9 @@ mod tests {
     #[test]
     fn tools_list_returns_mcp_enabled_tools() {
         let server = make_server();
+        let sid = server.session_store.create(None);
         let body = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
-        match server.handle_request(body, None) {
+        match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
                 body: resp_body, ..
             } => {
@@ -379,9 +382,10 @@ mod tests {
     #[test]
     fn tools_call_returns_needs_dispatch() {
         let server = make_server();
+        let sid = server.session_store.create(None);
         let body =
             br#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getHealth"}}"#;
-        match server.handle_request(body, None) {
+        match server.handle_request(body, Some(&sid)) {
             McpResult::NeedsDispatch {
                 operation_index,
                 path,
@@ -397,9 +401,10 @@ mod tests {
     #[test]
     fn tools_call_unknown_tool() {
         let server = make_server();
+        let sid = server.session_store.create(None);
         let body =
             br#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nonexistent"}}"#;
-        match server.handle_request(body, None) {
+        match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
                 body: resp_body, ..
             } => {
@@ -414,8 +419,9 @@ mod tests {
     #[test]
     fn unknown_method_returns_error() {
         let server = make_server();
+        let sid = server.session_store.create(None);
         let body = br#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#;
-        match server.handle_request(body, None) {
+        match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
                 body: resp_body, ..
             } => {
@@ -440,8 +446,9 @@ mod tests {
     #[test]
     fn ping_returns_empty_result() {
         let server = make_server();
+        let sid = server.session_store.create(None);
         let body = br#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#;
-        match server.handle_request(body, None) {
+        match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
                 body: resp_body, ..
             } => {
@@ -450,6 +457,27 @@ mod tests {
                 assert_eq!(json["result"], serde_json::json!({}));
             }
             _ => panic!("expected Response"),
+        }
+    }
+
+    #[test]
+    fn non_initialize_without_session_is_rejected() {
+        // DP-1 regression: omitting the session must NOT bypass validation.
+        let server = make_server();
+        for body in [
+            &br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#[..],
+            &br#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getHealth"}}"#[..],
+        ] {
+            match server.handle_request(body, None) {
+                McpResult::Response {
+                    body: resp_body, ..
+                } => {
+                    let json: serde_json::Value =
+                        serde_json::from_slice(&resp_body).expect("valid json");
+                    assert_eq!(json["error"]["code"], INVALID_REQUEST);
+                }
+                _ => panic!("expected session-rejection Response"),
+            }
         }
     }
 
@@ -532,8 +560,9 @@ mod tests {
     #[test]
     fn tools_call_missing_name_field() {
         let server = make_server();
+        let sid = server.session_store.create(None);
         let body = br#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}"#;
-        match server.handle_request(body, None) {
+        match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
                 body: resp_body, ..
             } => {
@@ -585,9 +614,10 @@ mod tests {
             server_version: None,
         };
         let server = McpServer::new(&ops, &config);
+        let sid = server.session_store.create(None);
 
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getUser","arguments":{"id":"123"}}}"#;
-        match server.handle_request(body, None) {
+        match server.handle_request(body, Some(&sid)) {
             McpResult::NeedsDispatch {
                 operation_index,
                 path,

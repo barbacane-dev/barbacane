@@ -6,4 +6,4 @@ description = "OPA authorization middleware — policy-based access control via 
 wasm = "opa-authz.wasm"
 
 [capabilities]
-http = true
+host_functions = ["http_call"]

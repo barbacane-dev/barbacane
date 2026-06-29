@@ -31,19 +31,64 @@ pub struct JwtAuth {
     #[serde(default)]
     groups_claim: Option<String>,
 
-    /// Whether to skip signature validation (for testing only).
+    /// Skip signature validation. **Test only** — this flag is ignored in the
+    /// compiled WASM plugin (it is honored solely under `#[cfg(test)]`), so a
+    /// production deployment can never be configured to accept unsigned tokens.
     #[serde(default)]
     skip_signature_validation: bool,
 
-    /// JWKS URL for fetching public keys (not yet implemented).
+    /// JWKS URL for fetching public keys. Not handled by `jwt-auth`; use the
+    /// `oidc-auth` plugin for JWKS-based verification.
     #[allow(dead_code)]
     #[serde(default)]
     jwks_url: Option<String>,
 
-    /// Inline public key in PEM format for signature validation (not yet implemented).
+    /// Inline public key in PEM format. Not handled by `jwt-auth`; supply
+    /// `public_key_jwk` instead, or use `oidc-auth`.
     #[allow(dead_code)]
     #[serde(default)]
     public_key_pem: Option<String>,
+
+    /// Inline public key as a JWK, used to verify the token signature via the
+    /// host `verify_signature` capability. Supports RSA (`RS256/384/512`) and
+    /// EC (`ES256/384`) keys. When set, every token must carry a valid
+    /// signature under this key.
+    #[serde(default)]
+    public_key_jwk: Option<Jwk>,
+}
+
+/// A JSON Web Key (public part) accepted by the host `verify_signature`
+/// capability.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct Jwk {
+    kty: String,
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    alg: Option<String>,
+    #[serde(default, rename = "use")]
+    use_: Option<String>,
+    // RSA
+    #[serde(default)]
+    n: Option<String>,
+    #[serde(default)]
+    e: Option<String>,
+    // EC
+    #[serde(default)]
+    x: Option<String>,
+    #[serde(default)]
+    y: Option<String>,
+    #[serde(default)]
+    crv: Option<String>,
+}
+
+/// Request payload for the host `verify_signature` capability.
+#[derive(Serialize)]
+struct VerifyRequest {
+    algorithm: String,
+    jwk: serde_json::Value,
+    message: String,
+    signature: Vec<u8>,
 }
 
 fn default_clock_skew() -> u64 {
@@ -112,9 +157,7 @@ impl Audience {
 struct ParsedJwt {
     header: JwtHeader,
     claims: JwtClaims,
-    #[allow(dead_code)]
     signing_input: String,
-    #[allow(dead_code)]
     signature: Vec<u8>,
 }
 
@@ -239,8 +282,11 @@ impl JwtAuth {
         // Validate algorithm
         self.validate_algorithm(&parsed.header)?;
 
-        // Validate signature (if not skipped)
-        if !self.skip_signature_validation {
+        // Validate signature. `skip_signature_validation` is honored only in
+        // unit tests (`cfg!(test)`); in the compiled plugin it has no effect,
+        // so a forged/unsigned token is never accepted in production.
+        let skip = self.skip_signature_validation && cfg!(test);
+        if !skip {
             self.validate_signature(&parsed)?;
         }
 
@@ -308,19 +354,55 @@ impl JwtAuth {
         }
     }
 
-    /// Validate the JWT signature.
+    /// Validate the JWT signature using the host `verify_signature` capability.
     ///
-    /// NOTE: Cryptographic signature validation is not yet implemented.
-    /// When `skip_signature_validation` is false, this will always fail.
-    /// Use `skip_signature_validation: true` until JWKS support is added.
-    fn validate_signature(&self, _parsed: &ParsedJwt) -> Result<(), JwtError> {
-        // Signature validation requires either:
-        // 1. A host function for crypto (host_verify_signature) - not yet implemented
-        // 2. WASM-compatible crypto library - complex to integrate
-        //
-        // For now, signature validation always fails unless explicitly skipped.
-        // This is intentional: we don't want to silently accept unsigned tokens.
-        Err(JwtError::SignatureInvalid)
+    /// Requires `public_key_jwk` to be configured. JWKS-over-network and PEM
+    /// keys are intentionally not handled here — use the `oidc-auth` plugin for
+    /// those. Fails closed when no inline key is configured.
+    fn validate_signature(&self, parsed: &ParsedJwt) -> Result<(), JwtError> {
+        let jwk = self
+            .public_key_jwk
+            .as_ref()
+            .ok_or(JwtError::SignatureInvalid)?;
+
+        // Bind the key to the token algorithm (RFC 8725): a key tagged with a
+        // specific `alg`/`use` must match what the token claims, and the key
+        // type must match the algorithm family.
+        if let Some(key_alg) = &jwk.alg {
+            if key_alg != &parsed.header.alg {
+                return Err(JwtError::SignatureInvalid);
+            }
+        }
+        if let Some(use_) = &jwk.use_ {
+            if use_ != "sig" {
+                return Err(JwtError::SignatureInvalid);
+            }
+        }
+        let expected_kty = match parsed.header.alg.as_str() {
+            "RS256" | "RS384" | "RS512" => "RSA",
+            "ES256" | "ES384" | "ES512" => "EC",
+            other => return Err(JwtError::UnsupportedAlgorithm(other.to_string())),
+        };
+        if jwk.kty != expected_kty {
+            return Err(JwtError::SignatureInvalid);
+        }
+
+        let request = VerifyRequest {
+            algorithm: parsed.header.alg.clone(),
+            jwk: serde_json::to_value(jwk).map_err(|_| JwtError::SignatureInvalid)?,
+            message: parsed.signing_input.clone(),
+            signature: parsed.signature.clone(),
+        };
+        let request_json = serde_json::to_vec(&request).map_err(|_| JwtError::SignatureInvalid)?;
+
+        // SAFETY: passing a pointer/length into the host, which copies the bytes
+        // out of guest memory before returning.
+        let result =
+            unsafe { host_verify_signature(request_json.as_ptr() as i32, request_json.len() as i32) };
+        match result {
+            1 => Ok(()),
+            _ => Err(JwtError::SignatureInvalid),
+        }
     }
 
     /// Validate JWT claims.
@@ -388,13 +470,24 @@ impl JwtAuth {
     }
 }
 
+/// Host capability bindings (WASM).
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "barbacane")]
+extern "C" {
+    fn host_get_unix_timestamp() -> u64;
+    fn host_verify_signature(req_ptr: i32, req_len: i32) -> i32;
+}
+
+/// Non-WASM stub: signature verification is unavailable off-target, so it
+/// fails closed. Unit tests use `skip_signature_validation` instead.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe fn host_verify_signature(_req_ptr: i32, _req_len: i32) -> i32 {
+    -1
+}
+
 /// Get current Unix timestamp (WASM version using host function).
 #[cfg(target_arch = "wasm32")]
 fn current_timestamp() -> u64 {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_get_unix_timestamp() -> u64;
-    }
     unsafe { host_get_unix_timestamp() }
 }
 
@@ -461,6 +554,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let req = create_test_request(Some("Bearer my.jwt.token"));
         let token = config.extract_token(&req).unwrap();
@@ -477,6 +571,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let req = create_test_request(Some("bearer my.jwt.token"));
         let token = config.extract_token(&req).unwrap();
@@ -493,6 +588,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let req = create_test_request(Some("Bearer  my.jwt.token  "));
         let token = config.extract_token(&req).unwrap();
@@ -509,6 +605,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let req = create_test_request(None);
         let result = config.extract_token(&req);
@@ -525,6 +622,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let req = create_test_request(Some("Basic dXNlcjpwYXNz"));
         let result = config.extract_token(&req);
@@ -541,6 +639,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let token = create_test_jwt(
             r#"{"alg":"RS256","typ":"JWT"}"#,
@@ -562,6 +661,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let result = config.parse_jwt("header.payload");
         assert!(matches!(result, Err(JwtError::MalformedToken)));
@@ -577,6 +677,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let result = config.parse_jwt("invalid!!!.payload.sig");
         assert!(matches!(result, Err(JwtError::InvalidBase64)));
@@ -592,6 +693,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let header_b64 = URL_SAFE_NO_PAD.encode(b"not json");
         let claims_b64 = URL_SAFE_NO_PAD.encode(b"{}");
@@ -610,6 +712,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let header = JwtHeader {
             alg: "RS256".to_string(),
@@ -629,6 +732,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let header = JwtHeader {
             alg: "ES256".to_string(),
@@ -648,6 +752,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let header = JwtHeader {
             alg: "none".to_string(),
@@ -668,6 +773,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let header = JwtHeader {
             alg: "HS256".to_string(),
@@ -689,6 +795,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let claims = JwtClaims {
             sub: Some("user123".to_string()),
@@ -714,6 +821,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let claims = JwtClaims {
             sub: None,
@@ -740,6 +848,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let claims = JwtClaims {
             sub: None,
@@ -766,6 +875,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let claims = JwtClaims {
             sub: None,
@@ -792,6 +902,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let claims = JwtClaims {
             sub: None,
@@ -819,6 +930,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let claims = JwtClaims {
             sub: None,
@@ -862,6 +974,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let error = JwtError::MissingAuthHeader;
         let response = config.unauthorized_response(&error);
@@ -922,6 +1035,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         let token = create_test_jwt(
@@ -949,6 +1063,34 @@ mod tests {
     }
 
     #[test]
+    fn test_on_request_rejects_when_no_key_and_not_skipped() {
+        // Production-shaped config: signature validation is NOT skipped and no
+        // verification key is configured. A structurally valid, unexpired token
+        // must be rejected (fail closed) — this is the CR-1 regression guard
+        // proving the old "skip-or-bypass" hole is gone.
+        mock_time::set_mock_timestamp(1000);
+        let mut config = JwtAuth {
+            issuer: None,
+            audience: None,
+            clock_skew_seconds: 60,
+            groups_claim: None,
+            skip_signature_validation: false,
+            jwks_url: None,
+            public_key_pem: None,
+            public_key_jwk: None,
+        };
+        let token = create_test_jwt(
+            r#"{"alg":"RS256","typ":"JWT"}"#,
+            r#"{"sub":"attacker","exp":2000}"#,
+        );
+        let req = create_test_request(Some(&format!("Bearer {}", token)));
+        match config.on_request(req) {
+            Action::ShortCircuit(response) => assert_eq!(response.status, 401),
+            Action::Continue(_) => panic!("forged/unsigned token must be rejected"),
+        }
+    }
+
+    #[test]
     fn test_on_request_missing_token() {
         let mut config = JwtAuth {
             issuer: None,
@@ -958,6 +1100,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         let req = create_test_request(None);
@@ -981,6 +1124,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         let token = create_test_jwt(
@@ -1009,6 +1153,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         let response = Response {
@@ -1032,6 +1177,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
         let mut headers = BTreeMap::new();
         headers.insert(
@@ -1062,6 +1208,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         let token = create_test_jwt(
@@ -1090,6 +1237,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         let token = create_test_jwt(
@@ -1121,6 +1269,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         let token = create_test_jwt(
@@ -1152,6 +1301,7 @@ mod tests {
             skip_signature_validation: true,
             jwks_url: None,
             public_key_pem: None,
+            public_key_jwk: None,
         };
 
         // JWT has no "roles" claim

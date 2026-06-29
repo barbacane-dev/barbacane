@@ -6,4 +6,4 @@ description = "Block requests from known bots and scrapers by User-Agent pattern
 wasm = "bot-detection.wasm"
 
 [capabilities]
-log = true
+host_functions = []

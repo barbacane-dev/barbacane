@@ -13,6 +13,7 @@ categories.workspace = true
 chrono = { workspace = true }
 hex = { workspace = true }
 home = "0.5"
+ring = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

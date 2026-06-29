@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -112,6 +113,9 @@ impl HttpClient {
             .pool_idle_timeout(config.pool_idle_timeout)
             .connect_timeout(config.connect_timeout)
             .timeout(config.default_timeout)
+            // Disable redirect following: a permitted host could otherwise 3xx
+            // to an internal/metadata target, bypassing the SSRF guard below.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(HttpClientError::BuildError)?;
 
@@ -160,7 +164,8 @@ impl HttpClient {
             .pool_max_idle_per_host(self.base_config.pool_max_idle_per_host)
             .pool_idle_timeout(self.base_config.pool_idle_timeout)
             .connect_timeout(self.base_config.connect_timeout)
-            .timeout(self.base_config.default_timeout);
+            .timeout(self.base_config.default_timeout)
+            .redirect(reqwest::redirect::Policy::none());
 
         // Add client certificate (mTLS)
         if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key)
@@ -225,6 +230,9 @@ impl HttpClient {
             .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?
             .to_string();
 
+        // SSRF guard: reject internal/loopback/link-local/metadata targets.
+        ssrf_guard(&url, self.base_config.allow_internal_egress).await?;
+
         let circuit_state = self.get_circuit_state(&host);
         if circuit_state == crate::circuit_breaker::CircuitState::Open {
             return Err(HttpClientError::CircuitOpen(host));
@@ -283,6 +291,9 @@ impl HttpClient {
             .host_str()
             .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?
             .to_string();
+
+        // SSRF guard: reject internal/loopback/link-local/metadata targets.
+        ssrf_guard(&url, self.base_config.allow_internal_egress).await?;
 
         // Check circuit breaker
         let circuit_state = self.get_circuit_state(&host);
@@ -390,6 +401,84 @@ impl HttpClient {
     }
 }
 
+/// Whether an IP address points at an internal / non-routable / metadata range
+/// that an untrusted plugin must not be able to reach.
+fn ip_is_internal(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local() // 169.254.0.0/16, incl. 169.254.169.254 cloud metadata
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.octets()[0] == 0 // 0.0.0.0/8
+                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64) // 100.64.0.0/10 CGNAT
+        }
+        IpAddr::V6(v6) => {
+            // Unwrap IPv4-in-IPv6 forms and apply the v4 rules.
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return ip_is_internal(&IpAddr::V4(mapped));
+            }
+            if let Some(compat) = v6.to_ipv4() {
+                return ip_is_internal(&IpAddr::V4(compat));
+            }
+            let seg = v6.segments();
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (seg[0] & 0xfe00) == 0xfc00 // fc00::/7 unique-local
+                || (seg[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
+        }
+    }
+}
+
+/// Reject requests whose target resolves to an internal address. Hostnames are
+/// resolved and rejected if *any* resolved address is internal, defending
+/// against a public name that points at an internal IP.
+///
+/// Note: a separate connect-time resolution still occurs inside reqwest, so a
+/// rebinding attacker could in theory return a different address; pinning the
+/// vetted IP via a custom resolver is tracked as follow-up hardening.
+async fn ssrf_guard(url: &reqwest::Url, allow_internal: bool) -> Result<(), HttpClientError> {
+    if allow_internal {
+        return Ok(());
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?;
+    let host_clean = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+
+    if let Ok(ip) = host_clean.parse::<IpAddr>() {
+        if ip_is_internal(&ip) {
+            return Err(HttpClientError::BlockedTarget(host.to_string()));
+        }
+        return Ok(());
+    }
+
+    let port = url.port_or_known_default().unwrap_or(0);
+    let mut saw_any = false;
+    let addrs = tokio::net::lookup_host((host_clean, port))
+        .await
+        .map_err(|e| HttpClientError::ConnectionFailed(e.to_string()))?;
+    for addr in addrs {
+        saw_any = true;
+        if ip_is_internal(&addr.ip()) {
+            return Err(HttpClientError::BlockedTarget(host.to_string()));
+        }
+    }
+    if !saw_any {
+        return Err(HttpClientError::ConnectionFailed(format!(
+            "no DNS records for {host}"
+        )));
+    }
+    Ok(())
+}
+
 /// Configuration for the HTTP client.
 #[derive(Debug, Clone)]
 pub struct HttpClientConfig {
@@ -403,6 +492,10 @@ pub struct HttpClientConfig {
     pub default_timeout: Duration,
     /// Allow plaintext HTTP (development only).
     pub allow_plaintext: bool,
+    /// Allow plugin egress to internal/loopback/link-local/metadata targets,
+    /// disabling the SSRF guard. Off by default; operators opt in for trusted
+    /// internal upstreams.
+    pub allow_internal_egress: bool,
 }
 
 impl Default for HttpClientConfig {
@@ -413,6 +506,7 @@ impl Default for HttpClientConfig {
             connect_timeout: Duration::from_secs(10),
             default_timeout: Duration::from_secs(30),
             allow_plaintext: false,
+            allow_internal_egress: false,
         }
     }
 }
@@ -489,6 +583,9 @@ pub enum HttpClientError {
     #[error("circuit breaker open for host: {0}")]
     CircuitOpen(String),
 
+    #[error("target blocked by SSRF policy: {0}")]
+    BlockedTarget(String),
+
     #[error("request timeout")]
     Timeout,
 
@@ -532,6 +629,59 @@ mod option_duration_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssrf_classifier_blocks_internal_targets() {
+        let blocked = [
+            "127.0.0.1",
+            "169.254.169.254", // cloud metadata
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.16.0.1",
+            "0.0.0.0",
+            "100.64.0.1",       // CGNAT
+            "::1",              // IPv6 loopback
+            "fc00::1",          // IPv6 ULA
+            "fe80::1",          // IPv6 link-local
+            "::ffff:127.0.0.1", // IPv4-mapped loopback
+            "::ffff:169.254.169.254",
+        ];
+        for s in blocked {
+            let ip: IpAddr = s.parse().unwrap();
+            assert!(ip_is_internal(&ip), "{s} should be classified internal");
+        }
+
+        let allowed = [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+        ];
+        for s in allowed {
+            let ip: IpAddr = s.parse().unwrap();
+            assert!(!ip_is_internal(&ip), "{s} should be classified external");
+        }
+    }
+
+    #[tokio::test]
+    async fn ssrf_guard_rejects_ip_literals_to_metadata_and_loopback() {
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8081/",
+            "https://[::1]/",
+            "http://10.1.2.3/",
+        ] {
+            let parsed = url.parse::<reqwest::Url>().unwrap();
+            let err = ssrf_guard(&parsed, false).await.unwrap_err();
+            assert!(
+                matches!(err, HttpClientError::BlockedTarget(_)),
+                "{url} should be blocked, got {err:?}"
+            );
+        }
+        // With internal egress allowed, the same targets pass the guard.
+        let parsed = "http://127.0.0.1:8081/".parse::<reqwest::Url>().unwrap();
+        assert!(ssrf_guard(&parsed, true).await.is_ok());
+    }
 
     #[test]
     fn test_config_default() {
@@ -693,6 +843,7 @@ mod tests {
     async fn stream_raw_rejects_invalid_method() {
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");
@@ -713,6 +864,7 @@ mod tests {
     async fn stream_raw_connection_refused() {
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");
@@ -743,6 +895,7 @@ mod tests {
 
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");
@@ -782,6 +935,7 @@ mod tests {
 
         let config = HttpClientConfig {
             allow_plaintext: true,
+            allow_internal_egress: true,
             ..Default::default()
         };
         let client = HttpClient::new(config).expect("client");

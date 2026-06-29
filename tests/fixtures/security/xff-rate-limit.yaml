@@ -1,0 +1,30 @@
+openapi: "3.1.0"
+info:
+  title: XFF Rate Limit Test API
+  version: "1.0.0"
+  description: >
+    Rate limit partitioned by client_ip. Used to prove that rotating a forged
+    X-Forwarded-For must not create fresh buckets (BARB-SEC-005).
+
+paths:
+  /limited:
+    get:
+      operationId: limitedEndpoint
+      summary: Rate limited endpoint (3 req/60s), partitioned by client IP
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 3
+            window: 60
+            policy_name: "xff-test-policy"
+            partition_key: "client_ip"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+      responses:
+        "200":
+          description: Success
+        "429":
+          description: Rate limit exceeded

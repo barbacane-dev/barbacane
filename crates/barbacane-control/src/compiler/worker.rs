@@ -262,8 +262,12 @@ async fn resolve_project_plugins(
             version: plugin_with_binary.version.clone(),
             plugin_type: plugin_with_binary.plugin_type.clone(),
             wasm_bytes: plugin_with_binary.wasm_binary,
-            // TODO: read body_access from DB once the plugins table has a capabilities column
+            // TODO: read body_access + host_functions from the registry once the
+            // plugins table persists capabilities. Until then the control plane
+            // compiles capability-less (non-authoritative) artifacts, so the data
+            // plane loads them without capability enforcement (WA-1).
             body_access: false,
+            host_functions: vec![],
         });
     }
 

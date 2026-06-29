@@ -27,6 +27,7 @@
 # Reference
 
 - [CLI reference](reference/cli.md)
+- [Configuration & environment variables](reference/configuration.md)
 - [Spec Extensions](reference/extensions.md)
 - [Artifact Format](reference/artifact.md)
 - [Reserved Endpoints](reference/endpoints.md)
@@ -36,3 +37,4 @@
 - [Architecture](contributing/architecture.md)
 - [Development setup](contributing/development.md)
 - [WASM plugin development](contributing/plugins.md)
+- [Security testing](contributing/security-testing.md)

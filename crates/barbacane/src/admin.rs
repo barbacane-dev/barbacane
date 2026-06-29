@@ -183,6 +183,9 @@ mod tests {
                 source: Some("ci/github-actions".to_string()),
             },
             mcp: barbacane_compiler::McpConfig::default(),
+            signature: None,
+            signing_public_key: None,
+            capabilities_enforced: false,
         }
     }
 
@@ -279,6 +282,9 @@ mod tests {
             artifact_hash: "sha256:test".to_string(),
             provenance: barbacane_compiler::Provenance::default(),
             mcp: barbacane_compiler::McpConfig::default(),
+            signature: None,
+            signing_public_key: None,
+            capabilities_enforced: false,
         };
         let state = Arc::new(AdminState {
             manifest: Arc::new(ArcSwap::new(Arc::new(manifest))),
@@ -317,6 +323,9 @@ mod tests {
             artifact_hash: "sha256:test".to_string(),
             provenance: barbacane_compiler::Provenance::default(),
             mcp: barbacane_compiler::McpConfig::default(),
+            signature: None,
+            signing_public_key: None,
+            capabilities_enforced: false,
         };
         let state = Arc::new(AdminState {
             manifest: Arc::new(ArcSwap::new(Arc::new(manifest))),

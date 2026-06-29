@@ -37,7 +37,12 @@ async fn make_app() -> Option<Router> {
     crate::db::run_migrations(&pool).await.ok()?;
 
     let conn_mgr = Arc::new(crate::api::ConnectionManager::new());
-    Some(crate::api::create_router(pool, None, conn_mgr))
+    Some(crate::api::create_router(
+        pool,
+        None,
+        conn_mgr,
+        crate::api::AdminAuth::Disabled,
+    ))
 }
 
 /// Send one request through the router and return the status + body bytes.

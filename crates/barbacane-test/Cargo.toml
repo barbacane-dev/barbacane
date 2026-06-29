@@ -22,6 +22,10 @@ tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
+# Used by the security suite (artifact_integrity) to rebuild a .bca archive with
+# a single tampered byte. Same crates the compiler uses for the .bca format.
+flate2 = { workspace = true }
+tar = { workspace = true }
 
 [lints]
 workspace = true

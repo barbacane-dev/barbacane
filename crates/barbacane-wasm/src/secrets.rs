@@ -64,6 +64,46 @@ impl SecretsStore {
     }
 }
 
+/// Confine a `file://` secret path to the operator-configured secrets
+/// directory (`BARBACANE_SECRETS_DIR`).
+///
+/// Without this, `file://` is an arbitrary-file-read primitive
+/// (`file:///etc/shadow`, `file:///proc/self/environ`). We require an explicit
+/// base directory and verify, after canonicalization (which resolves symlinks
+/// and `..`), that the target stays inside it. Fails closed when the base dir
+/// is not configured.
+fn confine_secret_path(path: &str) -> Result<std::path::PathBuf, SecretsError> {
+    let base = std::env::var_os("BARBACANE_SECRETS_DIR").ok_or_else(|| {
+        SecretsError::FileReadError(
+            "file:// secret references require BARBACANE_SECRETS_DIR to be set".to_string(),
+        )
+    })?;
+    let base = std::path::Path::new(&base)
+        .canonicalize()
+        .map_err(|e| SecretsError::FileReadError(format!("invalid BARBACANE_SECRETS_DIR: {e}")))?;
+
+    let requested = std::path::Path::new(path);
+    let joined = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        base.join(requested)
+    };
+    let canonical = joined.canonicalize().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            SecretsError::FileNotFound(path.to_string())
+        } else {
+            SecretsError::FileReadError(format!("{}: {}", path, e))
+        }
+    })?;
+
+    if !canonical.starts_with(&base) {
+        return Err(SecretsError::FileReadError(format!(
+            "secret path '{path}' escapes BARBACANE_SECRETS_DIR"
+        )));
+    }
+    Ok(canonical)
+}
+
 /// Check if a string value is a secret reference.
 pub fn is_secret_reference(value: &str) -> bool {
     value.starts_with("env://")
@@ -77,12 +117,14 @@ pub fn is_secret_reference(value: &str) -> bool {
 ///
 /// Currently supports:
 /// - `env://VAR_NAME` - Environment variable
-/// - `file:///path/to/secret` - File content (trimmed)
+/// - `file:///path/to/secret` - File content (trimmed), confined to the
+///   directory named by `BARBACANE_SECRETS_DIR`
 pub fn resolve_secret(reference: &str) -> Result<String, SecretsError> {
     if let Some(var_name) = reference.strip_prefix("env://") {
         std::env::var(var_name).map_err(|_| SecretsError::EnvNotFound(var_name.to_string()))
     } else if let Some(path) = reference.strip_prefix("file://") {
-        std::fs::read_to_string(path)
+        let resolved = confine_secret_path(path)?;
+        std::fs::read_to_string(&resolved)
             .map(|s| s.trim().to_string())
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
@@ -235,22 +277,42 @@ mod tests {
         assert!(matches!(result, Err(SecretsError::EnvNotFound(_))));
     }
 
+    // All `file://` assertions live in one test: they mutate the shared
+    // BARBACANE_SECRETS_DIR env var, so keeping them sequential avoids the
+    // cross-thread race that separate parallel tests would introduce.
     #[test]
-    fn test_resolve_file_secret() {
+    fn test_resolve_file_secret_confinement() {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secret.txt");
         let mut file = std::fs::File::create(&path).unwrap();
         writeln!(file, "file-secret-value").unwrap();
 
-        let result = resolve_secret(&format!("file://{}", path.display()));
-        assert_eq!(result.unwrap(), "file-secret-value");
-    }
+        // Fail closed when no secrets dir is configured.
+        std::env::remove_var("BARBACANE_SECRETS_DIR");
+        assert!(matches!(
+            resolve_secret(&format!("file://{}", path.display())),
+            Err(SecretsError::FileReadError(_))
+        ));
 
-    #[test]
-    fn test_resolve_file_not_found() {
-        let result = resolve_secret("file:///nonexistent/path/to/secret");
-        assert!(matches!(result, Err(SecretsError::FileNotFound(_))));
+        // Confined read succeeds inside the configured dir.
+        std::env::set_var("BARBACANE_SECRETS_DIR", dir.path());
+        assert_eq!(
+            resolve_secret(&format!("file://{}", path.display())).unwrap(),
+            "file-secret-value"
+        );
+
+        // Absolute path outside the dir is rejected.
+        assert!(resolve_secret("file:///etc/hostname").is_err());
+
+        // Missing file inside the dir → FileNotFound.
+        let missing = dir.path().join("nope.txt");
+        assert!(matches!(
+            resolve_secret(&format!("file://{}", missing.display())),
+            Err(SecretsError::FileNotFound(_))
+        ));
+
+        std::env::remove_var("BARBACANE_SECRETS_DIR");
     }
 
     #[test]

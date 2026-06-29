@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::api::{create_router, ConnectionManager};
+use crate::api::{create_router, AdminAuth, ConnectionManager};
 use crate::db::DataPlanesRepository;
 
 /// How often to check for stale data planes (seconds).
@@ -21,6 +21,7 @@ const STALE_THRESHOLD_MINUTES: i64 = 2;
 pub struct ServerConfig {
     pub listen_addr: SocketAddr,
     pub pool: PgPool,
+    pub admin_auth: AdminAuth,
 }
 
 /// Run the control plane server.
@@ -56,7 +57,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let connection_manager = Arc::new(ConnectionManager::new());
 
     // Create router
-    let app = create_router(config.pool, Some(tx), connection_manager);
+    let app = create_router(config.pool, Some(tx), connection_manager, config.admin_auth);
 
     // Bind and serve
     let listener = TcpListener::bind(config.listen_addr).await?;

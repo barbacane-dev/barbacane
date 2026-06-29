@@ -5,5 +5,4 @@ type = "middleware"
 description = "Response caching middleware with TTL support"
 
 [capabilities]
-cache = true
-log = true
+host_functions = ["log", "cache"]

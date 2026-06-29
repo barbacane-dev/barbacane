@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **security**: control-plane admin authentication (`BARBACANE_CONTROL_ADMIN_TOKEN`), CORS allowlist (`BARBACANE_CONTROL_ALLOWED_ORIGINS`).
+- **security**: `.bca` Ed25519 signing (`BARBACANE_SIGNING_KEY`) and verify-on-load against a pinned key (`BARBACANE_TRUSTED_PUBKEY`), plus per-plugin/spec/route checksum verification on load.
+- **security**: WASM plugin SSRF guard (blocks loopback/link-local/private/metadata egress; `BARBACANE_ALLOW_INTERNAL_EGRESS` to override) and redirect following disabled.
+- **security**: WASM plugin capability enforcement — plugins may only import host functions covered by the capabilities declared in `plugin.toml`.
+- **security**: `jwt-auth` performs real signature verification via the host `verify_signature` capability (inline JWK).
+- **security**: a security testing framework — adversarial integration suite (`crates/barbacane-test/tests/security/`) and `cargo-fuzz` targets (`fuzz/`).
+- **docs**: [Configuration & environment variables](reference/configuration.md) reference.
+
+### Changed (breaking, secure-by-default)
+
+- The control plane refuses to start without `BARBACANE_CONTROL_ADMIN_TOKEN`, and all API routes (except `/health` and the data-plane WebSocket) require the bearer token.
+- `file://` secret references require `BARBACANE_SECRETS_DIR` and are confined to it.
+- MCP requires a valid session for non-`initialize` requests.
+- Plugin HTTP egress to internal/metadata addresses is blocked by default.
+
+### Fixed
+
+- **security**: fail-open middleware short-circuit downgrade in the WASM chain.
+- **security**: panic on hostile `x-request-id` / `traceparent`; unbounded Prometheus path-label cardinality on unmatched routes.
+- **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
+
 ## [0.7.0] - 2026-05-05
 
 Headline: AI gateway extensions land — caller-owned model, glob-based dynamic routing, stateless Responses API, aggregated model catalog, and four new policy middlewares (ADR-0024 + ADR-0030).

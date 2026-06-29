@@ -20,7 +20,12 @@ use crate::error::{CompileError, CompileWarning};
 use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
-pub const ARTIFACT_VERSION: u32 = 3;
+///
+/// v4 adds Ed25519 signing fields and records each plugin's declared capability
+/// `host_functions` in the manifest. Whether those capabilities are enforced on
+/// load is gated by the manifest `capabilities_enforced` flag (WA-1), not by the
+/// version, so older artifacts and capability-less builds load without rejection.
+pub const ARTIFACT_VERSION: u32 = 4;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
@@ -96,6 +101,19 @@ pub struct Manifest {
     /// MCP server configuration (from root-level x-barbacane-mcp).
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Detached Ed25519 signature (hex) over `artifact_hash`. Present when the
+    /// artifact was signed at compile time (AR-1). Excluded from `artifact_hash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// Hex-encoded Ed25519 public key the signature was produced with
+    /// (informational; verification uses the operator's pinned trusted key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_public_key: Option<String>,
+    /// Whether per-plugin `capabilities.host_functions` are authoritative (read
+    /// from plugin.toml). The data plane enforces the capability contract on
+    /// load only when this is true (WA-1).
+    #[serde(default)]
+    pub capabilities_enforced: bool,
 }
 
 /// MCP server configuration extracted from `x-barbacane-mcp`.
@@ -143,6 +161,10 @@ pub struct PluginCapabilities {
     /// Whether the middleware receives the request body in `on_request`.
     #[serde(default)]
     pub body_access: bool,
+    /// Declared capability host-function names from plugin.toml. The data plane
+    /// enforces these against the module's actual imports at load (WA-1).
+    #[serde(default)]
+    pub host_functions: Vec<String>,
 }
 
 /// A plugin loaded from a .bca artifact, ready for compilation.
@@ -237,7 +259,11 @@ pub fn compile(
     options: &CompileOptions,
 ) -> Result<CompileResult, CompileError> {
     let specs = parse_specs(spec_paths)?;
-    compile_inner(&specs, plugins, output, options)
+    // Plain `compile` receives caller-built bundles whose declared capabilities
+    // may not have been read from plugin.toml (e.g. the control plane builds
+    // bundles from the registry, which does not yet persist capabilities), so
+    // the resulting artifact is not marked capability-authoritative.
+    compile_inner(&specs, plugins, output, options, false)
 }
 
 /// Compile specs with a project manifest into a .bca artifact.
@@ -280,10 +306,13 @@ pub fn compile_with_manifest(
             plugin_type: p.plugin_type.unwrap_or_else(|| "plugin".to_string()),
             wasm_bytes: p.wasm_bytes,
             body_access: p.body_access,
+            host_functions: p.host_functions,
         })
         .collect();
 
-    compile_inner(&specs, &plugin_bundles, output, options)
+    // Bundles were resolved from plugin.toml, so their declared capabilities are
+    // authoritative and the artifact is eligible for load-time enforcement.
+    compile_inner(&specs, &plugin_bundles, output, options, true)
 }
 
 /// Load a manifest from a .bca artifact.
@@ -411,6 +440,8 @@ pub struct PluginBundle {
     pub wasm_bytes: Vec<u8>,
     /// Whether this plugin needs the request body.
     pub body_access: bool,
+    /// Declared capability host-function names from plugin.toml.
+    pub host_functions: Vec<String>,
 }
 
 /// Parse spec files into (ApiSpec, content, sha256) tuples.
@@ -455,6 +486,7 @@ fn compile_inner(
     plugins: &[PluginBundle],
     output: &Path,
     options: &CompileOptions,
+    capabilities_authoritative: bool,
 ) -> Result<CompileResult, CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut operations: Vec<CompiledOperation> = Vec::new();
@@ -683,6 +715,7 @@ fn compile_inner(
             sha256,
             capabilities: PluginCapabilities {
                 body_access: plugin.body_access,
+                host_functions: plugin.host_functions.clone(),
             },
         });
     }
@@ -731,7 +764,7 @@ fn compile_inner(
         cfg
     };
 
-    let manifest = Manifest {
+    let mut manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
         compiled_at: now_utc_iso8601(),
         compiler_version: COMPILER_VERSION.to_string(),
@@ -742,7 +775,15 @@ fn compile_inner(
         artifact_hash,
         provenance,
         mcp,
+        signature: None,
+        signing_public_key: None,
+        capabilities_enforced: capabilities_authoritative,
     };
+
+    // AR-1: sign the artifact when a signing key is configured. The signature
+    // covers `artifact_hash`, which already binds every spec, route, and plugin
+    // WASM hash, so a tampered artifact fails verification on load.
+    sign_manifest_from_env(&mut manifest)?;
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
 
@@ -809,6 +850,126 @@ fn compute_artifact_hash(
         hasher.update(format!("{}={}\n", key, value).as_bytes());
     }
     format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+// ---------------------------------------------------------------------------
+// AR-1: artifact integrity & Ed25519 signing
+// ---------------------------------------------------------------------------
+
+/// Errors from artifact integrity / signature verification.
+#[derive(Debug, thiserror::Error)]
+pub enum IntegrityError {
+    #[error("artifact hash mismatch: manifest claims {expected}, recomputed {actual}")]
+    ArtifactHashMismatch { expected: String, actual: String },
+    #[error("plugin '{name}' checksum mismatch: manifest {expected}, actual {actual}")]
+    PluginChecksumMismatch {
+        name: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("plugin '{name}' is not listed in the manifest")]
+    UnknownPlugin { name: String },
+    #[error("artifact is unsigned but a trusted public key is configured")]
+    MissingSignature,
+    #[error("invalid key/signature material: {0}")]
+    InvalidMaterial(String),
+    #[error("artifact signature verification failed")]
+    BadSignature,
+}
+
+/// Decode a hex string into bytes (the local `hex` module only encodes).
+fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return Err("odd-length hex string".to_string());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
+        .collect()
+}
+
+/// Recompute the combined artifact hash from the manifest's recorded inputs.
+pub fn recompute_artifact_hash(manifest: &Manifest) -> String {
+    compute_artifact_hash(&manifest.source_specs, &manifest.checksums)
+}
+
+/// Verify the manifest's `artifact_hash` is internally consistent with its
+/// recorded spec/route/plugin checksums.
+pub fn verify_artifact_hash(manifest: &Manifest) -> Result<(), IntegrityError> {
+    let actual = recompute_artifact_hash(manifest);
+    if actual != manifest.artifact_hash {
+        return Err(IntegrityError::ArtifactHashMismatch {
+            expected: manifest.artifact_hash.clone(),
+            actual,
+        });
+    }
+    Ok(())
+}
+
+/// Verify that a plugin's actual WASM bytes match the SHA-256 recorded in the
+/// manifest (detects a swapped/tampered plugin binary).
+pub fn verify_plugin_checksum(
+    manifest: &Manifest,
+    name: &str,
+    wasm_bytes: &[u8],
+) -> Result<(), IntegrityError> {
+    let expected = manifest
+        .plugins
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| p.sha256.clone())
+        .ok_or_else(|| IntegrityError::UnknownPlugin {
+            name: name.to_string(),
+        })?;
+    let actual = compute_sha256(wasm_bytes);
+    if actual != expected {
+        return Err(IntegrityError::PluginChecksumMismatch {
+            name: name.to_string(),
+            expected,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+/// Verify the artifact's Ed25519 signature over `artifact_hash` against a pinned
+/// trusted public key (hex-encoded). Fails closed if the artifact is unsigned.
+pub fn verify_artifact_signature(
+    manifest: &Manifest,
+    trusted_public_key_hex: &str,
+) -> Result<(), IntegrityError> {
+    let signature_hex = manifest
+        .signature
+        .as_ref()
+        .ok_or(IntegrityError::MissingSignature)?;
+    let signature = decode_hex(signature_hex)
+        .map_err(|e| IntegrityError::InvalidMaterial(format!("signature hex: {e}")))?;
+    let public_key = decode_hex(trusted_public_key_hex.trim())
+        .map_err(|e| IntegrityError::InvalidMaterial(format!("trusted public key hex: {e}")))?;
+
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, public_key)
+        .verify(manifest.artifact_hash.as_bytes(), &signature)
+        .map_err(|_| IntegrityError::BadSignature)
+}
+
+/// Sign the manifest's `artifact_hash` when `BARBACANE_SIGNING_KEY` (a path to a
+/// PKCS#8 Ed25519 private key) is set. No-op when unset (unsigned artifact).
+fn sign_manifest_from_env(manifest: &mut Manifest) -> Result<(), CompileError> {
+    use ring::signature::KeyPair;
+
+    let key_path = match std::env::var_os("BARBACANE_SIGNING_KEY") {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let pkcs8 = std::fs::read(&key_path)
+        .map_err(|e| CompileError::Signing(format!("reading BARBACANE_SIGNING_KEY: {e}")))?;
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(&pkcs8)
+        .map_err(|e| CompileError::Signing(format!("invalid PKCS#8 Ed25519 key: {e}")))?;
+    let signature = key_pair.sign(manifest.artifact_hash.as_bytes());
+    manifest.signature = Some(hex::encode(signature.as_ref()));
+    manifest.signing_public_key = Some(hex::encode(key_pair.public_key().as_ref()));
+    Ok(())
 }
 
 /// Add a file to a tar archive from bytes.
@@ -1444,6 +1605,7 @@ paths:
             plugin_type: "middleware".to_string(),
             wasm_bytes: fake_wasm.clone(),
             body_access: false,
+            host_functions: vec![],
         }];
 
         let result = compile(
@@ -2695,5 +2857,117 @@ paths:
         };
         let (enabled, _) = resolve_mcp_config(&root, None);
         assert!(enabled.is_none());
+    }
+
+    // --- AR-1: artifact integrity & signing ---
+
+    fn integrity_test_manifest() -> Manifest {
+        let mut checksums = BTreeMap::new();
+        checksums.insert("routes.json".to_string(), "routehash".to_string());
+        checksums.insert(
+            "plugins/jwt-auth.wasm".to_string(),
+            compute_sha256(b"wasm-bytes"),
+        );
+        let source_specs = vec![SourceSpec {
+            file: "api.yaml".to_string(),
+            sha256: compute_sha256(b"spec"),
+            spec_type: "openapi".to_string(),
+            version: "1.0.0".to_string(),
+        }];
+        let artifact_hash = compute_artifact_hash(&source_specs, &checksums);
+        Manifest {
+            barbacane_artifact_version: ARTIFACT_VERSION,
+            compiled_at: "1970-01-01T00:00:00Z".to_string(),
+            compiler_version: COMPILER_VERSION.to_string(),
+            source_specs,
+            routes_count: 1,
+            checksums,
+            plugins: vec![BundledPlugin {
+                name: "jwt-auth".to_string(),
+                version: "0.1.0".to_string(),
+                plugin_type: "middleware".to_string(),
+                wasm_path: "plugins/jwt-auth.wasm".to_string(),
+                sha256: compute_sha256(b"wasm-bytes"),
+                capabilities: PluginCapabilities::default(),
+            }],
+            artifact_hash,
+            provenance: Provenance::default(),
+            mcp: McpConfig::default(),
+            signature: None,
+            signing_public_key: None,
+            capabilities_enforced: false,
+        }
+    }
+
+    fn sign_for_test(manifest: &mut Manifest) -> String {
+        use ring::signature::KeyPair;
+        let rng = ring::rand::SystemRandom::new();
+        let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let kp = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let sig = kp.sign(manifest.artifact_hash.as_bytes());
+        manifest.signature = Some(super::hex::encode(sig.as_ref()));
+        let pubkey_hex = super::hex::encode(kp.public_key().as_ref());
+        manifest.signing_public_key = Some(pubkey_hex.clone());
+        pubkey_hex
+    }
+
+    #[test]
+    fn artifact_hash_verifies_and_detects_tampering() {
+        let mut manifest = integrity_test_manifest();
+        assert!(verify_artifact_hash(&manifest).is_ok());
+
+        // Tampered checksum (a swapped plugin) breaks the hash consistency.
+        manifest
+            .checksums
+            .insert("plugins/jwt-auth.wasm".to_string(), "deadbeef".to_string());
+        assert!(matches!(
+            verify_artifact_hash(&manifest),
+            Err(IntegrityError::ArtifactHashMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn plugin_checksum_detects_swapped_wasm() {
+        let manifest = integrity_test_manifest();
+        assert!(verify_plugin_checksum(&manifest, "jwt-auth", b"wasm-bytes").is_ok());
+        assert!(matches!(
+            verify_plugin_checksum(&manifest, "jwt-auth", b"evil-bytes"),
+            Err(IntegrityError::PluginChecksumMismatch { .. })
+        ));
+        assert!(matches!(
+            verify_plugin_checksum(&manifest, "ghost", b"x"),
+            Err(IntegrityError::UnknownPlugin { .. })
+        ));
+    }
+
+    #[test]
+    fn signature_roundtrip_and_rejection() {
+        let mut manifest = integrity_test_manifest();
+
+        // Unsigned artifact fails closed when a trusted key is configured.
+        assert!(matches!(
+            verify_artifact_signature(&manifest, "00"),
+            Err(IntegrityError::MissingSignature)
+        ));
+
+        let pubkey = sign_for_test(&mut manifest);
+        // Valid signature under the correct key.
+        assert!(verify_artifact_signature(&manifest, &pubkey).is_ok());
+
+        // Tampered artifact_hash → signature no longer matches.
+        let mut tampered = manifest.clone();
+        tampered.artifact_hash = "sha256:0000".to_string();
+        assert!(matches!(
+            verify_artifact_signature(&tampered, &pubkey),
+            Err(IntegrityError::BadSignature)
+        ));
+
+        // Wrong (attacker) key → rejected.
+        let mut other = integrity_test_manifest();
+        let _ = sign_for_test(&mut other);
+        assert!(matches!(
+            verify_artifact_signature(&manifest, other.signing_public_key.as_ref().unwrap()),
+            Err(IntegrityError::BadSignature)
+        ));
     }
 }

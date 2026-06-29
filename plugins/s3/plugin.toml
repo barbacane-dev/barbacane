@@ -6,4 +6,4 @@ description = "AWS S3 / S3-compatible object storage dispatcher with SigV4 signi
 wasm = "s3.wasm"
 
 [capabilities]
-host_functions = ["http_call", "log"]
+host_functions = ["http_call", "clock_now"]
