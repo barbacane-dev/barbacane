@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security**: `jwt-auth` performs real signature verification via the host `verify_signature` capability (inline JWK).
 - **security**: a security testing framework — adversarial integration suite (`crates/barbacane-test/tests/security/`) and `cargo-fuzz` targets (`fuzz/`).
 - **security**: WASM sandbox resource limits — buffered plugin HTTP responses are capped (`BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES`, default 16 MiB); the host cache and rate limiter bound their entry/partition counts and clamp plugin-supplied TTL/window/quota; a wall-clock epoch deadline backstops fuel-based CPU limiting.
+- **security**: ingress DoS hardening — a per-request header-read deadline (slowloris defense, doubling as the HTTP keep-alive idle timeout, wiring the previously-ignored `--keepalive-timeout`), a TLS handshake timeout, an HTTP/2 concurrent-stream cap, and a concurrent-connection ceiling (`BARBACANE_MAX_CONNECTIONS`, default 10000).
 - **docs**: [Configuration & environment variables](reference/configuration.md) reference.
 
 ### Changed (breaking, secure-by-default)
@@ -30,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security**: fail-open middleware short-circuit downgrade in the WASM chain.
 - **security**: panic on hostile `x-request-id` / `traceparent`; unbounded Prometheus path-label cardinality on unmatched routes.
 - **security**: panic vectors in WASM host functions — guest-controlled pointer/length slice reads now use saturating arithmetic, and cache/rate-limiter time arithmetic is overflow/underflow-safe.
+- **security**: chunked request bodies with no `Content-Length` are now size-capped while streaming (`http_body_util::Limited`) instead of being fully buffered before the limit check.
 - **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
 
 ## [0.7.0] - 2026-05-05

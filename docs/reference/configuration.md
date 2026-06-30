@@ -17,6 +17,7 @@ insecurely.
 | `BARBACANE_SECRETS_DIR` | Data plane | _unset_ | Base directory that `file://` secret references are confined to. **Required to use `file://` secrets** — references are rejected when it is unset, and any path resolving outside this directory (after symlink/`..` resolution) is rejected. |
 | `BARBACANE_ALLOW_INTERNAL_EGRESS` | Data plane | `false` | Set to `1`/`true` to disable the plugin SSRF guard and allow plugin egress (HTTP calls **and** Kafka/NATS broker connections) to internal/loopback/link-local/cloud-metadata addresses. Leave off unless you have legitimate internal upstreams or brokers. |
 | `BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES` | Data plane | `16777216` (16 MiB) | Maximum size of an upstream response body that the buffered plugin HTTP-call path will read into host memory. Bodies larger than this are rejected, bounding host memory against a hostile or compromised upstream. Streaming dispatchers are unaffected. |
+| `BARBACANE_MAX_CONNECTIONS` | Data plane | `10000` | Maximum number of concurrently served ingress connections. Beyond this, new connections are dropped (load shed) rather than letting file descriptors and tasks grow without bound under a connection flood. |
 
 ## Breaking-by-design defaults
 
