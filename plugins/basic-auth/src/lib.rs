@@ -130,14 +130,18 @@ impl BasicAuth {
         req: &Request,
     ) -> Result<(String, &CredentialEntry), BasicAuthError> {
         let (username, password) = self.extract_credentials(req)?;
-        let entry = self
-            .credentials
-            .iter()
-            .find(|e| e.username == username)
-            .ok_or(BasicAuthError::InvalidCredentials)?;
-        if entry.password != password {
-            return Err(BasicAuthError::InvalidCredentials);
+        // Compare username AND password for every entry in constant time without
+        // early-returning, so timing reveals neither valid usernames (no user
+        // enumeration) nor how many password bytes matched.
+        let mut matched: Option<&CredentialEntry> = None;
+        for e in &self.credentials {
+            let user_ok = constant_time_eq(e.username.as_bytes(), username.as_bytes());
+            let pass_ok = constant_time_eq(e.password.as_bytes(), password.as_bytes());
+            if user_ok && pass_ok {
+                matched = Some(e);
+            }
         }
+        let entry = matched.ok_or(BasicAuthError::InvalidCredentials)?;
         Ok((username, entry))
     }
 

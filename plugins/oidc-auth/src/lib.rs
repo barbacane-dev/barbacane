@@ -145,6 +145,38 @@ struct JwksDocument {
     keys: Vec<Jwk>,
 }
 
+/// Warn (once) that no `audience` is configured, so tokens for any relying party
+/// at the issuer are accepted (confused-deputy risk on shared IdPs).
+#[cfg(target_arch = "wasm32")]
+fn warn_once_no_audience() {
+    use core::cell::Cell;
+    thread_local! { static WARNED: Cell<bool> = const { Cell::new(false) }; }
+    WARNED.with(|w| {
+        if !w.get() {
+            w.set(true);
+            #[link(wasm_import_module = "barbacane")]
+            extern "C" {
+                fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
+            }
+            let msg = "oidc-auth: no 'audience' configured; tokens for any audience at this issuer are accepted (confused-deputy risk). Set 'audience' for multi-RP IdPs.";
+            unsafe { host_log(1, msg.as_ptr() as i32, msg.len() as i32) };
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_once_no_audience() {}
+
+/// Whether a JWK may be used to verify a token with the given algorithm:
+/// the key type must match the algorithm family, the key's declared `alg` (if
+/// present) must equal the token's `alg` (RFC 8725), and the key's `use` (if
+/// present) must be `sig` (never an encryption key).
+fn key_is_compatible(key: &Jwk, expected_kty: &str, alg: &str) -> bool {
+    key.kty == expected_kty
+        && key.alg.as_deref().is_none_or(|a| a == alg)
+        && key.use_.as_deref().is_none_or(|u| u == "sig")
+}
+
 /// Partial OIDC discovery response.
 #[derive(Deserialize)]
 struct DiscoveryResponse {
@@ -384,8 +416,17 @@ impl OidcAuth {
         self.ensure_discovery()?;
         self.ensure_jwks()?;
 
-        // Find the matching key
-        let jwk = self.find_key(parsed.header.kid.as_deref(), &parsed.header.alg)?;
+        // Find the matching key. On a kid miss (likely provider key rotation),
+        // force one rate-limited JWKS refresh and retry before giving up.
+        let kid = parsed.header.kid.as_deref();
+        let jwk = match self.find_key(kid, &parsed.header.alg) {
+            Ok(jwk) => jwk,
+            Err(OidcError::KeyNotFound(_)) => {
+                self.refresh_jwks_on_miss()?;
+                self.find_key(kid, &parsed.header.alg)?
+            }
+            Err(e) => return Err(e),
+        };
 
         // Verify signature
         self.verify_token_signature(
@@ -490,9 +531,7 @@ impl OidcAuth {
             self.issuer_url.trim_end_matches('/')
         );
 
-        let (status, body) = self
-            .http_get(&url)
-            .map_err(|e| OidcError::DiscoveryFailed(e))?;
+        let (status, body) = self.http_get(&url).map_err(OidcError::DiscoveryFailed)?;
 
         if status != 200 {
             return Err(OidcError::DiscoveryFailed(format!("status {}", status)));
@@ -534,7 +573,7 @@ impl OidcAuth {
 
         let (status, body) = self
             .http_get(&jwks_uri)
-            .map_err(|e| OidcError::JwksFetchFailed(e))?;
+            .map_err(OidcError::JwksFetchFailed)?;
 
         if status != 200 {
             return Err(OidcError::JwksFetchFailed(format!("status {}", status)));
@@ -553,6 +592,21 @@ impl OidcAuth {
         Ok(())
     }
 
+    /// Refresh the JWKS once on a `kid` miss (provider key rotation), rate-limited
+    /// so a stream of unknown-`kid` tokens can't hammer the provider's JWKS URI.
+    fn refresh_jwks_on_miss(&mut self) -> Result<(), OidcError> {
+        const MIN_REFRESH_ON_MISS_SECS: u64 = 10;
+        let now = current_timestamp();
+        let refreshed_recently = self
+            .jwks_cache
+            .as_ref()
+            .is_some_and(|c| now.saturating_sub(c.fetched_at) < MIN_REFRESH_ON_MISS_SECS);
+        if refreshed_recently {
+            return Ok(());
+        }
+        self.refresh_jwks(now)
+    }
+
     /// Find a key in the JWKS by kid and algorithm compatibility.
     fn find_key(&self, kid: Option<&str>, alg: &str) -> Result<Jwk, OidcError> {
         let cache = self
@@ -566,29 +620,30 @@ impl OidcAuth {
             _ => return Err(OidcError::UnsupportedAlgorithm(alg.to_string())),
         };
 
-        // Try to match by kid first
+        // Try to match by kid first.
         if let Some(kid) = kid {
             for key in &cache.keys {
-                if key.kid.as_deref() == Some(kid) && key.kty == expected_kty {
-                    // Check use field if present (must be "sig")
-                    if key.use_.as_deref().is_none() || key.use_.as_deref() == Some("sig") {
-                        return Ok(key.clone());
-                    }
+                if key.kid.as_deref() == Some(kid) && key_is_compatible(key, expected_kty, alg) {
+                    return Ok(key.clone());
                 }
             }
             return Err(OidcError::KeyNotFound(kid.to_string()));
         }
 
-        // No kid — find first compatible key
-        for key in &cache.keys {
-            if key.kty == expected_kty {
-                if key.use_.as_deref().is_none() || key.use_.as_deref() == Some("sig") {
-                    return Ok(key.clone());
-                }
-            }
+        // No kid: only accept an *unambiguous* match. Picking the first of
+        // several compatible keys lets a token be verified against an unintended
+        // key after rotation (RFC 8725).
+        let mut candidates = cache
+            .keys
+            .iter()
+            .filter(|k| key_is_compatible(k, expected_kty, alg));
+        match (candidates.next(), candidates.next()) {
+            (Some(key), None) => Ok(key.clone()),
+            (Some(_), Some(_)) => Err(OidcError::KeyNotFound(
+                "ambiguous: multiple candidate keys and token has no kid".to_string(),
+            )),
+            _ => Err(OidcError::KeyNotFound("none".to_string())),
         }
-
-        Err(OidcError::KeyNotFound("none".to_string()))
     }
 
     /// Verify the JWT signature via host_verify_signature.
@@ -656,12 +711,16 @@ impl OidcAuth {
             }
         }
 
-        // Validate audience
+        // Validate audience. When unset, a token minted for any relying party at
+        // this issuer is accepted (confused-deputy risk on shared IdPs); warn
+        // once to surface the gap.
         if let Some(expected_aud) = &self.audience {
             match &claims.aud {
                 Some(aud) if aud.contains(expected_aud) => {}
                 _ => return Err(OidcError::InvalidAudience),
             }
+        } else {
+            warn_once_no_audience();
         }
 
         Ok(())
@@ -1514,6 +1573,43 @@ mod tests {
 
         let result = config.find_key(Some("nonexistent-kid"), "RS256");
         assert!(matches!(result, Err(OidcError::KeyNotFound(_))));
+    }
+
+    // CR-3: a key whose declared `alg` differs from the token's `alg` must not
+    // be selected, even when kty + kid would otherwise match.
+    #[test]
+    fn find_key_rejects_declared_alg_mismatch() {
+        let mut config = create_test_config();
+        let mut key = create_test_jwk_rsa(); // kid "test-key-1", alg RS256
+        key.alg = Some("RS512".to_string());
+        config.jwks_cache = Some(JwksCache {
+            keys: vec![key],
+            fetched_at: 1000,
+        });
+        // Token claims RS256 but the only key is declared for RS512 -> no match.
+        assert!(matches!(
+            config.find_key(Some("test-key-1"), "RS256"),
+            Err(OidcError::KeyNotFound(_))
+        ));
+    }
+
+    // CR-3: with no kid and more than one compatible key, selection is ambiguous
+    // and must fail rather than pick the first.
+    #[test]
+    fn find_key_no_kid_ambiguous_is_rejected() {
+        let mut config = create_test_config();
+        let mut k1 = create_test_jwk_rsa();
+        k1.kid = Some("a".to_string());
+        let mut k2 = create_test_jwk_rsa();
+        k2.kid = Some("b".to_string());
+        config.jwks_cache = Some(JwksCache {
+            keys: vec![k1, k2],
+            fetched_at: 1000,
+        });
+        assert!(matches!(
+            config.find_key(None, "RS256"),
+            Err(OidcError::KeyNotFound(_))
+        ));
     }
 
     // --- Discovery URL test ---

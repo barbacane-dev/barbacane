@@ -143,6 +143,23 @@ pub fn streamed_response() -> Response {
     }
 }
 
+/// Constant-time byte-slice equality, for comparing secrets (API keys,
+/// passwords) without leaking how many leading bytes matched through timing.
+///
+/// Like `subtle`/`ring::constant_time`, unequal lengths return `false` early
+/// (only the length is revealed, never the content); equal-length inputs are
+/// compared in time independent of where they differ.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Resolve the effective client IP, honoring trusted proxies.
 ///
 /// `req.client_ip` is the peer the gateway actually observed. The forwarded
@@ -524,6 +541,15 @@ mod tests {
             client_ip: peer.to_string(),
             path_params: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn constant_time_eq_matches_std_equality() {
+        assert!(constant_time_eq(b"secret-key", b"secret-key"));
+        assert!(!constant_time_eq(b"secret-key", b"secret-different"));
+        assert!(!constant_time_eq(b"secret-key", b"secret-keX"));
+        assert!(!constant_time_eq(b"short", b"longer-value"));
+        assert!(constant_time_eq(b"", b""));
     }
 
     #[test]

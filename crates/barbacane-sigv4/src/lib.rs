@@ -142,7 +142,14 @@ pub fn canonical_query(query: Option<&str>) -> String {
                 Some(pos) => (&part[..pos], &part[pos + 1..]),
                 None => (part, ""),
             };
-            Some((percent_encode_query(key), percent_encode_query(value)))
+            // Decode any existing percent-encoding first, then re-encode per the
+            // SigV4 rules. This canonicalizes already-encoded input (e.g.
+            // `logs%2F` stays `logs%2F` instead of double-encoding to `logs%252F`)
+            // so the signed query equals what callers transmit.
+            Some((
+                percent_encode_query(&percent_decode(key)),
+                percent_encode_query(&percent_decode(value)),
+            ))
         })
         .collect();
 
@@ -155,16 +162,25 @@ pub fn canonical_query(query: Option<&str>) -> String {
         .join("&")
 }
 
+/// Canonicalize a header value per SigV4: trim, and collapse sequential
+/// internal whitespace to a single space (for non-quoted values).
+fn canonical_header_value(v: &str) -> String {
+    v.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Compute the SigV4 `Authorization` header and related signed headers.
 ///
 /// # Panics
 /// Never panics — HMAC accepts any key length.
 pub fn sign(input: &SigningInput, creds: &Credentials, config: &SigningConfig) -> SignedHeaders {
     // BTreeMap guarantees keys are already sorted; keys must be lowercase.
+    // SigV4 requires header values to be trimmed AND have sequential internal
+    // whitespace collapsed to a single space; `v.trim()` alone diverges from
+    // AWS's recomputation for multi-space values.
     let canonical_headers_str: String = input
         .headers_to_sign
         .iter()
-        .map(|(k, v)| format!("{}:{}\n", k, v.trim()))
+        .map(|(k, v)| format!("{}:{}\n", k, canonical_header_value(v)))
         .collect();
 
     let signed_headers_str: String = input
@@ -232,6 +248,35 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 /// Percent-encode a query string key or value (SigV4 rules).
 /// Encodes all bytes except unreserved characters (`A-Z a-z 0-9 - _ . ~`).
+/// Decode percent-escapes (`%XX`) in a query component. Invalid escapes are left
+/// as-is. `+` is treated literally (RFC 3986 query semantics), matching SigV4.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 3 <= bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_val(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn percent_encode_query(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     for byte in s.bytes() {
@@ -365,6 +410,26 @@ mod tests {
             canonical_query(Some("key=hello world")),
             "key=hello%20world"
         );
+    }
+
+    // CR-5: already-encoded input is decoded then re-encoded (not double-encoded),
+    // so the signed query matches what is transmitted.
+    #[test]
+    fn test_canonical_query_does_not_double_encode() {
+        assert_eq!(
+            canonical_query(Some("prefix=logs%2Fdir&list-type=2")),
+            "list-type=2&prefix=logs%2Fdir"
+        );
+        // Idempotent: canonicalizing twice yields the same result.
+        let once = canonical_query(Some("k=a%2Bb"));
+        assert_eq!(canonical_query(Some(&once)), once);
+    }
+
+    // CR-5: header values are trimmed AND internal whitespace is collapsed.
+    #[test]
+    fn test_canonical_header_value_collapses_whitespace() {
+        assert_eq!(canonical_header_value("  a   b\tc  "), "a b c");
+        assert_eq!(canonical_header_value("single"), "single");
     }
 
     #[test]

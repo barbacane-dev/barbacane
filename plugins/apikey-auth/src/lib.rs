@@ -179,11 +179,17 @@ impl ApiKeyAuth {
     }
 
     /// Look up the API key in the configured key store.
+    ///
+    /// Compares every entry in constant time and never early-returns, so request
+    /// timing reveals neither which key matched nor how many entries precede it.
     fn lookup_key(&self, key: &str) -> Result<&ApiKeyEntry, ApiKeyError> {
-        self.keys
-            .iter()
-            .find(|e| e.key == key)
-            .ok_or(ApiKeyError::InvalidKey)
+        let mut found: Option<&ApiKeyEntry> = None;
+        for entry in &self.keys {
+            if constant_time_eq(entry.key.as_bytes(), key.as_bytes()) {
+                found = Some(entry);
+            }
+        }
+        found.ok_or(ApiKeyError::InvalidKey)
     }
 
     /// Generate 401 Unauthorized response.
@@ -437,7 +443,11 @@ mod tests {
         match plugin.on_request(req) {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 401);
-                assert!(r.headers.get("www-authenticate").unwrap().contains("missing_key"));
+                assert!(r
+                    .headers
+                    .get("www-authenticate")
+                    .unwrap()
+                    .contains("missing_key"));
             }
             _ => panic!("expected ShortCircuit"),
         }
@@ -450,7 +460,11 @@ mod tests {
         match plugin.on_request(req) {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 401);
-                assert!(r.headers.get("www-authenticate").unwrap().contains("invalid_key"));
+                assert!(r
+                    .headers
+                    .get("www-authenticate")
+                    .unwrap()
+                    .contains("invalid_key"));
             }
             _ => panic!("expected ShortCircuit"),
         }

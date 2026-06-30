@@ -11,7 +11,7 @@
     },
     "audience": {
       "type": "string",
-      "description": "Expected audience (aud claim). If set, tokens must match."
+      "description": "Expected audience (aud claim). Strongly recommended: when unset, a token minted for any relying party at the same issuer is accepted (confused-deputy risk on shared IdPs). When set, tokens must match."
     },
     "clock_skew_seconds": {
       "type": "integer",
