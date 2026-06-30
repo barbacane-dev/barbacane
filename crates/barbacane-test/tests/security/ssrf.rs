@@ -30,9 +30,11 @@ use barbacane_test::TestGateway;
 
 use crate::security_fixture;
 
-/// Boot a gateway from the SSRF fixture.
+/// Boot a gateway from the SSRF fixture with the egress guard ACTIVE, so the
+/// block is what we actually observe (the default test harness allows internal
+/// egress for loopback mocks).
 async fn ssrf_gateway() -> TestGateway {
-    TestGateway::from_spec(&security_fixture("ssrf.yaml"))
+    TestGateway::from_spec_blocked_egress(&security_fixture("ssrf.yaml"))
         .await
         .expect("ssrf fixture failed to compile/start")
 }

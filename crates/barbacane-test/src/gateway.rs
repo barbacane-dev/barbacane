@@ -108,24 +108,36 @@ impl TestGateway {
         spec_path: &str,
         extra_args: &[&str],
     ) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(&[spec_path], false, extra_args).await
+        Self::create_gateway_with_args(&[spec_path], false, extra_args, true).await
+    }
+
+    /// Create a TestGateway with the plugin SSRF guard ACTIVE (internal egress
+    /// blocked). Use this for SSRF tests; the default constructors allow internal
+    /// egress so tests can reach loopback mock upstreams.
+    pub async fn from_spec_blocked_egress(spec_path: &str) -> Result<Self, TestError> {
+        Self::create_gateway_with_args(&[spec_path], false, &[], false).await
     }
 
     /// Create a TestGateway from multiple spec files.
     pub async fn from_specs(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(spec_paths, false, &[]).await
+        Self::create_gateway_with_args(spec_paths, false, &[], true).await
     }
 
     /// Create a TLS-enabled TestGateway from multiple spec files.
     pub async fn from_specs_with_tls(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(spec_paths, true, &[]).await
+        Self::create_gateway_with_args(spec_paths, true, &[], true).await
     }
 
     /// Internal method to create a gateway with optional TLS and extra CLI args.
+    ///
+    /// `allow_internal_egress` controls the plugin SSRF guard: most tests reach
+    /// loopback mock upstreams and need it `true`; SSRF tests pass `false` so the
+    /// guard is active and the block is observable.
     async fn create_gateway_with_args(
         spec_paths: &[&str],
         tls_enabled: bool,
         extra_args: &[&str],
+        allow_internal_egress: bool,
     ) -> Result<Self, TestError> {
         // Create temp directory for the artifact
         let temp_dir = TempDir::new()?;
@@ -185,6 +197,13 @@ impl TestGateway {
             .arg(format!("127.0.0.1:{}", admin_port))
             .arg("--dev")
             .arg("--allow-plaintext-upstream") // Allow HTTP calls to test mock servers
+            // Set egress policy explicitly so tests don't depend on the ambient
+            // environment: most tests reach loopback mocks (allow), SSRF tests
+            // exercise the guard (block).
+            .env(
+                "BARBACANE_ALLOW_INTERNAL_EGRESS",
+                if allow_internal_egress { "1" } else { "0" },
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
