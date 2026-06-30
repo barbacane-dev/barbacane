@@ -303,9 +303,10 @@ impl OAuth2Auth {
 
         // Parse the HTTP response
         let http_response: HttpResponse =
-            serde_json::from_slice(&response_buf[..bytes_read as usize]).map_err(|e| {
-                OAuth2Error::IntrospectionFailed(format!("invalid response format: {}", e))
-            })?;
+            serde_json::from_slice(&response_buf[..(bytes_read as usize).min(response_buf.len())])
+                .map_err(|e| {
+                    OAuth2Error::IntrospectionFailed(format!("invalid response format: {}", e))
+                })?;
 
         // Check HTTP status
         if http_response.status != 200 {
@@ -902,7 +903,10 @@ mod tests {
         };
 
         // Simulate on_request header logic: sub takes precedence over username
-        let consumer = introspection.sub.as_ref().or(introspection.username.as_ref());
+        let consumer = introspection
+            .sub
+            .as_ref()
+            .or(introspection.username.as_ref());
         assert_eq!(consumer.unwrap(), "user-123");
     }
 
@@ -923,7 +927,10 @@ mod tests {
             jti: None,
         };
 
-        let consumer = introspection.sub.as_ref().or(introspection.username.as_ref());
+        let consumer = introspection
+            .sub
+            .as_ref()
+            .or(introspection.username.as_ref());
         assert_eq!(consumer.unwrap(), "alice");
     }
 

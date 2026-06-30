@@ -25,6 +25,18 @@ pub struct RateLimit {
     /// Options: "client_ip", "header:<name>", "context:<key>", or a static string.
     #[serde(default = "default_partition_key")]
     partition_key: String,
+
+    /// Exact IPs of trusted reverse proxies, used when `partition_key` is
+    /// "client_ip". Forwarded headers are honored only behind a trusted proxy;
+    /// otherwise a client cannot rotate `X-Forwarded-For` to dodge the limit.
+    #[serde(default)]
+    trusted_proxies: Vec<String>,
+
+    /// When the host rate limiter is unavailable, allow the request through
+    /// (fail open) instead of rejecting it. Defaults to false (fail closed), so
+    /// a limiter outage cannot silently disable rate limiting.
+    #[serde(default)]
+    fail_open: bool,
 }
 
 fn default_policy_name() -> String {
@@ -55,9 +67,21 @@ impl RateLimit {
         let result = match self.check_rate_limit(&key) {
             Some(r) => r,
             None => {
-                // Rate limiter unavailable - fail open (allow request)
-                log_message(1, "rate limiter unavailable, allowing request");
-                return Action::Continue(req);
+                // Rate limiter unavailable. Fail closed by default so an outage
+                // cannot silently disable rate limiting; operators may opt into
+                // fail-open.
+                if self.fail_open {
+                    log_message(
+                        1,
+                        "rate limiter unavailable, failing open (allowing request)",
+                    );
+                    return Action::Continue(req);
+                }
+                log_message(
+                    3,
+                    "rate limiter unavailable, failing closed (rejecting request)",
+                );
+                return Action::ShortCircuit(self.unavailable_response());
             }
         };
 
@@ -95,12 +119,10 @@ impl RateLimit {
     /// Extract the partition key from the request.
     fn extract_partition_key(&self, req: &Request) -> String {
         if self.partition_key == "client_ip" {
-            // Use client IP from x-forwarded-for or x-real-ip header
-            req.headers
-                .get("x-forwarded-for")
-                .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
-                .or_else(|| req.headers.get("x-real-ip").cloned())
-                .unwrap_or_else(|| "unknown".to_string())
+            // Trusted-proxy-aware client IP: forwarded headers are honored only
+            // behind a configured trusted proxy, so the partition can't be
+            // spoofed to get a fresh bucket per request.
+            resolve_client_ip(req, &self.trusted_proxies)
         } else if let Some(header_name) = self.partition_key.strip_prefix("header:") {
             // Use specified header value
             req.headers
@@ -135,6 +157,27 @@ impl RateLimit {
 
         // Parse the JSON result
         serde_json::from_slice(&buf[..read_len as usize]).ok()
+    }
+
+    /// Generate a 503 response used when the limiter is unavailable and the
+    /// plugin is configured to fail closed.
+    fn unavailable_response(&self) -> Response {
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "content-type".to_string(),
+            "application/problem+json".to_string(),
+        );
+        let body = serde_json::json!({
+            "type": "urn:barbacane:error:rate-limiter-unavailable",
+            "title": "Service Unavailable",
+            "status": 503,
+            "detail": "Rate limiter is unavailable; request rejected (fail closed)."
+        });
+        Response {
+            status: 503,
+            headers,
+            body: Some(body.to_string().into_bytes()),
+        }
     }
 
     /// Generate 429 Too Many Requests response.
@@ -301,8 +344,36 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
+        // PL-4: without a trusted proxy a spoofed XFF is ignored; the real peer
+        // IP is used so a client can't rotate XFF to get fresh buckets.
+        assert_eq!(rate_limit.extract_partition_key(&req), "127.0.0.1");
+    }
+
+    #[test]
+    fn test_partition_key_xff_honored_behind_trusted_proxy() {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-forwarded-for".to_string(), "192.168.1.1".to_string());
+        let req = Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers,
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "10.9.9.9".to_string(),
+        };
+        let rate_limit = RateLimit {
+            quota: 10,
+            window: 60,
+            policy_name: "default".to_string(),
+            partition_key: "client_ip".to_string(),
+            trusted_proxies: vec!["10.9.9.9".to_string()],
+            fail_open: false,
+        };
         assert_eq!(rate_limit.extract_partition_key(&req), "192.168.1.1");
     }
 
@@ -326,9 +397,12 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
-        assert_eq!(rate_limit.extract_partition_key(&req), "192.168.1.2");
+        // X-Real-IP from an untrusted peer is ignored too.
+        assert_eq!(rate_limit.extract_partition_key(&req), "127.0.0.1");
     }
 
     #[test]
@@ -348,9 +422,12 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
-        assert_eq!(rate_limit.extract_partition_key(&req), "unknown");
+        // No forwarded headers: the real peer IP is used (not "unknown").
+        assert_eq!(rate_limit.extract_partition_key(&req), "127.0.0.1");
     }
 
     #[test]
@@ -373,6 +450,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "header:x-custom".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         assert_eq!(rate_limit.extract_partition_key(&req), "custom-value");
@@ -398,6 +477,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "header:X-Custom".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         assert_eq!(rate_limit.extract_partition_key(&req), "custom-value");
@@ -420,6 +501,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "header:x-custom".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         assert_eq!(rate_limit.extract_partition_key(&req), "unknown");
@@ -442,6 +525,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "context:user_id".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         assert_eq!(rate_limit.extract_partition_key(&req), "user_id");
@@ -464,6 +549,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "global-limit".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         assert_eq!(rate_limit.extract_partition_key(&req), "global-limit");
@@ -476,6 +563,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let result = RateLimitResult {
@@ -498,6 +587,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let result = RateLimitResult {
@@ -532,6 +623,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let result = RateLimitResult {
@@ -554,6 +647,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let result = RateLimitResult {
@@ -630,6 +725,8 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let req = Request {
@@ -682,6 +779,8 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let req = Request {
@@ -719,6 +818,8 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let req = Request {
@@ -733,13 +834,37 @@ mod tests {
 
         let action = rate_limit.on_request(req);
 
-        // Should fail open (allow request)
+        // PL-4: default is fail CLOSED — a limiter outage rejects with 503
+        // rather than silently disabling the limit.
         match action {
-            Action::Continue(modified_req) => {
-                // Should not have rate limit headers
-                assert!(!modified_req.headers.contains_key("x-ratelimit-policy"));
-            }
-            _ => panic!("Expected Action::Continue (fail open)"),
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 503),
+            _ => panic!("Expected Action::ShortCircuit (fail closed)"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_rate_limiter_unavailable_fail_open_opt_in() {
+        mock_host::reset();
+        let mut rate_limit = RateLimit {
+            quota: 10,
+            window: 60,
+            policy_name: "test-policy".to_string(),
+            partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: true,
+        };
+        let req = Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        };
+        match rate_limit.on_request(req) {
+            Action::Continue(r) => assert!(!r.headers.contains_key("x-ratelimit-policy")),
+            _ => panic!("Expected Action::Continue when fail_open is set"),
         }
     }
 
@@ -750,6 +875,8 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
         };
 
         let mut headers = BTreeMap::new();

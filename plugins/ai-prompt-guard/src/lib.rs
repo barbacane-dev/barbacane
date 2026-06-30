@@ -91,6 +91,13 @@ pub struct AiPromptGuard {
     /// Named profiles the operator can select between.
     profiles: BTreeMap<String, PromptProfile>,
 
+    /// When the request body can't be inspected (unparseable JSON, or a
+    /// `messages` field that isn't an array), allow it through (fail open)
+    /// instead of rejecting. Defaults to false (fail closed), so a client can't
+    /// bypass the guard by sending a body the parser rejects.
+    #[serde(default)]
+    fail_open: bool,
+
     /// Compiled regex cache, keyed by profile name. Populated lazily.
     #[serde(skip)]
     compiled: BTreeMap<String, Vec<Regex>>,
@@ -129,17 +136,37 @@ impl AiPromptGuard {
             return Action::ShortCircuit(regex_compile_error_response(&profile_name, &err));
         }
 
+        // No body: nothing to inspect (and nothing to inject into).
         let Some(body_bytes) = req.body.as_deref() else {
             return Action::Continue(req);
         };
 
+        // Unparseable body is the classic guard-bypass vector. Fail closed by
+        // default so a client can't skip filtering by sending malformed JSON.
         let mut root: serde_json::Value = match serde_json::from_slice(body_bytes) {
             Ok(v) => v,
-            Err(_) => return Action::Continue(req),
+            Err(_) => {
+                if self.fail_open {
+                    return Action::Continue(req);
+                }
+                return Action::ShortCircuit(reject(&profile, "request body is not valid JSON"));
+            }
         };
 
-        let Some(messages) = root.get("messages").and_then(|v| v.as_array()).cloned() else {
-            return Action::Continue(req);
+        let messages = match root.get("messages") {
+            // No `messages` field at all: a different request shape with no chat
+            // messages to guard — pass through.
+            None => return Action::Continue(req),
+            // Present but not an array: malformed; fail closed unless opted out.
+            Some(v) => match v.as_array() {
+                Some(arr) => arr.clone(),
+                None => {
+                    if self.fail_open {
+                        return Action::Continue(req);
+                    }
+                    return Action::ShortCircuit(reject(&profile, "'messages' is not an array"));
+                }
+            },
         };
 
         // --- Message count limit ---
@@ -493,6 +520,7 @@ mod tests {
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v))
                 .collect(),
+            fail_open: false,
             compiled: BTreeMap::new(),
             compile_errors: BTreeMap::new(),
         }
@@ -855,11 +883,34 @@ mod tests {
         assert!(matches!(p.on_request(r), Action::Continue(_)));
     }
 
+    // PL-6: an unparseable body must NOT bypass the guard by default.
     #[test]
-    fn non_json_body_continues() {
+    fn non_json_body_fails_closed() {
         mock_host::reset();
         let mut p = single_profile_plugin(profile_with(Some(5), None, vec![]));
+        match p.on_request(req("not json")) {
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 400),
+            Action::Continue(_) => panic!("unparseable body must fail closed"),
+        }
+    }
+
+    #[test]
+    fn non_json_body_continues_when_fail_open() {
+        mock_host::reset();
+        let mut p = single_profile_plugin(profile_with(Some(5), None, vec![]));
+        p.fail_open = true;
         assert!(matches!(p.on_request(req("not json")), Action::Continue(_)));
+    }
+
+    // PL-6: a `messages` field that isn't an array fails closed by default.
+    #[test]
+    fn non_array_messages_fails_closed() {
+        mock_host::reset();
+        let mut p = single_profile_plugin(profile_with(Some(5), None, vec![]));
+        match p.on_request(req(r#"{"messages":"oops"}"#)) {
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 400),
+            Action::Continue(_) => panic!("non-array messages must fail closed"),
+        }
     }
 
     #[test]

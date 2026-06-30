@@ -51,6 +51,17 @@
       "description": "Source of the per-consumer partition key. Accepted forms: `client_ip`, `header:<name>`, `context:<key>`, or a literal string (shared budget across all requests). Matches the `rate-limit` plugin's semantics.",
       "default": "client_ip"
     },
+    "trusted_proxies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Exact IPs of trusted reverse proxies. With partition_key 'client_ip', X-Forwarded-For / X-Real-IP are honored only behind these; otherwise the observed peer IP is used so clients cannot rotate XFF to evade their budget."
+    },
+    "fail_open": {
+      "type": "boolean",
+      "default": false,
+      "description": "When the host rate limiter is unavailable, allow the request (fail open) instead of rejecting with 503. Defaults to false (fail closed)."
+    },
     "count": {
       "type": "string",
       "description": "Which token counts charge against the budget. `prompt` counts input tokens only, `completion` counts output tokens only, `total` counts both.",

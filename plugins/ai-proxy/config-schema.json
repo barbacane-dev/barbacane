@@ -23,7 +23,7 @@
         },
         "api_key": {
           "type": "string",
-          "description": "Provider API key. Supports `env://VAR` substitution. Omit for Ollama (unauthenticated local endpoint)."
+          "description": "Provider API key. Use a secret reference (`env://VAR` or `file://...`) rather than a literal value, so the key is resolved at runtime and never baked into the compiled artifact. Omit for Ollama (unauthenticated local endpoint)."
         },
         "base_url": {
           "type": "string",
@@ -58,7 +58,7 @@
         },
         "api_key": {
           "type": "string",
-          "description": "Provider API key. Supports `env://VAR` substitution."
+          "description": "Provider API key. Use a secret reference (`env://VAR` or `file://...`) rather than a literal value, so the key is resolved at runtime and never baked into the compiled artifact."
         },
         "base_url": {
           "type": "string",
@@ -84,7 +84,7 @@
     },
     "api_key": {
       "type": "string",
-      "description": "API key for the flat config. Supports `env://VAR` substitution."
+      "description": "API key for the flat config. Use a secret reference (`env://VAR` or `file://...`) rather than a literal value, so the key is resolved at runtime and never baked into the compiled artifact."
     },
     "base_url": {
       "type": "string",

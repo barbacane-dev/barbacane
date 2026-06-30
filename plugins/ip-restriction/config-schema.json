@@ -14,7 +14,13 @@
       "type": "array",
       "items": { "type": "string" },
       "default": [],
-      "description": "Denylist of IPs or CIDR ranges. These IPs are always blocked (takes precedence over allow)."
+      "description": "Denylist of IPs or CIDR ranges (IPv4 and IPv6). These IPs are always blocked (takes precedence over allow)."
+    },
+    "trusted_proxies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Exact IPs of trusted reverse proxies. X-Forwarded-For / X-Real-IP are honored only when the immediate peer is one of these; otherwise forwarded headers are ignored so clients cannot spoof their address."
     },
     "message": {
       "type": "string",

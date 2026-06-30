@@ -88,6 +88,18 @@ pub struct AiTokenLimit {
     #[serde(default = "default_partition_key")]
     partition_key: String,
 
+    /// Exact IPs of trusted reverse proxies, used when `partition_key` is
+    /// "client_ip". Forwarded headers are honored only behind a trusted proxy so
+    /// a client cannot rotate `X-Forwarded-For` to dodge its token budget.
+    #[serde(default)]
+    trusted_proxies: Vec<String>,
+
+    /// When the host rate limiter is unavailable, allow the request (fail open)
+    /// instead of rejecting it. Defaults to false (fail closed), so a limiter
+    /// outage cannot silently disable token budgeting.
+    #[serde(default)]
+    fail_open: bool,
+
     /// Which tokens charge against the budget.
     #[serde(default)]
     count: CountMode,
@@ -115,7 +127,7 @@ impl AiTokenLimit {
             None => return Action::ShortCircuit(misconfig_response(&self.default_profile)),
         };
 
-        let partition = extract_partition(&req, &self.partition_key);
+        let partition = extract_partition(&req, &self.partition_key, &self.trusted_proxies);
 
         // Persist the resolved partition so on_response charges the same
         // bucket — on_response has no Request in scope and header/IP sources
@@ -125,11 +137,20 @@ impl AiTokenLimit {
         let key = self.bucket_key(&profile_name, &partition);
 
         let Some(result) = check_rate_limit(&key, profile.quota, profile.window) else {
+            // Fail closed by default: a limiter outage must not silently disable
+            // token budgeting. Operators may opt into fail-open.
+            if self.fail_open {
+                log_message(
+                    1,
+                    "ai-token-limit: rate limiter unavailable, failing open (allowing request)",
+                );
+                return Action::Continue(req);
+            }
             log_message(
-                1,
-                "ai-token-limit: rate limiter unavailable, allowing request",
+                3,
+                "ai-token-limit: rate limiter unavailable, failing closed (rejecting request)",
             );
-            return Action::Continue(req);
+            return Action::ShortCircuit(unavailable_response());
         };
 
         if result.allowed {
@@ -212,12 +233,8 @@ impl AiTokenLimit {
     }
 
     fn tokens_from_context(&self) -> u32 {
-        let prompt = context_get("ai.prompt_tokens")
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
-        let completion = context_get("ai.completion_tokens")
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
+        let prompt = parse_token_count("ai.prompt_tokens");
+        let completion = parse_token_count("ai.completion_tokens");
 
         match self.count {
             CountMode::Prompt => prompt,
@@ -279,6 +296,27 @@ impl AiTokenLimit {
 // Misconfiguration response (fail-closed)
 // ---------------------------------------------------------------------------
 
+/// 503 response returned when the host rate limiter is unavailable and the
+/// plugin is configured to fail closed (the default).
+fn unavailable_response() -> Response {
+    let mut headers = BTreeMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "application/problem+json".to_string(),
+    );
+    let body = serde_json::json!({
+        "type": "urn:barbacane:error:ai-token-limit-unavailable",
+        "title": "Service Unavailable",
+        "status": 503,
+        "detail": "Token-budget limiter is unavailable; request rejected (fail closed).",
+    });
+    Response {
+        status: 503,
+        headers,
+        body: Some(body.to_string().into_bytes()),
+    }
+}
+
 /// 500 response returned when `default_profile` isn't in the `profiles` map.
 /// Fail-closed: a rate-limit plugin that silently allows traffic on misconfig
 /// is worse than one that errors loudly — operators catch the typo in CI /
@@ -313,25 +351,39 @@ fn misconfig_response(default_profile: &str) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// Token counting
+// ---------------------------------------------------------------------------
+
+/// Read a token-count context value. A present-but-unparseable value is charged
+/// as 0 (so it can't crash budgeting) but is logged, since silently dropping a
+/// real count would under-charge the budget.
+fn parse_token_count(key: &str) -> u32 {
+    match context_get(key) {
+        Some(raw) => raw.parse::<u32>().unwrap_or_else(|_| {
+            log_message(
+                1,
+                &format!("ai-token-limit: context '{key}' is not a u32; charging 0"),
+            );
+            0
+        }),
+        None => 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Partition-key extraction
 // ---------------------------------------------------------------------------
 
-fn extract_partition(req: &Request, source: &str) -> String {
+fn extract_partition(req: &Request, source: &str, trusted_proxies: &[String]) -> String {
     if source == "client_ip" {
-        if let Some(v) = req
-            .headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
-        {
-            return v;
-        }
-        if let Some(v) = req.headers.get("x-real-ip") {
-            return v.clone();
-        }
-        if !req.client_ip.is_empty() {
-            return req.client_ip.clone();
-        }
-        return "unknown".to_string();
+        // Trusted-proxy-aware: forwarded headers honored only behind a trusted
+        // proxy, otherwise the observed peer is used (no XFF-rotation evasion).
+        let ip = resolve_client_ip(req, trusted_proxies);
+        return if ip.is_empty() {
+            "unknown".to_string()
+        } else {
+            ip
+        };
     }
 
     if let Some(header_name) = source.strip_prefix("header:") {
@@ -570,6 +622,8 @@ mod tests {
                 .collect(),
             policy_name: "ai-tokens".into(),
             partition_key: partition_key.into(),
+            trusted_proxies: vec![],
+            fail_open: false,
             count,
         }
     }
@@ -703,10 +757,23 @@ mod tests {
     }
 
     #[test]
-    fn on_request_fails_open_when_limiter_unavailable() {
+    fn on_request_fails_closed_when_limiter_unavailable() {
         mock_host::reset();
         mock_host::set_rate_limiter_unavailable();
         let mut p = simple(100, 60);
+        // PL-4: default is fail CLOSED — a limiter outage rejects with 503.
+        match p.on_request(make_request()) {
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 503),
+            _ => panic!("expected 503 fail-closed"),
+        }
+    }
+
+    #[test]
+    fn on_request_fail_open_opt_in_allows_when_limiter_unavailable() {
+        mock_host::reset();
+        mock_host::set_rate_limiter_unavailable();
+        let mut p = simple(100, 60);
+        p.fail_open = true;
         assert!(matches!(p.on_request(make_request()), Action::Continue(_)));
     }
 
@@ -1049,31 +1116,45 @@ mod tests {
     // =======================================================================
 
     #[test]
-    fn partition_from_client_ip_forwarded_for() {
+    fn partition_from_client_ip_ignores_spoofed_forwarded_for() {
+        // PL-4: without a trusted proxy, a spoofed XFF is ignored; the real peer
+        // is used so a client can't rotate XFF to dodge its budget.
         let mut req = make_request();
         req.headers
             .insert("x-forwarded-for".into(), "1.2.3.4, 5.6.7.8".into());
-        assert_eq!(extract_partition(&req, "client_ip"), "1.2.3.4");
+        assert_eq!(extract_partition(&req, "client_ip", &[]), "127.0.0.1");
     }
 
     #[test]
-    fn partition_from_client_ip_real_ip() {
+    fn partition_from_client_ip_honors_xff_behind_trusted_proxy() {
+        let mut req = make_request();
+        req.client_ip = "10.9.9.9".into();
+        req.headers
+            .insert("x-forwarded-for".into(), "1.2.3.4".into());
+        assert_eq!(
+            extract_partition(&req, "client_ip", &["10.9.9.9".to_string()]),
+            "1.2.3.4"
+        );
+    }
+
+    #[test]
+    fn partition_from_client_ip_ignores_spoofed_real_ip() {
         let mut req = make_request();
         req.headers.insert("x-real-ip".into(), "9.9.9.9".into());
-        assert_eq!(extract_partition(&req, "client_ip"), "9.9.9.9");
+        assert_eq!(extract_partition(&req, "client_ip", &[]), "127.0.0.1");
     }
 
     #[test]
     fn partition_from_client_ip_fallback_field() {
         let req = make_request();
-        assert_eq!(extract_partition(&req, "client_ip"), "127.0.0.1");
+        assert_eq!(extract_partition(&req, "client_ip", &[]), "127.0.0.1");
     }
 
     #[test]
     fn partition_from_header() {
         let mut req = make_request();
         req.headers.insert("x-api-key".into(), "abc123".into());
-        assert_eq!(extract_partition(&req, "header:x-api-key"), "abc123");
+        assert_eq!(extract_partition(&req, "header:x-api-key", &[]), "abc123");
     }
 
     #[test]
@@ -1081,20 +1162,20 @@ mod tests {
         mock_host::reset();
         mock_host::set_context("auth.sub", "bob");
         let req = make_request();
-        assert_eq!(extract_partition(&req, "context:auth.sub"), "bob");
+        assert_eq!(extract_partition(&req, "context:auth.sub", &[]), "bob");
     }
 
     #[test]
     fn partition_literal() {
         let req = make_request();
-        assert_eq!(extract_partition(&req, "global"), "global");
+        assert_eq!(extract_partition(&req, "global", &[]), "global");
     }
 
     #[test]
     fn partition_context_missing_defaults_to_unknown() {
         mock_host::reset();
         let req = make_request();
-        assert_eq!(extract_partition(&req, "context:missing"), "unknown");
+        assert_eq!(extract_partition(&req, "context:missing", &[]), "unknown");
     }
 
     #[test]

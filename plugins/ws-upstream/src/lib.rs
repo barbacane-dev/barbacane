@@ -147,7 +147,7 @@ impl WsUpstreamDispatcher {
         let bytes_read =
             unsafe { host_http_read_result(buf.as_mut_ptr() as i32, buf.len() as i32) };
         if bytes_read > 0 {
-            String::from_utf8_lossy(&buf[..bytes_read as usize]).to_string()
+            String::from_utf8_lossy(&buf[..(bytes_read as usize).min(buf.len())]).to_string()
         } else {
             "unknown error".to_string()
         }

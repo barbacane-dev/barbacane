@@ -111,13 +111,12 @@ impl NatsDispatcher {
         }
 
         // Parse the publish result
-        let publish_result: PublishResult =
-            match serde_json::from_slice(&result_buf[..bytes_read as usize]) {
-                Ok(r) => r,
-                Err(e) => {
-                    return self.error_response(502, "invalid publish result", &e.to_string())
-                }
-            };
+        let publish_result: PublishResult = match serde_json::from_slice(
+            &result_buf[..(bytes_read as usize).min(result_buf.len())],
+        ) {
+            Ok(r) => r,
+            Err(e) => return self.error_response(502, "invalid publish result", &e.to_string()),
+        };
 
         if !publish_result.success {
             let detail = publish_result
