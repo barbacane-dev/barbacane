@@ -397,8 +397,9 @@ impl JwtAuth {
 
         // SAFETY: passing a pointer/length into the host, which copies the bytes
         // out of guest memory before returning.
-        let result =
-            unsafe { host_verify_signature(request_json.as_ptr() as i32, request_json.len() as i32) };
+        let result = unsafe {
+            host_verify_signature(request_json.as_ptr() as i32, request_json.len() as i32)
+        };
         match result {
             1 => Ok(()),
             _ => Err(JwtError::SignatureInvalid),
@@ -431,12 +432,16 @@ impl JwtAuth {
             }
         }
 
-        // Validate audience (aud)
+        // Validate audience (aud). When unset, any token minted for any relying
+        // party at this issuer is accepted (confused-deputy risk on shared
+        // IdPs), so warn once to surface the gap.
         if let Some(expected_aud) = &self.audience {
             match &claims.aud {
                 Some(aud) if aud.contains(expected_aud) => {}
                 _ => return Err(JwtError::InvalidAudience),
             }
+        } else {
+            warn_once_no_audience();
         }
 
         Ok(())
@@ -484,6 +489,28 @@ extern "C" {
 unsafe fn host_verify_signature(_req_ptr: i32, _req_len: i32) -> i32 {
     -1
 }
+
+/// Warn (once) that no `audience` is configured, so tokens for any relying party
+/// at the issuer are accepted. Logged via host_log on the WASM target.
+#[cfg(target_arch = "wasm32")]
+fn warn_once_no_audience() {
+    use core::cell::Cell;
+    thread_local! { static WARNED: Cell<bool> = const { Cell::new(false) }; }
+    WARNED.with(|w| {
+        if !w.get() {
+            w.set(true);
+            #[link(wasm_import_module = "barbacane")]
+            extern "C" {
+                fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
+            }
+            let msg = "jwt-auth: no 'audience' configured; tokens for any audience at this issuer are accepted (confused-deputy risk). Set 'audience' for multi-RP IdPs.";
+            unsafe { host_log(1, msg.as_ptr() as i32, msg.len() as i32) };
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_once_no_audience() {}
 
 /// Get current Unix timestamp (WASM version using host function).
 #[cfg(target_arch = "wasm32")]

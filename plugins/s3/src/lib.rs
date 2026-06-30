@@ -161,10 +161,15 @@ impl S3Dispatcher {
             (host, path.clone(), format!("{}{}", base, path))
         };
 
-        // Append query string to final URL
-        let full_url = match query {
-            Some(qs) if !qs.is_empty() => format!("{}?{}", base_url, qs),
-            _ => base_url,
+        // Canonicalize the query ONCE and use the same form for both signing and
+        // the outbound URL ("sign exactly what you send"). Sending the raw query
+        // while signing the canonical form breaks the signature whenever the
+        // incoming query is already percent-encoded.
+        let canonical_query_str = sigv4::canonical_query(query);
+        let full_url = if canonical_query_str.is_empty() {
+            base_url
+        } else {
+            format!("{}?{}", base_url, canonical_query_str)
         };
 
         // ── Build headers to sign ──────────────────────────────────────────
@@ -188,7 +193,6 @@ impl S3Dispatcher {
             service: "s3",
         };
         let canonical_uri_str = sigv4::canonical_uri(&s3_path);
-        let canonical_query_str = sigv4::canonical_query(query);
         let signing_input = sigv4::SigningInput {
             method,
             canonical_uri: &canonical_uri_str,
@@ -621,7 +625,8 @@ mod tests {
 
     #[test]
     fn test_no_fallback_query_preserved_in_s3_request() {
-        // Without fallback_key, query params must be forwarded to S3.
+        // Without fallback_key, query params must be forwarded to S3 — now in
+        // canonical (sorted, single-encoded) form, matching what is signed.
         let d = make_dispatcher(Some("bucket"), None);
         let req = d.build_s3_request(
             "bucket",
@@ -633,8 +638,8 @@ mod tests {
             TEST_TS,
         );
         assert!(
-            req.url.contains("?list-type=2&delimiter=%2F"),
-            "without fallback_key, query must be forwarded: {}",
+            req.url.contains("?delimiter=%2F&list-type=2"),
+            "query must be forwarded in canonical form: {}",
             req.url
         );
     }
