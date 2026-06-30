@@ -15,6 +15,16 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Default Kafka broker port, used when an address omits one.
+const DEFAULT_KAFKA_PORT: u16 = 9092;
+
+/// Upper bound on cached broker connections, so a plugin can't force unbounded
+/// connection growth by publishing to many distinct broker strings.
+const MAX_KAFKA_CONNECTIONS: usize = 256;
+
+/// Timeout for an individual produce operation.
+const PRODUCE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Kafka publisher with connection caching.
 ///
 /// Owns a dedicated tokio runtime so that `rskafka::Client` background tasks
@@ -23,27 +33,25 @@ use std::time::Duration;
 pub struct KafkaPublisher {
     runtime: tokio::runtime::Runtime,
     clients: Mutex<HashMap<String, Arc<Client>>>,
-}
-
-impl Default for KafkaPublisher {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// When false, broker addresses resolving to internal/metadata ranges are
+    /// rejected (SSRF guard). Operators opt in for trusted internal brokers.
+    allow_internal_egress: bool,
 }
 
 impl KafkaPublisher {
     /// Create a new Kafka publisher with its own background runtime.
-    pub fn new() -> Self {
+    pub fn new(allow_internal_egress: bool) -> Result<Self, BrokerError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("kafka-runtime")
             .enable_all()
             .build()
-            .expect("failed to create Kafka runtime");
-        Self {
+            .map_err(|e| BrokerError::ConnectionFailed(format!("failed to create runtime: {e}")))?;
+        Ok(Self {
             runtime,
             clients: Mutex::new(HashMap::new()),
-        }
+            allow_internal_egress,
+        })
     }
 
     /// Blocking publish for use from sync WASM host functions.
@@ -88,10 +96,13 @@ impl KafkaPublisher {
             timestamp: Utc::now(),
         };
 
-        let offsets = partition_client
-            .produce(vec![record], Compression::NoCompression)
-            .await
-            .map_err(|e| BrokerError::PublishFailed(e.to_string()))?;
+        let offsets = tokio::time::timeout(
+            PRODUCE_TIMEOUT,
+            partition_client.produce(vec![record], Compression::NoCompression),
+        )
+        .await
+        .map_err(|_| BrokerError::Timeout)?
+        .map_err(|e| BrokerError::PublishFailed(e.to_string()))?;
 
         let offset = offsets.first().copied();
 
@@ -117,6 +128,23 @@ impl KafkaPublisher {
         // Parse broker addresses (comma-separated)
         let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_string()).collect();
 
+        // SSRF guard: refuse to connect to internal/metadata targets unless the
+        // operator has opted into internal egress.
+        for broker in &broker_list {
+            let (host, port) = crate::broker::split_host_port(broker, DEFAULT_KAFKA_PORT);
+            match crate::http_client::guard_external_host(&host, port, self.allow_internal_egress)
+                .await
+            {
+                Ok(()) => {}
+                Err(crate::http_client::HostGuardError::Blocked(h)) => {
+                    return Err(BrokerError::Blocked(h));
+                }
+                Err(crate::http_client::HostGuardError::Resolve(m)) => {
+                    return Err(BrokerError::ConnectionFailed(m));
+                }
+            }
+        }
+
         // Connect (outside the lock) with a 5s deadline to avoid blocking the host function
         let backoff = BackoffConfig {
             deadline: Some(Duration::from_secs(5)),
@@ -131,9 +159,14 @@ impl KafkaPublisher {
         let client = Arc::new(client);
         tracing::info!(brokers = %brokers, "established Kafka connection");
 
-        // Cache the new connection
+        // Cache the new connection, bounding the cache size.
         {
             let mut clients = self.clients.lock();
+            if clients.len() >= MAX_KAFKA_CONNECTIONS && !clients.contains_key(brokers) {
+                return Err(BrokerError::ConnectionFailed(
+                    "Kafka connection cache is full".to_string(),
+                ));
+            }
             clients.insert(brokers.to_string(), client.clone());
         }
 
@@ -147,21 +180,27 @@ mod tests {
 
     #[test]
     fn publisher_starts_empty() {
-        let publisher = KafkaPublisher::new();
+        let publisher = KafkaPublisher::new(true).expect("kafka publisher");
         let clients = publisher.clients.lock();
         assert!(clients.is_empty());
     }
 
     #[test]
-    fn default_impl() {
-        let publisher = KafkaPublisher::default();
-        let clients = publisher.clients.lock();
-        assert!(clients.is_empty());
+    fn blocks_internal_broker_when_egress_disallowed() {
+        let publisher = KafkaPublisher::new(false).expect("kafka publisher");
+        let result = publisher.publish_blocking(
+            "169.254.169.254:9092",
+            "test-topic",
+            None,
+            "hello",
+            BTreeMap::new(),
+        );
+        assert!(matches!(result, Err(BrokerError::Blocked(_))));
     }
 
     #[test]
     fn publish_blocking_connection_refused() {
-        let publisher = KafkaPublisher::new();
+        let publisher = KafkaPublisher::new(true).expect("kafka publisher");
         let result = publisher.publish_blocking(
             "127.0.0.1:19092",
             "test-topic",
@@ -176,7 +215,7 @@ mod tests {
 
     #[test]
     fn publish_blocking_from_thread_scope() {
-        let publisher = KafkaPublisher::new();
+        let publisher = KafkaPublisher::new(true).expect("kafka publisher");
         let result = std::thread::scope(|s| {
             s.spawn(|| {
                 publisher.publish_blocking(
@@ -195,7 +234,7 @@ mod tests {
 
     #[test]
     fn publish_blocking_with_key_and_headers() {
-        let publisher = KafkaPublisher::new();
+        let publisher = KafkaPublisher::new(true).expect("kafka publisher");
         let mut headers = BTreeMap::new();
         headers.insert("x-request-id".to_string(), "req-123".to_string());
 
@@ -212,7 +251,7 @@ mod tests {
 
     #[test]
     fn publish_blocking_comma_separated_brokers() {
-        let publisher = KafkaPublisher::new();
+        let publisher = KafkaPublisher::new(true).expect("kafka publisher");
         let result = publisher.publish_blocking(
             "127.0.0.1:19092, 127.0.0.1:19093",
             "test-topic",

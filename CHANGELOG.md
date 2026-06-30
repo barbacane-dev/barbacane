@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security**: WASM plugin capability enforcement — plugins may only import host functions covered by the capabilities declared in `plugin.toml`.
 - **security**: `jwt-auth` performs real signature verification via the host `verify_signature` capability (inline JWK).
 - **security**: a security testing framework — adversarial integration suite (`crates/barbacane-test/tests/security/`) and `cargo-fuzz` targets (`fuzz/`).
+- **security**: WASM sandbox resource limits — buffered plugin HTTP responses are capped (`BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES`, default 16 MiB); the host cache and rate limiter bound their entry/partition counts and clamp plugin-supplied TTL/window/quota; a wall-clock epoch deadline backstops fuel-based CPU limiting.
 - **docs**: [Configuration & environment variables](reference/configuration.md) reference.
 
 ### Changed (breaking, secure-by-default)
@@ -22,12 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The control plane refuses to start without `BARBACANE_CONTROL_ADMIN_TOKEN`, and all API routes (except `/health` and the data-plane WebSocket) require the bearer token.
 - `file://` secret references require `BARBACANE_SECRETS_DIR` and are confined to it.
 - MCP requires a valid session for non-`initialize` requests.
-- Plugin HTTP egress to internal/metadata addresses is blocked by default.
+- Plugin egress to internal/metadata addresses is blocked by default — this now covers Kafka/NATS broker connections in addition to plugin HTTP calls.
 
 ### Fixed
 
 - **security**: fail-open middleware short-circuit downgrade in the WASM chain.
 - **security**: panic on hostile `x-request-id` / `traceparent`; unbounded Prometheus path-label cardinality on unmatched routes.
+- **security**: panic vectors in WASM host functions — guest-controlled pointer/length slice reads now use saturating arithmetic, and cache/rate-limiter time arithmetic is overflow/underflow-safe.
 - **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
 
 ## [0.7.0] - 2026-05-05

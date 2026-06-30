@@ -703,9 +703,16 @@ impl Gateway {
                 .as_deref(),
             Some("1" | "true" | "TRUE" | "yes")
         );
+        // Cap the body the buffered plugin-egress path will read into host
+        // memory. Operators can raise/lower it; default is 16 MiB.
+        let max_response_bytes = std::env::var("BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or_else(|| HttpClientConfig::default().max_response_bytes);
         let http_client_config = HttpClientConfig {
             allow_plaintext: allow_plaintext_upstream,
             allow_internal_egress,
+            max_response_bytes,
             ..Default::default()
         };
         let http_client = HttpClient::new(http_client_config)
@@ -848,11 +855,14 @@ impl Gateway {
         // Create response cache for host_cache_get/set calls
         let response_cache = ResponseCache::new();
 
-        // Create NATS publisher for host_nats_publish calls
-        let nats_publisher = barbacane_wasm::NatsPublisher::new();
+        // Create NATS publisher for host_nats_publish calls. Broker egress
+        // honors the same internal-egress policy as plugin HTTP calls.
+        let nats_publisher = barbacane_wasm::NatsPublisher::new(allow_internal_egress)
+            .map_err(|e| format!("failed to create NATS publisher: {}", e))?;
 
         // Create Kafka publisher for host_kafka_publish calls
-        let kafka_publisher = barbacane_wasm::KafkaPublisher::new();
+        let kafka_publisher = barbacane_wasm::KafkaPublisher::new(allow_internal_egress)
+            .map_err(|e| format!("failed to create Kafka publisher: {}", e))?;
 
         // Create pool with all options: HTTP client, secrets, rate limiter, cache, NATS, and Kafka
         let plugin_pool = InstancePool::with_all_options(

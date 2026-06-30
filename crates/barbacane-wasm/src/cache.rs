@@ -8,6 +8,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Upper bound on an entry's TTL. The TTL is plugin-controlled, so it is clamped
+/// before being fed into `Instant + Duration` arithmetic to avoid an
+/// overflow panic on an absurd value (1 year is well beyond any sane cache TTL).
+const MAX_TTL_SECS: u64 = 366 * 24 * 60 * 60;
+
+/// Upper bound on the number of cached entries. A plugin can write arbitrary
+/// keys, so the table is capped to bound host memory; inserts past the cap evict
+/// expired entries first, then the entry closest to expiry.
+const MAX_CACHE_ENTRIES: usize = 10_000;
+
 /// A cached response entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CacheEntry {
@@ -97,8 +107,8 @@ impl ResponseCache {
 
                 let mut entry = internal.entry.clone();
                 entry.metadata = Some(CacheMetadata {
-                    created_at: now_unix - internal.created_at.elapsed().as_secs(),
-                    expires_at: now_unix + ttl_remaining,
+                    created_at: now_unix.saturating_sub(internal.created_at.elapsed().as_secs()),
+                    expires_at: now_unix.saturating_add(ttl_remaining),
                     ttl_remaining,
                 });
 
@@ -119,7 +129,12 @@ impl ResponseCache {
     /// Set a cache entry with TTL.
     pub fn set(&self, key: &str, entry: CacheEntry, ttl_secs: u64) {
         let now = Instant::now();
-        let expires_at = now + Duration::from_secs(ttl_secs);
+        // Clamp the plugin-controlled TTL and use checked arithmetic so a huge
+        // value can't overflow-panic `Instant + Duration`.
+        let ttl_secs = ttl_secs.min(MAX_TTL_SECS);
+        let expires_at = now
+            .checked_add(Duration::from_secs(ttl_secs))
+            .unwrap_or(now);
 
         let internal = InternalEntry {
             entry,
@@ -129,6 +144,20 @@ impl ResponseCache {
         };
 
         let mut entries = self.entries.write();
+        if entries.len() >= MAX_CACHE_ENTRIES && !entries.contains_key(key) {
+            // Make room: drop expired entries first.
+            entries.retain(|_, v| v.expires_at > now);
+            // Still full of live entries? Evict the one closest to expiry.
+            if entries.len() >= MAX_CACHE_ENTRIES {
+                if let Some(victim) = entries
+                    .iter()
+                    .min_by_key(|(_, v)| v.expires_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    entries.remove(&victim);
+                }
+            }
+        }
         entries.insert(key.to_string(), internal);
     }
 
@@ -219,6 +248,26 @@ mod tests {
         let cached = result.entry.unwrap();
         assert_eq!(cached.status, 200);
         assert_eq!(cached.body, Some(b"test body".to_vec()));
+    }
+
+    #[test]
+    fn cache_entry_count_is_bounded() {
+        let cache = ResponseCache::new();
+        let entry = CacheEntry {
+            status: 200,
+            headers: HashMap::new(),
+            body: None,
+            metadata: None,
+        };
+        // Write more distinct keys than the cap, all with a live TTL.
+        for i in 0..(MAX_CACHE_ENTRIES + 100) {
+            cache.set(&format!("key-{i}"), entry.clone(), 3600);
+        }
+        assert!(
+            cache.stats().total_entries <= MAX_CACHE_ENTRIES,
+            "cache grew past the cap: {}",
+            cache.stats().total_entries
+        );
     }
 
     #[test]

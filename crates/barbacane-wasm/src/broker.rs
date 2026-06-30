@@ -24,6 +24,48 @@ pub enum BrokerError {
 
     #[error("timeout")]
     Timeout,
+
+    #[error("broker target blocked by SSRF policy: {0}")]
+    Blocked(String),
+}
+
+/// Split a broker address into its host and port, stripping any `scheme://`
+/// prefix and IPv6 brackets. Used to feed the SSRF guard. Falls back to
+/// `default_port` when no port is present.
+pub(crate) fn split_host_port(addr: &str, default_port: u16) -> (String, u16) {
+    // Drop a leading scheme such as `nats://` or `tls://`.
+    let addr = addr
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(addr)
+        .trim();
+    // Drop any path/query that may follow the authority.
+    let authority = addr
+        .split(['/', '?'])
+        .next()
+        .unwrap_or(addr)
+        .trim_end_matches('.');
+
+    // Bracketed IPv6: [::1]:4222 or [::1]
+    if let Some(rest) = authority.strip_prefix('[') {
+        if let Some((host, after)) = rest.split_once(']') {
+            let port = after
+                .strip_prefix(':')
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(default_port);
+            return (host.to_string(), port);
+        }
+    }
+
+    // host:port — but only treat the last colon as a port separator when what
+    // follows parses as a port (avoids mangling a bare unbracketed IPv6).
+    if let Some((host, port_str)) = authority.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            return (host.to_string(), port);
+        }
+    }
+
+    (authority.to_string(), default_port)
 }
 
 /// A message to publish to a broker.
@@ -213,6 +255,30 @@ mod tests {
 
         assert_eq!(deserialized.partition, Some(3));
         assert_eq!(deserialized.offset, Some(42));
+    }
+
+    #[test]
+    fn split_host_port_variants() {
+        assert_eq!(split_host_port("kafka:9092", 9092), ("kafka".into(), 9092));
+        assert_eq!(
+            split_host_port("nats://example.com:4222", 4222),
+            ("example.com".into(), 4222)
+        );
+        assert_eq!(
+            split_host_port("broker.internal", 9092),
+            ("broker.internal".into(), 9092)
+        );
+        assert_eq!(split_host_port("[::1]:4222", 4222), ("::1".into(), 4222));
+        assert_eq!(split_host_port("[fe80::1]", 4222), ("fe80::1".into(), 4222));
+        assert_eq!(
+            split_host_port("tls://10.0.0.1:9093/path", 9092),
+            ("10.0.0.1".into(), 9093)
+        );
+        // Bare IPv6 without brackets: no colon is treated as a port.
+        assert_eq!(
+            split_host_port("169.254.169.254:9092", 9092),
+            ("169.254.169.254".into(), 9092)
+        );
     }
 
     #[test]

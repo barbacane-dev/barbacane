@@ -492,6 +492,10 @@ impl PluginInstance {
             .set_fuel(limits.max_fuel)
             .map_err(|e| WasmError::Instantiation(format!("failed to set fuel: {}", e)))?;
 
+        // Wall-clock backstop: trap if the guest runs past its time budget. The
+        // deadline is expressed in epoch ticks (see EPOCH_TICK).
+        store.set_epoch_deadline(limits.max_execution_ms.max(1));
+
         // Enable resource limiting
         store.limiter(|state| state);
 
@@ -622,6 +626,9 @@ impl PluginInstance {
         if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
             tracing::warn!(error = %e, "failed to reset WASM fuel");
         }
+        // Reset the wall-clock deadline for this call.
+        self.store
+            .set_epoch_deadline(self.limits.max_execution_ms.max(1));
 
         // Call init
         let result = init_func
@@ -677,6 +684,15 @@ impl PluginInstance {
         if let Err(e) = self.store.set_fuel(fuel) {
             tracing::warn!(error = %e, "failed to reset WASM fuel");
         }
+        // Reset the wall-clock deadline, scaled by the same factor as fuel so a
+        // large payload's extra serialization work isn't spuriously trapped.
+        let fuel_ratio = (fuel / self.limits.max_fuel.max(1)).max(1);
+        let deadline = self
+            .limits
+            .max_execution_ms
+            .max(1)
+            .saturating_mul(fuel_ratio);
+        self.store.set_epoch_deadline(deadline);
 
         // Write data to memory (may call plugin's `alloc` export)
         let ptr = self.write_to_memory(data)?;
@@ -791,7 +807,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = ptr as usize;
-                let end = start + len as usize;
+                let end = start.saturating_add(len as usize);
                 let data = memory.data(&caller);
 
                 if end <= data.len() {
@@ -835,7 +851,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = ptr as usize;
-                let end = start + len as usize;
+                let end = start.saturating_add(len as usize);
                 let data = memory.data(&caller);
 
                 if end <= data.len() {
@@ -890,7 +906,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = ptr as usize;
-                let end = start + len as usize;
+                let end = start.saturating_add(len as usize);
                 let data = memory.data(&caller);
 
                 if end <= data.len() {
@@ -915,7 +931,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = msg_ptr as usize;
-                let end = start + msg_len as usize;
+                let end = start.saturating_add(msg_len as usize);
                 let data = memory.data(&caller);
 
                 if end <= data.len() {
@@ -945,7 +961,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = key_ptr as usize;
-                let end = start + key_len as usize;
+                let end = start.saturating_add(key_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -990,9 +1006,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let key_start = key_ptr as usize;
-                let key_end = key_start + key_len as usize;
+                let key_end = key_start.saturating_add(key_len as usize);
                 let val_start = val_ptr as usize;
-                let val_end = val_start + val_len as usize;
+                let val_end = val_start.saturating_add(val_len as usize);
 
                 // Read data first, then mutate
                 let data = memory.data(&caller);
@@ -1093,7 +1109,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = req_ptr as usize;
-                let end = start + req_len as usize;
+                let end = start.saturating_add(req_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -1250,7 +1266,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = req_ptr as usize;
-                let end = start + req_len as usize;
+                let end = start.saturating_add(req_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -1417,7 +1433,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = req_ptr as usize;
-                let end = start + req_len as usize;
+                let end = start.saturating_add(req_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -1462,7 +1478,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = req_ptr as usize;
-                let end = start + req_len as usize;
+                let end = start.saturating_add(req_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -1512,7 +1528,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = ref_ptr as usize;
-                let end = start + ref_len as usize;
+                let end = start.saturating_add(ref_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -1568,7 +1584,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = key_ptr as usize;
-                let end = start + key_len as usize;
+                let end = start.saturating_add(key_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -1628,7 +1644,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = key_ptr as usize;
-                let end = start + key_len as usize;
+                let end = start.saturating_add(key_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -1687,9 +1703,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let key_start = key_ptr as usize;
-                let key_end = key_start + key_len as usize;
+                let key_end = key_start.saturating_add(key_len as usize);
                 let entry_start = entry_ptr as usize;
-                let entry_end = entry_start + entry_len as usize;
+                let entry_end = entry_start.saturating_add(entry_len as usize);
                 let data = memory.data(&caller);
 
                 if key_end > data.len() || entry_end > data.len() {
@@ -1753,9 +1769,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
 
                 let data = memory.data(&caller);
                 let name_start = name_ptr as usize;
-                let name_end = name_start + name_len as usize;
+                let name_end = name_start.saturating_add(name_len as usize);
                 let labels_start = labels_ptr as usize;
-                let labels_end = labels_start + labels_len as usize;
+                let labels_end = labels_start.saturating_add(labels_len as usize);
 
                 if name_end > data.len() || labels_end > data.len() {
                     return;
@@ -1799,9 +1815,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
 
                 let data = memory.data(&caller);
                 let name_start = name_ptr as usize;
-                let name_end = name_start + name_len as usize;
+                let name_end = name_start.saturating_add(name_len as usize);
                 let labels_start = labels_ptr as usize;
-                let labels_end = labels_start + labels_len as usize;
+                let labels_end = labels_start.saturating_add(labels_len as usize);
 
                 if name_end > data.len() || labels_end > data.len() {
                     return;
@@ -1844,7 +1860,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
 
                 let data = memory.data(&caller);
                 let start = name_ptr as usize;
-                let end = start + name_len as usize;
+                let end = start.saturating_add(name_len as usize);
 
                 if end > data.len() {
                     return -1;
@@ -1894,9 +1910,9 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
 
                 let data = memory.data(&caller);
                 let key_start = key_ptr as usize;
-                let key_end = key_start + key_len as usize;
+                let key_end = key_start.saturating_add(key_len as usize);
                 let val_start = val_ptr as usize;
-                let val_end = val_start + val_len as usize;
+                let val_end = val_start.saturating_add(val_len as usize);
 
                 if key_end > data.len() || val_end > data.len() {
                     return;
@@ -1934,7 +1950,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = msg_ptr as usize;
-                let end = start + msg_len as usize;
+                let end = start.saturating_add(msg_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -2035,7 +2051,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
 
                 let start = msg_ptr as usize;
-                let end = start + msg_len as usize;
+                let end = start.saturating_add(msg_len as usize);
                 let data = memory.data(&caller);
 
                 if end > data.len() {
@@ -2143,7 +2159,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     None => return 1,
                 };
                 let start = buf_ptr as usize;
-                let end = start + buf_len as usize;
+                let end = start.saturating_add(buf_len as usize);
                 let data = memory.data_mut(&mut caller);
                 if end > data.len() {
                     return 1;
@@ -2401,8 +2417,9 @@ mod tests {
     #[test]
     fn plugin_state_with_all_options_sets_publishers() {
         let limits = PluginLimits::default();
-        let nats = Arc::new(crate::nats_client::NatsPublisher::new());
-        let kafka = Arc::new(crate::kafka_client::KafkaPublisher::new());
+        let nats = Arc::new(crate::nats_client::NatsPublisher::new(true).expect("nats publisher"));
+        let kafka =
+            Arc::new(crate::kafka_client::KafkaPublisher::new(true).expect("kafka publisher"));
         let state = PluginState::with_all_options(
             "test".into(),
             &limits,
