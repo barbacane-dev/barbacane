@@ -346,15 +346,12 @@ impl HttpClient {
                     })
                     .collect();
 
-                let body = response
-                    .bytes()
-                    .await
-                    .map_err(HttpClientError::ResponseReadError)?;
+                let body = self.read_body_capped(response).await?;
 
                 Ok(HttpResponse {
                     status,
                     headers,
-                    body: Some(body.to_vec()),
+                    body: Some(body),
                 })
             }
             Err(e) => {
@@ -370,6 +367,36 @@ impl HttpClient {
                 }
             }
         }
+    }
+
+    /// Read an upstream response body into memory, refusing to buffer more than
+    /// `max_response_bytes`. The upstream is plugin-chosen and untrusted, so a
+    /// `Content-Length` over the cap is rejected up front and the streamed body
+    /// is bounded chunk-by-chunk (covers chunked encoding with no length).
+    async fn read_body_capped(
+        &self,
+        mut response: reqwest::Response,
+    ) -> Result<Vec<u8>, HttpClientError> {
+        let limit = self.base_config.max_response_bytes;
+
+        if let Some(len) = response.content_length() {
+            if len > limit as u64 {
+                return Err(HttpClientError::ResponseTooLarge { limit });
+            }
+        }
+
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(HttpClientError::ResponseReadError)?
+        {
+            if body.len().saturating_add(chunk.len()) > limit {
+                return Err(HttpClientError::ResponseTooLarge { limit });
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
     }
 
     /// Configure circuit breaker for a host.
@@ -403,7 +430,7 @@ impl HttpClient {
 
 /// Whether an IP address points at an internal / non-routable / metadata range
 /// that an untrusted plugin must not be able to reach.
-fn ip_is_internal(ip: &IpAddr) -> bool {
+pub(crate) fn ip_is_internal(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_loopback()
@@ -433,21 +460,32 @@ fn ip_is_internal(ip: &IpAddr) -> bool {
     }
 }
 
-/// Reject requests whose target resolves to an internal address. Hostnames are
-/// resolved and rejected if *any* resolved address is internal, defending
-/// against a public name that points at an internal IP.
+/// Outcome of an SSRF host check that distinguishes a policy rejection from a
+/// resolution failure so callers can map each to their own error type.
+pub(crate) enum HostGuardError {
+    /// The host resolves to an internal/non-routable/metadata address.
+    Blocked(String),
+    /// The host could not be resolved.
+    Resolve(String),
+}
+
+/// Reject a target whose host resolves to an internal address. `host` may be an
+/// IP literal (optionally bracketed for IPv6) or a name; `port` is used only for
+/// DNS resolution. A name is rejected if *any* resolved address is internal,
+/// defending against a public name that points at an internal IP.
 ///
-/// Note: a separate connect-time resolution still occurs inside reqwest, so a
+/// Note: a separate connect-time resolution still occurs inside the client, so a
 /// rebinding attacker could in theory return a different address; pinning the
 /// vetted IP via a custom resolver is tracked as follow-up hardening.
-async fn ssrf_guard(url: &reqwest::Url, allow_internal: bool) -> Result<(), HttpClientError> {
+pub(crate) async fn guard_external_host(
+    host: &str,
+    port: u16,
+    allow_internal: bool,
+) -> Result<(), HostGuardError> {
     if allow_internal {
         return Ok(());
     }
 
-    let host = url
-        .host_str()
-        .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?;
     let host_clean = host
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
@@ -455,28 +493,42 @@ async fn ssrf_guard(url: &reqwest::Url, allow_internal: bool) -> Result<(), Http
 
     if let Ok(ip) = host_clean.parse::<IpAddr>() {
         if ip_is_internal(&ip) {
-            return Err(HttpClientError::BlockedTarget(host.to_string()));
+            return Err(HostGuardError::Blocked(host.to_string()));
         }
         return Ok(());
     }
 
-    let port = url.port_or_known_default().unwrap_or(0);
     let mut saw_any = false;
     let addrs = tokio::net::lookup_host((host_clean, port))
         .await
-        .map_err(|e| HttpClientError::ConnectionFailed(e.to_string()))?;
+        .map_err(|e| HostGuardError::Resolve(e.to_string()))?;
     for addr in addrs {
         saw_any = true;
         if ip_is_internal(&addr.ip()) {
-            return Err(HttpClientError::BlockedTarget(host.to_string()));
+            return Err(HostGuardError::Blocked(host.to_string()));
         }
     }
     if !saw_any {
-        return Err(HttpClientError::ConnectionFailed(format!(
+        return Err(HostGuardError::Resolve(format!(
             "no DNS records for {host}"
         )));
     }
     Ok(())
+}
+
+/// SSRF guard for the HTTP client: reject requests whose target resolves to an
+/// internal address.
+async fn ssrf_guard(url: &reqwest::Url, allow_internal: bool) -> Result<(), HttpClientError> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?;
+    let port = url.port_or_known_default().unwrap_or(0);
+    guard_external_host(host, port, allow_internal)
+        .await
+        .map_err(|e| match e {
+            HostGuardError::Blocked(h) => HttpClientError::BlockedTarget(h),
+            HostGuardError::Resolve(m) => HttpClientError::ConnectionFailed(m),
+        })
 }
 
 /// Configuration for the HTTP client.
@@ -496,6 +548,11 @@ pub struct HttpClientConfig {
     /// disabling the SSRF guard. Off by default; operators opt in for trusted
     /// internal upstreams.
     pub allow_internal_egress: bool,
+    /// Maximum size (bytes) of a buffered upstream response body. A
+    /// plugin-chosen upstream is untrusted, so the buffered `call` path caps the
+    /// body it will read into host memory to avoid an OOM. Streaming dispatchers
+    /// (`stream_raw`) are unaffected.
+    pub max_response_bytes: usize,
 }
 
 impl Default for HttpClientConfig {
@@ -507,6 +564,7 @@ impl Default for HttpClientConfig {
             default_timeout: Duration::from_secs(30),
             allow_plaintext: false,
             allow_internal_egress: false,
+            max_response_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -597,6 +655,9 @@ pub enum HttpClientError {
 
     #[error("failed to read response: {0}")]
     ResponseReadError(#[source] reqwest::Error),
+
+    #[error("upstream response exceeds the {limit}-byte buffer limit")]
+    ResponseTooLarge { limit: usize },
 
     #[error("TLS configuration error: {0}")]
     TlsConfig(#[source] TlsConfigError),
@@ -953,6 +1014,81 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body = resp.text().await.expect("body");
         assert_eq!(body, "ok");
+    }
+
+    #[tokio::test]
+    async fn call_rejects_oversized_response_body() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
+        // Server returns a 10-byte body but advertises it; the client cap is 4.
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+            let response = "HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\n0123456789";
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        });
+
+        let config = HttpClientConfig {
+            allow_plaintext: true,
+            allow_internal_egress: true,
+            max_response_bytes: 4,
+            ..Default::default()
+        };
+        let client = HttpClient::new(config).expect("client");
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: format!("http://{addr}/"),
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+        let err = client.call(req).await.unwrap_err();
+        assert!(
+            matches!(err, HttpClientError::ResponseTooLarge { limit: 4 }),
+            "expected ResponseTooLarge, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_allows_response_within_limit() {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
+            let response = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok";
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        });
+
+        let config = HttpClientConfig {
+            allow_plaintext: true,
+            allow_internal_egress: true,
+            max_response_bytes: 1024,
+            ..Default::default()
+        };
+        let client = HttpClient::new(config).expect("client");
+        let req = HttpRequest {
+            method: "GET".into(),
+            url: format!("http://{addr}/"),
+            headers: Default::default(),
+            body: None,
+            timeout: None,
+        };
+        let resp = client.call(req).await.expect("call should succeed");
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body.as_deref(), Some(b"ok".as_slice()));
     }
 
     #[test]

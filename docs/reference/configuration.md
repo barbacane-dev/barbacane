@@ -15,7 +15,8 @@ insecurely.
 | `BARBACANE_TRUSTED_PUBKEY` | Data plane | _unset_ | Hex-encoded Ed25519 public key. When set, the data plane requires every loaded `.bca` artifact to carry a valid signature produced by the matching private key; load fails otherwise. When unset, the artifact's content hashes are still verified, but signature checking is skipped (a startup warning is logged). |
 | `BARBACANE_SIGNING_KEY` | Compiler | _unset_ | Path to a PKCS#8 Ed25519 private key. When set, `barbacane compile` signs the artifact's content hash. When unset, the artifact is built unsigned. |
 | `BARBACANE_SECRETS_DIR` | Data plane | _unset_ | Base directory that `file://` secret references are confined to. **Required to use `file://` secrets** — references are rejected when it is unset, and any path resolving outside this directory (after symlink/`..` resolution) is rejected. |
-| `BARBACANE_ALLOW_INTERNAL_EGRESS` | Data plane | `false` | Set to `1`/`true` to disable the plugin SSRF guard and allow plugin HTTP calls to internal/loopback/link-local/cloud-metadata addresses. Leave off unless you have legitimate internal upstreams. |
+| `BARBACANE_ALLOW_INTERNAL_EGRESS` | Data plane | `false` | Set to `1`/`true` to disable the plugin SSRF guard and allow plugin egress (HTTP calls **and** Kafka/NATS broker connections) to internal/loopback/link-local/cloud-metadata addresses. Leave off unless you have legitimate internal upstreams or brokers. |
+| `BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES` | Data plane | `16777216` (16 MiB) | Maximum size of an upstream response body that the buffered plugin HTTP-call path will read into host memory. Bodies larger than this are rejected, bounding host memory against a hostile or compromised upstream. Streaming dispatchers are unaffected. |
 
 ## Breaking-by-design defaults
 
@@ -33,8 +34,9 @@ These changes are intentional secure defaults. Adopt them as follows:
    (`tools/list`, `tools/call`, …) without a valid `Mcp-Session-Id` are now
    rejected; call `initialize` first and reuse the returned session id.
 
-4. **Plugin HTTP calls to internal addresses are blocked by default.** If a
-   plugin legitimately calls an internal upstream, set
+4. **Plugin egress to internal addresses is blocked by default.** This now
+   covers both plugin HTTP calls and Kafka/NATS broker connections. If a plugin
+   legitimately reaches an internal upstream or broker, set
    `BARBACANE_ALLOW_INTERNAL_EGRESS=1` (or prefer an explicit allowlist when one
    is available).
 

@@ -3,10 +3,20 @@
 //! This module provides the core wasmtime engine with settings optimized
 //! for the Barbacane plugin runtime.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
+
 use wasmtime::{Config, Engine, Module, OptLevel};
 
 use crate::error::WasmError;
 use crate::limits::PluginLimits;
+
+/// Wall-clock granularity of the epoch ticker. The per-call epoch deadline is
+/// expressed as a count of these ticks, so it bounds the slack between a
+/// plugin's configured execution budget and when it is actually interrupted.
+pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(1);
 
 /// A compiled WASM module ready for instantiation.
 #[derive(Clone)]
@@ -31,6 +41,19 @@ impl CompiledModule {
 pub struct WasmEngine {
     engine: Engine,
     limits: PluginLimits,
+    /// Signals the epoch ticker thread to stop on drop.
+    epoch_stop: Arc<AtomicBool>,
+    /// Handle to the background epoch ticker thread.
+    epoch_ticker: Option<JoinHandle<()>>,
+}
+
+impl Drop for WasmEngine {
+    fn drop(&mut self) {
+        self.epoch_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.epoch_ticker.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl WasmEngine {
@@ -49,6 +72,13 @@ impl WasmEngine {
         // Enable fuel consumption for execution time limiting
         config.consume_fuel(true);
 
+        // Enable epoch interruption as a wall-clock backstop. Fuel bounds the
+        // number of instructions executed, but not wall-clock time (e.g. on a
+        // slow host, or if fuel is miscalibrated). A background thread ticks the
+        // engine epoch and each call sets a deadline, trapping a guest that runs
+        // past its time budget.
+        config.epoch_interruption(true);
+
         // Configure memory settings
         config.max_wasm_stack(limits.max_stack_bytes);
 
@@ -66,7 +96,29 @@ impl WasmEngine {
 
         let engine = Engine::new(&config).map_err(|e| WasmError::EngineCreation(e.to_string()))?;
 
-        Ok(Self { engine, limits })
+        // Spawn the epoch ticker: it increments the engine epoch every
+        // `EPOCH_TICK` so per-call epoch deadlines fire on a wall-clock basis.
+        let epoch_stop = Arc::new(AtomicBool::new(false));
+        let epoch_ticker = {
+            let engine = engine.clone();
+            let stop = Arc::clone(&epoch_stop);
+            std::thread::Builder::new()
+                .name("wasm-epoch-ticker".into())
+                .spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::thread::sleep(EPOCH_TICK);
+                        engine.increment_epoch();
+                    }
+                })
+                .map_err(|e| WasmError::EngineCreation(e.to_string()))?
+        };
+
+        Ok(Self {
+            engine,
+            limits,
+            epoch_stop,
+            epoch_ticker: Some(epoch_ticker),
+        })
     }
 
     /// Get a reference to the underlying wasmtime engine.
