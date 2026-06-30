@@ -61,6 +61,11 @@
       "description": "Named policy profiles.",
       "additionalProperties": { "$ref": "#/$defs/PromptProfile" },
       "minProperties": 1
+    },
+    "fail_open": {
+      "type": "boolean",
+      "default": false,
+      "description": "When the request body can't be inspected (unparseable JSON or a non-array 'messages'), allow it through instead of rejecting. Defaults to false (fail closed) so the guard can't be bypassed with a malformed body."
     }
   }
 }

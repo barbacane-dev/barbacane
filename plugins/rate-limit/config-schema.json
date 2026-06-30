@@ -24,6 +24,17 @@
       "type": "string",
       "default": "client_ip",
       "description": "Partition key for rate limiting. Options: 'client_ip', 'header:<name>', 'context:<key>', or a static string"
+    },
+    "trusted_proxies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Exact IPs of trusted reverse proxies. With partition_key 'client_ip', X-Forwarded-For / X-Real-IP are honored only behind these; otherwise the observed peer IP is used so clients cannot rotate XFF to evade limits."
+    },
+    "fail_open": {
+      "type": "boolean",
+      "default": false,
+      "description": "When the host rate limiter is unavailable, allow the request (fail open) instead of rejecting with 503. Defaults to false (fail closed)."
     }
   },
   "additionalProperties": false

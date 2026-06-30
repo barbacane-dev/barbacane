@@ -162,18 +162,19 @@ impl HttpUpstreamDispatcher {
             );
         }
 
-        let http_response: HttpResponse =
-            match serde_json::from_slice(&response_buf[..bytes_read as usize]) {
-                Ok(resp) => resp,
-                Err(e) => {
-                    return self.error_response(
-                        502,
-                        "Bad Gateway",
-                        "invalid upstream response",
-                        &e.to_string(),
-                    );
-                }
-            };
+        let http_response: HttpResponse = match serde_json::from_slice(
+            &response_buf[..(bytes_read as usize).min(response_buf.len())],
+        ) {
+            Ok(resp) => resp,
+            Err(e) => {
+                return self.error_response(
+                    502,
+                    "Bad Gateway",
+                    "invalid upstream response",
+                    &e.to_string(),
+                );
+            }
+        };
 
         // Read response body from side-channel.
         let response_body = barbacane_plugin_sdk::body::read_http_response_body();

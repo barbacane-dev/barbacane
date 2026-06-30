@@ -764,7 +764,7 @@ impl OidcAuth {
         }
 
         let http_response: HttpResponse =
-            serde_json::from_slice(&response_buf[..bytes_read as usize])
+            serde_json::from_slice(&response_buf[..(bytes_read as usize).min(response_buf.len())])
                 .map_err(|e| format!("invalid response format: {}", e))?;
 
         let body = read_http_response_body();

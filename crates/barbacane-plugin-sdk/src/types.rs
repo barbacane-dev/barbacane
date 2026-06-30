@@ -143,6 +143,44 @@ pub fn streamed_response() -> Response {
     }
 }
 
+/// Resolve the effective client IP, honoring trusted proxies.
+///
+/// `req.client_ip` is the peer the gateway actually observed. The forwarded
+/// headers (`X-Forwarded-For`, `X-Real-IP`) are attacker-controlled, so they are
+/// consulted **only** when the immediate peer is one of `trusted_proxies`; then
+/// the right-most forwarded address that is not itself a trusted proxy is
+/// returned. With no trusted proxies configured (the default), forwarded headers
+/// are ignored entirely and the observed peer is used.
+///
+/// This is the single source of truth for client-IP resolution so security
+/// middlewares (ip-restriction, rate-limit, ai-token-limit) cannot drift into
+/// independently spoofable implementations.
+pub fn resolve_client_ip(req: &Request, trusted_proxies: &[String]) -> String {
+    let peer = req.client_ip.trim();
+    let is_trusted = |ip: &str| trusted_proxies.iter().any(|p| p.trim() == ip);
+
+    if !is_trusted(peer) {
+        return peer.to_string();
+    }
+
+    if let Some(xff) = req.headers.get("x-forwarded-for") {
+        for hop in xff.split(',').map(str::trim).rev() {
+            if !hop.is_empty() && !is_trusted(hop) {
+                return hop.to_string();
+            }
+        }
+    }
+
+    if let Some(real) = req.headers.get("x-real-ip") {
+        let real = real.trim();
+        if !real.is_empty() {
+            return real.to_string();
+        }
+    }
+
+    peer.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +508,39 @@ mod tests {
             .decode(&encoded)
             .unwrap();
         assert_eq!(bytes, original);
+    }
+
+    fn req_with(peer: &str, xff: Option<&str>) -> Request {
+        let mut headers = BTreeMap::new();
+        if let Some(v) = xff {
+            headers.insert("x-forwarded-for".to_string(), v.to_string());
+        }
+        Request {
+            method: "GET".into(),
+            path: "/".into(),
+            query: None,
+            headers,
+            body: None,
+            client_ip: peer.to_string(),
+            path_params: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_client_ip_ignores_xff_from_untrusted_peer() {
+        // No trusted proxies: a spoofed XFF must be ignored.
+        let req = req_with("203.0.113.9", Some("10.0.0.5"));
+        assert_eq!(resolve_client_ip(&req, &[]), "203.0.113.9");
+    }
+
+    #[test]
+    fn resolve_client_ip_uses_xff_only_behind_trusted_proxy() {
+        let trusted = vec!["203.0.113.9".to_string()];
+        // Peer is the trusted proxy: take the right-most non-trusted hop.
+        let req = req_with("203.0.113.9", Some("198.51.100.7, 203.0.113.9"));
+        assert_eq!(resolve_client_ip(&req, &trusted), "198.51.100.7");
+        // Peer is NOT trusted: XFF ignored even though one is configured.
+        let req2 = req_with("198.51.100.200", Some("10.0.0.5"));
+        assert_eq!(resolve_client_ip(&req2, &trusted), "198.51.100.200");
     }
 }

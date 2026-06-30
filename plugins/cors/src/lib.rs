@@ -61,6 +61,16 @@ impl Cors {
             }
         };
 
+        // A literal `*` with credentials is invalid per the Fetch spec; warn so
+        // the misconfiguration is visible (behavior already fails closed above).
+        if self.allow_credentials && self.allowed_origins.iter().any(|o| o == "*") {
+            log_message(
+                3,
+                "CORS: allowed_origins contains '*' with allow_credentials=true; \
+                 the wildcard is ignored. List explicit origins instead.",
+            );
+        }
+
         // Validate origin
         if !self.is_origin_allowed(&origin) {
             log_message(2, &format!("CORS: origin not allowed: {}", origin));
@@ -79,24 +89,27 @@ impl Cors {
             }
         }
 
-        // Regular CORS request - add origin to context for response handling
-        let mut modified_req = req;
-        modified_req
-            .headers
-            .insert("x-cors-origin".to_string(), origin);
-        Action::Continue(modified_req)
+        // Regular CORS request: stash the validated origin in request context so
+        // on_response can reflect it (the response itself carries no Origin).
+        context_set("cors.origin", &origin);
+        Action::Continue(req)
     }
 
     /// Add CORS headers to response.
     pub fn on_response(&mut self, mut resp: Response) -> Response {
-        // Check if we stored the origin during request processing
-        // In a real implementation, we'd use context storage
-        // For now, we add headers based on configuration
-
-        // The origin was validated in on_request, add CORS headers
-        if self.allowed_origins.contains(&"*".to_string()) && !self.allow_credentials {
+        if self.wildcard_active() {
+            // Non-credentialed wildcard: a constant `*` works without the origin.
             resp.headers
                 .insert("access-control-allow-origin".to_string(), "*".to_string());
+        } else if let Some(origin) = context_get("cors.origin") {
+            // Reflect the specific origin validated in on_request, and Vary on it
+            // so caches don't serve one origin's response to another.
+            resp.headers.insert(
+                "access-control-allow-origin".to_string(),
+                self.allow_origin_value(&origin),
+            );
+            resp.headers
+                .insert("vary".to_string(), "Origin".to_string());
         }
 
         // Expose headers if configured
@@ -118,21 +131,42 @@ impl Cors {
         resp
     }
 
+    /// Whether a literal `*` wildcard is in effect. Per the Fetch spec, `*` is
+    /// incompatible with credentials, so when `allow_credentials` is set the
+    /// wildcard is ignored entirely and only explicit origins may match.
+    fn wildcard_active(&self) -> bool {
+        !self.allow_credentials && self.allowed_origins.iter().any(|o| o == "*")
+    }
+
     /// Check if the origin is allowed.
     fn is_origin_allowed(&self, origin: &str) -> bool {
         if self.allowed_origins.is_empty() {
             return false;
         }
 
-        // Wildcard allows any origin (but not with credentials)
-        if self.allowed_origins.contains(&"*".to_string()) {
+        // `*` allows any origin, but never together with credentials.
+        if self.wildcard_active() {
             return true;
         }
 
-        // Check exact match
+        // Otherwise require an explicit exact or suffix-wildcard match. Note a
+        // bare "*" entry does NOT match here, so `["*"]` + credentials denies
+        // rather than reflecting an arbitrary origin with credentials.
         self.allowed_origins
             .iter()
+            .filter(|allowed| *allowed != "*")
             .any(|allowed| allowed == origin || self.matches_wildcard_origin(allowed, origin))
+    }
+
+    /// The value to emit in `Access-Control-Allow-Origin` for an already-validated
+    /// origin: `*` only in non-credentialed wildcard mode, otherwise the specific
+    /// origin echoed back (required when credentials are allowed).
+    fn allow_origin_value(&self, origin: &str) -> String {
+        if self.wildcard_active() {
+            "*".to_string()
+        } else {
+            origin.to_string()
+        }
     }
 
     /// Check if origin matches a wildcard pattern like "*.example.com".
@@ -216,15 +250,11 @@ impl Cors {
             return self.forbidden_response(origin);
         }
 
-        // Set origin header
-        if self.allowed_origins.contains(&"*".to_string()) && !self.allow_credentials {
-            headers.insert("access-control-allow-origin".to_string(), "*".to_string());
-        } else {
-            headers.insert(
-                "access-control-allow-origin".to_string(),
-                origin.to_string(),
-            );
-        }
+        // Set origin header (never `*` when credentials are allowed)
+        headers.insert(
+            "access-control-allow-origin".to_string(),
+            self.allow_origin_value(origin),
+        );
 
         // Allow methods
         headers.insert(
@@ -315,6 +345,79 @@ fn log_message(level: i32, msg: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 fn log_message(_level: i32, _msg: &str) {
     // No-op for tests
+}
+
+/// Store a value in the request context (WASM).
+#[cfg(target_arch = "wasm32")]
+fn context_set(key: &str, value: &str) {
+    #[link(wasm_import_module = "barbacane")]
+    extern "C" {
+        fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
+    }
+    unsafe {
+        host_context_set(
+            key.as_ptr() as i32,
+            key.len() as i32,
+            value.as_ptr() as i32,
+            value.len() as i32,
+        );
+    }
+}
+
+/// Get a value from the request context (WASM).
+#[cfg(target_arch = "wasm32")]
+fn context_get(key: &str) -> Option<String> {
+    #[link(wasm_import_module = "barbacane")]
+    extern "C" {
+        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
+        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
+    }
+    unsafe {
+        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
+        if len <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; len as usize];
+        let read_len = host_context_read_result(buf.as_mut_ptr() as i32, len);
+        if read_len != len {
+            return None;
+        }
+        String::from_utf8(buf).ok()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn context_set(key: &str, value: &str) {
+    mock_host::context_set(key, value)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn context_get(key: &str) -> Option<String> {
+    mock_host::context_get(key)
+}
+
+/// Native mock context for tests.
+#[cfg(not(target_arch = "wasm32"))]
+mod mock_host {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn context_set(key: &str, value: &str) {
+        CONTEXT.with(|c| c.borrow_mut().insert(key.to_string(), value.to_string()));
+    }
+
+    pub fn context_get(key: &str) -> Option<String> {
+        CONTEXT.with(|c| c.borrow().get(key).cloned())
+    }
+
+    #[cfg(test)]
+    pub fn reset() {
+        CONTEXT.with(|c| c.borrow_mut().clear());
+    }
 }
 
 #[cfg(test)]
@@ -524,19 +627,57 @@ mod tests {
 
     #[test]
     fn test_on_request_allowed_origin() {
+        mock_host::reset();
         let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
         let req = create_request("GET", Some("https://example.com"));
 
         match cors.on_request(req) {
             Action::Continue(returned_req) => {
                 assert_eq!(returned_req.method, "GET");
+                // The validated origin is stashed in context for on_response.
                 assert_eq!(
-                    returned_req.headers.get("x-cors-origin"),
-                    Some(&"https://example.com".to_string())
+                    context_get("cors.origin"),
+                    Some("https://example.com".to_string())
                 );
             }
             Action::ShortCircuit(_) => panic!("Expected Continue, got ShortCircuit"),
         }
+    }
+
+    // PL-3 regression: `*` with credentials must NOT allow an arbitrary origin.
+    #[test]
+    fn wildcard_with_credentials_denies_arbitrary_origin() {
+        let mut cors = create_test_cors(vec!["*".to_string()]);
+        cors.allow_credentials = true;
+        assert!(!cors.is_origin_allowed("https://evil.com"));
+        match cors.on_request(create_request("GET", Some("https://evil.com"))) {
+            Action::ShortCircuit(r) => assert_eq!(r.status, 403),
+            Action::Continue(_) => panic!("wildcard+credentials must not allow arbitrary origins"),
+        }
+    }
+
+    // With credentials, an explicitly-listed origin is allowed and echoed back
+    // specifically (never `*`).
+    #[test]
+    fn credentials_echo_specific_origin_on_response() {
+        mock_host::reset();
+        let mut cors = create_test_cors(vec!["https://app.example.com".to_string()]);
+        cors.allow_credentials = true;
+        let _ = cors.on_request(create_request("GET", Some("https://app.example.com")));
+        let resp = cors.on_response(Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: None,
+        });
+        assert_eq!(
+            resp.headers.get("access-control-allow-origin"),
+            Some(&"https://app.example.com".to_string())
+        );
+        assert_eq!(resp.headers.get("vary"), Some(&"Origin".to_string()));
+        assert_eq!(
+            resp.headers.get("access-control-allow-credentials"),
+            Some(&"true".to_string())
+        );
     }
 
     #[test]
@@ -547,7 +688,8 @@ mod tests {
         match cors.on_request(req) {
             Action::ShortCircuit(response) => {
                 assert_eq!(response.status, 403);
-                let body = String::from_utf8(response.body.expect("Response should have a body")).unwrap();
+                let body =
+                    String::from_utf8(response.body.expect("Response should have a body")).unwrap();
                 assert!(body.contains("https://evil.com"));
             }
             Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
@@ -623,6 +765,7 @@ mod tests {
 
     #[test]
     fn test_on_response_wildcard_origin() {
+        mock_host::reset();
         let mut cors = create_test_cors(vec!["*".to_string()]);
         let response = Response {
             status: 200,
@@ -673,6 +816,7 @@ mod tests {
 
     #[test]
     fn test_on_response_wildcard_with_credentials_no_wildcard_header() {
+        mock_host::reset();
         let mut cors = create_test_cors(vec!["*".to_string()]);
         cors.allow_credentials = true;
         let response = Response {

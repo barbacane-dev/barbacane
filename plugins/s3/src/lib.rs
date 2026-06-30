@@ -278,9 +278,10 @@ impl S3Dispatcher {
         }
 
         let http_response: HttpResponse =
-            serde_json::from_slice(&response_buf[..bytes_read as usize]).map_err(|e| {
-                self.error_response(502, "Bad Gateway", "invalid S3 response", &e.to_string())
-            })?;
+            serde_json::from_slice(&response_buf[..(bytes_read as usize).min(response_buf.len())])
+                .map_err(|e| {
+                    self.error_response(502, "Bad Gateway", "invalid S3 response", &e.to_string())
+                })?;
 
         let response_body = read_http_response_body();
         Ok((http_response, response_body))
