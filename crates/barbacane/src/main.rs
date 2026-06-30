@@ -1127,8 +1127,8 @@ impl Gateway {
         // Check content-length before reading body (if present)
         if let Some(content_length) = headers.get("content-length") {
             if let Ok(len) = content_length.parse::<usize>() {
-                if let Err(e) = self.limits.validate_body_size(len) {
-                    let response = self.validation_error_response(&[e]);
+                if self.limits.validate_body_size(len).is_err() {
+                    let response = self.payload_too_large_response(self.limits.max_body_size);
                     self.record_request_metrics(
                         &method_str,
                         UNMATCHED_ROUTE_LABEL,
@@ -1165,10 +1165,27 @@ impl Gateway {
                 let (body_bytes, upgrade_handle) = if is_ws_upgrade {
                     (Bytes::new(), Some(hyper::upgrade::on(req)))
                 } else {
-                    match req.collect().await {
+                    // Cap the bytes read while collecting so a chunked body with
+                    // no content-length can't be buffered past the limit (DoS).
+                    // `Limited` errors as soon as the cap is exceeded.
+                    let limited =
+                        http_body_util::Limited::new(req.into_body(), self.limits.max_body_size);
+                    match limited.collect().await {
                         Ok(collected) => (collected.to_bytes(), None),
-                        Err(_) => {
-                            let response = self.bad_request_response("failed to read request body");
+                        Err(e) => {
+                            let response = if e
+                                .downcast_ref::<http_body_util::LengthLimitError>()
+                                .is_some()
+                            {
+                                self.metrics.record_validation_failure(
+                                    &method_str,
+                                    &route_path,
+                                    "body_too_large",
+                                );
+                                self.payload_too_large_response(self.limits.max_body_size)
+                            } else {
+                                self.bad_request_response("failed to read request body")
+                            };
                             self.record_request_metrics(
                                 &method_str,
                                 &route_path,
@@ -1189,13 +1206,13 @@ impl Gateway {
                 let request_size = body_bytes.len() as u64;
 
                 // Validate actual body size (in case content-length was missing or wrong)
-                if let Err(e) = self.limits.validate_body_size(body_bytes.len()) {
+                if self.limits.validate_body_size(body_bytes.len()).is_err() {
                     self.metrics.record_validation_failure(
                         &method_str,
                         &route_path,
                         "body_too_large",
                     );
-                    let response = self.validation_error_response(&[e]);
+                    let response = self.payload_too_large_response(self.limits.max_body_size);
                     self.record_request_metrics(
                         &method_str,
                         &route_path,
@@ -2232,31 +2249,35 @@ impl Gateway {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<usize>().ok())
         {
-            if let Err(e) = self.limits.validate_body_size(content_length) {
-                let response = self.validation_error_response(&[e]);
+            if self.limits.validate_body_size(content_length).is_err() {
+                let response = self.payload_too_large_response(self.limits.max_body_size);
                 return box_full(Self::add_standard_headers(response, request_id, trace_id));
             }
         }
 
-        let body = match http_body_util::BodyExt::collect(req.into_body()).await {
+        // Cap the bytes read while collecting so a chunked body with no
+        // content-length can't be buffered past the limit (DoS).
+        let limited = http_body_util::Limited::new(req.into_body(), self.limits.max_body_size);
+        let body = match limited.collect().await {
             Ok(collected) => collected.to_bytes(),
-            Err(_) => {
-                let response = Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .header("content-type", "application/problem+json")
-                    .body(Full::new(Bytes::from(
-                        r#"{"type":"urn:barbacane:error:bad-request","title":"Bad Request","status":400,"detail":"failed to read request body"}"#,
-                    )))
-                    .expect("valid response");
+            Err(e) => {
+                let response = if e
+                    .downcast_ref::<http_body_util::LengthLimitError>()
+                    .is_some()
+                {
+                    self.payload_too_large_response(self.limits.max_body_size)
+                } else {
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header("content-type", "application/problem+json")
+                        .body(Full::new(Bytes::from(
+                            r#"{"type":"urn:barbacane:error:bad-request","title":"Bad Request","status":400,"detail":"failed to read request body"}"#,
+                        )))
+                        .expect("valid response")
+                };
                 return box_full(Self::add_standard_headers(response, request_id, trace_id));
             }
         };
-
-        // Validate collected body size
-        if let Err(e) = self.limits.validate_body_size(body.len()) {
-            let response = self.validation_error_response(&[e]);
-            return box_full(Self::add_standard_headers(response, request_id, trace_id));
-        }
 
         // Single parse: handle_request returns the appropriate result type
         let result = mcp_server.handle_request(&body, session_id.as_deref());
@@ -2653,6 +2674,24 @@ impl Gateway {
             .status(StatusCode::BAD_REQUEST)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(problem.to_json())))
+            .expect("valid response")
+    }
+
+    /// Build a 413 Payload Too Large response (RFC 9457). Used when the request
+    /// body exceeds the configured size limit, whether detected via
+    /// `Content-Length` or while streaming a chunked body.
+    fn payload_too_large_response(&self, limit: usize) -> Response<Full<Bytes>> {
+        let body = serde_json::json!({
+            "type": "urn:barbacane:error:payload-too-large",
+            "title": "Payload Too Large",
+            "status": 413,
+            "detail": format!("Request body exceeds the maximum allowed size of {limit} bytes."),
+        });
+
+        Response::builder()
+            .status(StatusCode::PAYLOAD_TOO_LARGE)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")
     }
 
@@ -3987,11 +4026,7 @@ async fn run_dev(
 
                     let io = TokioIo::new(stream);
                     let mut builder = auto::Builder::new(TokioExecutor::new());
-                    builder.http1().keep_alive(true);
-                    builder
-                        .http2()
-                        .timer(TokioTimer::new())
-                        .keep_alive_interval(Some(Duration::from_secs(20)));
+                    configure_conn_builder(&mut builder, DEFAULT_KEEPALIVE);
                     let conn = builder.serve_connection_with_upgrades(io, service);
 
                     tokio::pin!(conn);
@@ -4024,6 +4059,41 @@ async fn run_dev(
     drop(temp_artifact);
 
     ExitCode::SUCCESS
+}
+
+/// Default ceiling on concurrently served connections, bounding file-descriptor
+/// and task growth under a connection flood. Override with
+/// `BARBACANE_MAX_CONNECTIONS`.
+const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
+
+/// Maximum time allowed to complete a TLS handshake before the connection is
+/// dropped. Bounds slowloris-style handshake stalls.
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default idle keep-alive timeout used where no operator value is supplied
+/// (e.g. the dev server). Also the per-request header-read deadline.
+const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(60);
+
+/// Maximum number of concurrent HTTP/2 streams per connection, bounding a
+/// single client's ability to multiplex a flood of streams.
+const HTTP2_MAX_CONCURRENT_STREAMS: u32 = 256;
+
+/// Apply ingress DoS hardening to a connection builder: a header-read deadline
+/// (slowloris defense, doubling as the HTTP/1 idle keep-alive timeout), an
+/// HTTP/2 keep-alive probe + timeout, and a per-connection stream cap.
+fn configure_conn_builder(builder: &mut auto::Builder<TokioExecutor>, keepalive: Duration) {
+    builder
+        .http1()
+        // A timer is required for `header_read_timeout` to function.
+        .timer(TokioTimer::new())
+        .keep_alive(true)
+        .header_read_timeout(keepalive);
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .keep_alive_interval(Some(Duration::from_secs(20)))
+        .keep_alive_timeout(keepalive)
+        .max_concurrent_streams(HTTP2_MAX_CONCURRENT_STREAMS);
 }
 
 /// TLS configuration for the server.
@@ -4314,9 +4384,18 @@ async fn run_serve(
         });
     }
 
-    // Keep-alive timeout (currently used for documentation; HTTP/1.1 uses internal defaults)
-    let _keepalive_duration = Duration::from_secs(keepalive_timeout);
+    // Keep-alive / idle timeout: bounds how long an idle connection may wait for
+    // the next request's headers (slowloris defense + HTTP keep-alive idle).
+    let keepalive_duration = Duration::from_secs(keepalive_timeout.max(1));
     let shutdown_duration = Duration::from_secs(shutdown_timeout);
+
+    // Cap concurrently served connections to bound FD/task growth under a flood.
+    let max_connections = std::env::var("BARBACANE_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_CONNECTIONS);
+    let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(max_connections));
 
     // Track active connections for graceful shutdown
     let active_connections = Arc::new(AtomicU64::new(0));
@@ -4421,6 +4500,17 @@ async fn run_serve(
                     }
                 };
 
+                // Connection cap: shed load when at capacity rather than letting
+                // FDs/tasks grow without bound.
+                let permit = match conn_semaphore.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!(%peer_addr, "connection limit reached; dropping connection");
+                        drop(stream);
+                        continue;
+                    }
+                };
+
                 // Track connection
                 metrics.connection_opened();
                 active_connections.fetch_add(1, Ordering::SeqCst);
@@ -4434,8 +4524,11 @@ async fn run_serve(
                 let conn_counter = active_connections.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
                 let client_addr = Some(peer_addr);
+                let conn_keepalive = keepalive_duration;
 
                 tokio::spawn(async move {
+                    // Held for the connection's lifetime; released on drop.
+                    let _permit = permit;
                     let service = service_fn(move |req| {
                         let gateway = Arc::clone(&gateway_snapshot);
                         let client_addr = client_addr;
@@ -4443,16 +4536,26 @@ async fn run_serve(
                     });
 
                     if let Some(acceptor) = tls_acceptor {
-                        // TLS connection - uses auto protocol detection (HTTP/1.1 or HTTP/2 via ALPN)
-                        match acceptor.accept(stream).await {
-                            Ok(tls_stream) => {
+                        // TLS connection - uses auto protocol detection (HTTP/1.1 or HTTP/2 via ALPN).
+                        // Bound the handshake so a stalled client can't pin the task.
+                        let accepted =
+                            match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream))
+                                .await
+                            {
+                                Ok(Ok(tls_stream)) => Some(tls_stream),
+                                Ok(Err(e)) => {
+                                    tracing::debug!(error = %e, "TLS handshake failed");
+                                    None
+                                }
+                                Err(_) => {
+                                    tracing::debug!("TLS handshake timed out");
+                                    None
+                                }
+                            };
+                        if let Some(tls_stream) = accepted {
                                 let io = TokioIo::new(tls_stream);
                                 let mut builder = auto::Builder::new(TokioExecutor::new());
-                                builder.http1().keep_alive(true);
-                                builder
-                                    .http2()
-                                    .timer(TokioTimer::new())
-                                    .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
+                                configure_conn_builder(&mut builder, conn_keepalive);
                                 let conn = builder.serve_connection_with_upgrades(io, service);
 
                                 // Pin the connection for graceful shutdown
@@ -4476,21 +4579,13 @@ async fn run_serve(
                                         }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                tracing::debug!(error = %e, "TLS handshake failed");
-                            }
                         }
                     } else {
                         // Plain TCP connection - uses auto protocol detection
                         // Supports both HTTP/1.1 and HTTP/2 prior knowledge (h2c)
                         let io = TokioIo::new(stream);
                         let mut builder = auto::Builder::new(TokioExecutor::new());
-                        builder.http1().keep_alive(true);
-                        builder
-                            .http2()
-                            .timer(TokioTimer::new())
-                            .keep_alive_interval(Some(std::time::Duration::from_secs(20)));
+                        configure_conn_builder(&mut builder, conn_keepalive);
                         let conn = builder.serve_connection_with_upgrades(io, service);
 
                         // Pin the connection for graceful shutdown

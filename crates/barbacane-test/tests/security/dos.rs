@@ -17,7 +17,7 @@
 //!      request path on the `RouteMatch::NotFound` arm
 //!      (`crates/barbacane/src/main.rs`), so an attacker can blow up metric
 //!      cardinality (memory DoS) and exfiltrate scanned paths. The fix replaces
-//!      the label with a sentinel such as `<not_found>`.
+//!      the label with an `<unmatched>` sentinel.
 
 use barbacane_test::TestGateway;
 
@@ -27,21 +27,24 @@ use crate::{fixture, security_fixture};
 // 1. Oversized chunked body -> 413
 // ---------------------------------------------------------------------------
 
-/// A chunked request whose body exceeds the configured limit must get 413.
+/// A chunked request whose body exceeds the gateway's body-size limit must be
+/// rejected with 413 while streaming — not buffered in full and then checked.
 ///
-/// `request-size-limit.yaml` caps `/limited` at 100 bytes. We send ~64 KiB with
+/// We boot the gateway with `--max-body-size 100` and POST ~64 KiB with
 /// `Transfer-Encoding: chunked` (reqwest streams a body of unknown length as
-/// chunked). The hardened gateway rejects it with 413.
+/// chunked, so there is no Content-Length). The hardened gateway caps the read
+/// (`http_body_util::Limited`) and returns 413 before the body is fully
+/// buffered or schema validation runs.
 #[tokio::test]
 async fn oversized_chunked_body_rejected_with_413() {
-    // EXPECTED TO FAIL until BARB-SEC-003 is fixed (chunked bodies without a
-    // Content-Length must be size-capped while streaming, not buffered then
-    // checked / accepted).
-    let gw = TestGateway::from_spec(&fixture("request-size-limit.yaml"))
-        .await
-        .expect("failed to start gateway");
+    let gw = TestGateway::from_spec_with_args(
+        &fixture("request-size-limit.yaml"),
+        &["--max-body-size", "100"],
+    )
+    .await
+    .expect("failed to start gateway");
 
-    // A 64 KiB payload (limit is 100 bytes). Using a streaming body forces
+    // A 64 KiB payload (gateway limit is 100 bytes). A streaming body forces
     // chunked transfer-encoding (no Content-Length).
     let big = vec![b'a'; 64 * 1024];
     let body = reqwest::Body::wrap_stream(futures_util::stream::once(async move {
@@ -68,23 +71,54 @@ async fn oversized_chunked_body_rejected_with_413() {
 // ---------------------------------------------------------------------------
 
 /// Slowloris: a client that opens a connection and dribbles bytes (or never
-/// finishes the body) must be timed out so it cannot pin a worker indefinitely.
+/// finishes the request headers) must be timed out so it cannot pin a worker
+/// indefinitely.
 ///
-/// This is inherently timing-dependent and would require holding a socket open
-/// and measuring that the server closes it within a header/body read deadline.
-/// Asserting that deterministically (without sleeps that make CI flaky) needs a
-/// configurable, observable read timeout we can drive from the test. Parked
-/// until the gateway exposes a read/header timeout knob we can set low and a
-/// signal we can assert on.
+/// We boot the gateway with `--keepalive-timeout 2`, which drives the
+/// per-request header-read deadline. Then we open a raw TCP socket, send a
+/// partial request (request line + one header, but never the terminating blank
+/// line) and assert the server closes the connection well within a generous
+/// window rather than waiting forever.
 #[tokio::test]
-#[ignore = "BLOCKED: needs a configurable+observable read/header timeout to assert slowloris defence without flaky wall-clock sleeps (BARB-SEC-003)"]
 async fn slowloris_connection_is_timed_out() {
-    // EXPECTED TO FAIL until BARB-SEC-003 (slowloris) is addressed.
-    //
-    // Intended shape: open a raw TCP socket to the gateway, send a partial
-    // request ("GET /health HTTP/1.1\r\nHost: x\r\n") and then stop, and assert
-    // the server closes the connection within N seconds rather than waiting
-    // forever. Requires a deterministic timeout to assert against.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    let gw = TestGateway::from_spec_with_args(
+        &fixture("request-size-limit.yaml"),
+        &["--keepalive-timeout", "2"],
+    )
+    .await
+    .expect("failed to start gateway");
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", gw.port()))
+        .await
+        .expect("connect");
+
+    // Partial request: never send the blank line that ends the header block.
+    // A vulnerable server would wait on this read forever.
+    stream
+        .write_all(b"GET /limited HTTP/1.1\r\nHost: x\r\n")
+        .await
+        .expect("write");
+    stream.flush().await.expect("flush");
+
+    // A hardened server hits the header-read deadline and closes the connection
+    // (EOF / reset), optionally after a 408/400. The 15s window is far larger
+    // than the 2s deadline, so this is not timing-sensitive.
+    let mut buf = [0u8; 1024];
+    match tokio::time::timeout(std::time::Duration::from_secs(15), stream.read(&mut buf)).await {
+        Ok(Ok(0)) => { /* EOF: server closed the slow connection — good */ }
+        Ok(Ok(n)) => {
+            let resp = String::from_utf8_lossy(&buf[..n]);
+            assert!(
+                resp.contains("408") || resp.contains("400"),
+                "expected the server to time out the slow connection, got: {resp}"
+            );
+        }
+        Ok(Err(_)) => { /* connection reset by peer — server closed it, good */ }
+        Err(_) => panic!("server did not time out the slowloris connection within 15s"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -93,13 +127,10 @@ async fn slowloris_connection_is_timed_out() {
 
 /// Flooding unique unmatched paths must not create a distinct Prometheus series
 /// per raw path. We hit many random 404 paths, then scrape `/metrics` and
-/// assert (a) none of the raw flood paths appear as label values, and (b) a
-/// `<not_found>` sentinel label is present instead.
+/// assert (a) none of the raw flood paths appear as label values, and (b) an
+/// `<unmatched>` sentinel label is present instead.
 #[tokio::test]
 async fn not_found_flood_does_not_explode_metric_cardinality() {
-    // EXPECTED TO FAIL until BARB-SEC-003 is fixed (RouteMatch::NotFound records
-    // the raw request path as a metric label; should use a `<not_found>`
-    // sentinel).
     let gw = TestGateway::from_spec(&security_fixture("metrics.yaml"))
         .await
         .expect("failed to start gateway");
@@ -133,7 +164,7 @@ async fn not_found_flood_does_not_explode_metric_cardinality() {
 
     // (b) Unmatched requests should collapse to a sentinel label.
     assert!(
-        metrics.contains("<not_found>"),
-        "expected a `<not_found>` sentinel label for unmatched requests"
+        metrics.contains("<unmatched>"),
+        "expected an `<unmatched>` sentinel label for unmatched requests"
     );
 }
