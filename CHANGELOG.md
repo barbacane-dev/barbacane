@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security**: panic on hostile `x-request-id` / `traceparent`; unbounded Prometheus path-label cardinality on unmatched routes.
 - **security**: panic vectors in WASM host functions — guest-controlled pointer/length slice reads now use saturating arithmetic, and cache/rate-limiter time arithmetic is overflow/underflow-safe.
 - **security**: chunked request bodies with no `Content-Length` are now size-capped while streaming (`http_body_util::Limited`) instead of being fully buffered before the limit check.
+- **plugin**: `jwt-auth` and `oidc-auth` now declare the `log` capability they use, so they load under WASM capability enforcement (they emit a one-time warning when no `audience` is configured).
+- **ci**: the adversarial security suite (`crates/barbacane-test/tests/security/`) now runs in CI.
 - **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
 
 ## [0.7.0] - 2026-05-05

@@ -291,6 +291,65 @@ jobs:
         # Run gateway integration tests from barbacane-test crate
         run: cargo test -p barbacane-test --lib -- --test-threads=2
 
+  # Adversarial security suite (crates/barbacane-test/tests/security/). Runs the
+  # gateway (and, for authz, the control plane) end-to-end, so it needs the
+  # built binaries, the WASM plugins, and a PostgreSQL instance.
+  security-suite:
+    name: Security Suite
+    runs-on: ubuntu-latest
+    needs: [changes, unit-tests]
+    if: needs.changes.outputs.code == 'true'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: barbacane
+          POSTGRES_PASSWORD: barbacane
+          POSTGRES_DB: barbacane
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
+
+      - name: Make data-plane binary executable
+        run: chmod +x target/debug/barbacane
+
+      - name: Build control-plane binary
+        # The authz category boots the barbacane-control binary; the rest of the
+        # suite uses the data-plane binary downloaded above.
+        run: cargo build -p barbacane-control
+
+      - name: Run security suite
+        run: cargo test -p barbacane-test --test security -- --test-threads=2
+
   # Benchmark regression check
   # Triggered by: adding the "run-benchmarks" label, or commenting "/bench" on a PR.
   benchmarks:

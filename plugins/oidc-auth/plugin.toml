@@ -6,4 +6,4 @@ description = "OIDC authentication middleware with auto-discovery and JWKS rotat
 wasm = "oidc-auth.wasm"
 
 [capabilities]
-host_functions = ["http_call", "verify_signature", "clock_now"]
+host_functions = ["http_call", "verify_signature", "clock_now", "log"]
