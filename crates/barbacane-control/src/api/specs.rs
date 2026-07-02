@@ -226,7 +226,12 @@ pub async fn download_spec_content(
             ),
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", revision.filename),
+                // Sanitize before reflecting into the header (defeats CRLF/quote
+                // injection); older rows may predate ingestion-time sanitization.
+                format!(
+                    "attachment; filename=\"{}\"",
+                    super::multipart::safe_filename(&revision.filename)
+                ),
             ),
         ],
         revision.content,

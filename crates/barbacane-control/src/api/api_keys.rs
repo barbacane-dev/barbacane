@@ -19,9 +19,9 @@ pub async fn create_api_key(
 ) -> Result<(StatusCode, Json<ApiKeyCreated>), ProblemDetails> {
     let repo = ApiKeysRepository::new(state.pool.clone());
 
-    let created = repo.create(project_id, input).await.map_err(|e| {
-        ProblemDetails::internal_error_with_detail(format!("Failed to create API key: {}", e))
-    })?;
+    // DB errors route through the generic `From<sqlx::Error>` mapper, which logs
+    // the detail server-side and returns a generic 500 (no schema disclosure).
+    let created = repo.create(project_id, input).await?;
 
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -33,9 +33,7 @@ pub async fn list_api_keys(
 ) -> Result<Json<Vec<ApiKey>>, ProblemDetails> {
     let repo = ApiKeysRepository::new(state.pool.clone());
 
-    let keys = repo.list_for_project(project_id).await.map_err(|e| {
-        ProblemDetails::internal_error_with_detail(format!("Failed to list API keys: {}", e))
-    })?;
+    let keys = repo.list_for_project(project_id).await?;
 
     Ok(Json(keys))
 }
@@ -50,10 +48,7 @@ pub async fn revoke_api_key(
     // Verify the key belongs to the project
     let key = repo
         .get(key_id)
-        .await
-        .map_err(|e| {
-            ProblemDetails::internal_error_with_detail(format!("Failed to get API key: {}", e))
-        })?
+        .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("API key {} not found", key_id)))?;
 
     if key.project_id != project_id {
@@ -63,9 +58,7 @@ pub async fn revoke_api_key(
         )));
     }
 
-    repo.revoke(key_id).await.map_err(|e| {
-        ProblemDetails::internal_error_with_detail(format!("Failed to revoke API key: {}", e))
-    })?;
+    repo.revoke(key_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

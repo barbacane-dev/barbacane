@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security**: chunked request bodies with no `Content-Length` are now size-capped while streaming (`http_body_util::Limited`) instead of being fully buffered before the limit check.
 - **plugin**: `jwt-auth` and `oidc-auth` now declare the `log` capability they use, so they load under WASM capability enforcement (they emit a one-time warning when no `audience` is configured).
 - **ci**: the adversarial security suite (`crates/barbacane-test/tests/security/`) now runs in CI.
+- **security (control plane)**: request-body size limits — 1 MiB default for JSON endpoints, 32 MiB for spec/plugin uploads — bound in-memory buffering; database errors are routed through the generic error mapper (no schema disclosure); upload filenames are sanitized to a safe basename (defeating path traversal into the compile temp dir and CRLF/quote injection in `Content-Disposition`); and concurrent WebSocket sessions are capped so unauthenticated sockets can't pile up during the registration window.
 - **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
 
 ## [0.7.0] - 2026-05-05

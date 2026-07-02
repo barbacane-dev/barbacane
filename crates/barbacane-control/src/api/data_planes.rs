@@ -26,9 +26,7 @@ pub async fn list_data_planes(
 
     let repo = DataPlanesRepository::new(state.pool.clone());
 
-    let data_planes = repo.list_for_project(project_id).await.map_err(|e| {
-        ProblemDetails::internal_error_with_detail(format!("Failed to list data planes: {}", e))
-    })?;
+    let data_planes = repo.list_for_project(project_id).await?;
 
     Ok(Json(data_planes))
 }
@@ -42,10 +40,7 @@ pub async fn get_data_plane(
 
     let data_plane = repo
         .get(dp_id)
-        .await
-        .map_err(|e| {
-            ProblemDetails::internal_error_with_detail(format!("Failed to get data plane: {}", e))
-        })?
+        .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("Data plane {} not found", dp_id)))?;
 
     if data_plane.project_id != project_id {
@@ -68,10 +63,7 @@ pub async fn disconnect_data_plane(
     // Verify the data plane belongs to the project
     let data_plane = repo
         .get(dp_id)
-        .await
-        .map_err(|e| {
-            ProblemDetails::internal_error_with_detail(format!("Failed to get data plane: {}", e))
-        })?
+        .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("Data plane {} not found", dp_id)))?;
 
     if data_plane.project_id != project_id {
@@ -85,9 +77,7 @@ pub async fn disconnect_data_plane(
     state.connection_manager.remove(dp_id);
 
     // Delete the record
-    repo.delete(dp_id).await.map_err(|e| {
-        ProblemDetails::internal_error_with_detail(format!("Failed to delete data plane: {}", e))
-    })?;
+    repo.delete(dp_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -118,26 +108,12 @@ pub async fn deploy_to_data_planes(
 
     // Get the artifact to deploy
     let artifact = if let Some(artifact_id) = request.artifact_id {
-        artifacts_repo
-            .get(artifact_id)
-            .await
-            .map_err(|e| {
-                ProblemDetails::internal_error_with_detail(format!("Failed to get artifact: {}", e))
-            })?
-            .ok_or_else(|| {
-                ProblemDetails::not_found(format!("Artifact {} not found", artifact_id))
-            })?
+        artifacts_repo.get(artifact_id).await?.ok_or_else(|| {
+            ProblemDetails::not_found(format!("Artifact {} not found", artifact_id))
+        })?
     } else {
         // Get the latest artifact for this project
-        let artifacts = artifacts_repo
-            .list_for_project(project_id)
-            .await
-            .map_err(|e| {
-                ProblemDetails::internal_error_with_detail(format!(
-                    "Failed to list artifacts: {}",
-                    e
-                ))
-            })?;
+        let artifacts = artifacts_repo.list_for_project(project_id).await?;
 
         artifacts.into_iter().next().ok_or_else(|| {
             ProblemDetails::not_found(format!("No artifacts found for project {}", project_id))

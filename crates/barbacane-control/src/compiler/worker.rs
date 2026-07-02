@@ -64,9 +64,13 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
         .await?
         .ok_or_else(|| anyhow::anyhow!("Spec revision not found"))?;
 
-    // Write spec to temp file
+    // Write spec to temp file. Sanitize the stored filename to a safe basename
+    // so it cannot escape the temp dir via `../` (defense-in-depth: uploads are
+    // sanitized on ingestion, but older rows may predate that).
     let temp_dir = tempfile::tempdir()?;
-    let spec_path = temp_dir.path().join(&spec_revision.filename);
+    let spec_path = temp_dir.path().join(crate::api::multipart::safe_filename(
+        &spec_revision.filename,
+    ));
     tokio::fs::write(&spec_path, &spec_revision.content).await?;
 
     // Collect all spec paths
@@ -78,7 +82,9 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
 
     for additional_id in additional_spec_ids {
         if let Some(additional_revision) = specs_repo.get_latest_revision(additional_id).await? {
-            let additional_path = temp_dir.path().join(&additional_revision.filename);
+            let additional_path = temp_dir.path().join(crate::api::multipart::safe_filename(
+                &additional_revision.filename,
+            ));
             tokio::fs::write(&additional_path, &additional_revision.content).await?;
             spec_paths.push(additional_path);
         }

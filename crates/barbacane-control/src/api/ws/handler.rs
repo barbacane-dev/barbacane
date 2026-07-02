@@ -31,6 +31,17 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
 
 /// Handle an individual WebSocket connection.
 async fn handle_socket(socket: WebSocket, state: AppState) {
+    // Reserve a session slot up front so unauthenticated sockets can't pile up
+    // during the registration window. Held for the whole session (released on
+    // drop when this function returns).
+    let _session_permit = match state.connection_manager.try_acquire_session() {
+        Some(permit) => permit,
+        None => {
+            tracing::warn!("WebSocket session cap reached; rejecting connection");
+            return;
+        }
+    };
+
     let (mut sender, mut receiver) = socket.split();
 
     // Wait for registration message
