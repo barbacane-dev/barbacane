@@ -1203,23 +1203,24 @@ async fn test_ai_proxy_models_handles_empty_body_from_upstream() {
 // =========================================================================
 // schemas/ai-gateway.yaml — end-to-end test of the shipped fragment.
 //
-// The fragment ships with `env://`-resolved provider keys + OLLAMA_BASE_URL.
-// OpenAI and Anthropic use the provider defaults (api.openai.com, etc.) so
-// we can't redirect them at wiremock without modifying the fragment. This
-// test exercises the only path we can fully isolate end-to-end:
+// The fragment ships with `env://`-resolved provider keys + OLLAMA_BASE_URL,
+// and OpenAI/Anthropic use the provider defaults (api.openai.com, etc.). To
+// keep this test hermetic we inject `base_url: "env://<PROVIDER>_BASE_URL"`
+// into the copied fragment's OpenAI/Anthropic routes and point all three
+// providers at the same wiremock. This isolates two paths end-to-end:
 //
-// - OLLAMA_BASE_URL → wiremock (the catch-all route in the fragment)
-// - send a request with `model: mistral` → matches catch-all → reaches
-//   wiremock at /v1/chat/completions → returns the canned completion.
-//
-// The /v1/models partial-response path is also verified end-to-end: with
-// OLLAMA up but OpenAI/Anthropic unreachable, the aggregator returns 200
-// with `partial: true` + warnings for the two failing providers. This is
-// the operator's most-likely real-world experience the first time they
-// drop the fragment in (real OpenAI/Anthropic keys not yet wired).
+// - Chat completions: `model: mistral` → catch-all `*` → Ollama route →
+//   wiremock `/v1/chat/completions` → canned completion.
+// - `/v1/models` partial-response: Ollama `/api/tags` succeeds while the
+//   OpenAI/Anthropic `/v1/models` calls return 500, so the aggregator
+//   returns 200 with `partial: true` + a warning per failing provider —
+//   the operator's most-likely first-run experience (real provider keys
+//   not yet wired), reproduced deterministically instead of relying on
+//   real outbound calls (which are non-hermetic and, when slow in CI, trip
+//   the plugin's wall-clock/epoch deadline and surface as a 502).
 // =========================================================================
 
-fn copy_shipped_fragment_to_temp(ollama_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+fn copy_shipped_fragment_to_temp(mock_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let temp = tempfile::TempDir::new().expect("temp dir");
 
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1227,7 +1228,19 @@ fn copy_shipped_fragment_to_temp(ollama_url: &str) -> (tempfile::TempDir, std::p
     let fragment = repo_root.join("schemas/ai-gateway.yaml");
     let plugins = repo_root.join("plugins");
 
-    std::fs::copy(&fragment, temp.path().join("ai-gateway.yaml")).expect("copy fragment");
+    // Redirect the OpenAI/Anthropic routes at the wiremock by adding a
+    // `base_url` sibling to each `api_key` line (the shipped fragment omits
+    // base_url for these providers, defaulting to the real hosts).
+    let fragment_src = std::fs::read_to_string(&fragment).expect("read fragment");
+    let fragment_src = fragment_src.replace(
+        "              api_key: \"env://ANTHROPIC_API_KEY\"",
+        "              api_key: \"env://ANTHROPIC_API_KEY\"\n              base_url: \"env://ANTHROPIC_BASE_URL\"",
+    );
+    let fragment_src = fragment_src.replace(
+        "              api_key: \"env://OPENAI_API_KEY\"",
+        "              api_key: \"env://OPENAI_API_KEY\"\n              base_url: \"env://OPENAI_BASE_URL\"",
+    );
+    std::fs::write(temp.path().join("ai-gateway.yaml"), fragment_src).expect("write fragment");
     std::fs::write(
         temp.path().join("barbacane.yaml"),
         format!(
@@ -1237,13 +1250,14 @@ fn copy_shipped_fragment_to_temp(ollama_url: &str) -> (tempfile::TempDir, std::p
     )
     .expect("manifest");
 
-    // Set the env vars the fragment reads via env://. Placeholder strings
-    // for the API keys (we never actually call those upstreams in this
-    // test); OLLAMA_BASE_URL points at the wiremock so the catch-all
-    // route can be exercised.
+    // Set the env vars the fragment reads via env://. Placeholder API keys
+    // (the upstreams are wiremock, not real providers); every base_url points
+    // at the same wiremock so all provider traffic stays local.
     std::env::set_var("OPENAI_API_KEY", "sk-test-openai");
     std::env::set_var("ANTHROPIC_API_KEY", "sk-test-anthropic");
-    std::env::set_var("OLLAMA_BASE_URL", ollama_url);
+    std::env::set_var("OLLAMA_BASE_URL", mock_url);
+    std::env::set_var("OPENAI_BASE_URL", mock_url);
+    std::env::set_var("ANTHROPIC_BASE_URL", mock_url);
 
     let path = temp.path().join("ai-gateway.yaml");
     (temp, path)
@@ -1279,6 +1293,15 @@ async fn test_shipped_fragment_chat_completions_and_models_via_ollama() {
                 .insert_header("content-type", "application/json"),
         )
         .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // OpenAI/Anthropic /v1/models fail fast (500) so the aggregator degrades to
+    // a partial response with a warning per provider — deterministic, and quick
+    // enough not to trip the plugin's wall-clock deadline.
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("upstream down"))
         .mount(&mock_server)
         .await;
 
