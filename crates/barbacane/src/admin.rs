@@ -42,6 +42,18 @@ pub async fn start_admin_server(
         .await
         .map_err(|e| format!("admin: failed to bind to {}: {}", addr, e))?;
 
+    // The admin endpoints (/health, /metrics, /provenance) are unauthenticated
+    // by design (metrics scraping). /provenance and /metrics expose build and
+    // operational metadata, so warn when the port is reachable off-host.
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            %addr,
+            "admin API (incl. /provenance, /metrics) is bound to a non-loopback \
+             address and is UNAUTHENTICATED; restrict it to loopback or place it \
+             behind a trusted network boundary"
+        );
+    }
+
     loop {
         tokio::select! {
             _ = shutdown_rx.changed() => {

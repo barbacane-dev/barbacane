@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **plugin**: `jwt-auth` and `oidc-auth` now declare the `log` capability they use, so they load under WASM capability enforcement (they emit a one-time warning when no `audience` is configured).
 - **ci**: the adversarial security suite (`crates/barbacane-test/tests/security/`) now runs in CI.
 - **security (control plane)**: request-body size limits — 1 MiB default for JSON endpoints, 32 MiB for spec/plugin uploads — bound in-memory buffering; database errors are routed through the generic error mapper (no schema disclosure); upload filenames are sanitized to a safe basename (defeating path traversal into the compile temp dir and CRLF/quote injection in `Content-Disposition`); and concurrent WebSocket sessions are capped so unauthenticated sockets can't pile up during the registration window.
+- **security (data plane)**: a single canonical, UTF-8-correct percent-decoder is applied to query and path parameters before validation and dispatch (the previous per-byte decode corrupted multi-byte sequences); request header limits are enforced on the raw header map so duplicate header names can't undercount the header limit or skip per-value size checks; and the unauthenticated admin port (`/health`, `/metrics`, `/provenance`) logs a startup warning when bound to a non-loopback address.
 - **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
 
 ## [0.7.0] - 2026-05-05

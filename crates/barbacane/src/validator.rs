@@ -243,6 +243,32 @@ impl RequestLimits {
         Ok(())
     }
 
+    /// Validate the raw header count. Unlike [`validate_headers`], which operates
+    /// on a name→value map that collapses duplicate names, this counts the total
+    /// number of header lines so repeated names cannot undercount the limit.
+    pub fn validate_header_count(&self, count: usize) -> Result<(), ValidationError2> {
+        if count > self.max_headers {
+            return Err(ValidationError2::TooManyHeaders {
+                count,
+                limit: self.max_headers,
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate a single header line's size (name bytes + value bytes). Applied
+    /// per raw header so a duplicate name's value isn't skipped.
+    pub fn validate_header_size(&self, name: &str, size: usize) -> Result<(), ValidationError2> {
+        if size > self.max_header_size {
+            return Err(ValidationError2::HeaderTooLarge {
+                name: name.to_string(),
+                size,
+                limit: self.max_header_size,
+            });
+        }
+        Ok(())
+    }
+
     /// Validate body size.
     pub fn validate_body_size(&self, body_len: usize) -> Result<(), ValidationError2> {
         if body_len > self.max_body_size {
@@ -437,7 +463,7 @@ impl OperationValidator {
                 let mut parts = pair.splitn(2, '=');
                 let key = parts.next()?;
                 let value = parts.next().unwrap_or("");
-                Some((urlencoding_decode(key), urlencoding_decode(value)))
+                Some((percent_decode(key), percent_decode(value)))
             })
             .collect();
 
@@ -582,28 +608,49 @@ impl OperationValidator {
     }
 }
 
-/// Simple URL decoding (handles %XX escapes).
-fn urlencoding_decode(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                result.push(byte as char);
-            } else {
-                result.push('%');
-                result.push_str(&hex);
+/// Canonical percent-decoding of a URL component (handles `%XX` escapes and `+`).
+///
+/// Decodes into a byte buffer and interprets the result as UTF-8, so multi-byte
+/// sequences like `%C3%A9` decode to `é` rather than being corrupted by a naive
+/// per-byte `as char` cast. This is the single decoder used for both query and
+/// path parameters so routing and validation agree on the decoded value.
+pub fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => match (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                (Some(h), Some(l)) => {
+                    out.push((h << 4) | l);
+                    i += 3;
+                }
+                _ => {
+                    out.push(b'%');
+                    i += 1;
+                }
+            },
+            b'+' => {
+                out.push(b' ');
+                i += 1;
             }
-        } else if c == '+' {
-            result.push(' ');
-        } else {
-            result.push(c);
+            b => {
+                out.push(b);
+                i += 1;
+            }
         }
     }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
-    result
+/// Parse a single ASCII hex digit into its 0..=15 value.
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1312,5 +1359,39 @@ mod tests {
 
         let result = validator.validate_querystring(Some("anything"));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn percent_decode_handles_multibyte_utf8() {
+        // %C3%A9 is UTF-8 for é; the old per-byte `as char` cast corrupted this.
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+        // %E2%82%AC is the euro sign €.
+        assert_eq!(percent_decode("%E2%82%AC"), "€");
+        // ASCII, plus-as-space, and passthrough.
+        assert_eq!(percent_decode("a%20b+c"), "a b c");
+        // A malformed escape is left intact rather than dropped.
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn header_count_counts_duplicates() {
+        let limits = RequestLimits {
+            max_headers: 2,
+            ..Default::default()
+        };
+        // A map collapses duplicate names, but the raw count is what matters.
+        assert!(limits.validate_header_count(2).is_ok());
+        assert!(limits.validate_header_count(3).is_err());
+    }
+
+    #[test]
+    fn header_size_is_checked_per_entry() {
+        let limits = RequestLimits {
+            max_header_size: 10,
+            ..Default::default()
+        };
+        assert!(limits.validate_header_size("x", 10).is_ok());
+        assert!(limits.validate_header_size("x-big", 11).is_err());
     }
 }
