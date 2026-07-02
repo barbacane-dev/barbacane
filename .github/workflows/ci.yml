@@ -305,7 +305,9 @@ jobs:
             | grep -vx security \
             | sed 's/^/--test /' | tr '\n' ' ')
           echo "Running integration targets: $targets"
-          cargo test -p barbacane-test --lib $targets -- --test-threads=2
+          # --no-fail-fast so a failure in one binary doesn't hide failures in
+          # the binaries that would run after it; we want the full picture.
+          cargo test -p barbacane-test --lib $targets --no-fail-fast -- --test-threads=2
 
   # Adversarial security suite (crates/barbacane-test/tests/security/). Runs the
   # gateway (and, for authz, the control plane) end-to-end, so it needs the
