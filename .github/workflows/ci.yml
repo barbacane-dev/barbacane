@@ -288,8 +288,18 @@ jobs:
         run: chmod +x target/debug/barbacane
 
       - name: Run integration tests
-        # Run gateway integration tests from barbacane-test crate
-        run: cargo test -p barbacane-test --lib -- --test-threads=2
+        # Run the full barbacane-test suite: the lib tests plus every
+        # integration binary in tests/*.rs. The `security` target is excluded
+        # here because it needs PostgreSQL and the control-plane binary — it has
+        # its own `security-suite` job below. Targets are discovered rather than
+        # hard-coded so new suites are picked up automatically.
+        run: |
+          targets=$(ls crates/barbacane-test/tests/*.rs \
+            | xargs -n1 basename | sed 's/\.rs$//' \
+            | grep -vx security \
+            | sed 's/^/--test /' | tr '\n' ' ')
+          echo "Running integration targets: $targets"
+          cargo test -p barbacane-test --lib $targets -- --test-threads=2
 
   # Adversarial security suite (crates/barbacane-test/tests/security/). Runs the
   # gateway (and, for authz, the control plane) end-to-end, so it needs the
