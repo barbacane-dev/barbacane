@@ -236,14 +236,14 @@ async fn test_limits_body_size_exceeds_limit() {
     );
 
     // Server may either:
-    // 1. Return 400 before the client finishes sending
+    // 1. Return 413 Payload Too Large before the client finishes sending
     // 2. Close the connection early (connection reset, broken pipe, etc.)
     // Both are valid behaviors for rejecting oversized bodies
     match gateway.post("/users", &large_body).await {
         Ok(resp) => {
-            assert_eq!(resp.status(), 400);
+            assert_eq!(resp.status(), 413);
             let body: serde_json::Value = resp.json().await.unwrap();
-            assert_eq!(body["type"], "urn:barbacane:error:validation-failed");
+            assert_eq!(body["type"], "urn:barbacane:error:payload-too-large");
         }
         Err(_) => {
             // Any connection error is acceptable when the server rejects a large body

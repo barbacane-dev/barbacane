@@ -1099,7 +1099,26 @@ impl Gateway {
             )));
         }
 
-        // Extract headers for validation
+        // Enforce header limits on the RAW header map first: `HeaderMap::len()`
+        // counts every header line (including repeated names), so a flood of
+        // duplicate-named headers can't slip under the count limit, and each
+        // value is size-checked (not just the last one for a given name).
+        let raw_headers = req.headers();
+        let header_limit_error = self
+            .limits
+            .validate_header_count(raw_headers.len())
+            .err()
+            .or_else(|| {
+                raw_headers.iter().find_map(|(name, value)| {
+                    self.limits
+                        .validate_header_size(name.as_str(), name.as_str().len() + value.len())
+                        .err()
+                })
+            });
+
+        // Extract headers for downstream validation and plugin forwarding. This
+        // collapses duplicate names (last value wins), which is fine now that the
+        // limit checks above ran against the raw map.
         let headers: HashMap<String, String> = req
             .headers()
             .iter()
@@ -1107,7 +1126,7 @@ impl Gateway {
             .collect();
 
         // Check header limits
-        if let Err(e) = self.limits.validate_headers(&headers) {
+        if let Some(e) = header_limit_error {
             let response = self.validation_error_response(&[e]);
             self.record_request_metrics(
                 &method_str,
@@ -1148,7 +1167,14 @@ impl Gateway {
 
         // Route lookup
         match self.router.lookup(&path, &method_str) {
-            RouteMatch::Found { entry, params } => {
+            RouteMatch::Found { entry, mut params } => {
+                // Canonically percent-decode captured path-parameter values once,
+                // so routing, validation, and the dispatcher all see the same
+                // decoded value (segments were matched raw; `%2F` stays a literal
+                // slash within its segment rather than acting as a separator).
+                for (_, value) in params.iter_mut() {
+                    *value = barbacane_lib::validator::percent_decode(value);
+                }
                 let operation = &self.operations[entry.operation_index];
                 let validator = &self.validators[entry.operation_index];
                 let route_path = operation.path.clone();

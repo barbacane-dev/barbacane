@@ -47,6 +47,16 @@ These changes are intentional secure defaults. Adopt them as follows:
    capabilities; custom plugins must list theirs under
    `[capabilities] host_functions = [...]`.
 
+## Admin endpoints (loopback by default)
+
+The data plane serves `/health`, `/metrics`, and `/provenance` on a dedicated
+admin port (`--admin-bind`). These endpoints are **unauthenticated** so metrics
+scrapers can reach them; `/provenance` and `/metrics` expose build and
+operational metadata. Keep the admin port bound to loopback (the default) or
+behind a trusted network boundary. Binding it to a non-loopback address (e.g.
+`--admin-bind 0.0.0.0:...`) logs a startup warning because it exposes that
+metadata off-host.
+
 ## Artifact signing quickstart
 
 ```bash
