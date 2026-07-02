@@ -267,6 +267,12 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # Needed so barbacane-test's build.rs can compile the fixture WASM
+          # plugins (streaming-echo, body-echo). Without the target it fails with
+          # exit 101 and the streaming/body integration tests panic on the
+          # missing .wasm.
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
         uses: actions/cache@v5
