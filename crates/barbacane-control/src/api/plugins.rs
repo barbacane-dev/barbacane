@@ -222,16 +222,7 @@ pub async fn delete_plugin(
 ) -> Result<StatusCode, ProblemDetails> {
     // Refuse to delete if any artifact still bundles this plugin version.
     let artifacts_repo = ArtifactsRepository::new(state.pool.clone());
-    if artifacts_repo
-        .plugin_is_referenced(&name, &version)
-        .await
-        .map_err(|e| {
-            ProblemDetails::internal_error_with_detail(format!(
-                "Failed to check artifact references: {}",
-                e
-            ))
-        })?
-    {
+    if artifacts_repo.plugin_is_referenced(&name, &version).await? {
         return Err(ProblemDetails::conflict(format!(
             "Plugin {}:{} is referenced by existing artifacts and cannot be deleted",
             name, version

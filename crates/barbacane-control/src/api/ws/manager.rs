@@ -1,10 +1,17 @@
 //! Connection manager for tracking active WebSocket connections.
 
+use std::sync::Arc;
+
 use dashmap::DashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use super::protocol::ControlPlaneMessage;
+
+/// Ceiling on concurrently handled WebSocket sessions (registered *and* those
+/// still pending registration). Bounds how many unauthenticated sockets an
+/// attacker can pin during the pre-registration window.
+const MAX_CONCURRENT_WS_SESSIONS: usize = 1024;
 
 /// Information about a connected data plane.
 #[derive(Debug, Clone)]
@@ -14,12 +21,20 @@ struct DataPlaneConnection {
 }
 
 /// Manages active WebSocket connections to data planes.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ConnectionManager {
     /// Active connections: data_plane_id -> connection info
     connections: DashMap<Uuid, DataPlaneConnection>,
     /// Index: project_id -> Vec<data_plane_id>
     project_connections: DashMap<Uuid, Vec<Uuid>>,
+    /// Bounds concurrent WebSocket session handlers (pre-auth + registered).
+    session_slots: Arc<Semaphore>,
+}
+
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConnectionManager {
@@ -28,7 +43,16 @@ impl ConnectionManager {
         Self {
             connections: DashMap::new(),
             project_connections: DashMap::new(),
+            session_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_WS_SESSIONS)),
         }
+    }
+
+    /// Try to reserve a slot for a new (as-yet-unauthenticated) WebSocket
+    /// session. Returns `None` when the concurrent-session cap is reached, so the
+    /// handler can shed load instead of letting sockets pile up. The permit is
+    /// held for the session's lifetime and released on drop.
+    pub fn try_acquire_session(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.session_slots).try_acquire_owned().ok()
     }
 
     /// Register a new connection.

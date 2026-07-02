@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::{
+    extract::DefaultBodyLimit,
     http::{header, HeaderValue, Method, StatusCode},
     response::{Html, IntoResponse},
     routing::{delete, get, patch, post, put},
@@ -31,6 +32,14 @@ const OPENAPI_SPEC: &str = include_str!("../../openapi.yaml");
 
 /// API version header value.
 const API_VERSION: &str = "application/vnd.barbacane.v1+json";
+
+/// Body-size ceiling for ordinary JSON API requests. Bounds how much a caller
+/// can make the control plane buffer in memory per request.
+const MAX_JSON_BODY: usize = 1024 * 1024; // 1 MiB
+
+/// Body-size ceiling for file uploads (spec documents, WASM plugins). Larger
+/// than the JSON limit to accommodate real plugin binaries, but still bounded.
+const MAX_UPLOAD_BODY: usize = 32 * 1024 * 1024; // 32 MiB
 
 /// Shared application state.
 #[derive(Clone)]
@@ -123,7 +132,10 @@ pub fn create_router(
         // Init
         .route("/init", post(init::init_project))
         // Specs
-        .route("/specs", post(specs::upload_spec))
+        .route(
+            "/specs",
+            post(specs::upload_spec).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
+        )
         .route("/specs", get(specs::list_specs))
         .route("/specs/{id}", get(specs::get_spec))
         .route("/specs/{id}", delete(specs::delete_spec))
@@ -136,7 +148,10 @@ pub fn create_router(
             get(compilations::list_spec_compilations),
         )
         // Plugins
-        .route("/plugins", post(plugins::register_plugin))
+        .route(
+            "/plugins",
+            post(plugins::register_plugin).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
+        )
         .route("/plugins", get(plugins::list_plugins))
         .route("/plugins/{name}", get(plugins::list_plugin_versions))
         .route("/plugins/{name}/{version}", get(plugins::get_plugin))
@@ -174,7 +189,7 @@ pub fn create_router(
         .route("/projects/{id}/specs", get(projects::list_project_specs))
         .route(
             "/projects/{id}/specs",
-            post(projects::upload_spec_to_project),
+            post(projects::upload_spec_to_project).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY)),
         )
         // Project plugins
         .route(
@@ -240,6 +255,9 @@ pub fn create_router(
     Router::new()
         .merge(public)
         .merge(protected)
+        // Default request-body ceiling for all routes (upload routes opt into a
+        // larger limit via their own inner DefaultBodyLimit layer).
+        .layer(DefaultBodyLimit::max(MAX_JSON_BODY))
         // Middleware applied to all routes
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())

@@ -7,7 +7,7 @@ mod compilations;
 mod data_planes;
 mod health;
 mod init;
-mod multipart;
+pub(crate) mod multipart;
 mod operations;
 mod plugins;
 mod project_plugins;
