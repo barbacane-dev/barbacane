@@ -501,9 +501,12 @@ async fn test_ip_restriction_allowlist_denied_via_xff() {
         .await
         .expect("failed to start gateway");
 
-    // Request with X-Forwarded-For from non-allowed IP should be denied
+    // X-Forwarded-For from a non-allowed IP should be denied — but only because
+    // this endpoint trusts the loopback proxy, so the forwarded address is
+    // honored. (/allowlist leaves trusted_proxies empty so a forged XFF is
+    // ignored; that anti-spoofing case is covered in the security suite.)
     let resp = gateway
-        .request_builder(reqwest::Method::GET, "/allowlist")
+        .request_builder(reqwest::Method::GET, "/allowlist-trusted-proxy")
         .header("X-Forwarded-For", "203.0.113.50")
         .send()
         .await
@@ -536,9 +539,10 @@ async fn test_ip_restriction_denylist_blocked() {
         .await
         .expect("failed to start gateway");
 
-    // Request from denied CIDR range should be blocked
+    // XFF in the denied CIDR range should be blocked on the trusted-proxy
+    // endpoint (which honors X-Forwarded-For from the loopback peer).
     let resp = gateway
-        .request_builder(reqwest::Method::GET, "/denylist")
+        .request_builder(reqwest::Method::GET, "/denylist-trusted-proxy")
         .header("X-Forwarded-For", "10.1.2.3")
         .send()
         .await
