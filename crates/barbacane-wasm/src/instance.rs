@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use wasmtime::{Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
+use wasmtime::{AsContextMut, Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
 
 use barbacane_plugin_sdk::types::base64_body;
 use serde::Deserialize;
@@ -95,6 +95,12 @@ pub struct PluginState {
     /// Maximum memory in bytes.
     pub max_memory: usize,
 
+    /// WASM execution budget in milliseconds (the epoch deadline). Blocking host
+    /// functions refresh the store's epoch deadline to this after network I/O so
+    /// that time spent waiting on an upstream/broker doesn't count against the
+    /// plugin's CPU-execution budget and spuriously trap the dispatch.
+    pub max_execution_ms: u64,
+
     /// HTTP client for outbound requests (shared).
     pub http_client: Option<Arc<HttpClient>>,
 
@@ -180,6 +186,7 @@ impl PluginState {
             output_buffer: Vec::new(),
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
+            max_execution_ms: limits.max_execution_ms,
             http_client: None,
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
@@ -213,6 +220,7 @@ impl PluginState {
             output_buffer: Vec::new(),
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
+            max_execution_ms: limits.max_execution_ms,
             http_client: Some(http_client),
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
@@ -247,6 +255,7 @@ impl PluginState {
             output_buffer: Vec::new(),
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
+            max_execution_ms: limits.max_execution_ms,
             http_client: Some(http_client),
             last_http_result: None,
             secrets,
@@ -286,6 +295,7 @@ impl PluginState {
             output_buffer: Vec::new(),
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
+            max_execution_ms: limits.max_execution_ms,
             http_client,
             last_http_result: None,
             secrets,
@@ -326,6 +336,7 @@ impl PluginState {
             output_buffer: Vec::new(),
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
+            max_execution_ms: limits.max_execution_ms,
             http_client,
             last_http_result: None,
             secrets,
@@ -1231,6 +1242,11 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 });
 
+                // Refresh the execution deadline after blocking HTTP I/O — see
+                // the host_kafka_publish handler for the rationale.
+                let deadline = caller.data().max_execution_ms.max(1);
+                caller.as_context_mut().set_epoch_deadline(deadline);
+
                 match response_result {
                     Some((Some(json), body)) => {
                         let len = json.len() as i32;
@@ -1400,6 +1416,11 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                         }
                     }
                 });
+
+                // Refresh the execution deadline after blocking HTTP I/O — see
+                // the host_kafka_publish handler for the rationale.
+                let deadline = caller.data().max_execution_ms.max(1);
+                caller.as_context_mut().set_epoch_deadline(deadline);
 
                 match response_result {
                     Some((Some(json), body)) => {
@@ -2005,6 +2026,14 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 });
 
+                // The publish above blocked on native broker I/O (connect,
+                // metadata, produce) while the epoch clock advanced. That wait is
+                // not WASM CPU work, so refresh the execution deadline; otherwise a
+                // slow or unavailable broker trips the epoch guard and the dispatch
+                // traps (500) instead of returning a clean broker error (502).
+                let deadline = caller.data().max_execution_ms.max(1);
+                caller.as_context_mut().set_epoch_deadline(deadline);
+
                 // Serialize the result
                 let result_json = match result {
                     Some(Ok(r)) => serde_json::to_vec(&r),
@@ -2103,6 +2132,11 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                         }
                     }
                 });
+
+                // Refresh the execution deadline after blocking broker I/O — see
+                // the host_kafka_publish handler for the rationale.
+                let deadline = caller.data().max_execution_ms.max(1);
+                caller.as_context_mut().set_epoch_deadline(deadline);
 
                 // Serialize the result
                 let result_json = match result {

@@ -108,24 +108,33 @@ impl TestGateway {
         spec_path: &str,
         extra_args: &[&str],
     ) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(&[spec_path], false, extra_args, true).await
+        Self::create_gateway_with_args(&[spec_path], false, extra_args, true, &[]).await
+    }
+
+    /// Create a TestGateway with extra environment variables set on the data-plane
+    /// child process (e.g. `BARBACANE_SECRETS_DIR`).
+    pub async fn from_spec_with_env(
+        spec_path: &str,
+        env: &[(&str, &str)],
+    ) -> Result<Self, TestError> {
+        Self::create_gateway_with_args(&[spec_path], false, &[], true, env).await
     }
 
     /// Create a TestGateway with the plugin SSRF guard ACTIVE (internal egress
     /// blocked). Use this for SSRF tests; the default constructors allow internal
     /// egress so tests can reach loopback mock upstreams.
     pub async fn from_spec_blocked_egress(spec_path: &str) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(&[spec_path], false, &[], false).await
+        Self::create_gateway_with_args(&[spec_path], false, &[], false, &[]).await
     }
 
     /// Create a TestGateway from multiple spec files.
     pub async fn from_specs(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(spec_paths, false, &[], true).await
+        Self::create_gateway_with_args(spec_paths, false, &[], true, &[]).await
     }
 
     /// Create a TLS-enabled TestGateway from multiple spec files.
     pub async fn from_specs_with_tls(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(spec_paths, true, &[], true).await
+        Self::create_gateway_with_args(spec_paths, true, &[], true, &[]).await
     }
 
     /// Internal method to create a gateway with optional TLS and extra CLI args.
@@ -138,6 +147,7 @@ impl TestGateway {
         tls_enabled: bool,
         extra_args: &[&str],
         allow_internal_egress: bool,
+        env: &[(&str, &str)],
     ) -> Result<Self, TestError> {
         // Create temp directory for the artifact
         let temp_dir = TempDir::new()?;
@@ -218,6 +228,13 @@ impl TestGateway {
             cmd.arg(arg);
         }
 
+        // Inject per-instance environment variables (e.g. BARBACANE_SECRETS_DIR)
+        // into the child process, avoiding process-global set_var races between
+        // concurrently running tests.
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+
         // Start the gateway process
         let child = cmd.spawn()?;
 
@@ -261,9 +278,12 @@ impl TestGateway {
     /// Wait for the gateway to be ready by polling the health endpoint.
     async fn wait_for_ready(&mut self) -> Result<(), TestError> {
         let health_url = format!("{}/__barbacane/health", self.base_url());
-        // 60-second timeout — larger WASM plugins (e.g. CEL ~1.3 MB) need
-        // more JIT compile time, especially under heavy parallel test load.
-        let max_attempts = 600;
+        // 120-second timeout — larger WASM plugins (e.g. CEL ~1.3 MB) need more
+        // JIT compile time, and when the full integration suite runs in CI two
+        // CEL-heavy gateways can cold-boot simultaneously (--test-threads=2) on a
+        // shared runner, so the loser of that CPU race needs a wider window. A
+        // genuine boot hang still fails here rather than being masked.
+        let max_attempts = 1200;
         let delay = Duration::from_millis(100);
 
         for _ in 0..max_attempts {

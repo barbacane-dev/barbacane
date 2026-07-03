@@ -342,10 +342,20 @@ async fn test_mcp_invalid_json() {
 async fn test_mcp_unknown_method() {
     let gw = mcp_gateway().await;
 
+    // A session is required before any non-initialize method; without it the
+    // request is rejected as invalid (-32600) before method dispatch.
+    let init = mcp_post(
+        &gw,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test","version":"1.0"}}}"#,
+        None,
+    )
+    .await;
+    let session_id = extract_session_id(&init);
+
     let resp = mcp_post(
         &gw,
-        r#"{"jsonrpc":"2.0","id":1,"method":"resources/list"}"#,
-        None,
+        r#"{"jsonrpc":"2.0","id":2,"method":"resources/list"}"#,
+        Some(&session_id),
     )
     .await;
 

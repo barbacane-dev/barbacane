@@ -88,6 +88,58 @@ paths:
         "401":
           description: Unauthorized
 
+  # Endpoints that trust the loopback peer as a proxy, so X-Forwarded-For is
+  # honored. Kept separate from /allowlist and /denylist, which deliberately
+  # leave trusted_proxies empty so the security suite can verify that a forged
+  # XFF is ignored (anti-spoofing). See tests/security/crypto_auth.rs.
+  /allowlist-trusted-proxy:
+    get:
+      operationId: allowlistTrustedProxyEndpoint
+      summary: IP allowlist that honors XFF from the trusted loopback proxy
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config:
+            trusted_proxies:
+              - "127.0.0.1"
+              - "::1"
+            allow:
+              - "127.0.0.1"
+              - "::1"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
+  /denylist-trusted-proxy:
+    get:
+      operationId: denylistTrustedProxyEndpoint
+      summary: IP denylist that honors XFF from the trusted loopback proxy
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config:
+            trusted_proxies:
+              - "127.0.0.1"
+              - "::1"
+            deny:
+              - "10.0.0.0/8"
+              - "192.168.0.0/16"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden
+
   /public:
     get:
       operationId: publicEndpoint
