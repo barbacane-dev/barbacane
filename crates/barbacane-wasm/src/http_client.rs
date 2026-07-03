@@ -317,8 +317,16 @@ impl HttpClient {
 
         let mut req_builder = client.request(method, url).timeout(timeout);
 
-        // Add headers
+        // Add headers, dropping any a plugin must not control on the outbound
+        // request. `Host` is derived from the URL (a plugin-set Host enables
+        // routing/cache/SSRF confusion), and the hop-by-hop / framing headers
+        // below are owned by the HTTP client (a plugin-set value enables request
+        // smuggling). `Authorization` is intentionally allowed: dispatchers such
+        // as ai-proxy legitimately authenticate to their upstream.
         for (key, value) in &request.headers {
+            if is_forbidden_outbound_header(key) {
+                continue;
+            }
             req_builder = req_builder.header(key.as_str(), value.as_str());
         }
 
@@ -514,6 +522,26 @@ pub(crate) async fn guard_external_host(
         )));
     }
     Ok(())
+}
+
+/// Headers a plugin may not set on an outbound HTTP request. `host` is derived
+/// from the URL; the rest are hop-by-hop / message-framing headers owned by the
+/// HTTP client. Allowing a plugin to override any of these enables routing
+/// confusion or request smuggling. `authorization` is deliberately absent:
+/// dispatchers legitimately authenticate to their upstream.
+fn is_forbidden_outbound_header(name: &str) -> bool {
+    const FORBIDDEN: &[&str] = &[
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "upgrade",
+        "te",
+        "trailer",
+    ];
+    FORBIDDEN.iter().any(|h| name.eq_ignore_ascii_case(h))
 }
 
 /// SSRF guard for the HTTP client: reject requests whose target resolves to an
@@ -1111,6 +1139,40 @@ mod tests {
 
         assert_eq!(tls1.cache_key(), tls2.cache_key());
         assert_ne!(tls1.cache_key(), tls3.cache_key());
+    }
+
+    #[test]
+    fn forbidden_outbound_headers_are_denied_case_insensitively() {
+        for h in [
+            "host",
+            "Host",
+            "HOST",
+            "content-length",
+            "Transfer-Encoding",
+            "connection",
+            "keep-alive",
+            "proxy-connection",
+            "upgrade",
+            "te",
+            "trailer",
+        ] {
+            assert!(is_forbidden_outbound_header(h), "{h} should be denied");
+        }
+    }
+
+    #[test]
+    fn legitimate_outbound_headers_are_allowed() {
+        // Authorization is intentionally allowed (dispatchers authenticate to
+        // their upstream); custom and content-type headers pass through.
+        for h in [
+            "authorization",
+            "Authorization",
+            "content-type",
+            "x-api-key",
+            "x-custom-header",
+        ] {
+            assert!(!is_forbidden_outbound_header(h), "{h} should be allowed");
+        }
     }
 
     // ── base64 body serde (host ↔ WASM plugin compatibility) ─────────────
