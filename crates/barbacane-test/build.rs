@@ -48,20 +48,32 @@ fn main() {
 
     for plugin in FIXTURE_PLUGINS {
         let plugin_dir = root.join(plugin.dir);
-        let wasm_path = plugin_dir
-            .join("target/wasm32-unknown-unknown/release")
-            .join(plugin.wasm);
+        let release_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let wasm_path = release_dir.join(plugin.wasm);
 
-        // Re-run if any source file in the plugin changes.
+        // Re-run if any source file or the manifest changes.
         println!("cargo:rerun-if-changed={}/src", plugin_dir.display());
         println!("cargo:rerun-if-changed={}/Cargo.toml", plugin_dir.display());
+        println!("cargo:rerun-if-changed={}/plugin.toml", plugin_dir.display());
 
-        if wasm_path.exists() {
-            // Already built — skip (incremental builds use rerun-if-changed above).
-            continue;
+        if !wasm_path.exists() {
+            build_fixture_plugin(&plugin_dir, &wasm_path, plugin.wasm);
         }
 
-        build_fixture_plugin(&plugin_dir, &wasm_path, plugin.wasm);
+        // The compiler reads a plugin's capabilities from a `plugin.toml` in the
+        // same directory as its .wasm. These fixtures keep plugin.toml at the
+        // crate root, so copy it next to the built wasm — otherwise capability
+        // enforcement sees no declared host functions and rejects the plugin.
+        let src_toml = plugin_dir.join("plugin.toml");
+        let dst_toml = release_dir.join("plugin.toml");
+        if src_toml.exists() && release_dir.exists() {
+            if let Err(e) = std::fs::copy(&src_toml, &dst_toml) {
+                println!(
+                    "cargo:warning=failed to copy {} plugin.toml next to wasm: {}",
+                    plugin.wasm, e
+                );
+            }
+        }
     }
 }
 

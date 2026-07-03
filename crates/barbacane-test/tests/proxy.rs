@@ -35,16 +35,96 @@ fn plugin_wasm(name: &str) -> PathBuf {
 // M4: HTTP Upstream Tests
 // ========================
 
+/// Build a temp spec whose http-upstream routes proxy to a local wiremock,
+/// keeping these tests hermetic. (They previously hit the real httpbin.org,
+/// which is non-deterministic in CI and, when slow, trips the plugin's
+/// wall-clock deadline and surfaces as a 500.)
+fn http_upstream_spec(upstream_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let spec = format!(
+        r#"openapi: "3.1.0"
+info:
+  title: HTTP Upstream Test API
+  version: "1.0.0"
+paths:
+  /proxy/get:
+    get:
+      operationId: proxyGet
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{url}"
+          path: "/get"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /proxy/post:
+    post:
+      operationId: proxyPost
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{url}"
+          path: "/post"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /proxy/headers:
+    get:
+      operationId: proxyHeaders
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{url}"
+          path: "/headers"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+"#,
+        url = upstream_url
+    );
+    std::fs::write(temp.path().join("http-upstream.yaml"), spec).expect("write spec");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  http-upstream:\n    path: {}\n",
+            plugin_wasm("http-upstream").display()
+        ),
+    )
+    .expect("write manifest");
+    let path = temp.path().join("http-upstream.yaml");
+    (temp, path)
+}
+
 #[tokio::test]
 async fn test_http_upstream_get() {
-    let gateway = TestGateway::from_spec(&fixture("http-upstream.yaml"))
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/get"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "url": format!("{}/get", upstream.uri()),
+        })))
+        .mount(&upstream)
+        .await;
+
+    let (_tmp, spec) = http_upstream_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
-    // Proxy GET request to httpbin.org/get
     let resp = gateway.get("/proxy/get").await.unwrap();
-
-    // httpbin.org/get returns 200 with JSON containing request details
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -56,23 +136,32 @@ async fn test_http_upstream_get() {
 
 #[tokio::test]
 async fn test_http_upstream_post() {
-    let gateway = TestGateway::from_spec(&fixture("http-upstream.yaml"))
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    // Echo the posted JSON back under `json`, like httpbin's /post.
+    Mock::given(method("POST"))
+        .and(path("/post"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "json": {"test": "data"},
+        })))
+        .mount(&upstream)
+        .await;
+
+    let (_tmp, spec) = http_upstream_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
-    // Proxy POST request to httpbin.org/post
     let resp = gateway
         .post("/proxy/post", r#"{"test":"data"}"#)
         .await
         .unwrap();
 
-    // httpbin.org/post returns 200 with JSON containing request details
     let status = resp.status();
     let body_text = resp.text().await.unwrap();
-    assert_eq!(
-        status, 200,
-        "expected 200, got {status}. Body:\n{body_text}"
-    );
+    assert_eq!(status, 200, "expected 200, got {status}. Body:\n{body_text}");
 
     let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
     assert!(
@@ -84,18 +173,31 @@ async fn test_http_upstream_post() {
 
 #[tokio::test]
 async fn test_http_upstream_headers_forwarded() {
-    let gateway = TestGateway::from_spec(&fixture("http-upstream.yaml"))
+    use wiremock::matchers::{header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    // Only match when the gateway actually forwarded X-Forwarded-Host; if it
+    // didn't, wiremock returns no match and the request 404s, failing the test.
+    Mock::given(method("GET"))
+        .and(path("/headers"))
+        .and(header_exists("x-forwarded-host"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "headers": {"X-Forwarded-Host": "gateway"},
+        })))
+        .mount(&upstream)
+        .await;
+
+    let (_tmp, spec) = http_upstream_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
-    // httpbin.org/headers returns the request headers
     let resp = gateway.get("/proxy/headers").await.unwrap();
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
     let headers = &body["headers"];
-
-    // Should have X-Forwarded-Host header
     assert!(
         headers.get("X-Forwarded-Host").is_some() || headers.get("x-forwarded-host").is_some(),
         "should forward X-Forwarded-Host header"

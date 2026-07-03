@@ -11,6 +11,12 @@ paths:
       x-barbacane-middlewares:
         - name: ip-restriction
           config:
+            # The test client connects over loopback, so trust it as a proxy;
+            # otherwise X-Forwarded-For is ignored (anti-spoofing default) and
+            # the XFF-based cases below can't be exercised.
+            trusted_proxies:
+              - "127.0.0.1"
+              - "::1"
             allow:
               - "127.0.0.1"
               - "::1"
@@ -32,6 +38,9 @@ paths:
       x-barbacane-middlewares:
         - name: ip-restriction
           config:
+            trusted_proxies:
+              - "127.0.0.1"
+              - "::1"
             deny:
               - "10.0.0.0/8"
               - "192.168.0.0/16"

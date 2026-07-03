@@ -1177,17 +1177,27 @@ async fn test_response_transformer_passthrough() {
 // Redirect middleware integration tests
 // =========================================================================
 
+/// GET a path without following redirects, so the 3xx status + Location header
+/// can be asserted directly. The shared TestGateway client follows redirects,
+/// which would turn a 301 -> /new-page into a 404 for the nonexistent target.
+async fn get_no_redirect(gateway: &TestGateway, path: &str) -> reqwest::Response {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("failed to build no-redirect client")
+        .get(format!("{}{}", gateway.base_url(), path))
+        .send()
+        .await
+        .expect("request failed")
+}
+
 #[tokio::test]
 async fn test_redirect_exact_path_301() {
     let gateway = TestGateway::from_spec(&fixture("redirect.yaml"))
         .await
         .expect("failed to start gateway");
 
-    let resp = gateway
-        .request_builder(reqwest::Method::GET, "/old-page")
-        .send()
-        .await
-        .unwrap();
+    let resp = get_no_redirect(&gateway, "/old-page").await;
 
     assert_eq!(resp.status(), 301);
     assert_eq!(
@@ -1202,11 +1212,7 @@ async fn test_redirect_prefix_strips_and_appends() {
         .await
         .expect("failed to start gateway");
 
-    let resp = gateway
-        .request_builder(reqwest::Method::GET, "/api/v1/users")
-        .send()
-        .await
-        .unwrap();
+    let resp = get_no_redirect(&gateway, "/api/v1/users").await;
 
     assert_eq!(resp.status(), 302);
     assert_eq!(
@@ -1221,11 +1227,7 @@ async fn test_redirect_catch_all_308() {
         .await
         .expect("failed to start gateway");
 
-    let resp = gateway
-        .request_builder(reqwest::Method::GET, "/catch-all")
-        .send()
-        .await
-        .unwrap();
+    let resp = get_no_redirect(&gateway, "/catch-all").await;
 
     assert_eq!(resp.status(), 308);
     assert_eq!(
@@ -1240,11 +1242,7 @@ async fn test_redirect_preserves_query_string() {
         .await
         .expect("failed to start gateway");
 
-    let resp = gateway
-        .request_builder(reqwest::Method::GET, "/with-query?foo=bar&page=2")
-        .send()
-        .await
-        .unwrap();
+    let resp = get_no_redirect(&gateway, "/with-query?foo=bar&page=2").await;
 
     assert_eq!(resp.status(), 302);
     assert_eq!(
@@ -1259,11 +1257,7 @@ async fn test_redirect_strips_query_when_disabled() {
         .await
         .expect("failed to start gateway");
 
-    let resp = gateway
-        .request_builder(reqwest::Method::GET, "/no-query?foo=bar")
-        .send()
-        .await
-        .unwrap();
+    let resp = get_no_redirect(&gateway, "/no-query?foo=bar").await;
 
     assert_eq!(resp.status(), 302);
     assert_eq!(

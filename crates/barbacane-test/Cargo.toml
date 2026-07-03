@@ -17,6 +17,10 @@ thiserror = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 base64 = { workspace = true }
+# ES256 signing of test JWTs. The jwt-auth plugin enforces real signatures in
+# the production WASM (skip_signature_validation is honored only under cfg(test)
+# of the plugin's own unit tests), so integration tests must sign properly.
+p256 = { version = "0.13", features = ["ecdsa"] }
 wiremock = "0.6"
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

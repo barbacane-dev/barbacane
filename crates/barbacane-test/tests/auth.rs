@@ -18,12 +18,98 @@ fn fixture(name: &str) -> String {
 
 // JWT Authentication Tests
 
-/// Helper to create a JWT token for testing.
-/// Creates unsigned tokens since we use skip_signature_validation: true in tests.
-fn create_test_jwt(sub: &str, iss: &str, aud: &str, exp: u64, nbf: Option<u64>) -> String {
+/// Absolute path to a plugin's built wasm.
+fn plugin_wasm(name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(format!("plugins/{name}/{name}.wasm"))
+}
+
+/// Fixed P-256 signing key for test JWTs. Deterministic so the derived public
+/// JWK embedded in the spec stays stable across runs.
+fn jwt_signing_key() -> p256::ecdsa::SigningKey {
+    // A fixed, non-zero scalar well below the curve order.
+    let scalar = [0x11u8; 32];
+    p256::ecdsa::SigningKey::from_slice(&scalar).expect("valid P-256 scalar")
+}
+
+/// The public key of [`jwt_signing_key`] as ES256 JWK coordinates (base64url).
+fn jwt_public_jwk_xy() -> (String, String) {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
-    let header = serde_json::json!({"alg": "RS256", "typ": "JWT"});
+    let sk = jwt_signing_key();
+    let point = sk.verifying_key().to_encoded_point(false);
+    let x = URL_SAFE_NO_PAD.encode(point.x().expect("x coord").as_slice());
+    let y = URL_SAFE_NO_PAD.encode(point.y().expect("y coord").as_slice());
+    (x, y)
+}
+
+/// Build a temp spec whose `/protected` route requires jwt-auth verifying tokens
+/// signed by [`jwt_signing_key`]. The plugin enforces the signature in the
+/// production WASM (skip_signature_validation is honored only under the plugin's
+/// own cfg(test) unit tests), so the spec embeds the matching public JWK.
+fn jwt_auth_spec() -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let (x, y) = jwt_public_jwk_xy();
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: JWT Auth Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "test-issuer"
+      audience: "test-audience"
+      clock_skew_seconds: 60
+      public_key_jwk:
+        kty: "EC"
+        crv: "P-256"
+        alg: "ES256"
+        x: "{x}"
+        y: "{y}"
+paths:
+  /protected:
+    get:
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "Access granted"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized
+"#,
+        x = x,
+        y = y
+    );
+    std::fs::write(temp.path().join("jwt-auth.yaml"), spec).expect("write spec");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  mock:\n    path: {mock}\n  jwt-auth:\n    path: {jwt}\n",
+            mock = plugin_wasm("mock").display(),
+            jwt = plugin_wasm("jwt-auth").display(),
+        ),
+    )
+    .expect("write manifest");
+    let path = temp.path().join("jwt-auth.yaml");
+    (temp, path)
+}
+
+/// Create a signed ES256 JWT for testing, verifiable against [`jwt_auth_spec`].
+fn create_test_jwt(sub: &str, iss: &str, aud: &str, exp: u64, nbf: Option<u64>) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use p256::ecdsa::{signature::Signer, Signature};
+
+    let header = serde_json::json!({"alg": "ES256", "typ": "JWT"});
     let mut claims = serde_json::json!({
         "sub": sub,
         "iss": iss,
@@ -36,10 +122,14 @@ fn create_test_jwt(sub: &str, iss: &str, aud: &str, exp: u64, nbf: Option<u64>) 
 
     let header_b64 = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
     let claims_b64 = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
-    // Signature is just filler since we skip validation
-    let sig_b64 = URL_SAFE_NO_PAD.encode(b"test_signature");
+    let signing_input = format!("{}.{}", header_b64, claims_b64);
 
-    format!("{}.{}.{}", header_b64, claims_b64, sig_b64)
+    // ES256 signature: raw r||s (64 bytes), matching the host's FIXED-format
+    // ECDSA_P256_SHA256 verification.
+    let signature: Signature = jwt_signing_key().sign(signing_input.as_bytes());
+    let sig_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+
+    format!("{}.{}", signing_input, sig_b64)
 }
 
 /// Get current Unix timestamp.
@@ -105,7 +195,8 @@ async fn test_jwt_auth_malformed_token() {
 
 #[tokio::test]
 async fn test_jwt_auth_valid_token() {
-    let gateway = TestGateway::from_spec(&fixture("jwt-auth.yaml"))
+    let (_tmp, spec) = jwt_auth_spec();
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
@@ -127,7 +218,8 @@ async fn test_jwt_auth_valid_token() {
 
 #[tokio::test]
 async fn test_jwt_auth_expired_token() {
-    let gateway = TestGateway::from_spec(&fixture("jwt-auth.yaml"))
+    let (_tmp, spec) = jwt_auth_spec();
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
@@ -150,7 +242,8 @@ async fn test_jwt_auth_expired_token() {
 
 #[tokio::test]
 async fn test_jwt_auth_not_yet_valid() {
-    let gateway = TestGateway::from_spec(&fixture("jwt-auth.yaml"))
+    let (_tmp, spec) = jwt_auth_spec();
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
@@ -176,7 +269,8 @@ async fn test_jwt_auth_not_yet_valid() {
 
 #[tokio::test]
 async fn test_jwt_auth_invalid_issuer() {
-    let gateway = TestGateway::from_spec(&fixture("jwt-auth.yaml"))
+    let (_tmp, spec) = jwt_auth_spec();
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
@@ -198,7 +292,8 @@ async fn test_jwt_auth_invalid_issuer() {
 
 #[tokio::test]
 async fn test_jwt_auth_invalid_audience() {
-    let gateway = TestGateway::from_spec(&fixture("jwt-auth.yaml"))
+    let (_tmp, spec) = jwt_auth_spec();
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
 
@@ -879,10 +974,18 @@ async fn test_secrets_file_reference_resolved() {
     let introspection_url = format!("{}/introspect", mock_server.uri());
     let spec_path = create_oauth2_secrets_spec(temp_dir.path(), &introspection_url, &secret_ref);
 
-    // Gateway should start successfully with the resolved secret
-    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
-        .await
-        .expect("failed to start gateway with file secret");
+    // Gateway should start successfully with the resolved secret. file://
+    // references are confined to BARBACANE_SECRETS_DIR (fail-closed hardening),
+    // so point it at the temp dir holding the secret file.
+    let gateway = TestGateway::from_spec_with_env(
+        spec_path.to_str().unwrap(),
+        &[(
+            "BARBACANE_SECRETS_DIR",
+            temp_dir.path().to_str().unwrap(),
+        )],
+    )
+    .await
+    .expect("failed to start gateway with file secret");
 
     // Make a request with a valid token
     let resp = gateway

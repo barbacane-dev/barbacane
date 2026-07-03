@@ -6,5 +6,6 @@ description = "Test fixture: proxies to upstream via host_http_stream (ADR-0023 
 wasm = "streaming_echo.wasm"
 
 [capabilities]
-http_stream = true
-log = true
+# host_http_stream (ADR-0023) is granted by the http_call capability, and the
+# manifest reads the `host_functions` array (not `key = true` shorthand).
+host_functions = ["http_call"]
