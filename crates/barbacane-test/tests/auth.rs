@@ -979,10 +979,7 @@ async fn test_secrets_file_reference_resolved() {
     // so point it at the temp dir holding the secret file.
     let gateway = TestGateway::from_spec_with_env(
         spec_path.to_str().unwrap(),
-        &[(
-            "BARBACANE_SECRETS_DIR",
-            temp_dir.path().to_str().unwrap(),
-        )],
+        &[("BARBACANE_SECRETS_DIR", temp_dir.path().to_str().unwrap())],
     )
     .await
     .expect("failed to start gateway with file secret");

@@ -54,7 +54,10 @@ fn main() {
         // Re-run if any source file or the manifest changes.
         println!("cargo:rerun-if-changed={}/src", plugin_dir.display());
         println!("cargo:rerun-if-changed={}/Cargo.toml", plugin_dir.display());
-        println!("cargo:rerun-if-changed={}/plugin.toml", plugin_dir.display());
+        println!(
+            "cargo:rerun-if-changed={}/plugin.toml",
+            plugin_dir.display()
+        );
 
         if !wasm_path.exists() {
             build_fixture_plugin(&plugin_dir, &wasm_path, plugin.wasm);

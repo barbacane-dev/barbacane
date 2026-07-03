@@ -161,7 +161,10 @@ async fn test_http_upstream_post() {
 
     let status = resp.status();
     let body_text = resp.text().await.unwrap();
-    assert_eq!(status, 200, "expected 200, got {status}. Body:\n{body_text}");
+    assert_eq!(
+        status, 200,
+        "expected 200, got {status}. Body:\n{body_text}"
+    );
 
     let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
     assert!(
