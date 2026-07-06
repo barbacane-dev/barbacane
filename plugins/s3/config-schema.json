@@ -12,10 +12,12 @@
     },
     "secret_access_key": {
       "type": "string",
+      "writeOnly": true,
       "description": "AWS secret access key. Supports env:// references (e.g. env://AWS_SECRET_ACCESS_KEY)."
     },
     "session_token": {
       "type": "string",
+      "writeOnly": true,
       "description": "Session token for temporary credentials (STS / AssumeRole / IRSA). Supports env:// references."
     },
     "region": {

@@ -307,6 +307,7 @@ pub fn compile_with_manifest(
             wasm_bytes: p.wasm_bytes,
             body_access: p.body_access,
             host_functions: p.host_functions,
+            secret_fields: p.secret_fields,
         })
         .collect();
 
@@ -442,6 +443,8 @@ pub struct PluginBundle {
     pub body_access: bool,
     /// Declared capability host-function names from plugin.toml.
     pub host_functions: Vec<String>,
+    /// Config fields marked `writeOnly` (secret) in the plugin's config-schema.json.
+    pub secret_fields: Vec<String>,
 }
 
 /// Parse spec files into (ApiSpec, content, sha256) tuples.
@@ -490,6 +493,15 @@ fn compile_inner(
 ) -> Result<CompileResult, CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut operations: Vec<CompiledOperation> = Vec::new();
+
+    // Per-plugin set of secret (writeOnly) config fields, from each plugin's
+    // config-schema.json, used to warn on plaintext secrets baked into configs.
+    let plugin_secret_fields: HashMap<&str, std::collections::BTreeSet<String>> = plugins
+        .iter()
+        .filter(|p| !p.secret_fields.is_empty())
+        .map(|p| (p.name.as_str(), p.secret_fields.iter().cloned().collect()))
+        .collect();
+
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
     let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
     let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
@@ -603,6 +615,24 @@ fn compile_inner(
                         idx + 1,
                         location
                     )));
+                }
+            }
+
+            // Warn on plaintext secrets in config (E1070): a field the plugin's
+            // schema marks `writeOnly` but that holds a literal gets baked into
+            // the artifact. Recommend env:// / file:// references.
+            if let Some(fields) = plugin_secret_fields.get(dispatch.name.as_str()) {
+                scan_plaintext_secrets(
+                    &dispatch.config,
+                    &dispatch.name,
+                    fields,
+                    &location,
+                    &mut warnings,
+                );
+            }
+            for mw in &middlewares {
+                if let Some(fields) = plugin_secret_fields.get(mw.name.as_str()) {
+                    scan_plaintext_secrets(&mw.config, &mw.name, fields, &location, &mut warnings);
                 }
             }
 
@@ -991,6 +1021,103 @@ fn now_utc_iso8601() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// Collect the names of config fields a plugin's `config-schema.json` marks as
+/// secret via the standard JSON Schema `writeOnly: true` keyword. Walks the
+/// whole schema (properties, array `items`, `additionalProperties`, and the
+/// `$defs`/`allOf`/`anyOf`/`oneOf` combinators) so nested shapes such as
+/// ai-proxy's `routes[].api_key` and `targets{}.api_key` are covered.
+pub fn collect_writeonly_fields(schema: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    fn walk(node: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
+        match node {
+            serde_json::Value::Object(map) => {
+                // A `properties` map names fields; a child marked writeOnly is a secret.
+                if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                    for (field, subschema) in props {
+                        if subschema.get("writeOnly").and_then(|v| v.as_bool()) == Some(true) {
+                            out.insert(field.clone());
+                        }
+                        walk(subschema, out);
+                    }
+                }
+                // Recurse into the remaining schema structure.
+                for key in [
+                    "items",
+                    "additionalProperties",
+                    "$defs",
+                    "definitions",
+                    "allOf",
+                    "anyOf",
+                    "oneOf",
+                    "then",
+                    "else",
+                ] {
+                    if let Some(child) = map.get(key) {
+                        walk(child, out);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    walk(schema, &mut out);
+    out
+}
+
+/// Recursively scan a plugin config for `secret_fields` (declared `writeOnly` in
+/// the plugin's schema) whose value is a plaintext literal rather than an
+/// `env://` / `file://` reference. Such values are baked into the compiled
+/// artifact at rest; warn (E1070) so operators move them to a secret reference
+/// that is resolved at runtime. With no schema-declared secrets, this is a no-op.
+fn scan_plaintext_secrets(
+    config: &serde_json::Value,
+    plugin: &str,
+    secret_fields: &std::collections::BTreeSet<String>,
+    location: &str,
+    warnings: &mut Vec<CompileWarning>,
+) {
+    if secret_fields.is_empty() {
+        return;
+    }
+
+    /// A value that is resolved at runtime rather than stored in the artifact.
+    fn is_secret_ref(value: &str) -> bool {
+        value.starts_with("env://") || value.starts_with("file://")
+    }
+
+    match config {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if let serde_json::Value::String(s) = value {
+                    if secret_fields.contains(key) && !s.is_empty() && !is_secret_ref(s) {
+                        warnings.push(CompileWarning {
+                            code: "E1070".to_string(),
+                            message: format!(
+                                "plugin '{plugin}' config field '{key}' is a secret but is set to \
+                                 a plaintext literal; use an env:// or file:// reference so it is \
+                                 resolved at runtime instead of baked into the artifact"
+                            ),
+                            location: Some(location.to_string()),
+                        });
+                    }
+                }
+                scan_plaintext_secrets(value, plugin, secret_fields, location, warnings);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                scan_plaintext_secrets(item, plugin, secret_fields, location, warnings);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Extract upstream URL from dispatch config, if present.
 ///
 /// Looks for common URL fields in the dispatch config:
@@ -1325,6 +1452,88 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
+    #[test]
+    fn collect_writeonly_fields_finds_nested_secrets() {
+        // Mirrors ai-proxy: writeOnly api_key at top level, in routes[].items,
+        // and in targets{}.additionalProperties. `base_url` is not writeOnly.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "api_key": { "type": "string", "writeOnly": true },
+                "base_url": { "type": "string" },
+                "routes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "api_key": { "type": "string", "writeOnly": true }
+                        }
+                    }
+                },
+                "targets": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "client_secret": { "type": "string", "writeOnly": true }
+                        }
+                    }
+                }
+            }
+        });
+        let fields = collect_writeonly_fields(&schema);
+        assert!(fields.contains("api_key"));
+        assert!(fields.contains("client_secret"));
+        assert!(!fields.contains("base_url"));
+    }
+
+    #[test]
+    fn scan_plaintext_secrets_flags_literals_and_ignores_refs() {
+        let secret_fields: std::collections::BTreeSet<String> = ["api_key", "client_secret"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Nested shape like ai-proxy: routes[] and targets{}.
+        let config = serde_json::json!({
+            "routes": [
+                { "provider": "openai", "api_key": "sk-live-plaintext" },
+                { "provider": "ollama", "base_url": "env://OLLAMA_BASE_URL" },
+            ],
+            "targets": {
+                "claude": { "api_key": "env://ANTHROPIC_API_KEY" },
+                "azure": { "client_secret": "hunter2" },
+            },
+            "timeout": 30,
+        });
+        let mut warnings = Vec::new();
+        scan_plaintext_secrets(
+            &config,
+            "ai-proxy",
+            &secret_fields,
+            "GET /v1 in 'api.yaml'",
+            &mut warnings,
+        );
+
+        // Two plaintext secrets: routes[0].api_key and targets.azure.client_secret.
+        // routes[1].base_url is not a secret field; the env:// api_key is ignored.
+        assert_eq!(warnings.len(), 2, "got: {warnings:?}");
+        assert!(warnings.iter().all(|w| w.code == "E1070"));
+    }
+
+    #[test]
+    fn scan_plaintext_secrets_ignores_nonsecret_and_empty_fields() {
+        let secret_fields: std::collections::BTreeSet<String> =
+            ["api_key"].iter().map(|s| s.to_string()).collect();
+        let config = serde_json::json!({
+            "url": "https://api.example.com",
+            "model": "gpt-4o",
+            "api_key": "",
+        });
+        let mut warnings = Vec::new();
+        scan_plaintext_secrets(&config, "ai-proxy", &secret_fields, "loc", &mut warnings);
+        assert!(warnings.is_empty(), "got: {warnings:?}");
+    }
+
     fn create_test_spec(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
         let path = dir.join(name);
         let mut file = File::create(&path).unwrap();
@@ -1606,6 +1815,7 @@ paths:
             wasm_bytes: fake_wasm.clone(),
             body_access: false,
             host_functions: vec![],
+            secret_fields: vec![],
         }];
 
         let result = compile(

@@ -6,9 +6,10 @@ const schemas = {
     required: [],
     properties: {
       provider: { type: "string" },
-      api_key: { type: "string" },
+      api_key: { type: "string", writeOnly: true },
       base_url: { type: "string" },
       timeout: { type: "integer", minimum: 1 },
+      models_timeout_ms: { type: "integer", minimum: 1 },
       max_tokens: { type: "integer", minimum: 1 },
       fallback: { type: "array" },
       routes: { type: "array" },
@@ -87,8 +88,8 @@ const schemas = {
     required: ["access_key_id","secret_access_key","region"],
     properties: {
       access_key_id: { type: "string" },
-      secret_access_key: { type: "string" },
-      session_token: { type: "string" },
+      secret_access_key: { type: "string", writeOnly: true },
+      session_token: { type: "string", writeOnly: true },
       region: { type: "string" },
       endpoint: { type: "string" },
       force_path_style: { type: "boolean" },
@@ -164,6 +165,20 @@ function runRule(input) {
     for (const [key, prop] of Object.entries(schema.properties)) {
       const value = config[key];
       if (value === undefined || value === null) continue;
+
+      // Secret fields (writeOnly in config-schema.json) must not be plaintext
+      // literals — they would be baked into the artifact. Mirrors compiler E1070.
+      if (
+        prop.writeOnly &&
+        typeof value === "string" &&
+        value.length > 0 &&
+        !value.startsWith("env://") &&
+        !value.startsWith("file://")
+      ) {
+        results.push({
+          message: `Config field "${key}" for dispatcher "${pluginName}" is a secret; use an env:// or file:// reference instead of a plaintext literal so it is not baked into the artifact.`,
+        });
+      }
 
       if (typeof value === "string" && (value.startsWith("env://") || value.startsWith("file://"))) {
         continue;

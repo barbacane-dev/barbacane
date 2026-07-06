@@ -23,6 +23,7 @@
         },
         "api_key": {
           "type": "string",
+          "writeOnly": true,
           "description": "Provider API key. Use a secret reference (`env://VAR` or `file://...`) rather than a literal value, so the key is resolved at runtime and never baked into the compiled artifact. Omit for Ollama (unauthenticated local endpoint)."
         },
         "base_url": {
@@ -58,6 +59,7 @@
         },
         "api_key": {
           "type": "string",
+          "writeOnly": true,
           "description": "Provider API key. Use a secret reference (`env://VAR` or `file://...`) rather than a literal value, so the key is resolved at runtime and never baked into the compiled artifact."
         },
         "base_url": {
@@ -84,6 +86,7 @@
     },
     "api_key": {
       "type": "string",
+      "writeOnly": true,
       "description": "API key for the flat config. Use a secret reference (`env://VAR` or `file://...`) rather than a literal value, so the key is resolved at runtime and never baked into the compiled artifact."
     },
     "base_url": {

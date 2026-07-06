@@ -17,6 +17,7 @@
     },
     "client_secret": {
       "type": "string",
+      "writeOnly": true,
       "description": "Client secret for introspection request"
     },
     "required_scopes": {

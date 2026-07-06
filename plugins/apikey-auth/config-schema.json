@@ -30,6 +30,7 @@
         "properties": {
           "key": {
             "type": "string",
+            "writeOnly": true,
             "description": "The API key value. Supports secret references (e.g. env://MY_API_KEY)."
           },
           "id": {

@@ -17,6 +17,7 @@ function formatSchemas(schemas) {
         const parts = [`type: "${v.type}"`];
         if (v.minimum !== undefined) parts.push(`minimum: ${v.minimum}`);
         if (v.maximum !== undefined) parts.push(`maximum: ${v.maximum}`);
+        if (v.writeOnly) parts.push(`writeOnly: true`);
         return `      ${k}: { ${parts.join(", ")} },`;
       })
       .join("\n");
@@ -93,6 +94,20 @@ function runRule(input) {
     for (const [key, prop] of Object.entries(schema.properties)) {
       const value = config[key];
       if (value === undefined || value === null) continue;
+
+      // Secret fields (writeOnly in config-schema.json) must not be plaintext
+      // literals — they would be baked into the artifact. Mirrors compiler E1070.
+      if (
+        prop.writeOnly &&
+        typeof value === "string" &&
+        value.length > 0 &&
+        !value.startsWith("env://") &&
+        !value.startsWith("file://")
+      ) {
+        results.push({
+          message: \`Config field "\${key}" for ${kind.toLowerCase()} "\${pluginName}" is a secret; use an env:// or file:// reference instead of a plaintext literal so it is not baked into the artifact.\`,
+        });
+      }
 
       if (typeof value === "string" && (value.startsWith("env://") || value.startsWith("file://"))) {
         continue;
@@ -183,6 +198,7 @@ for (const name of readdirSync(PLUGINS).sort()) {
     const prop = { type: v.type };
     if (v.minimum !== undefined) prop.minimum = v.minimum;
     if (v.maximum !== undefined) prop.maximum = v.maximum;
+    if (v.writeOnly === true) prop.writeOnly = true;
     simplified.properties[k] = prop;
   }
 
