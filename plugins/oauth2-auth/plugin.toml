@@ -6,4 +6,4 @@ description = "OAuth2 token introspection middleware for validating Bearer token
 wasm = "oauth2-auth.wasm"
 
 [capabilities]
-host_functions = ["http_call"]
+host_functions = ["http_call", "log"]

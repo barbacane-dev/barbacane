@@ -24,6 +24,10 @@
       "type": "string",
       "description": "Required scopes (space-separated). If set, token must have all these scopes."
     },
+    "audience": {
+      "type": "string",
+      "description": "Expected audience (aud). If set, the introspection response's aud must contain it. Leave unset only for single-RP setups; on a shared authorization server, set it to prevent cross-RP token acceptance (RFC 8725)."
+    },
     "timeout": {
       "type": "number",
       "description": "Request timeout in seconds for introspection call",
