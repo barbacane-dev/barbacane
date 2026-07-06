@@ -260,6 +260,22 @@ error: failed to resolve secrets: unsupported secret scheme: vault
 
 This means you're using a scheme that isn't implemented yet. Currently only `env://` and `file://` are supported.
 
+## Compile-time detection
+
+Plugin config fields that hold secrets are marked `writeOnly` in the plugin's
+schema (`api_key`, `client_secret`, passwords, provider keys, etc.). If you set
+one to a **plaintext literal** instead of an `env://` / `file://` reference,
+`barbacane compile` warns:
+
+```
+warning[E1070]: plugin 'ai-proxy' config field 'api_key' is a secret but is set
+to a plaintext literal; use an env:// or file:// reference so it is resolved at
+runtime instead of baked into the artifact
+```
+
+The [vacuum linter](vacuum.md) flags the same thing at lint time. This keeps
+plaintext credentials out of the compiled `.bca`.
+
 ## Security Considerations
 
 1. **Never commit secrets to Git** - Use `.gitignore` for `.env` files

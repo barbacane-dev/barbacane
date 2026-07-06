@@ -22,9 +22,10 @@ Several rules use custom JavaScript functions (config schema validation, duplica
 ```bash
 mkdir -p .barbacane/rulesets/functions .barbacane/rulesets/schemas
 curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
-for f in barbacane-auth-opt-out barbacane-no-duplicate-middlewares barbacane-no-plaintext-upstream \
+for f in barbacane-auth-opt-out barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
          barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
-         barbacane-validate-dispatch-config barbacane-validate-middleware-config; do
+         barbacane-validate-ai-regex barbacane-validate-dispatch-config \
+         barbacane-validate-middleware-config; do
   curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
 done
 ```
@@ -92,6 +93,7 @@ The same rules apply to operation-level middlewares (`barbacane-op-middleware-*`
 |------|----------|-------------|
 | `barbacane-no-plaintext-upstream` | warn | `http-upstream` URLs should use HTTPS |
 | `barbacane-secret-ref-format` | error | Secret references must match `env://VAR_NAME` or `file:///path` |
+| `barbacane-dispatch-config-valid` / `barbacane-middleware-config-valid` | warn | A secret field (marked `writeOnly` in the plugin schema) set to a plaintext literal should use an `env://` / `file://` reference instead (mirrors compiler warning E1070) |
 
 ### Auth Safety
 

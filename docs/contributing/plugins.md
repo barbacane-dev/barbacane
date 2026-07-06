@@ -135,6 +135,27 @@ host_functions = ["log"]
 }
 ```
 
+Mark any field that carries a secret (API key, password, token, client secret)
+with `"writeOnly": true` — the standard JSON Schema keyword for sensitive
+values:
+
+```json
+"api_key": {
+  "type": "string",
+  "writeOnly": true,
+  "description": "Provider API key. Use a secret reference (env://VAR or file://...)."
+}
+```
+
+`barbacane compile` then warns (**E1070**) — and the vacuum linter flags — when
+such a field is set to a plaintext literal instead of an `env://` / `file://`
+reference, so credentials are never baked into the compiled artifact. The
+detection is nested-aware (arrays and maps of objects). Do **not** mark
+non-secret fields (e.g. a message-key expression) `writeOnly`.
+
+After changing `config-schema.json`, regenerate the vacuum ruleset validators
+(`node docs/rulesets/generate.mjs`) and run `docs/rulesets/tests/run-tests.sh`.
+
 ### 6. Build
 
 ```bash

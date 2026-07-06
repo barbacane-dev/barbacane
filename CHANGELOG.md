@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security**: a security testing framework — adversarial integration suite (`crates/barbacane-test/tests/security/`) and `cargo-fuzz` targets (`fuzz/`).
 - **security**: WASM sandbox resource limits — buffered plugin HTTP responses are capped (`BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES`, default 16 MiB); the host cache and rate limiter bound their entry/partition counts and clamp plugin-supplied TTL/window/quota; a wall-clock epoch deadline backstops fuel-based CPU limiting.
 - **security**: ingress DoS hardening — a per-request header-read deadline (slowloris defense, doubling as the HTTP keep-alive idle timeout, wiring the previously-ignored `--keepalive-timeout`), a TLS handshake timeout, an HTTP/2 concurrent-stream cap, and a concurrent-connection ceiling (`BARBACANE_MAX_CONNECTIONS`, default 10000).
+- **security**: plugin outbound HTTP drops attacker-controllable `Host` and hop-by-hop / message-framing headers (`Content-Length`, `Transfer-Encoding`, `Connection`, …), preventing routing confusion and request smuggling. `Authorization` is still allowed so dispatchers can authenticate to their upstream.
+- **security**: the plugin HTTP SSRF guard is now DNS-rebinding safe — a custom resolver filters internal addresses at connection time, so the vetted IP is the one actually connected to.
+- **security**: WebSocket upstreams (`host_ws_upgrade`) are covered by the SSRF guard (internal/metadata targets blocked unless `BARBACANE_ALLOW_INTERNAL_EGRESS`).
+- **security**: `barbacane compile` warns (E1070) when a plugin config field marked `writeOnly` in its `config-schema.json` (a secret) is set to a plaintext literal instead of an `env://` / `file://` reference; the vacuum ruleset flags the same at lint time.
 - **docs**: [Configuration & environment variables](reference/configuration.md) reference.
 
 ### Changed (breaking, secure-by-default)
@@ -24,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The control plane refuses to start without `BARBACANE_CONTROL_ADMIN_TOKEN`, and all API routes (except `/health` and the data-plane WebSocket) require the bearer token.
 - `file://` secret references require `BARBACANE_SECRETS_DIR` and are confined to it.
 - MCP requires a valid session for non-`initialize` requests.
-- Plugin egress to internal/metadata addresses is blocked by default — this now covers Kafka/NATS broker connections in addition to plugin HTTP calls.
+- Plugin egress to internal/metadata addresses is blocked by default — this now covers Kafka/NATS broker connections and WebSocket upstreams in addition to plugin HTTP calls.
 
 ### Fixed
 
@@ -34,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security**: chunked request bodies with no `Content-Length` are now size-capped while streaming (`http_body_util::Limited`) instead of being fully buffered before the limit check.
 - **plugin**: `jwt-auth` and `oidc-auth` now declare the `log` capability they use, so they load under WASM capability enforcement (they emit a one-time warning when no `audience` is configured).
 - **ci**: the adversarial security suite (`crates/barbacane-test/tests/security/`) now runs in CI.
+- **ci**: the full `barbacane-test` integration suite (every `tests/*.rs` binary) now runs in CI instead of only the crate's lib tests, repairing ~21 integration tests that had rotted while excluded.
+- **wasm**: blocking host calls (broker publish, HTTP call/stream) no longer count their network wait against the plugin's wall-clock execution deadline — a slow/unavailable upstream now returns a clean error (e.g. broker-unavailable → 502) instead of trapping the dispatch (500). The CPU guard on actual WASM execution is unchanged.
 - **security (control plane)**: request-body size limits — 1 MiB default for JSON endpoints, 32 MiB for spec/plugin uploads — bound in-memory buffering; database errors are routed through the generic error mapper (no schema disclosure); upload filenames are sanitized to a safe basename (defeating path traversal into the compile temp dir and CRLF/quote injection in `Content-Disposition`); and concurrent WebSocket sessions are capped so unauthenticated sockets can't pile up during the registration window.
 - **security (data plane)**: a single canonical, UTF-8-correct percent-decoder is applied to query and path parameters before validation and dispatch (the previous per-byte decode corrupted multi-byte sequences); request header limits are enforced on the raw header map so duplicate header names can't undercount the header limit or skip per-value size checks; and the unauthenticated admin port (`/health`, `/metrics`, `/provenance`) logs a startup warning when bound to a non-loopback address.
 - **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
