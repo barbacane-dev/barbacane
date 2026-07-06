@@ -31,6 +31,7 @@ const schemas = {
       context_key: { type: "string" },
       default_profile: { type: "string" },
       profiles: { type: "object" },
+      fail_open: { type: "boolean" },
     },
     additionalProperties: false,
   },
@@ -53,6 +54,8 @@ const schemas = {
       profiles: { type: "object" },
       policy_name: { type: "string" },
       partition_key: { type: "string" },
+      trusted_proxies: { type: "array" },
+      fail_open: { type: "boolean" },
       count: { type: "string" },
     },
     additionalProperties: false,
@@ -155,6 +158,7 @@ const schemas = {
     properties: {
       allow: { type: "array" },
       deny: { type: "array" },
+      trusted_proxies: { type: "array" },
       message: { type: "string" },
       status: { type: "integer", minimum: 100, maximum: 599 },
     },
@@ -171,6 +175,7 @@ const schemas = {
       jwks_url: { type: "string" },
       groups_claim: { type: "string" },
       public_key_pem: { type: "string" },
+      public_key_jwk: { type: "object" },
     },
     additionalProperties: false,
   },
@@ -180,7 +185,7 @@ const schemas = {
     properties: {
       introspection_endpoint: { type: "string" },
       client_id: { type: "string" },
-      client_secret: { type: "string" },
+      client_secret: { type: "string", writeOnly: true },
       required_scopes: { type: "string" },
       timeout: { type: "number", minimum: 0 },
     },
@@ -234,6 +239,8 @@ const schemas = {
       window: { type: "integer", minimum: 1 },
       policy_name: { type: "string" },
       partition_key: { type: "string" },
+      trusted_proxies: { type: "array" },
+      fail_open: { type: "boolean" },
     },
     additionalProperties: false,
   },
@@ -331,6 +338,20 @@ function runRule(input) {
     for (const [key, prop] of Object.entries(schema.properties)) {
       const value = config[key];
       if (value === undefined || value === null) continue;
+
+      // Secret fields (writeOnly in config-schema.json) must not be plaintext
+      // literals — they would be baked into the artifact. Mirrors compiler E1070.
+      if (
+        prop.writeOnly &&
+        typeof value === "string" &&
+        value.length > 0 &&
+        !value.startsWith("env://") &&
+        !value.startsWith("file://")
+      ) {
+        results.push({
+          message: `Config field "${key}" for middleware "${pluginName}" is a secret; use an env:// or file:// reference instead of a plaintext literal so it is not baked into the artifact.`,
+        });
+      }
 
       if (typeof value === "string" && (value.startsWith("env://") || value.startsWith("file://"))) {
         continue;

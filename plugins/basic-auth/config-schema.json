@@ -28,6 +28,7 @@
           },
           "password": {
             "type": "string",
+            "writeOnly": true,
             "description": "Password for this user. Supports secret references (e.g. env://MY_PASSWORD)."
           },
           "roles": {

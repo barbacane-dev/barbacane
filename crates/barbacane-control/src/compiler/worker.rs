@@ -274,6 +274,11 @@ async fn resolve_project_plugins(
             // plane loads them without capability enforcement (WA-1).
             body_access: false,
             host_functions: vec![],
+            // The registry doesn't persist config-schema.json, so no secret
+            // (writeOnly) fields are known here; the plaintext-secret warning
+            // (E1070) is a no-op for control-plane compiles. Same limitation as
+            // host_functions above (WA-1).
+            secret_fields: vec![],
         });
     }
 

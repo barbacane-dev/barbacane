@@ -63,6 +63,25 @@ fn read_plugin_metadata(wasm_path: &Path) -> Option<PluginMetadata> {
     parse_plugin_metadata(&content)
 }
 
+/// Read config-schema.json next to the WASM and return the names of fields
+/// marked `writeOnly` (secret). Best-effort: an absent or invalid schema yields
+/// an empty list (no secret-field warnings for that plugin).
+fn read_secret_fields(wasm_path: &Path) -> Vec<String> {
+    let Some(dir) = wasm_path.parent() else {
+        return Vec::new();
+    };
+    let content = match std::fs::read_to_string(dir.join("config-schema.json")) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(schema) => crate::artifact::collect_writeonly_fields(&schema)
+            .into_iter()
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Resolve a WASM path from a plugin source, relative to a base path.
 fn resolve_wasm_path(path_source: &PathSource, base_path: &Path) -> std::path::PathBuf {
     if Path::new(&path_source.path).is_absolute() {
@@ -117,6 +136,15 @@ fn resolve_plugin(
             .and_then(parse_plugin_metadata),
     };
 
+    // Secret (writeOnly) config fields from config-schema.json (path plugins
+    // only; URL plugins do not fetch the schema).
+    let secret_fields = match source {
+        PluginSource::Path(path_source) => {
+            read_secret_fields(&resolve_wasm_path(path_source, base_path))
+        }
+        PluginSource::Url(_) => Vec::new(),
+    };
+
     Ok(ResolvedPlugin {
         name: name.to_string(),
         source: source.description(),
@@ -128,6 +156,7 @@ fn resolve_plugin(
             .as_ref()
             .map(|m| m.host_functions.clone())
             .unwrap_or_default(),
+        secret_fields,
     })
 }
 
@@ -251,6 +280,8 @@ pub struct ResolvedPlugin {
     pub body_access: bool,
     /// Declared capability host-function names from plugin.toml.
     pub host_functions: Vec<String>,
+    /// Config fields marked `writeOnly` (secret) in config-schema.json, if present.
+    pub secret_fields: Vec<String>,
 }
 
 impl ProjectManifest {
