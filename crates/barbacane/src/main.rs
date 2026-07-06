@@ -658,6 +658,10 @@ struct Gateway {
     /// Request limits (body size, headers, URI length).
     limits: RequestLimits,
     dev_mode: bool,
+    /// Whether plugin egress to internal/loopback/metadata targets is allowed
+    /// (BARBACANE_ALLOW_INTERNAL_EGRESS). The HTTP/broker clients carry their own
+    /// copy; this one guards WebSocket upstream connections.
+    allow_internal_egress: bool,
     /// WASM engine for plugin execution (kept alive for engine lifetime).
     _wasm_engine: Arc<WasmEngine>,
     /// Plugin instance pool.
@@ -952,6 +956,7 @@ impl Gateway {
             specs,
             limits,
             dev_mode,
+            allow_internal_egress,
             _wasm_engine: wasm_engine,
             plugin_pool: Arc::new(plugin_pool),
             _plugin_limits: plugin_limits,
@@ -2038,20 +2043,24 @@ impl Gateway {
                     // This MUST happen here (not in a temporary runtime) so the
                     // TcpStream is registered with the I/O driver that will drive
                     // the relay task.
-                    let ws_upstream =
-                        match barbacane_wasm::ws_client::connect_upstream(ws_request).await {
-                            Ok(stream) => stream,
-                            Err(err) => {
-                                tracing::warn!(
-                                    error = %err,
-                                    "WebSocket upstream connection failed"
-                                );
-                                return Err(self.dev_error_response(format_args!(
-                                    "WebSocket upstream connection failed: {}",
-                                    err
-                                )));
-                            }
-                        };
+                    let ws_upstream = match barbacane_wasm::ws_client::connect_upstream(
+                        ws_request,
+                        self.allow_internal_egress,
+                    )
+                    .await
+                    {
+                        Ok(stream) => stream,
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                "WebSocket upstream connection failed"
+                            );
+                            return Err(self.dev_error_response(format_args!(
+                                "WebSocket upstream connection failed: {}",
+                                err
+                            )));
+                        }
+                    };
 
                     // Run on_response for observability (modifications discarded).
                     if !middleware_instances.is_empty() {
