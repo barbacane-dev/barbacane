@@ -24,6 +24,18 @@ use sha2::{Digest, Sha256};
 
 use crate::error::ProblemDetails;
 
+/// API-key scopes (`api_keys.scopes`). A key being valid for a project is not
+/// sufficient — it must also carry the scope required by the action it performs.
+pub mod scopes {
+    /// Permits a data plane to register and connect over `/ws/data-plane`.
+    pub const DATA_PLANE_CONNECT: &str = "data-plane:connect";
+}
+
+/// Whether an API key's granted `scopes` include `required`.
+pub fn key_has_scope(scopes: &[String], required: &str) -> bool {
+    scopes.iter().any(|s| s == required)
+}
+
 /// Authentication policy applied to protected control-plane routes.
 #[derive(Clone)]
 pub enum AdminAuth {
@@ -102,5 +114,26 @@ pub async fn require_admin(
             axum::http::HeaderValue::from_static("Bearer"),
         );
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_has_scope_matches_exactly() {
+        let scopes = vec!["data-plane:connect".to_string(), "project:read".to_string()];
+        assert!(key_has_scope(&scopes, scopes::DATA_PLANE_CONNECT));
+        assert!(key_has_scope(&scopes, "project:read"));
+        // No partial / prefix matching.
+        assert!(!key_has_scope(&scopes, "data-plane"));
+        assert!(!key_has_scope(&scopes, "project:write"));
+        // A key without the scope is rejected.
+        assert!(!key_has_scope(
+            &["project:read".to_string()],
+            scopes::DATA_PLANE_CONNECT
+        ));
+        assert!(!key_has_scope(&[], scopes::DATA_PLANE_CONNECT));
     }
 }
