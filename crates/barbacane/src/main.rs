@@ -51,7 +51,7 @@ const SERVER_VERSION: &str = concat!("barbacane/", env!("CARGO_PKG_VERSION"));
 const UNMATCHED_ROUTE_LABEL: &str = "<unmatched>";
 
 use barbacane_telemetry::MetricsRegistry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use barbacane_compiler::{
     compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs, CompileOptions,
@@ -843,6 +843,26 @@ impl Gateway {
                 format!("failed to resolve secrets: {}", messages.join(", "))
             })?;
 
+        // WA-3: map each plugin name to the secret references in its own config
+        // (collected from the raw, pre-substitution configs), so the pool can
+        // scope host_get_secret per plugin — a plugin can resolve the secrets it
+        // declares, not another plugin's secrets held in the shared store.
+        let mut secret_refs_by_plugin: HashMap<String, HashSet<String>> = HashMap::new();
+        for op in &routes.operations {
+            for mw in &op.middlewares {
+                secret_refs_by_plugin
+                    .entry(mw.name.clone())
+                    .or_default()
+                    .extend(barbacane_wasm::collect_secret_references(&mw.config));
+            }
+            secret_refs_by_plugin
+                .entry(op.dispatch.name.clone())
+                .or_default()
+                .extend(barbacane_wasm::collect_secret_references(
+                    &op.dispatch.config,
+                ));
+        }
+
         // Replace secret references in route configs with resolved values
         let mut resolved_operations = routes.operations;
         for op in &mut resolved_operations {
@@ -878,7 +898,8 @@ impl Gateway {
             Some(response_cache),
             Some(Arc::new(nats_publisher)),
             Some(Arc::new(kafka_publisher)),
-        );
+        )
+        .with_secret_scopes(secret_refs_by_plugin);
 
         // Register all compiled modules in the pool
         for (name, version, module) in compiled_modules {

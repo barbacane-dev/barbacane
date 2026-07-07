@@ -6,7 +6,7 @@
 //!
 //! Future: `vault://`, `aws-sm://`, `k8s://` references.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -56,6 +56,21 @@ impl SecretsStore {
     /// Get a secret by its reference.
     pub fn get(&self, reference: &str) -> Option<&String> {
         self.secrets.get(reference)
+    }
+
+    /// Return a new store containing only the references in `allowed`.
+    ///
+    /// Used to scope `host_get_secret` to a single plugin's own config
+    /// references (WA-3): a plugin can resolve the secrets it declares in its
+    /// config, but not another plugin's secrets held in the shared store.
+    pub fn scoped(&self, allowed: &HashSet<String>) -> Self {
+        let scoped: HashMap<String, String> = self
+            .secrets
+            .iter()
+            .filter(|(k, _)| allowed.contains(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Self::from_map(scoped)
     }
 
     /// Check if a reference exists in the store.
@@ -249,6 +264,31 @@ pub fn resolve_all_secrets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoped_store_only_exposes_allowed_references() {
+        let mut all = HashMap::new();
+        all.insert("env://PLUGIN_A_KEY".to_string(), "a-secret".to_string());
+        all.insert("env://PLUGIN_B_KEY".to_string(), "b-secret".to_string());
+        let store = SecretsStore::from_map(all);
+
+        // Plugin A is scoped to only its own reference.
+        let allowed: HashSet<String> = ["env://PLUGIN_A_KEY".to_string()].into_iter().collect();
+        let scoped = store.scoped(&allowed);
+
+        assert_eq!(
+            scoped.get("env://PLUGIN_A_KEY").map(String::as_str),
+            Some("a-secret")
+        );
+        // ...and cannot read plugin B's secret from the shared store.
+        assert!(scoped.get("env://PLUGIN_B_KEY").is_none());
+
+        // An empty scope (plugin declared no secrets) exposes nothing.
+        assert!(store
+            .scoped(&HashSet::new())
+            .get("env://PLUGIN_A_KEY")
+            .is_none());
+    }
 
     #[test]
     fn test_is_secret_reference() {
