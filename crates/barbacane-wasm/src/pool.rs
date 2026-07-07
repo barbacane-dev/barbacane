@@ -4,6 +4,7 @@
 //! separate WASM instance. Under load, instances are cloned from the
 //! AOT-compiled module.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -101,6 +102,11 @@ pub struct InstancePool {
 
     /// Plugin configs by key.
     configs: DashMap<InstanceKey, Vec<u8>>,
+
+    /// Secret references (env://… / file://…) each plugin declares in its config,
+    /// keyed by plugin name. Used to scope `host_get_secret` to a plugin's own
+    /// secrets (WA-3). A plugin absent from this map gets an empty secrets store.
+    secret_refs_by_plugin: HashMap<String, HashSet<String>>,
 }
 
 impl InstancePool {
@@ -118,6 +124,7 @@ impl InstancePool {
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
+            secret_refs_by_plugin: HashMap::new(),
         }
     }
 
@@ -139,6 +146,7 @@ impl InstancePool {
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
+            secret_refs_by_plugin: HashMap::new(),
         }
     }
 
@@ -161,6 +169,7 @@ impl InstancePool {
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
+            secret_refs_by_plugin: HashMap::new(),
         }
     }
 
@@ -188,7 +197,15 @@ impl InstancePool {
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
+            secret_refs_by_plugin: HashMap::new(),
         }
+    }
+
+    /// Set the per-plugin secret reference scopes (WA-3). Chain after a
+    /// constructor: `InstancePool::with_all_options(..).with_secret_scopes(map)`.
+    pub fn with_secret_scopes(mut self, scopes: HashMap<String, HashSet<String>>) -> Self {
+        self.secret_refs_by_plugin = scopes;
+        self
     }
 
     /// Register a compiled module in the pool.
@@ -216,13 +233,23 @@ impl InstancePool {
             .get(key)
             .ok_or_else(|| WasmError::InitFailed(format!("config not found for: {}", key.name)))?;
 
+        // Scope host_get_secret to this plugin's own config references (WA-3):
+        // a plugin can resolve the secrets it declares, not another plugin's.
+        let scoped_secrets = self.secrets.as_ref().map(|store| {
+            match self.secret_refs_by_plugin.get(&key.name) {
+                Some(refs) => store.scoped(refs),
+                // Plugin declared no secret references -> empty store (default-deny).
+                None => store.scoped(&HashSet::new()),
+            }
+        });
+
         // Create a new instance with all options
         let mut instance = PluginInstance::new_with_all_options(
             self.engine.engine(),
             &module,
             self.limits.clone(),
             self.http_client.clone(),
-            self.secrets.clone(),
+            scoped_secrets,
             self.rate_limiter.clone(),
             self.response_cache.clone(),
             self.nats_publisher.clone(),
