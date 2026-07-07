@@ -164,13 +164,28 @@ fn build_output_schema(op: &CompiledOperation) -> Option<serde_json::Value> {
     None
 }
 
+/// Decomposed HTTP request components: (resolved_path, query_string, body_json).
+type DecomposedRequest = (String, Option<String>, Option<Vec<u8>>);
+
 /// Decompose MCP tool call arguments back into HTTP request components.
 ///
-/// Returns (resolved_path, query_string, body_json).
+/// Returns `Ok((resolved_path, query_string, body_json))`, or `Err(message)`
+/// when a path-parameter value is unsafe.
+///
+/// MCP callers bypass the HTTP router, which normally guarantees a non-wildcard
+/// path parameter is a single URL segment (it splits the request line on `/`).
+/// Substituting a raw MCP value straight into the path template would let a
+/// caller inject `/` or `..` and reach an upstream resource never exposed as a
+/// tool, or forge the `request.path` that prefix-based authz middleware inspects
+/// (MCP-1). We therefore validate + percent-encode each substituted segment:
+///   * non-wildcard `{name}` — reject `/`, `\`, `?`, `#`, and any `..`; the
+///     value must be a single segment, then percent-encode it;
+///   * wildcard `{name+}` — may span segments (`/` allowed), but reject `?`,
+///     `#`, `\`, and any `..` path segment so it cannot traverse upward.
 pub fn decompose_arguments(
     entry: &ToolEntry,
     arguments: &serde_json::Value,
-) -> (String, Option<String>, Option<Vec<u8>>) {
+) -> Result<DecomposedRequest, String> {
     let args = arguments.as_object().cloned().unwrap_or_default();
 
     let mut path = entry.path.clone();
@@ -185,9 +200,14 @@ pub fn decompose_arguments(
                     serde_json::Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
-                path = path.replace(&format!("{{{}}}", param.name), &val_str);
-                // Also handle wildcard params {name+}
-                path = path.replace(&format!("{{{}+}}", param.name), &val_str);
+                let wildcard_placeholder = format!("{{{}+}}", param.name);
+                let is_wildcard = path.contains(&wildcard_placeholder);
+                let substituted = sanitize_path_param(&param.name, &val_str, is_wildcard)?;
+                if is_wildcard {
+                    path = path.replace(&wildcard_placeholder, &substituted);
+                } else {
+                    path = path.replace(&format!("{{{}}}", param.name), &substituted);
+                }
                 consumed_keys.insert(param.name.clone());
             }
         } else if param.location == "query" {
@@ -225,7 +245,44 @@ pub fn decompose_arguments(
         serde_json::to_vec(&remaining).ok()
     };
 
-    (path, query, body)
+    Ok((path, query, body))
+}
+
+/// Validate and encode a value being substituted into a path template segment.
+///
+/// Returns the substitution string, or an error message if the value would
+/// break out of its intended segment(s). See [`decompose_arguments`] for the
+/// rationale (MCP-1).
+fn sanitize_path_param(name: &str, value: &str, is_wildcard: bool) -> Result<String, String> {
+    // Control characters (incl. CR/LF) are never valid in a path.
+    if value.chars().any(|c| c.is_control()) {
+        return Err(format!(
+            "path parameter '{name}' contains control characters"
+        ));
+    }
+    if value.contains(['?', '#', '\\']) {
+        return Err(format!(
+            "path parameter '{name}' contains a disallowed character (?, #, or \\)"
+        ));
+    }
+    if is_wildcard {
+        // Wildcards may span segments; reject upward traversal in any segment.
+        if value.split('/').any(|seg| seg == "..") {
+            return Err(format!(
+                "path parameter '{name}' contains a '..' path segment"
+            ));
+        }
+        Ok(value.to_string())
+    } else {
+        // Non-wildcard params must be a single segment: no '/', no '..'.
+        if value.contains('/') {
+            return Err(format!("path parameter '{name}' must not contain '/'"));
+        }
+        if value == ".." || value == "." {
+            return Err(format!("path parameter '{name}' must not be '.' or '..'"));
+        }
+        Ok(percent_encode(value))
+    }
 }
 
 /// Minimal percent-encoding for query string components.
@@ -450,7 +507,7 @@ mod tests {
             ],
         };
         let args = serde_json::json!({"id": "123", "fields": "name,email"});
-        let (path, query, body) = decompose_arguments(&entry, &args);
+        let (path, query, body) = decompose_arguments(&entry, &args).expect("valid args");
         assert_eq!(path, "/users/123");
         assert_eq!(query, Some("fields=name%2Cemail".to_string()));
         assert!(body.is_none());
@@ -471,7 +528,7 @@ mod tests {
             parameters: vec![],
         };
         let args = serde_json::json!({"items": [{"id": "a"}], "note": "rush"});
-        let (path, query, body) = decompose_arguments(&entry, &args);
+        let (path, query, body) = decompose_arguments(&entry, &args).expect("valid args");
         assert_eq!(path, "/orders");
         assert!(query.is_none());
         let body = body.expect("body should be present");
@@ -522,7 +579,7 @@ mod tests {
             }],
         };
         let args = serde_json::json!({"path": "docs/2024/report.pdf"});
-        let (path, query, body) = decompose_arguments(&entry, &args);
+        let (path, query, body) = decompose_arguments(&entry, &args).expect("valid args");
         assert_eq!(path, "/files/docs/2024/report.pdf");
         assert!(query.is_none());
         assert!(body.is_none());
@@ -549,7 +606,7 @@ mod tests {
         };
         // Numeric value instead of string
         let args = serde_json::json!({"id": 42});
-        let (path, _, _) = decompose_arguments(&entry, &args);
+        let (path, _, _) = decompose_arguments(&entry, &args).expect("valid args");
         assert_eq!(path, "/users/42");
     }
 
@@ -574,8 +631,85 @@ mod tests {
         };
         // Missing "id" argument
         let args = serde_json::json!({});
-        let (path, _, _) = decompose_arguments(&entry, &args);
+        let (path, _, _) = decompose_arguments(&entry, &args).expect("valid args");
         assert_eq!(path, "/users/{id}");
+    }
+
+    fn user_id_entry() -> ToolEntry {
+        ToolEntry {
+            tool: McpTool {
+                name: "getUser".to_string(),
+                description: "Get user".to_string(),
+                input_schema: serde_json::json!({}),
+                output_schema: None,
+            },
+            operation_index: 0,
+            method: "GET".to_string(),
+            path: "/users/{id}".to_string(),
+            parameters: vec![Parameter {
+                name: "id".to_string(),
+                location: "path".to_string(),
+                required: true,
+                schema: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn decompose_rejects_traversal_in_non_wildcard_param() {
+        // MCP-1: a non-wildcard path param must not break out of its segment.
+        let entry = user_id_entry();
+        for evil in [
+            "../admin/secrets",
+            "..",
+            "a/b",
+            "x?inject=1",
+            "y#frag",
+            "back\\slash",
+        ] {
+            let args = serde_json::json!({ "id": evil });
+            assert!(
+                decompose_arguments(&entry, &args).is_err(),
+                "value {evil:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn decompose_percent_encodes_non_wildcard_segment() {
+        // Reserved but non-structural characters are encoded, not rejected, so
+        // the value stays a single opaque segment.
+        let entry = user_id_entry();
+        let args = serde_json::json!({"id": "a b:c"});
+        let (path, _, _) = decompose_arguments(&entry, &args).expect("encodable");
+        assert_eq!(path, "/users/a%20b%3Ac");
+    }
+
+    #[test]
+    fn decompose_rejects_traversal_segment_in_wildcard_param() {
+        // Wildcards may contain '/', but not an upward-traversal segment.
+        let entry = ToolEntry {
+            tool: McpTool {
+                name: "getFile".to_string(),
+                description: "Get file".to_string(),
+                input_schema: serde_json::json!({}),
+                output_schema: None,
+            },
+            operation_index: 0,
+            method: "GET".to_string(),
+            path: "/files/{path+}".to_string(),
+            parameters: vec![Parameter {
+                name: "path".to_string(),
+                location: "path".to_string(),
+                required: true,
+                schema: None,
+            }],
+        };
+        let args = serde_json::json!({"path": "docs/../../etc/passwd"});
+        assert!(decompose_arguments(&entry, &args).is_err());
+        // A legitimate deep path with no traversal is still allowed.
+        let ok = serde_json::json!({"path": "docs/2024/report.pdf"});
+        assert!(decompose_arguments(&entry, &ok).is_ok());
     }
 
     #[test]

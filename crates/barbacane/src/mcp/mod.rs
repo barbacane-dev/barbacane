@@ -13,7 +13,8 @@ use std::time::Duration;
 use barbacane_compiler::{CompiledOperation, McpConfig};
 
 use self::jsonrpc::{
-    JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST,
+    METHOD_NOT_FOUND, PARSE_ERROR,
 };
 use self::session::SessionStore;
 use self::tools::{McpTool, ToolEntry};
@@ -129,11 +130,22 @@ impl McpServer {
 
         match req.method.as_str() {
             "initialize" => {
-                let client_info = req
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("clientInfo").cloned());
-                let new_session_id = self.session_store.create(client_info);
+                // Do not retain the attacker-controlled `clientInfo` blob; it was
+                // unused and only amplified the session-exhaustion vector (MCP-2).
+                let new_session_id = match self.session_store.create() {
+                    Some(id) => id,
+                    None => {
+                        let resp = JsonRpcResponse::error(
+                            req.id,
+                            INTERNAL_ERROR,
+                            "session capacity reached; retry later",
+                        );
+                        return McpResult::Response {
+                            body: serde_json::to_vec(&resp).unwrap_or_default(),
+                            session_id: None,
+                        };
+                    }
+                };
                 let resp = JsonRpcResponse::success(
                     req.id,
                     serde_json::json!({
@@ -230,7 +242,16 @@ impl McpServer {
             .cloned()
             .unwrap_or(serde_json::json!({}));
 
-        let (path, query, body) = tools::decompose_arguments(entry, &arguments);
+        let (path, query, body) = match tools::decompose_arguments(entry, &arguments) {
+            Ok(parts) => parts,
+            Err(msg) => {
+                let resp = JsonRpcResponse::error(req.id, INVALID_PARAMS, msg);
+                return McpResult::Response {
+                    body: serde_json::to_vec(&resp).unwrap_or_default(),
+                    session_id: None,
+                };
+            }
+        };
 
         McpResult::NeedsDispatch {
             operation_index: entry.operation_index,
@@ -363,7 +384,7 @@ mod tests {
     #[test]
     fn tools_list_returns_mcp_enabled_tools() {
         let server = make_server();
-        let sid = server.session_store.create(None);
+        let sid = server.session_store.create().expect("under cap");
         let body = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
@@ -382,7 +403,7 @@ mod tests {
     #[test]
     fn tools_call_returns_needs_dispatch() {
         let server = make_server();
-        let sid = server.session_store.create(None);
+        let sid = server.session_store.create().expect("under cap");
         let body =
             br#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"getHealth"}}"#;
         match server.handle_request(body, Some(&sid)) {
@@ -401,7 +422,7 @@ mod tests {
     #[test]
     fn tools_call_unknown_tool() {
         let server = make_server();
-        let sid = server.session_store.create(None);
+        let sid = server.session_store.create().expect("under cap");
         let body =
             br#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nonexistent"}}"#;
         match server.handle_request(body, Some(&sid)) {
@@ -419,7 +440,7 @@ mod tests {
     #[test]
     fn unknown_method_returns_error() {
         let server = make_server();
-        let sid = server.session_store.create(None);
+        let sid = server.session_store.create().expect("under cap");
         let body = br#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#;
         match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
@@ -446,7 +467,7 @@ mod tests {
     #[test]
     fn ping_returns_empty_result() {
         let server = make_server();
-        let sid = server.session_store.create(None);
+        let sid = server.session_store.create().expect("under cap");
         let body = br#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#;
         match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
@@ -560,7 +581,7 @@ mod tests {
     #[test]
     fn tools_call_missing_name_field() {
         let server = make_server();
-        let sid = server.session_store.create(None);
+        let sid = server.session_store.create().expect("under cap");
         let body = br#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{}}"#;
         match server.handle_request(body, Some(&sid)) {
             McpResult::Response {
@@ -614,7 +635,7 @@ mod tests {
             server_version: None,
         };
         let server = McpServer::new(&ops, &config);
-        let sid = server.session_store.create(None);
+        let sid = server.session_store.create().expect("under cap");
 
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"getUser","arguments":{"id":"123"}}}"#;
         match server.handle_request(body, Some(&sid)) {
@@ -627,6 +648,20 @@ mod tests {
                 assert_eq!(path, "/users/123");
             }
             _ => panic!("expected NeedsDispatch"),
+        }
+
+        // MCP-1: a path-traversal argument is rejected before dispatch, so it can
+        // never reach an upstream resource that isn't exposed as a tool.
+        let evil = br#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"getUser","arguments":{"id":"../admin/secrets"}}}"#;
+        match server.handle_request(evil, Some(&sid)) {
+            McpResult::Response {
+                body: resp_body, ..
+            } => {
+                let json: serde_json::Value =
+                    serde_json::from_slice(&resp_body).expect("valid json");
+                assert_eq!(json["error"]["code"], INVALID_PARAMS);
+            }
+            _ => panic!("expected INVALID_PARAMS Response, not dispatch"),
         }
     }
 }
