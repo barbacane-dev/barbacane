@@ -187,6 +187,7 @@ const schemas = {
       client_id: { type: "string" },
       client_secret: { type: "string", writeOnly: true },
       required_scopes: { type: "string" },
+      audience: { type: "string" },
       timeout: { type: "number", minimum: 0 },
     },
     additionalProperties: false,

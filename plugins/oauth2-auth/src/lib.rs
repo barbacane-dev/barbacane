@@ -24,6 +24,12 @@ pub struct OAuth2Auth {
     #[serde(default)]
     required_scopes: Option<String>,
 
+    /// Expected audience (`aud`). If set, the introspection response's `aud` must
+    /// contain this value; otherwise tokens minted for any audience at this
+    /// authorization server are accepted (confused-deputy risk on shared IdPs).
+    #[serde(default)]
+    audience: Option<String>,
+
     /// Request timeout in seconds for introspection call.
     #[serde(default = "default_timeout")]
     timeout: f64,
@@ -32,6 +38,28 @@ pub struct OAuth2Auth {
 fn default_timeout() -> f64 {
     5.0 // 5 seconds default for auth calls
 }
+
+/// Warn (once) that no `audience` is configured, so tokens for any audience at
+/// this authorization server are accepted (confused-deputy risk on shared IdPs).
+#[cfg(target_arch = "wasm32")]
+fn warn_once_no_audience() {
+    use core::cell::Cell;
+    thread_local! { static WARNED: Cell<bool> = const { Cell::new(false) }; }
+    WARNED.with(|w| {
+        if !w.get() {
+            w.set(true);
+            #[link(wasm_import_module = "barbacane")]
+            extern "C" {
+                fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
+            }
+            let msg = "oauth2-auth: no 'audience' configured; tokens for any audience at this authorization server are accepted (confused-deputy risk). Set 'audience' for multi-RP setups.";
+            unsafe { host_log(1, msg.as_ptr() as i32, msg.len() as i32) };
+        }
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_once_no_audience() {}
 
 /// HTTP request format for host_http_call.
 ///
@@ -54,7 +82,7 @@ struct HttpResponse {
 }
 
 /// RFC 7662 Token Introspection Response.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 struct IntrospectionResponse {
     /// REQUIRED. Whether the token is active.
     active: bool,
@@ -112,6 +140,7 @@ enum OAuth2Error {
     IntrospectionFailed(String),
     TokenInactive,
     InsufficientScope,
+    InvalidAudience,
 }
 
 impl OAuth2Error {
@@ -122,6 +151,7 @@ impl OAuth2Error {
             OAuth2Error::IntrospectionFailed(_) => "server_error",
             OAuth2Error::TokenInactive => "invalid_token",
             OAuth2Error::InsufficientScope => "insufficient_scope",
+            OAuth2Error::InvalidAudience => "invalid_token",
         }
     }
 
@@ -132,6 +162,7 @@ impl OAuth2Error {
             OAuth2Error::IntrospectionFailed(msg) => format!("Token introspection failed: {}", msg),
             OAuth2Error::TokenInactive => "Token is not active".to_string(),
             OAuth2Error::InsufficientScope => "Token does not have required scopes".to_string(),
+            OAuth2Error::InvalidAudience => "Token audience mismatch".to_string(),
         }
     }
 
@@ -229,7 +260,33 @@ impl OAuth2Auth {
             self.check_scopes(&introspection, required)?;
         }
 
+        // Check audience (confused-deputy defense on shared IdPs).
+        self.check_audience(&introspection)?;
+
         Ok(introspection)
+    }
+
+    /// Validate the introspection `aud` against the configured `audience`. When no
+    /// audience is configured, tokens for any audience are accepted; warn once so
+    /// operators on shared authorization servers know to set it (RFC 8725).
+    fn check_audience(&self, introspection: &IntrospectionResponse) -> Result<(), OAuth2Error> {
+        let expected = match &self.audience {
+            Some(a) => a.as_str(),
+            None => {
+                warn_once_no_audience();
+                return Ok(());
+            }
+        };
+        let matches = match &introspection.aud {
+            Some(serde_json::Value::String(s)) => s == expected,
+            Some(serde_json::Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some(expected)),
+            _ => false,
+        };
+        if matches {
+            Ok(())
+        } else {
+            Err(OAuth2Error::InvalidAudience)
+        }
     }
 
     /// Extract Bearer token from Authorization header.
@@ -459,8 +516,51 @@ mod tests {
             client_id: "test_client".to_string(),
             client_secret: "test_secret".to_string(),
             required_scopes: None,
+            audience: None,
             timeout: 5.0,
         }
+    }
+
+    fn introspection(active: bool, aud: Option<serde_json::Value>) -> IntrospectionResponse {
+        IntrospectionResponse {
+            active,
+            scope: None,
+            aud,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn audience_unset_accepts_any() {
+        let config = create_test_config();
+        assert!(config
+            .check_audience(&introspection(true, Some(serde_json::json!("anything"))))
+            .is_ok());
+    }
+
+    #[test]
+    fn audience_matches_string_and_array() {
+        let mut config = create_test_config();
+        config.audience = Some("my-api".to_string());
+        assert!(config
+            .check_audience(&introspection(true, Some(serde_json::json!("my-api"))))
+            .is_ok());
+        assert!(config
+            .check_audience(&introspection(
+                true,
+                Some(serde_json::json!(["other", "my-api"]))
+            ))
+            .is_ok());
+    }
+
+    #[test]
+    fn audience_mismatch_or_missing_is_rejected() {
+        let mut config = create_test_config();
+        config.audience = Some("my-api".to_string());
+        assert!(config
+            .check_audience(&introspection(true, Some(serde_json::json!("other-api"))))
+            .is_err());
+        assert!(config.check_audience(&introspection(true, None)).is_err());
     }
 
     fn create_request_with_auth(auth_value: &str) -> Request {
