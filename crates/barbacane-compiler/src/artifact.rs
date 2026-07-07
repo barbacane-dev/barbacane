@@ -773,8 +773,6 @@ fn compile_inner(
     // Sort source_specs by filename for deterministic output
     source_specs.sort_by(|a, b| a.file.cmp(&b.file));
 
-    let artifact_hash = compute_artifact_hash(&source_specs, &checksums);
-
     let provenance = Provenance {
         commit: options.provenance_commit.clone(),
         source: options.provenance_source.clone(),
@@ -794,6 +792,16 @@ fn compile_inner(
         cfg
     };
 
+    // Compute the artifact hash after every hashed input is final (specs,
+    // checksums, plugin capability surface, capabilities_enforced, mcp).
+    let artifact_hash = compute_artifact_hash(
+        &source_specs,
+        &checksums,
+        &bundled_plugins,
+        capabilities_authoritative,
+        &mcp,
+    );
+
     let mut manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
         compiled_at: now_utc_iso8601(),
@@ -811,8 +819,10 @@ fn compile_inner(
     };
 
     // AR-1: sign the artifact when a signing key is configured. The signature
-    // covers `artifact_hash`, which already binds every spec, route, and plugin
-    // WASM hash, so a tampered artifact fails verification on load.
+    // covers `artifact_hash`, which binds every spec, route, and plugin WASM
+    // hash as well as the capability-enforcement surface (capabilities_enforced,
+    // per-plugin host_functions/body_access, MCP config), so a tampered artifact
+    // fails verification on load (H3).
     sign_manifest_from_env(&mut manifest)?;
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
@@ -866,9 +876,20 @@ fn compute_sha256(content: &[u8]) -> String {
 /// Produces a single SHA-256 that represents the entire artifact content by
 /// hashing all source spec hashes and all checksums (routes + plugins) in
 /// deterministic sorted order.
+///
+/// The hash also binds the security-critical capability surface the data plane
+/// trusts at load time: the `capabilities_enforced` flag, each plugin's
+/// `plugin_type`/`version`/`body_access`/declared `host_functions`, and the MCP
+/// config. These are NOT covered by the spec/route/wasm checksums, so without
+/// them a tampered-but-still-signature-verifying `.bca` could flip
+/// `capabilities_enforced=false` (or widen a plugin's host functions, or enable
+/// the MCP surface) and disable the sandbox while passing verification (H3).
 fn compute_artifact_hash(
     source_specs: &[SourceSpec],
     checksums: &BTreeMap<String, String>,
+    plugins: &[BundledPlugin],
+    capabilities_enforced: bool,
+    mcp: &McpConfig,
 ) -> String {
     let mut hasher = Sha256::new();
     // Source spec hashes (already sorted by filename before this call)
@@ -879,6 +900,35 @@ fn compute_artifact_hash(
     for (key, value) in checksums {
         hasher.update(format!("{}={}\n", key, value).as_bytes());
     }
+    // Capability-enforcement surface (H3). `plugins` arrives sorted by name;
+    // sort host_functions so declaration order cannot change the hash.
+    hasher.update(format!("capabilities_enforced={}\n", capabilities_enforced).as_bytes());
+    for p in plugins {
+        let mut host_functions = p.capabilities.host_functions.clone();
+        host_functions.sort();
+        hasher.update(
+            format!(
+                "plugin:{}\ttype={}\tversion={}\tbody_access={}\thost_functions={}\n",
+                p.name,
+                p.plugin_type,
+                p.version,
+                p.capabilities.body_access,
+                host_functions.join(","),
+            )
+            .as_bytes(),
+        );
+    }
+    // MCP surface: gates the MCP endpoint/tooling at runtime, read from the
+    // manifest (not re-derived from the spec) on load.
+    hasher.update(
+        format!(
+            "mcp:enabled={}\tserver_name={}\tserver_version={}\n",
+            mcp.enabled,
+            mcp.server_name.as_deref().unwrap_or(""),
+            mcp.server_version.as_deref().unwrap_or(""),
+        )
+        .as_bytes(),
+    );
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
@@ -921,7 +971,13 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
 
 /// Recompute the combined artifact hash from the manifest's recorded inputs.
 pub fn recompute_artifact_hash(manifest: &Manifest) -> String {
-    compute_artifact_hash(&manifest.source_specs, &manifest.checksums)
+    compute_artifact_hash(
+        &manifest.source_specs,
+        &manifest.checksums,
+        &manifest.plugins,
+        manifest.capabilities_enforced,
+        &manifest.mcp,
+    )
 }
 
 /// Verify the manifest's `artifact_hash` is internally consistent with its
@@ -2666,8 +2722,10 @@ paths:
         checksums.insert("routes.json".to_string(), "ccc".to_string());
         checksums.insert("plugins/mock.wasm".to_string(), "ddd".to_string());
 
-        let hash1 = compute_artifact_hash(&source_specs, &checksums);
-        let hash2 = compute_artifact_hash(&source_specs, &checksums);
+        let hash1 =
+            compute_artifact_hash(&source_specs, &checksums, &[], false, &McpConfig::default());
+        let hash2 =
+            compute_artifact_hash(&source_specs, &checksums, &[], false, &McpConfig::default());
 
         assert_eq!(hash1, hash2, "Same inputs must produce same hash");
         assert!(
@@ -2692,8 +2750,8 @@ paths:
         }];
         let checksums = BTreeMap::new();
 
-        let hash_a = compute_artifact_hash(&specs_a, &checksums);
-        let hash_b = compute_artifact_hash(&specs_b, &checksums);
+        let hash_a = compute_artifact_hash(&specs_a, &checksums, &[], false, &McpConfig::default());
+        let hash_b = compute_artifact_hash(&specs_b, &checksums, &[], false, &McpConfig::default());
 
         assert_ne!(
             hash_a, hash_b,
@@ -2714,8 +2772,8 @@ paths:
         let mut checksums_b = BTreeMap::new();
         checksums_b.insert("routes.json".to_string(), "v2".to_string());
 
-        let hash_a = compute_artifact_hash(&specs, &checksums_a);
-        let hash_b = compute_artifact_hash(&specs, &checksums_b);
+        let hash_a = compute_artifact_hash(&specs, &checksums_a, &[], false, &McpConfig::default());
+        let hash_b = compute_artifact_hash(&specs, &checksums_b, &[], false, &McpConfig::default());
 
         assert_ne!(
             hash_a, hash_b,
@@ -3084,8 +3142,7 @@ paths:
             spec_type: "openapi".to_string(),
             version: "1.0.0".to_string(),
         }];
-        let artifact_hash = compute_artifact_hash(&source_specs, &checksums);
-        Manifest {
+        let mut manifest = Manifest {
             barbacane_artifact_version: ARTIFACT_VERSION,
             compiled_at: "1970-01-01T00:00:00Z".to_string(),
             compiler_version: COMPILER_VERSION.to_string(),
@@ -3098,15 +3155,20 @@ paths:
                 plugin_type: "middleware".to_string(),
                 wasm_path: "plugins/jwt-auth.wasm".to_string(),
                 sha256: compute_sha256(b"wasm-bytes"),
-                capabilities: PluginCapabilities::default(),
+                capabilities: PluginCapabilities {
+                    body_access: false,
+                    host_functions: vec!["host_log".to_string()],
+                },
             }],
-            artifact_hash,
+            artifact_hash: String::new(),
             provenance: Provenance::default(),
             mcp: McpConfig::default(),
             signature: None,
             signing_public_key: None,
-            capabilities_enforced: false,
-        }
+            capabilities_enforced: true,
+        };
+        manifest.artifact_hash = recompute_artifact_hash(&manifest);
+        manifest
     }
 
     fn sign_for_test(manifest: &mut Manifest) -> String {
@@ -3179,5 +3241,65 @@ paths:
             verify_artifact_signature(&manifest, other.signing_public_key.as_ref().unwrap()),
             Err(IntegrityError::BadSignature)
         ));
+    }
+
+    /// H3 regression: the signed hash must bind the capability-enforcement
+    /// surface. Before the fix, `capabilities_enforced`, a plugin's declared
+    /// `host_functions`/`body_access`, and the MCP config were omitted from
+    /// `artifact_hash`, so an attacker could weaken the sandbox in `manifest.json`
+    /// while `artifact_hash` (and thus the signature over it) stayed valid.
+    ///
+    /// The load path runs both checks, so tampering is caught two ways:
+    ///  1. leave `artifact_hash` as-is → `verify_artifact_hash` recomputes over
+    ///     the tampered fields and detects the mismatch (this is what was broken);
+    ///  2. recompute `artifact_hash` to match the tampered fields (as a real
+    ///     attacker would) → `verify_artifact_signature` fails, since the hash
+    ///     changed and they cannot re-sign without the private key.
+    #[test]
+    fn signed_hash_binds_capability_surface() {
+        let mut manifest = integrity_test_manifest();
+        let pubkey = sign_for_test(&mut manifest);
+        assert!(verify_artifact_hash(&manifest).is_ok());
+        assert!(verify_artifact_signature(&manifest, &pubkey).is_ok());
+
+        let disable_enforcement = |m: &mut Manifest| m.capabilities_enforced = false;
+        let widen_host_functions = |m: &mut Manifest| {
+            m.plugins[0].capabilities.host_functions = vec!["host_http_call".to_string()]
+        };
+        let grant_body_access = |m: &mut Manifest| m.plugins[0].capabilities.body_access = true;
+        let enable_mcp = |m: &mut Manifest| m.mcp.enabled = true;
+
+        let tampers: Vec<&dyn Fn(&mut Manifest)> = vec![
+            &disable_enforcement,
+            &widen_host_functions,
+            &grant_body_access,
+            &enable_mcp,
+        ];
+
+        for tamper in tampers {
+            // (1) tamper only: stale artifact_hash is now detected.
+            let mut stale = manifest.clone();
+            tamper(&mut stale);
+            assert!(
+                matches!(
+                    verify_artifact_hash(&stale),
+                    Err(IntegrityError::ArtifactHashMismatch { .. })
+                ),
+                "tampering the capability surface must break the recomputed hash"
+            );
+
+            // (2) attacker recomputes artifact_hash to match → signature fails.
+            let mut resealed = manifest.clone();
+            tamper(&mut resealed);
+            resealed.artifact_hash = recompute_artifact_hash(&resealed);
+            assert!(verify_artifact_hash(&resealed).is_ok());
+            assert!(
+                matches!(
+                    verify_artifact_signature(&resealed, &pubkey),
+                    Err(IntegrityError::BadSignature)
+                ),
+                "recomputing the hash after tampering must invalidate the signature"
+            );
+        }
     }
 }
