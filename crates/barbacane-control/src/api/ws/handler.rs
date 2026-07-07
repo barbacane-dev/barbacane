@@ -86,6 +86,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         return;
     }
 
+    // Enforce the data-plane:connect scope: a key valid for the project must
+    // also be authorized for this action (api_keys.scopes), not merely exist.
+    if !crate::api::auth::key_has_scope(
+        &api_key.scopes,
+        crate::api::auth::scopes::DATA_PLANE_CONNECT,
+    ) {
+        let msg = ControlPlaneMessage::RegistrationFailed {
+            reason: "API key lacks the data-plane:connect scope".to_string(),
+        };
+        let _ = sender.send(to_ws_message(&msg)).await;
+        return;
+    }
+
     // Create data plane record
     let data_planes_repo = DataPlanesRepository::new(state.pool.clone());
     let data_plane = match data_planes_repo
