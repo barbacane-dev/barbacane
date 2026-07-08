@@ -21,6 +21,10 @@ resolver = "2"
 [workspace.package]
 version = "0.7.0"
 edition = "2021"
+# Minimum supported Rust version. Dependencies using the 2024 edition need
+# 1.85; the codebase itself uses APIs stabilized in 1.87 (e.g. is_multiple_of),
+# so 1.87 is the true floor. Enforced by the `msrv` CI job.
+rust-version = "1.87"
 license = "AGPL-3.0-only"
 repository = "https://github.com/barbacane-dev/Barbacane"
 homepage = "https://github.com/barbacane-dev/Barbacane"

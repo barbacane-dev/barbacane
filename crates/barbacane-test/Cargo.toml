@@ -3,6 +3,7 @@ name = "barbacane-test"
 description = "Test harnesses for Barbacane gateway and plugins"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 

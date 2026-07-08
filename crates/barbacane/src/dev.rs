@@ -147,7 +147,7 @@ mod tests {
         let file = temp.path().join("test.yaml");
         std::fs::write(&file, "test").unwrap();
 
-        let watcher = DevWatcher::new(&[file.clone()]);
+        let watcher = DevWatcher::new(std::slice::from_ref(&file));
         assert!(watcher.is_ok());
     }
 
@@ -164,7 +164,7 @@ mod tests {
         let file = temp.path().join("test.yaml");
         std::fs::write(&file, "v1").unwrap();
 
-        let mut watcher = DevWatcher::new(&[file.clone()]).unwrap();
+        let mut watcher = DevWatcher::new(std::slice::from_ref(&file)).unwrap();
 
         // Write a change after a small delay.
         let file_clone = file.clone();

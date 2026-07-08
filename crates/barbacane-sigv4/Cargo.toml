@@ -2,6 +2,7 @@
 name = "barbacane-sigv4"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "AWS Signature Version 4 signing primitives for Barbacane API gateway plugins"
 
