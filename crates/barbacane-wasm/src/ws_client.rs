@@ -37,17 +37,19 @@ pub async fn connect_upstream(
 ) -> Result<UpstreamWsStream, String> {
     // SSRF guard: resolve the upstream host and refuse internal / loopback /
     // link-local / cloud-metadata targets unless egress is explicitly allowed.
-    // Mirrors the HTTP and broker guards so a plugin can't reach internal
-    // services over ws:// / wss://.
+    // We resolve ONCE here and pin the connection to a vetted address below,
+    // rather than letting tokio-tungstenite resolve again at connect time — that
+    // second resolution is the DNS-rebinding TOCTOU window the HTTP client closes
+    // via its custom resolver, and which this mirrors for ws:// / wss://.
     let parsed = reqwest::Url::parse(&req.url)
         .map_err(|e| format!("invalid WebSocket URL '{}': {}", req.url, e))?;
     let host = parsed
         .host_str()
         .ok_or_else(|| format!("WebSocket URL '{}' has no host", req.url))?;
     let port = parsed.port_or_known_default().unwrap_or(0);
-    if let Err(e) = crate::http_client::guard_external_host(host, port, allow_internal_egress).await
-    {
-        return Err(match e {
+    let addrs = crate::http_client::resolve_permitted_addrs(host, port, allow_internal_egress)
+        .await
+        .map_err(|e| match e {
             crate::http_client::HostGuardError::Blocked(h) => format!(
                 "WebSocket target '{h}' is an internal address; set \
                  BARBACANE_ALLOW_INTERNAL_EGRESS to allow"
@@ -55,10 +57,11 @@ pub async fn connect_upstream(
             crate::http_client::HostGuardError::Resolve(m) => {
                 format!("WebSocket target resolution failed: {m}")
             }
-        });
-    }
+        })?;
 
-    // Build the request with custom headers
+    // Build the request with custom headers. The request carries the original
+    // host, so TLS SNI and the Host header stay correct even though we connect
+    // to a pinned IP.
     let mut ws_request = req
         .url
         .as_str()
@@ -75,13 +78,36 @@ pub async fn connect_upstream(
         }
     }
 
-    // Connect with timeout
-    let connect_future = tokio_tungstenite::connect_async(ws_request);
     let timeout = Duration::from_millis(req.connect_timeout_ms);
+    let connect_future = async move {
+        // Connect the TCP socket to a vetted address (try each in turn), then run
+        // the WebSocket/TLS handshake over that pinned stream.
+        let mut last_err: Option<String> = None;
+        let mut tcp = None;
+        for addr in &addrs {
+            match tokio::net::TcpStream::connect(addr).await {
+                Ok(stream) => {
+                    tcp = Some(stream);
+                    break;
+                }
+                Err(e) => last_err = Some(e.to_string()),
+            }
+        }
+        let tcp = tcp.ok_or_else(|| {
+            format!(
+                "WebSocket connection failed: {}",
+                last_err.unwrap_or_else(|| "no reachable address".to_string())
+            )
+        })?;
+
+        tokio_tungstenite::client_async_tls(ws_request, tcp)
+            .await
+            .map(|(ws_stream, _response)| ws_stream)
+            .map_err(|e| format!("WebSocket connection failed: {}", e))
+    };
 
     match tokio::time::timeout(timeout, connect_future).await {
-        Ok(Ok((ws_stream, _response))) => Ok(ws_stream),
-        Ok(Err(e)) => Err(format!("WebSocket connection failed: {}", e)),
+        Ok(result) => result,
         Err(_) => Err(format!(
             "WebSocket connection timed out after {}ms",
             req.connect_timeout_ms

@@ -128,14 +128,29 @@ impl KafkaPublisher {
         // Parse broker addresses (comma-separated)
         let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_string()).collect();
 
-        // SSRF guard: refuse to connect to internal/metadata targets unless the
-        // operator has opted into internal egress.
+        // SSRF guard: resolve each bootstrap broker once and pin the connection to
+        // the vetted IPs, refusing internal/metadata targets unless the operator
+        // opted into internal egress. Pinning (vs. letting rskafka resolve again at
+        // connect time) closes the DNS-rebinding TOCTOU window for the bootstrap
+        // connection. The Kafka client here is plaintext, so connecting by IP is
+        // transparent.
+        //
+        // Residual (rskafka 0.6 limitation): after bootstrap, rskafka discovers the
+        // cluster's *advertised* broker addresses from metadata and connects to
+        // those directly. rskafka exposes no resolver/socket hook, so those
+        // addresses cannot be filtered here; a hostile broker advertising an
+        // internal listener is not fully mitigated. Tracked as follow-up.
+        let mut pinned_brokers: Vec<String> = Vec::new();
         for broker in &broker_list {
             let (host, port) = crate::broker::split_host_port(broker, DEFAULT_KAFKA_PORT);
-            match crate::http_client::guard_external_host(&host, port, self.allow_internal_egress)
-                .await
+            match crate::http_client::resolve_permitted_addrs(
+                &host,
+                port,
+                self.allow_internal_egress,
+            )
+            .await
             {
-                Ok(()) => {}
+                Ok(addrs) => pinned_brokers.extend(addrs.iter().map(|a| a.to_string())),
                 Err(crate::http_client::HostGuardError::Blocked(h)) => {
                     return Err(BrokerError::Blocked(h));
                 }
@@ -150,7 +165,7 @@ impl KafkaPublisher {
             deadline: Some(Duration::from_secs(5)),
             ..Default::default()
         };
-        let client = ClientBuilder::new(broker_list)
+        let client = ClientBuilder::new(pinned_brokers)
             .backoff_config(backoff)
             .build()
             .await

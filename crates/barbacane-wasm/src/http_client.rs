@@ -479,6 +479,7 @@ pub(crate) fn ip_is_internal(ip: &IpAddr) -> bool {
 
 /// Outcome of an SSRF host check that distinguishes a policy rejection from a
 /// resolution failure so callers can map each to their own error type.
+#[derive(Debug)]
 pub(crate) enum HostGuardError {
     /// The host resolves to an internal/non-routable/metadata address.
     Blocked(String),
@@ -531,6 +532,48 @@ pub(crate) async fn guard_external_host(
         )));
     }
     Ok(())
+}
+
+/// Resolve `host`:`port` to the set of addresses a plugin is permitted to
+/// connect to, dropping internal/metadata addresses unless `allow_internal`.
+///
+/// Unlike [`guard_external_host`], which only *checks* and lets the client
+/// resolve again at connect time (leaving a DNS-rebinding TOCTOU window), this
+/// returns the vetted addresses so the caller can **pin** the connection to
+/// them. Errors distinguish a policy block from a resolution failure.
+pub(crate) async fn resolve_permitted_addrs(
+    host: &str,
+    port: u16,
+    allow_internal: bool,
+) -> Result<Vec<SocketAddr>, HostGuardError> {
+    let host_clean = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+
+    if let Ok(ip) = host_clean.parse::<IpAddr>() {
+        let addrs = permitted_addrs(std::iter::once(SocketAddr::new(ip, port)), allow_internal);
+        if addrs.is_empty() {
+            return Err(HostGuardError::Blocked(host.to_string()));
+        }
+        return Ok(addrs);
+    }
+
+    let resolved: Vec<SocketAddr> = tokio::net::lookup_host((host_clean, port))
+        .await
+        .map_err(|e| HostGuardError::Resolve(e.to_string()))?
+        .collect();
+    if resolved.is_empty() {
+        return Err(HostGuardError::Resolve(format!(
+            "no DNS records for {host}"
+        )));
+    }
+    let addrs = permitted_addrs(resolved.into_iter(), allow_internal);
+    if addrs.is_empty() {
+        // Records existed but every one was internal → policy block.
+        return Err(HostGuardError::Blocked(host.to_string()));
+    }
+    Ok(addrs)
 }
 
 /// Headers a plugin may not set on an outbound HTTP request. `host` is derived
@@ -775,6 +818,26 @@ mod option_duration_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn resolve_permitted_addrs_pins_public_literal_and_blocks_internal() {
+        // Public IP literal → returned as a pinnable address with the given port.
+        let addrs = resolve_permitted_addrs("8.8.8.8", 443, false)
+            .await
+            .expect("public literal permitted");
+        assert_eq!(addrs, vec!["8.8.8.8:443".parse().unwrap()]);
+
+        // Internal literal → blocked when egress is disallowed...
+        assert!(matches!(
+            resolve_permitted_addrs("169.254.169.254", 80, false).await,
+            Err(HostGuardError::Blocked(_))
+        ));
+        // ...but permitted (and pinned) once internal egress is allowed.
+        let addrs = resolve_permitted_addrs("10.0.0.5", 9092, true)
+            .await
+            .expect("internal permitted when egress allowed");
+        assert_eq!(addrs, vec!["10.0.0.5:9092".parse().unwrap()]);
+    }
 
     #[test]
     fn ssrf_classifier_blocks_internal_targets() {
