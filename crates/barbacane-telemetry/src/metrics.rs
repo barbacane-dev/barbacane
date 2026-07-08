@@ -2,11 +2,26 @@
 //!
 //! Implements all metrics per ADR-0010 and SPEC-005.
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+
+use parking_lot::Mutex;
 use prometheus_client::{
     encoding::EncodeLabelSet,
     metrics::{counter::Counter, family::Family, gauge::Gauge, histogram::Histogram},
     registry::Registry,
 };
+
+/// Untrusted plugins emit metrics across the WASM boundary. Bound what they can
+/// allocate on the host heap (plugin metric storage is never evicted):
+/// Maximum length of a plugin-supplied metric name.
+const MAX_PLUGIN_METRIC_NAME_LEN: usize = 128;
+/// Maximum length of a plugin-supplied `labels_json` string.
+const MAX_PLUGIN_LABELS_JSON_LEN: usize = 1024;
+/// Maximum number of distinct metric series (name + labels) a single plugin may
+/// create. Further new series are dropped (existing ones keep updating).
+const MAX_PLUGIN_METRIC_CARDINALITY: usize = 1000;
 
 /// Duration histogram buckets (in seconds).
 /// Covers 1ms to 10s range with exponential growth.
@@ -70,11 +85,23 @@ pub struct ConnectionLabels {
     pub api: String,
 }
 
-/// Plugin metric labels (user-defined).
+/// Plugin metric labels (user-defined). `plugin` and `metric` are kept as
+/// separate label fields: concatenating them (`"{plugin}_{name}"`) let a plugin
+/// forge another plugin's series (e.g. plugin `a`/metric `b_c` collided with
+/// plugin `a_b`/metric `c`).
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct PluginMetricLabels {
     pub plugin: String,
+    pub metric: String,
     pub labels_json: String,
+}
+
+/// Labels for the drop counter that records rejected plugin metric writes.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct PluginMetricDropLabels {
+    pub plugin: String,
+    /// Why the write was dropped: `oversize`, `cardinality`, or `non_finite`.
+    pub reason: String,
 }
 
 /// Metrics registry holding all Barbacane metrics.
@@ -113,6 +140,13 @@ pub struct MetricsRegistry {
     // Plugin metrics (dynamically registered)
     pub plugin_counters: Family<PluginMetricLabels, Counter>,
     pub plugin_histograms: Family<PluginMetricLabels, Histogram>,
+    /// Count of plugin metric writes rejected by the guards (per plugin/reason).
+    pub plugin_metrics_dropped_total: Family<PluginMetricDropLabels, Counter>,
+
+    /// Per-plugin set of admitted series fingerprints, enforcing
+    /// [`MAX_PLUGIN_METRIC_CARDINALITY`]. Not a Prometheus metric — internal
+    /// accounting so a plugin cannot grow the registry without bound.
+    plugin_series: Mutex<HashMap<String, HashSet<u64>>>,
 }
 
 impl MetricsRegistry {
@@ -259,6 +293,13 @@ impl MetricsRegistry {
             plugin_histograms.clone(),
         );
 
+        let plugin_metrics_dropped_total = Family::<PluginMetricDropLabels, Counter>::default();
+        registry.register(
+            "barbacane_plugin_metrics_dropped_total",
+            "Plugin metric writes rejected by cardinality/size/finite guards",
+            plugin_metrics_dropped_total.clone(),
+        );
+
         Self {
             registry,
             requests_total,
@@ -277,6 +318,8 @@ impl MetricsRegistry {
             deprecated_route_requests_total,
             plugin_counters,
             plugin_histograms,
+            plugin_metrics_dropped_total,
+            plugin_series: Mutex::new(HashMap::new()),
         }
     }
 
@@ -406,10 +449,53 @@ impl MetricsRegistry {
         self.active_connections.dec();
     }
 
+    /// Record that a plugin metric write was dropped by a guard.
+    fn record_plugin_metric_dropped(&self, plugin: &str, reason: &str) {
+        self.plugin_metrics_dropped_total
+            .get_or_create(&PluginMetricDropLabels {
+                plugin: plugin.to_string(),
+                reason: reason.to_string(),
+            })
+            .inc();
+    }
+
+    /// Whether a plugin may create/update the given series, enforcing the size
+    /// and per-plugin cardinality caps. Returns `false` (and records a drop) when
+    /// the write must be rejected; an already-seen series is always admitted so
+    /// existing metrics keep updating.
+    fn admit_plugin_series(&self, plugin: &str, name: &str, labels_json: &str) -> bool {
+        if name.len() > MAX_PLUGIN_METRIC_NAME_LEN || labels_json.len() > MAX_PLUGIN_LABELS_JSON_LEN
+        {
+            self.record_plugin_metric_dropped(plugin, "oversize");
+            return false;
+        }
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        labels_json.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+
+        let mut series = self.plugin_series.lock();
+        let seen = series.entry(plugin.to_string()).or_default();
+        if seen.contains(&fingerprint) {
+            return true;
+        }
+        if seen.len() >= MAX_PLUGIN_METRIC_CARDINALITY {
+            drop(series);
+            self.record_plugin_metric_dropped(plugin, "cardinality");
+            return false;
+        }
+        seen.insert(fingerprint);
+        true
+    }
+
     /// Increment a plugin counter metric.
     pub fn plugin_counter_inc(&self, plugin: &str, name: &str, labels_json: &str, value: u64) {
+        if !self.admit_plugin_series(plugin, name, labels_json) {
+            return;
+        }
         let labels = PluginMetricLabels {
-            plugin: format!("{}_{}", plugin, name),
+            plugin: plugin.to_string(),
+            metric: name.to_string(),
             labels_json: labels_json.to_string(),
         };
         self.plugin_counters.get_or_create(&labels).inc_by(value);
@@ -423,8 +509,17 @@ impl MetricsRegistry {
         labels_json: &str,
         value: f64,
     ) {
+        // A non-finite observation permanently poisons the series' _sum.
+        if !value.is_finite() {
+            self.record_plugin_metric_dropped(plugin, "non_finite");
+            return;
+        }
+        if !self.admit_plugin_series(plugin, name, labels_json) {
+            return;
+        }
         let labels = PluginMetricLabels {
-            plugin: format!("{}_{}", plugin, name),
+            plugin: plugin.to_string(),
+            metric: name.to_string(),
             labels_json: labels_json.to_string(),
         };
         self.plugin_histograms.get_or_create(&labels).observe(value);
@@ -498,5 +593,87 @@ mod tests {
                 .get(),
             1
         );
+    }
+
+    fn dropped(registry: &MetricsRegistry, plugin: &str, reason: &str) -> u64 {
+        registry
+            .plugin_metrics_dropped_total
+            .get_or_create(&PluginMetricDropLabels {
+                plugin: plugin.to_string(),
+                reason: reason.to_string(),
+            })
+            .get()
+    }
+
+    #[test]
+    fn plugin_metric_name_and_plugin_do_not_collide() {
+        // Regression: "{plugin}_{name}" concatenation let plugin `a`/metric `b_c`
+        // forge plugin `a_b`/metric `c`. Separate label fields keep them distinct.
+        let registry = MetricsRegistry::new();
+        registry.plugin_counter_inc("a", "b_c", "{}", 1);
+        registry.plugin_counter_inc("a_b", "c", "{}", 1);
+        assert_eq!(
+            registry
+                .plugin_counters
+                .get_or_create(&PluginMetricLabels {
+                    plugin: "a".to_string(),
+                    metric: "b_c".to_string(),
+                    labels_json: "{}".to_string(),
+                })
+                .get(),
+            1
+        );
+        assert_eq!(
+            registry
+                .plugin_counters
+                .get_or_create(&PluginMetricLabels {
+                    plugin: "a_b".to_string(),
+                    metric: "c".to_string(),
+                    labels_json: "{}".to_string(),
+                })
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn plugin_metric_oversize_is_dropped() {
+        let registry = MetricsRegistry::new();
+        let long_name = "n".repeat(MAX_PLUGIN_METRIC_NAME_LEN + 1);
+        registry.plugin_counter_inc("p", &long_name, "{}", 1);
+        let long_labels = "x".repeat(MAX_PLUGIN_LABELS_JSON_LEN + 1);
+        registry.plugin_counter_inc("p", "ok", &long_labels, 1);
+        assert_eq!(dropped(&registry, "p", "oversize"), 2);
+    }
+
+    #[test]
+    fn plugin_metric_cardinality_is_capped() {
+        let registry = MetricsRegistry::new();
+        // Fill the budget with distinct label sets, then exceed it.
+        for i in 0..MAX_PLUGIN_METRIC_CARDINALITY {
+            registry.plugin_counter_inc("p", "m", &format!("{{\"i\":{i}}}"), 1);
+        }
+        assert_eq!(dropped(&registry, "p", "cardinality"), 0);
+        registry.plugin_counter_inc("p", "m", "{\"i\":999999}", 1);
+        assert_eq!(dropped(&registry, "p", "cardinality"), 1);
+        // An already-admitted series still updates after the cap is reached.
+        registry.plugin_counter_inc("p", "m", "{\"i\":0}", 5);
+        let v = registry
+            .plugin_counters
+            .get_or_create(&PluginMetricLabels {
+                plugin: "p".to_string(),
+                metric: "m".to_string(),
+                labels_json: "{\"i\":0}".to_string(),
+            })
+            .get();
+        assert_eq!(v, 6); // 1 (initial) + 5
+    }
+
+    #[test]
+    fn plugin_histogram_rejects_non_finite() {
+        let registry = MetricsRegistry::new();
+        registry.plugin_histogram_observe("p", "h", "{}", f64::NAN);
+        registry.plugin_histogram_observe("p", "h", "{}", f64::INFINITY);
+        assert_eq!(dropped(&registry, "p", "non_finite"), 2);
     }
 }
