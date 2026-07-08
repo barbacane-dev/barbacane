@@ -53,6 +53,17 @@ pub(crate) struct PluginHttpRequest {
     pub(crate) timeout_ms: Option<u64>,
 }
 
+/// Prefix a plugin-controlled key (cache key, rate-limit partition) with the
+/// calling plugin's name so plugins sharing an Arc-backed store (`ResponseCache`,
+/// `RateLimiter`) cannot read, poison, or collide on each other's entries.
+///
+/// The NUL byte is used as the separator: plugin names come from the trusted
+/// manifest and never contain NUL, so the first NUL unambiguously delimits the
+/// namespace regardless of the (attacker-controlled) key contents.
+fn namespace_key(plugin_name: &str, key: &str) -> String {
+    format!("{plugin_name}\u{0}{key}")
+}
+
 /// Per-request context passed to plugins.
 #[derive(Debug, Clone, Default)]
 pub struct RequestContext {
@@ -1627,8 +1638,13 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 };
 
+                // Namespace the partition key by the calling plugin so one plugin
+                // cannot exhaust the shared partition table for another, or collide
+                // on another plugin's victim key (rate-limiter isolation).
+                let namespaced = namespace_key(&caller.data().plugin_name, &key);
+
                 // Check the rate limit
-                let result = rate_limiter.check(&key, quota, window_secs as u64);
+                let result = rate_limiter.check(&namespaced, quota, window_secs as u64);
 
                 // Serialize the result
                 match serde_json::to_vec(&result) {
@@ -1687,8 +1703,13 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 };
 
+                // Namespace the key by the calling plugin so one plugin cannot
+                // read or poison another plugin's cached responses (WA cache
+                // isolation). The NUL separator cannot appear in a plugin name.
+                let namespaced = namespace_key(&caller.data().plugin_name, &key);
+
                 // Check the cache
-                let result = cache.get(&key);
+                let result = cache.get(&namespaced);
 
                 // Serialize the result
                 match serde_json::to_vec(&result) {
@@ -1758,8 +1779,12 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     }
                 };
 
+                // Namespace by the calling plugin (see host_cache_get) so a plugin
+                // cannot poison an entry another plugin will read.
+                let namespaced = namespace_key(&caller.data().plugin_name, &key);
+
                 // Store in cache
-                cache.set(&key, entry, ttl_secs as u64);
+                cache.set(&namespaced, entry, ttl_secs as u64);
                 0 // Success
             },
         )
@@ -2332,6 +2357,25 @@ mod tests {
         assert_eq!(ctx.trace_id, "trace-123");
         assert_eq!(ctx.request_id, "req-456");
         assert!(ctx.values.is_empty());
+    }
+
+    #[test]
+    fn namespace_key_isolates_plugins() {
+        // Same key, different plugins → different namespaced keys.
+        assert_ne!(
+            namespace_key("plugin-a", "GET:/x"),
+            namespace_key("plugin-b", "GET:/x")
+        );
+        // Same plugin + key is stable.
+        assert_eq!(
+            namespace_key("plugin-a", "GET:/x"),
+            namespace_key("plugin-a", "GET:/x")
+        );
+        // Distinct keys under one plugin stay distinct.
+        assert_ne!(
+            namespace_key("plugin-a", "GET:/x"),
+            namespace_key("plugin-a", "GET:/y")
+        );
     }
 
     #[test]

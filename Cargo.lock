@@ -523,6 +523,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "parking_lot",
  "prometheus-client",
  "thiserror 2.0.18",
  "tracing",
