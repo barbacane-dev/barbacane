@@ -64,6 +64,16 @@ fn namespace_key(plugin_name: &str, key: &str) -> String {
     format!("{plugin_name}\u{0}{key}")
 }
 
+/// Bounds-check a guest `(offset, size)` span against WASM linear memory for the
+/// WASI stubs, using checked arithmetic so a negative or huge guest offset (an
+/// `i32` sign-extends to a large `usize`) cannot wrap past the check. Returns the
+/// `(start, end)` byte range when it lies fully within `mem_len`.
+fn wasi_span(offset: i32, size: usize, mem_len: usize) -> Option<(usize, usize)> {
+    let start = offset as usize;
+    let end = start.checked_add(size)?;
+    (end <= mem_len).then_some((start, end))
+}
+
 /// Per-request context passed to plugins.
 #[derive(Debug, Clone, Default)]
 pub struct RequestContext {
@@ -2261,12 +2271,11 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_nanos() as u64)
                     .unwrap_or(0);
-                let ptr = time_ptr as usize;
                 let data = memory.data_mut(&mut caller);
-                if ptr + 8 > data.len() {
+                let Some((start, end)) = wasi_span(time_ptr, 8, data.len()) else {
                     return 1;
-                }
-                data[ptr..ptr + 8].copy_from_slice(&nanos.to_le_bytes());
+                };
+                data[start..end].copy_from_slice(&nanos.to_le_bytes());
                 0
             },
         )
@@ -2289,20 +2298,29 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 };
                 let data = memory.data_mut(&mut caller);
                 let mut total: u32 = 0;
-                for i in 0..iovs_len as usize {
-                    let base = (iovs_ptr as usize) + i * 8;
-                    if base + 8 > data.len() {
-                        return 1;
+                for i in 0..iovs_len.max(0) as usize {
+                    // Each iovec is 8 bytes {buf: u32, len: u32}; read the len
+                    // field. Checked arithmetic so a hostile offset/index cannot
+                    // wrap past the bounds check.
+                    let base = match i
+                        .checked_mul(8)
+                        .and_then(|off| (iovs_ptr as usize).checked_add(off))
+                    {
+                        Some(b) => b,
+                        None => return 1,
+                    };
+                    match base.checked_add(8) {
+                        Some(base_end) if base_end <= data.len() => {}
+                        _ => return 1,
                     }
                     let len =
                         u32::from_le_bytes(data[base + 4..base + 8].try_into().unwrap_or([0; 4]));
                     total = total.saturating_add(len);
                 }
-                let ptr = nwritten_ptr as usize;
-                if ptr + 4 > data.len() {
+                let Some((start, end)) = wasi_span(nwritten_ptr, 4, data.len()) else {
                     return 1;
-                }
-                data[ptr..ptr + 4].copy_from_slice(&total.to_le_bytes());
+                };
+                data[start..end].copy_from_slice(&total.to_le_bytes());
                 0
             },
         )
@@ -2328,13 +2346,14 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     None => return 1,
                 };
                 let data = memory.data_mut(&mut caller);
-                let np = num_ptr as usize;
-                let bp = buf_size_ptr as usize;
-                if np + 4 > data.len() || bp + 4 > data.len() {
+                let (Some((np, np_end)), Some((bp, bp_end))) = (
+                    wasi_span(num_ptr, 4, data.len()),
+                    wasi_span(buf_size_ptr, 4, data.len()),
+                ) else {
                     return 1;
-                }
-                data[np..np + 4].copy_from_slice(&0u32.to_le_bytes());
-                data[bp..bp + 4].copy_from_slice(&0u32.to_le_bytes());
+                };
+                data[np..np_end].copy_from_slice(&0u32.to_le_bytes());
+                data[bp..bp_end].copy_from_slice(&0u32.to_le_bytes());
                 0
             },
         )
@@ -2364,6 +2383,20 @@ mod tests {
         assert_eq!(ctx.trace_id, "trace-123");
         assert_eq!(ctx.request_id, "req-456");
         assert!(ctx.values.is_empty());
+    }
+
+    #[test]
+    fn wasi_span_rejects_overflowing_or_oob_offset() {
+        // In-bounds span.
+        assert_eq!(wasi_span(4, 8, 64), Some((4, 12)));
+        assert_eq!(wasi_span(0, 64, 64), Some((0, 64)));
+        // End past memory → rejected.
+        assert_eq!(wasi_span(60, 8, 64), None);
+        // Negative offset sign-extends to a huge usize; checked add must not wrap
+        // past the bounds check.
+        assert_eq!(wasi_span(-1, 8, 64), None);
+        assert_eq!(wasi_span(-8, 8, 64), None);
+        assert_eq!(wasi_span(i32::MIN, 4, 64), None);
     }
 
     #[test]
