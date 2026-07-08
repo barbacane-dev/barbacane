@@ -2206,13 +2206,18 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
     // lightweight stubs so the linker can resolve these imports.
     // Full WASI support (wasmtime-wasi) can replace these if needed.
 
-    // random_get — deterministic bytes for HashMap seed initialisation.
-    // Acceptable in a sandboxed single-request context (no HashDoS risk).
+    // random_get — fill the guest buffer with cryptographically secure random
+    // bytes from the host CSPRNG. WASI imports are not capability-gated, so any
+    // wasm32-wasip1 plugin links this; getrandom (and thus rand / uuid::new_v4 /
+    // crypto nonces) and std HashMap's RandomState both route through it. The
+    // previous deterministic fill made those values predictable across every
+    // call and re-enabled HashDoS (MCP/WA random_get).
     linker
         .func_wrap(
             "wasi_snapshot_preview1",
             "random_get",
             |mut caller: Caller<'_, PluginState>, buf_ptr: i32, buf_len: i32| -> i32 {
+                use ring::rand::SecureRandom;
                 let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                     Some(m) => m,
                     None => return 1,
@@ -2223,8 +2228,10 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                 if end > data.len() {
                     return 1;
                 }
-                for (i, byte) in data[start..end].iter_mut().enumerate() {
-                    *byte = (i.wrapping_mul(0x9E3779B9) >> 24) as u8;
+                // Fail closed: never fall back to predictable bytes on RNG error.
+                let rng = ring::rand::SystemRandom::new();
+                if rng.fill(&mut data[start..end]).is_err() {
+                    return 1;
                 }
                 0
             },
