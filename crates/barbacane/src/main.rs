@@ -21,7 +21,7 @@ use clap::{Parser, Subcommand};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Body, Frame, Incoming};
-use hyper::header::HeaderValue;
+use hyper::header::{HeaderName, HeaderValue};
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 
@@ -1651,7 +1651,7 @@ impl Gateway {
                             ) {
                                 Ok(mut plugin_response) => {
                                     plugin_response.body = sc_body;
-                                    Err(self.build_response_from_plugin(&plugin_response))
+                                    Err(Self::build_response_from_plugin(&plugin_response))
                                 }
                                 Err(e) => {
                                     tracing::error!(error = %e, "failed to parse middleware response");
@@ -1773,8 +1773,10 @@ impl Gateway {
     }
 
     /// Build an HTTP response from a plugin Response.
+    ///
+    /// Does not use `self` (associated fn) so it can be unit-tested directly for
+    /// the untrusted-header handling below.
     fn build_response_from_plugin(
-        &self,
         plugin_response: &barbacane_wasm::Response,
     ) -> Response<Full<Bytes>> {
         let status = StatusCode::from_u16(plugin_response.status).unwrap_or(StatusCode::OK);
@@ -1794,13 +1796,43 @@ impl Gateway {
             ) {
                 continue;
             }
-            builder = builder.header(key.as_str(), value.as_str());
+            // Validate the plugin-supplied header before insertion. The `http`
+            // crate defers validation to `.body()`, so an illegal name/value
+            // (empty, whitespace, control byte, or a value with CR/LF) would
+            // otherwise surface as a panic there. Plugins are untrusted, so skip
+            // invalid headers instead of aborting the connection task (a plugin
+            // reflecting an attacker field into a header could otherwise DoS the
+            // route). Mirrors add_standard_headers' defensive handling.
+            let name = match HeaderName::from_bytes(key.as_bytes()) {
+                Ok(name) => name,
+                Err(_) => {
+                    tracing::debug!(header = %key, "skipping invalid plugin response header name");
+                    continue;
+                }
+            };
+            let header_value = match HeaderValue::from_str(value) {
+                Ok(v) => v,
+                Err(_) => {
+                    tracing::debug!(header = %key, "skipping invalid plugin response header value");
+                    continue;
+                }
+            };
+            builder = builder.header(name, header_value);
         }
 
         let body = plugin_response.body.clone().unwrap_or_default();
-        builder
-            .body(Full::new(Bytes::from(body)))
-            .expect("valid response")
+        match builder.body(Full::new(Bytes::from(body))) {
+            Ok(resp) => resp,
+            Err(e) => {
+                // Header validation above should make this unreachable, but never
+                // panic on plugin-derived data: return a clean 502 instead.
+                tracing::error!(error = %e, "failed to build response from plugin; returning 502");
+                Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Full::new(Bytes::from_static(b"invalid upstream response")))
+                    .expect("static 502 response is always valid")
+            }
+        }
     }
 
     /// Dispatch via a WASM plugin (inner function taking pre-serialized request).
@@ -1903,7 +1935,31 @@ impl Gateway {
                 let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
                 let mut builder = Response::builder().status(status_code);
                 for (k, v) in &headers {
-                    builder = builder.header(k.as_str(), v.as_str());
+                    // Same defensive validation as build_response_from_plugin:
+                    // skip framing headers and any name/value the `http` crate
+                    // would reject (which would otherwise panic at `.body()`).
+                    let k_lc = k.to_ascii_lowercase();
+                    if matches!(
+                        k_lc.as_str(),
+                        "content-length" | "transfer-encoding" | "connection" | "keep-alive"
+                    ) {
+                        continue;
+                    }
+                    let name = match HeaderName::from_bytes(k.as_bytes()) {
+                        Ok(name) => name,
+                        Err(_) => {
+                            tracing::debug!(header = %k, "skipping invalid streamed response header name");
+                            continue;
+                        }
+                    };
+                    let value = match HeaderValue::from_str(v) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            tracing::debug!(header = %k, "skipping invalid streamed response header value");
+                            continue;
+                        }
+                    };
+                    builder = builder.header(name, value);
                 }
 
                 // Convert remaining Chunk events into HTTP body frames.
@@ -1924,9 +1980,20 @@ impl Gateway {
                     }
                 });
 
-                let response = builder
-                    .body(BoxBody::new(StreamBody::new(chunk_stream)))
-                    .expect("valid response");
+                let response = match builder.body(BoxBody::new(StreamBody::new(chunk_stream))) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // Validated headers make this unreachable, but never panic
+                        // on plugin-derived data: return a clean 502 instead.
+                        tracing::error!(error = %e, "failed to build streaming response; returning 502");
+                        Response::builder()
+                            .status(StatusCode::BAD_GATEWAY)
+                            .body(BoxBody::new(Full::new(Bytes::from_static(
+                                b"invalid upstream response",
+                            ))))
+                            .expect("static 502 response is always valid")
+                    }
+                };
 
                 // Background task: wait for WASM to finish, then run on_response for
                 // observability. Modifications are discarded (response already sent).
@@ -2153,7 +2220,7 @@ impl Gateway {
                     plugin_response
                 };
 
-                Ok(box_full(self.build_response_from_plugin(&final_response)))
+                Ok(box_full(Self::build_response_from_plugin(&final_response)))
             }
         }
     }
@@ -4948,6 +5015,33 @@ fn extract_path_param(template: &str, resolved: &str, param_name: &str) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_response_from_plugin_skips_invalid_headers_without_panicking() {
+        use std::collections::BTreeMap;
+        // An untrusted plugin returns headers with an illegal name, an illegal
+        // value (embedded newline), and framing headers — none may panic the
+        // task, and the invalid/framing ones must be dropped.
+        let mut headers = BTreeMap::new();
+        headers.insert("x-ok".to_string(), "fine".to_string());
+        headers.insert("bad name".to_string(), "1".to_string()); // space in name
+        headers.insert("".to_string(), "empty-name".to_string()); // empty name
+        headers.insert("x-inject".to_string(), "a\r\nb".to_string()); // CRLF in value
+        headers.insert("content-length".to_string(), "999".to_string()); // framing
+        let plugin_response = barbacane_wasm::Response {
+            status: 200,
+            headers,
+            body: Some(b"hello".to_vec()),
+        };
+
+        let resp = Gateway::build_response_from_plugin(&plugin_response);
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("x-ok").unwrap(), "fine");
+        assert!(resp.headers().get("bad name").is_none());
+        assert!(resp.headers().get("x-inject").is_none());
+        // Framing header is dropped (hyper recomputes content-length).
+        assert!(resp.headers().get("content-length").is_none());
+    }
 
     #[test]
     fn test_ws_url_to_http_base() {
