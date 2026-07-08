@@ -34,7 +34,20 @@ serde_json = "1"
 serde_yaml = "0.9"
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+# Narrowed from "full": only the features the workspace actually uses (rt +
+# multi/current-thread runtimes, macros, timers, sync primitives, net, async IO,
+# fs, and signal for graceful shutdown). Dependencies request their own tokio
+# features independently, so this does not affect them.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+    "net",
+    "io-util",
+    "fs",
+    "signal",
+] }
 
 # HTTP
 hyper = { version = "1", features = ["server", "http1", "http2"] }
