@@ -1,8 +1,18 @@
 //! HTTP download logic for remote plugins.
 
+use std::io::Read;
 use std::time::Duration;
 
 use crate::error::CompileError;
+
+/// Maximum size of a downloaded plugin `.wasm` body. A remote (untrusted) host
+/// could otherwise stream an arbitrarily large body and OOM the compile/CI host,
+/// since the whole body is buffered in memory.
+const MAX_PLUGIN_WASM_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Maximum size of a downloaded `plugin.toml`. It is small config; cap it so a
+/// hostile host cannot exhaust memory via the sidecar fetch either.
+const MAX_PLUGIN_TOML_BYTES: u64 = 1024 * 1024;
 
 /// Result of downloading a remote plugin.
 #[derive(Debug)]
@@ -68,27 +78,49 @@ pub fn download_plugin(url: &str) -> Result<DownloadResult, CompileError> {
         )));
     }
 
-    let wasm_bytes = response.bytes().map_err(|e| {
-        CompileError::PluginResolution(format!(
-            "failed to read plugin response body from {url}: {e}"
-        ))
-    })?;
+    // Reject early if the server declares an oversize body...
+    if let Some(len) = response.content_length() {
+        if len > MAX_PLUGIN_WASM_BYTES {
+            return Err(CompileError::PluginResolution(format!(
+                "plugin at {url} is {len} bytes, exceeds the {MAX_PLUGIN_WASM_BYTES}-byte limit"
+            )));
+        }
+    }
+    // ...and cap the actual read so a missing or lying Content-Length can't OOM
+    // the host: read at most limit+1 bytes, then reject if the limit is exceeded.
+    let mut wasm_bytes = Vec::new();
+    response
+        .take(MAX_PLUGIN_WASM_BYTES + 1)
+        .read_to_end(&mut wasm_bytes)
+        .map_err(|e| {
+            CompileError::PluginResolution(format!(
+                "failed to read plugin response body from {url}: {e}"
+            ))
+        })?;
+    if wasm_bytes.len() as u64 > MAX_PLUGIN_WASM_BYTES {
+        return Err(CompileError::PluginResolution(format!(
+            "plugin body from {url} exceeds the {MAX_PLUGIN_WASM_BYTES}-byte limit"
+        )));
+    }
 
-    // Best-effort: try to fetch plugin.toml from candidate URLs
+    // Best-effort: try to fetch plugin.toml from candidate URLs (also bounded).
     let plugin_toml = derive_plugin_toml_urls(url)
         .into_iter()
         .find_map(|toml_url| {
             tracing::debug!(url = %toml_url, "attempting to fetch plugin.toml");
             let resp = client.get(&toml_url).send().ok()?;
-            if resp.status().is_success() {
-                resp.text().ok()
-            } else {
-                None
+            if !resp.status().is_success() {
+                return None;
             }
+            let mut buf = String::new();
+            resp.take(MAX_PLUGIN_TOML_BYTES)
+                .read_to_string(&mut buf)
+                .ok()?;
+            Some(buf)
         });
 
     Ok(DownloadResult {
-        wasm_bytes: wasm_bytes.to_vec(),
+        wasm_bytes,
         plugin_toml,
     })
 }

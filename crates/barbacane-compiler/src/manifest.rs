@@ -483,7 +483,7 @@ pub fn extract_plugin_names(specs: &[ApiSpec]) -> HashSet<String> {
 /// Normalize a plugin name by stripping version suffix.
 ///
 /// Handles formats like "rate-limit@1.0.0" -> "rate-limit".
-fn normalize_plugin_name(name: &str) -> String {
+pub(crate) fn normalize_plugin_name(name: &str) -> String {
     match name.split_once('@') {
         Some((base, _version)) => base.to_string(),
         None => name.to_string(),
