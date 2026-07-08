@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/cli%20tests-23%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/ui%20tests-44%20passing-brightgreen" alt="UI Tests">
   <img src="https://img.shields.io/badge/e2e%20tests-11%20passing-brightgreen" alt="E2E Tests">
-  <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="Rust Version">
+  <img src="https://img.shields.io/badge/rust-1.91%2B-orange" alt="Rust Version">
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-AGPLv3-blue" alt="License"></a>
 </p>
 

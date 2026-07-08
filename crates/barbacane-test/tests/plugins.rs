@@ -1366,10 +1366,8 @@ fn start_ws_echo_server() -> (tokio::task::JoinHandle<()>, String) {
                     if msg.is_close() {
                         break;
                     }
-                    if msg.is_text() || msg.is_binary() {
-                        if tx.send(msg).await.is_err() {
-                            break;
-                        }
+                    if (msg.is_text() || msg.is_binary()) && tx.send(msg).await.is_err() {
+                        break;
                     }
                 }
             });

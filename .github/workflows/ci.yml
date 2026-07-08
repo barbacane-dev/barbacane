@@ -87,8 +87,49 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Run Clippy
+      - name: Run Clippy (lib + bins, deny unwrap/panic in production code)
         run: cargo clippy --workspace --lib --bins -- -D warnings
+
+      - name: Run Clippy (all targets incl. tests/benches)
+        # Lints test/bench/example code too. unwrap/expect/panic are acceptable in
+        # tests, so they're allowed here while the lib/bins step above still denies
+        # them in production code.
+        run: >-
+          cargo clippy --workspace --all-targets --
+          -D warnings
+          -A clippy::unwrap_used
+          -A clippy::expect_used
+          -A clippy::panic
+
+  # Verify the workspace builds on the declared MSRV (workspace.package.rust-version).
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install MSRV Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Keep in sync with workspace.package.rust-version in Cargo.toml.
+          toolchain: "1.91"
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-msrv-
+
+      - name: Check workspace builds on MSRV
+        run: cargo check --workspace --all-targets
 
   # Security audit via cargo-deny (advisories configured in deny.toml)
   audit:
