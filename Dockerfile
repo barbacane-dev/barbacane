@@ -1,7 +1,7 @@
 # Barbacane Data Plane - Multi-stage build
 # Produces a minimal, rootless container image
 
-# Build stage - Rust 1.87+ required (MSRV; edition-2024 deps need 1.85, is_multiple_of needs 1.87), Bookworm for glibc compat
+# Build stage - Rust 1.91+ required (MSRV; wasmtime 43 / cranelift 0.130 floor), Bookworm for glibc compat
 FROM rust:1.93-slim-bookworm AS builder
 
 # Install build dependencies for aws-lc-rs

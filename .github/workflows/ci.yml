@@ -114,7 +114,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           # Keep in sync with workspace.package.rust-version in Cargo.toml.
-          toolchain: "1.87"
+          toolchain: "1.91"
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry

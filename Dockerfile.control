@@ -9,7 +9,7 @@ RUN npm ci
 COPY ui/ ./
 RUN npm run build
 
-# Rust build stage - Rust 1.87+ required (MSRV; edition-2024 deps need 1.85, is_multiple_of needs 1.87)
+# Rust build stage - Rust 1.91+ required (MSRV; wasmtime 43 / cranelift 0.130 floor)
 FROM rust:1.93-slim-bookworm AS rust-builder
 
 # Install build dependencies for aws-lc-rs
