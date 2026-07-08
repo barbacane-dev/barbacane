@@ -12,6 +12,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Least privilege by default: jobs only read the repo. Elevate per-job if ever needed.
+permissions:
+  contents: read
+
 jobs:
   # Detect what files changed to skip unnecessary jobs
   changes:
@@ -24,7 +28,7 @@ jobs:
       ui: ${{ steps.filter.outputs.ui }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         with:
           filters: |
@@ -98,8 +102,8 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
-      - name: Run security audit
-        run: cargo deny check advisories
+      - name: Run supply-chain checks (advisories, licenses, bans, sources)
+        run: cargo deny check
 
   # Build workspace and plugins, upload artifacts for test job
   build:
@@ -373,10 +377,14 @@ jobs:
   benchmarks:
     name: Benchmark Check
     runs-on: ubuntu-latest
+    # The issue_comment path checks out and runs PR-head code, so restrict the
+    # "/bench" trigger to trusted commenters (OWNER/MEMBER/COLLABORATOR); a
+    # drive-by comment from an outside contributor must not run arbitrary code.
     if: >-
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-benchmarks'))
       || (github.event_name == 'issue_comment' && github.event.issue.pull_request
-          && contains(github.event.comment.body, '/bench'))
+          && contains(github.event.comment.body, '/bench')
+          && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     steps:
       - uses: actions/checkout@v6
         with:

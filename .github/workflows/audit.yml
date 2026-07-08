@@ -1,0 +1,26 @@
+name: Scheduled Supply-chain Audit
+
+# The CI `audit` job runs cargo-deny only when code changes. This scheduled run
+# catches newly-published advisories against the pinned dependency tree even when
+# the repo is otherwise idle.
+on:
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run supply-chain checks (advisories, licenses, bans, sources)
+        run: cargo deny check
