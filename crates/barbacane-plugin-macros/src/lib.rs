@@ -58,8 +58,14 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
         mod __barbacane_wasm_abi {
             use super::*;
 
-            // Global state for the plugin instance
-            static mut PLUGIN_INSTANCE: Option<#struct_name> = None;
+            // Per-instance plugin state. WASM plugins are single-threaded, so a
+            // thread-local RefCell provides sound interior mutability without the
+            // `static mut` references that are a hard error under Rust 2024
+            // (static_mut_refs).
+            thread_local! {
+                static PLUGIN_INSTANCE: core::cell::RefCell<Option<#struct_name>> =
+                    const { core::cell::RefCell::new(None) };
+            }
 
             /// Initialize the plugin with JSON config.
             #[no_mangle]
@@ -70,7 +76,7 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
 
                 match serde_json::from_slice::<#struct_name>(config_bytes) {
                     Ok(instance) => {
-                        unsafe { PLUGIN_INSTANCE = Some(instance); }
+                        PLUGIN_INSTANCE.with_borrow_mut(|slot| *slot = Some(instance));
                         0 // Success
                     }
                     Err(_) => 1 // Failed to parse config
@@ -101,37 +107,37 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 // Read body from side-channel (host_body_read).
                 request.body = barbacane_plugin_sdk::body::read_request_body();
 
-                let instance = unsafe {
-                    match PLUGIN_INSTANCE.as_mut() {
+                PLUGIN_INSTANCE.with_borrow_mut(move |slot| {
+                    let instance = match slot.as_mut() {
                         Some(i) => i,
                         None => return 1, // Not initialized
-                    }
-                };
+                    };
 
-                match instance.on_request(request) {
-                    barbacane_plugin_sdk::prelude::Action::Continue(mut req) => {
-                        // Extract body and send via side-channel.
-                        match req.body.take() {
-                            Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
-                            None => barbacane_plugin_sdk::body::clear_response_body(),
+                    match instance.on_request(request) {
+                        barbacane_plugin_sdk::prelude::Action::Continue(mut req) => {
+                            // Extract body and send via side-channel.
+                            match req.body.take() {
+                                Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                                None => barbacane_plugin_sdk::body::clear_response_body(),
+                            }
+                            if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 0, data: req }) {
+                                set_output(&output);
+                            }
+                            0 // Continue
                         }
-                        if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 0, data: req }) {
-                            set_output(&output);
+                        barbacane_plugin_sdk::prelude::Action::ShortCircuit(mut resp) => {
+                            // Extract body and send via side-channel.
+                            match resp.body.take() {
+                                Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                                None => barbacane_plugin_sdk::body::clear_response_body(),
+                            }
+                            if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 1, data: resp }) {
+                                set_output(&output);
+                            }
+                            1 // Short-circuit
                         }
-                        0 // Continue
                     }
-                    barbacane_plugin_sdk::prelude::Action::ShortCircuit(mut resp) => {
-                        // Extract body and send via side-channel.
-                        match resp.body.take() {
-                            Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
-                            None => barbacane_plugin_sdk::body::clear_response_body(),
-                        }
-                        if let Ok(output) = serde_json::to_vec(&ActionOutput { action: 1, data: resp }) {
-                            set_output(&output);
-                        }
-                        1 // Short-circuit
-                    }
-                }
+                })
             }
 
             /// Process an outgoing response.
@@ -152,26 +158,26 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 // Read body from side-channel (host_body_read).
                 response.body = barbacane_plugin_sdk::body::read_request_body();
 
-                let instance = unsafe {
-                    match PLUGIN_INSTANCE.as_mut() {
+                PLUGIN_INSTANCE.with_borrow_mut(move |slot| {
+                    let instance = match slot.as_mut() {
                         Some(i) => i,
                         None => return 1,
+                    };
+
+                    let mut result = instance.on_response(response);
+
+                    // Extract body and send via side-channel.
+                    match result.body.take() {
+                        Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                        None => barbacane_plugin_sdk::body::clear_response_body(),
                     }
-                };
 
-                let mut result = instance.on_response(response);
+                    if let Ok(output) = serde_json::to_vec(&result) {
+                        set_output(&output);
+                    }
 
-                // Extract body and send via side-channel.
-                match result.body.take() {
-                    Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
-                    None => barbacane_plugin_sdk::body::clear_response_body(),
-                }
-
-                if let Ok(output) = serde_json::to_vec(&result) {
-                    set_output(&output);
-                }
-
-                0
+                    0
+                })
             }
 
             /// Allocate `size` bytes via the plugin's allocator and return the pointer.
@@ -234,8 +240,14 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
         mod __barbacane_wasm_abi {
             use super::*;
 
-            // Global state for the plugin instance
-            static mut PLUGIN_INSTANCE: Option<#struct_name> = None;
+            // Per-instance plugin state. WASM plugins are single-threaded, so a
+            // thread-local RefCell provides sound interior mutability without the
+            // `static mut` references that are a hard error under Rust 2024
+            // (static_mut_refs).
+            thread_local! {
+                static PLUGIN_INSTANCE: core::cell::RefCell<Option<#struct_name>> =
+                    const { core::cell::RefCell::new(None) };
+            }
 
             /// Initialize the plugin with JSON config.
             #[no_mangle]
@@ -246,7 +258,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
 
                 match serde_json::from_slice::<#struct_name>(config_bytes) {
                     Ok(instance) => {
-                        unsafe { PLUGIN_INSTANCE = Some(instance); }
+                        PLUGIN_INSTANCE.with_borrow_mut(|slot| *slot = Some(instance));
                         0 // Success
                     }
                     Err(_) => 1 // Failed to parse config
@@ -289,8 +301,8 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 // Read body from side-channel (host_body_read).
                 request.body = barbacane_plugin_sdk::body::read_request_body();
 
-                let instance = unsafe {
-                    match PLUGIN_INSTANCE.as_mut() {
+                PLUGIN_INSTANCE.with_borrow_mut(move |slot| {
+                    let instance = match slot.as_mut() {
                         Some(i) => i,
                         None => {
                             let error_body = br#"{"error":"plugin not initialized"}"#;
@@ -305,22 +317,22 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                             }
                             return 1;
                         }
+                    };
+
+                    let mut response = instance.dispatch(request);
+
+                    // Extract body and send via side-channel.
+                    match response.body.take() {
+                        Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
+                        None => barbacane_plugin_sdk::body::clear_response_body(),
                     }
-                };
 
-                let mut response = instance.dispatch(request);
+                    if let Ok(output) = serde_json::to_vec(&response) {
+                        set_output(&output);
+                    }
 
-                // Extract body and send via side-channel.
-                match response.body.take() {
-                    Some(body) => barbacane_plugin_sdk::body::set_response_body(&body),
-                    None => barbacane_plugin_sdk::body::clear_response_body(),
-                }
-
-                if let Ok(output) = serde_json::to_vec(&response) {
-                    set_output(&output);
-                }
-
-                0
+                    0
+                })
             }
 
             /// Allocate `size` bytes via the plugin's allocator and return the pointer.
