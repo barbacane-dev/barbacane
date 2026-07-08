@@ -9,9 +9,15 @@ use prometheus_client::encoding::text::encode;
 pub const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
 /// Render the metrics registry to Prometheus text format.
+///
+/// Runs on every `/__barbacane/metrics` scrape, so it must never panic: on the
+/// (practically unreachable) encoding error, log and return what was rendered so
+/// far rather than aborting the scrape handler.
 pub fn render_metrics(registry: &MetricsRegistry) -> String {
     let mut buffer = String::new();
-    encode(&mut buffer, &registry.registry).expect("encoding metrics should not fail");
+    if let Err(e) = encode(&mut buffer, &registry.registry) {
+        tracing::error!(error = %e, "failed to encode Prometheus metrics");
+    }
     buffer
 }
 

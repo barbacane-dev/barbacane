@@ -8,12 +8,12 @@
 use opentelemetry::{
     global,
     propagation::{Extractor, Injector, TextMapPropagator},
-    trace::{SpanKind, TraceContextExt, Tracer},
+    trace::{SpanContext, SpanKind, TraceContextExt, TraceFlags, TraceState, Tracer},
     Context, KeyValue,
 };
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
-    trace::{Sampler, TracerProvider},
+    trace::{IdGenerator, RandomIdGenerator, Sampler, TracerProvider},
     Resource,
 };
 use std::collections::HashMap;
@@ -130,10 +130,24 @@ impl TracingContext {
     }
 
     /// Create a new root tracing context (no parent).
+    ///
+    /// Generates a real 16-byte W3C/OTel `TraceId` and installs it as the
+    /// context's span context, so spans created under this context correlate and
+    /// the trace id propagates on outbound requests. A UUID-v4 string is not a
+    /// valid W3C trace id, so it must not be used here.
     pub fn new_root() -> Self {
         let request_id = Uuid::new_v4().to_string();
-        let context = Context::current();
-        let trace_id = Uuid::new_v4().to_string();
+
+        let generator = RandomIdGenerator::default();
+        let span_context = SpanContext::new(
+            generator.new_trace_id(),
+            generator.new_span_id(),
+            TraceFlags::SAMPLED,
+            false,
+            TraceState::default(),
+        );
+        let trace_id = span_context.trace_id().to_string();
+        let context = Context::current().with_remote_span_context(span_context);
 
         Self {
             context,
@@ -303,6 +317,27 @@ mod tests {
         // Should have injected x-request-id
         assert!(headers.contains_key("x-request-id"));
         assert_eq!(headers.get("x-request-id").unwrap(), &ctx.request_id);
+    }
+
+    #[test]
+    fn new_root_has_valid_w3c_trace_id() {
+        let ctx = TracingContext::new_root();
+        // A W3C/OTel trace id is 16 bytes = 32 lowercase hex chars, no dashes
+        // (a UUID-v4 string would be 36 chars with dashes and is invalid here).
+        assert_eq!(ctx.trace_id.len(), 32, "trace_id must be 32 hex chars");
+        assert!(ctx.trace_id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!ctx.trace_id.contains('-'));
+        // Must be non-zero (the all-zero id is the OTel "invalid" sentinel).
+        assert_ne!(ctx.trace_id, "0".repeat(32));
+        // The context's span context carries the same id, so child spans
+        // correlate and it propagates on outbound requests.
+        assert_eq!(
+            ctx.context.span().span_context().trace_id().to_string(),
+            ctx.trace_id
+        );
+
+        // Two roots get distinct ids.
+        assert_ne!(ctx.trace_id, TracingContext::new_root().trace_id);
     }
 
     #[test]
