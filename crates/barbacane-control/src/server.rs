@@ -17,6 +17,11 @@ const STALE_SWEEP_INTERVAL_SECS: u64 = 60;
 /// Data planes not seen for this many minutes are marked offline.
 const STALE_THRESHOLD_MINUTES: i64 = 2;
 
+/// Offline data planes older than this are hard-deleted by the sweep, bounding
+/// unbounded row growth from repeated connect/register/disconnect cycles while
+/// still retaining recent offline history.
+const OFFLINE_RETENTION_MINUTES: i64 = 24 * 60;
+
 /// Server configuration.
 pub struct ServerConfig {
     pub listen_addr: SocketAddr,
@@ -86,6 +91,18 @@ async fn run_stale_sweep(pool: PgPool) {
             }
             Err(e) => {
                 tracing::error!(error = %e, "Failed to sweep stale data planes");
+            }
+        }
+        match repo
+            .delete_offline_older_than(OFFLINE_RETENTION_MINUTES)
+            .await
+        {
+            Ok(0) => {}
+            Ok(count) => {
+                tracing::info!(count, "Deleted long-offline data planes past retention");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to reap offline data planes");
             }
         }
     }

@@ -621,7 +621,17 @@ fn compile_inner(
             // Warn on plaintext secrets in config (E1070): a field the plugin's
             // schema marks `writeOnly` but that holds a literal gets baked into
             // the artifact. Recommend env:// / file:// references.
-            if let Some(fields) = plugin_secret_fields.get(dispatch.name.as_str()) {
+            //
+            // `plugin_secret_fields` is keyed by the normalized plugin name, but
+            // a spec may reference a plugin with a version suffix
+            // (e.g. "jwt-auth@1.0.0"); normalize the reference before lookup so
+            // version-pinned plugins are still scanned.
+            //
+            // Note: `plugin_secret_fields` only contains path-sourced plugins;
+            // URL-sourced plugins carry no `secret_fields` (their schema is not
+            // fetched at compile time), so E1070 cannot cover them.
+            let dispatch_key = crate::manifest::normalize_plugin_name(&dispatch.name);
+            if let Some(fields) = plugin_secret_fields.get(dispatch_key.as_str()) {
                 scan_plaintext_secrets(
                     &dispatch.config,
                     &dispatch.name,
@@ -631,7 +641,8 @@ fn compile_inner(
                 );
             }
             for mw in &middlewares {
-                if let Some(fields) = plugin_secret_fields.get(mw.name.as_str()) {
+                let mw_key = crate::manifest::normalize_plugin_name(&mw.name);
+                if let Some(fields) = plugin_secret_fields.get(mw_key.as_str()) {
                     scan_plaintext_secrets(&mw.config, &mw.name, fields, &location, &mut warnings);
                 }
             }

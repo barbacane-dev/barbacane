@@ -145,6 +145,29 @@ impl DataPlanesRepository {
         Ok(result.rows_affected())
     }
 
+    /// Hard-delete data planes that have been offline beyond the retention
+    /// window. Each WebSocket registration INSERTs a new row that is only marked
+    /// offline (never deleted) on disconnect, so a client holding a valid
+    /// `data-plane:connect` key could loop connect/register/disconnect and grow
+    /// the table without bound. Reaping long-offline rows bounds that growth to
+    /// roughly (reconnect rate x retention window).
+    pub async fn delete_offline_older_than(
+        &self,
+        retention_minutes: i64,
+    ) -> Result<u64, sqlx::Error> {
+        let cutoff = Utc::now() - chrono::Duration::minutes(retention_minutes);
+        let result = sqlx::query(
+            r#"
+            DELETE FROM data_planes
+            WHERE status = 'offline' AND last_seen < $1
+            "#,
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Update the artifact hash reported by a data plane and reset drift status.
     pub async fn update_artifact_hash(
         &self,

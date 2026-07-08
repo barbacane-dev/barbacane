@@ -455,17 +455,42 @@ impl OperationValidator {
         &self,
         query_string: Option<&str>,
     ) -> Result<(), Vec<ValidationError2>> {
-        let param_map: HashMap<String, String> = query_string
+        // Parse pairs, tracking how many times each key occurs. The raw query
+        // string is forwarded verbatim to the dispatcher/upstream, but this
+        // validator only sees the collapsed (last-wins) value — so a repeated
+        // declared parameter is an HTTP-parameter-pollution vector: the check
+        // would pass on one value while a different value the upstream may
+        // consume rides along unvalidated. Reject duplicates of declared query
+        // params rather than validate a value the upstream might not use.
+        let mut param_map: HashMap<String, String> = HashMap::new();
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for pair in query_string
             .unwrap_or("")
             .split('&')
             .filter(|s| !s.is_empty())
-            .filter_map(|pair| {
-                let mut parts = pair.splitn(2, '=');
-                let key = parts.next()?;
-                let value = parts.next().unwrap_or("");
-                Some((percent_decode(key), percent_decode(value)))
+        {
+            let mut parts = pair.splitn(2, '=');
+            let Some(key) = parts.next() else { continue };
+            let value = parts.next().unwrap_or("");
+            let key = percent_decode(key);
+            *counts.entry(key.clone()).or_insert(0) += 1;
+            param_map.insert(key, percent_decode(value));
+        }
+
+        let mut errors: Vec<ValidationError2> = self
+            .query_params
+            .iter()
+            .filter(|p| counts.get(&p.name).copied().unwrap_or(0) > 1)
+            .map(|p| ValidationError2::InvalidParameter {
+                name: p.name.clone(),
+                location: "query".into(),
+                reason: "duplicate query parameter is not allowed".into(),
             })
             .collect();
+        if !errors.is_empty() {
+            errors.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+            return Err(errors);
+        }
 
         validate_params(
             &self.query_params,
@@ -722,6 +747,30 @@ mod tests {
         // Missing optional is OK
         let result = validator.validate_query_params(Some(""));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn duplicate_declared_query_param_is_rejected() {
+        // HTTP parameter pollution: a declared param with an enum constraint is
+        // sent twice. The validator collapses to last-wins ("user", which passes)
+        // while the raw query forwarded to the upstream still carries "admin".
+        // Reject the ambiguity rather than validate a value the upstream may not
+        // use.
+        let schema = serde_json::json!({"type": "string", "enum": ["user"]});
+        let params = vec![make_param("role", "query", false, Some(schema))];
+        let validator = OperationValidator::new(&params, None);
+
+        let result = validator.validate_query_params(Some("role=admin&role=user"));
+        assert!(result.is_err(), "duplicate declared param must be rejected");
+
+        // A single occurrence still validates normally.
+        assert!(validator.validate_query_params(Some("role=user")).is_ok());
+
+        // A duplicated *undeclared* param does not trip the guard (only declared
+        // params carry constraints the divergence could bypass).
+        assert!(validator
+            .validate_query_params(Some("other=1&other=2&role=user"))
+            .is_ok());
     }
 
     #[test]
