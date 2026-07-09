@@ -6,6 +6,7 @@
 //! - Header forwarding
 //! - Configurable timeouts
 
+use barbacane_plugin_sdk::http;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -30,26 +31,6 @@ pub struct HttpUpstreamDispatcher {
 
 fn default_timeout() -> f64 {
     30.0
-}
-
-/// HTTP request format for host_http_call.
-///
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-/// This eliminates the ~3.65x memory overhead of base64 encoding.
-#[derive(serde::Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: u64,
-}
-
-/// HTTP response metadata from host_http_call.
-/// Body is read separately via `read_http_response_body()`.
-#[derive(Deserialize)]
-struct HttpResponse {
-    status: u16,
-    headers: BTreeMap<String, String>,
 }
 
 impl HttpUpstreamDispatcher {
@@ -110,74 +91,42 @@ impl HttpUpstreamDispatcher {
 
         let timeout_ms = (self.timeout * 1000.0) as u64;
 
-        // Send request body via side-channel (avoids base64 encoding).
-        if let Some(ref b) = body {
-            barbacane_plugin_sdk::body::set_http_request_body(b);
-        }
-
-        let http_request = HttpRequest {
+        // Body travels via the side-channel; `http::call` sends it and reads the
+        // response body back the same way.
+        let http_request = http::HttpRequest {
             method,
             url: full_url,
             headers,
-            timeout_ms,
+            timeout_ms: Some(timeout_ms),
         };
 
-        let request_json = match serde_json::to_vec(&http_request) {
-            Ok(j) => j,
-            Err(e) => {
-                let msg = e.to_string();
+        let http_response = match http::call(&http_request, body.as_deref()) {
+            Ok(resp) => resp,
+            Err(http::HttpError::Unreachable) | Err(http::HttpError::Unsupported) => {
                 return self.error_response(
-                    500,
+                    502,
                     "Bad Gateway",
-                    "failed to serialize request",
-                    &msg,
+                    "upstream connection failed",
+                    "host_http_call returned error",
                 );
             }
-        };
-
-        // Call upstream via host_http_call
-        let result_len =
-            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
-
-        if result_len < 0 {
-            return self.error_response(
-                502,
-                "Bad Gateway",
-                "upstream connection failed",
-                "host_http_call returned error",
-            );
-        }
-
-        // Read the response metadata
-        let mut response_buf = vec![0u8; result_len as usize];
-        let bytes_read =
-            unsafe { host_http_read_result(response_buf.as_mut_ptr() as i32, result_len) };
-
-        if bytes_read <= 0 {
-            return self.error_response(
-                502,
-                "Bad Gateway",
-                "upstream connection failed",
-                "failed to read response",
-            );
-        }
-
-        let http_response: HttpResponse = match serde_json::from_slice(
-            &response_buf[..(bytes_read as usize).min(response_buf.len())],
-        ) {
-            Ok(resp) => resp,
-            Err(e) => {
+            Err(http::HttpError::Empty) | Err(http::HttpError::ReadFailed) => {
+                return self.error_response(
+                    502,
+                    "Bad Gateway",
+                    "upstream connection failed",
+                    "failed to read response",
+                );
+            }
+            Err(http::HttpError::InvalidResponse) => {
                 return self.error_response(
                     502,
                     "Bad Gateway",
                     "invalid upstream response",
-                    &e.to_string(),
+                    "failed to parse upstream response",
                 );
             }
         };
-
-        // Read response body from side-channel.
-        let response_body = barbacane_plugin_sdk::body::read_http_response_body();
 
         // Build the response, filtering hop-by-hop headers
         let mut response_headers: BTreeMap<String, String> = BTreeMap::new();
@@ -194,7 +143,7 @@ impl HttpUpstreamDispatcher {
         Response {
             status: http_response.status,
             headers: response_headers,
-            body: response_body,
+            body: http_response.body,
         }
     }
 
@@ -222,24 +171,6 @@ impl HttpUpstreamDispatcher {
             .detail(full_detail)
             .into_response()
     }
-}
-
-// Host function declarations
-#[cfg(target_arch = "wasm32")]
-#[link(wasm_import_module = "barbacane")]
-extern "C" {
-    fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-    fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
-    -1
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
-    0
 }
 
 #[cfg(test)]

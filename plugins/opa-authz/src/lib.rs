@@ -4,6 +4,7 @@
 //! Typically placed after an authentication middleware (jwt-auth, oauth2-auth, etc.)
 //! in the middleware chain so that auth claims are available as OPA input.
 
+use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -42,27 +43,6 @@ fn default_true() -> bool {
 
 fn default_deny_message() -> String {
     "Authorization denied by policy".to_string()
-}
-
-// ---------------------------------------------------------------------------
-// HTTP types for host_http_call
-// ---------------------------------------------------------------------------
-
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-#[derive(Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: Option<u64>,
-}
-
-/// Body is read separately via `read_http_response_body()`.
-#[derive(Deserialize)]
-struct HttpResponse {
-    status: u16,
-    #[allow(dead_code)]
-    headers: BTreeMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,53 +147,33 @@ impl OpaAuthz {
 
     /// POST to the OPA endpoint and return the raw response body.
     fn call_opa(&self, request_json: &str) -> Result<Vec<u8>, OpaError> {
-        let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-        headers.insert("accept".to_string(), "application/json".to_string());
+        let http_request = HttpRequest::new("POST", self.opa_url.clone())
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .timeout_ms((self.timeout * 1000.0) as u64);
 
-        // Send request body via side-channel
-        set_http_request_body(request_json.as_bytes());
+        // Request body travels via the side-channel inside `call`.
+        let response = call(&http_request, Some(request_json.as_bytes())).map_err(|e| match e {
+            HttpError::Unreachable | HttpError::Unsupported => {
+                OpaError::ServiceError("OPA service unreachable".to_string())
+            }
+            HttpError::Empty | HttpError::ReadFailed => {
+                OpaError::ServiceError("failed to read OPA response".to_string())
+            }
+            HttpError::InvalidResponse => {
+                OpaError::ServiceError("invalid response format".to_string())
+            }
+        })?;
 
-        let http_request = HttpRequest {
-            method: "POST".to_string(),
-            url: self.opa_url.clone(),
-            headers,
-            timeout_ms: Some((self.timeout * 1000.0) as u64),
-        };
-
-        let serialized = serde_json::to_vec(&http_request)
-            .map_err(|e| OpaError::ServiceError(format!("request serialization: {}", e)))?;
-
-        let result_len =
-            unsafe { host_http_call(serialized.as_ptr() as i32, serialized.len() as i32) };
-
-        if result_len < 0 {
-            return Err(OpaError::ServiceError(
-                "OPA service unreachable".to_string(),
-            ));
-        }
-
-        let mut buf = vec![0u8; result_len as usize];
-        let bytes_read = unsafe { host_http_read_result(buf.as_mut_ptr() as i32, result_len) };
-
-        if bytes_read <= 0 {
-            return Err(OpaError::ServiceError(
-                "failed to read OPA response".to_string(),
-            ));
-        }
-
-        let http_response: HttpResponse = serde_json::from_slice(&buf[..bytes_read as usize])
-            .map_err(|e| OpaError::ServiceError(format!("invalid response format: {}", e)))?;
-
-        if http_response.status != 200 {
+        if response.status != 200 {
             return Err(OpaError::ServiceError(format!(
                 "OPA returned status {}",
-                http_response.status
+                response.status
             )));
         }
 
-        // Read response body from side-channel
-        read_http_response_body()
+        response
+            .body
             .ok_or_else(|| OpaError::ServiceError("empty OPA response body".to_string()))
     }
 
@@ -261,27 +221,6 @@ impl OpaAuthz {
         .detail(detail)
         .into_response()
     }
-}
-
-// ---------------------------------------------------------------------------
-// Host function declarations
-// ---------------------------------------------------------------------------
-
-#[cfg(target_arch = "wasm32")]
-#[link(wasm_import_module = "barbacane")]
-extern "C" {
-    fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-    fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
-    -1
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
-    0
 }
 
 // ---------------------------------------------------------------------------

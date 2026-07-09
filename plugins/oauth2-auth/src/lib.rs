@@ -3,6 +3,7 @@
 //! Validates Bearer tokens via RFC 7662 token introspection and rejects
 //! unauthenticated requests with 401 Unauthorized or 403 Forbidden.
 
+use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -56,26 +57,6 @@ fn warn_once_no_audience() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn warn_once_no_audience() {}
-
-/// HTTP request format for host_http_call.
-///
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-#[derive(Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: Option<u64>,
-}
-
-/// HTTP response metadata from host_http_call.
-/// Body is read separately via `read_http_response_body()`.
-#[derive(Deserialize)]
-struct HttpResponse {
-    status: u16,
-    #[allow(dead_code)]
-    headers: BTreeMap<String, String>,
-}
 
 /// RFC 7662 Token Introspection Response.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -302,64 +283,31 @@ impl OAuth2Auth {
 
     /// Call the introspection endpoint to validate the token.
     fn introspect_token(&self, token: &str) -> Result<IntrospectionResponse, OAuth2Error> {
-        // Build request headers
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/x-www-form-urlencoded".to_string(),
-        );
-        headers.insert("accept".to_string(), "application/json".to_string());
-
         // Add Basic auth header
         let credentials = format!("{}:{}", self.client_id, self.client_secret);
         let encoded = base64_encode(credentials.as_bytes());
-        headers.insert("authorization".to_string(), format!("Basic {}", encoded));
 
         // Build request body (application/x-www-form-urlencoded)
         let body = format!("token={}", url_encode(token));
 
-        // Send request body via side-channel
-        set_http_request_body(body.as_bytes());
+        let http_request = HttpRequest::new("POST", self.introspection_endpoint.clone())
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("accept", "application/json")
+            .header("authorization", format!("Basic {}", encoded))
+            .timeout_ms((self.timeout * 1000.0) as u64);
 
-        let http_request = HttpRequest {
-            method: "POST".to_string(),
-            url: self.introspection_endpoint.clone(),
-            headers,
-            timeout_ms: Some((self.timeout * 1000.0) as u64),
-        };
-
-        // Serialize request
-        let request_json = serde_json::to_vec(&http_request).map_err(|e| {
-            OAuth2Error::IntrospectionFailed(format!("request serialization: {}", e))
+        // Request body travels via the side-channel inside `call`.
+        let http_response = call(&http_request, Some(body.as_bytes())).map_err(|e| match e {
+            HttpError::Unreachable | HttpError::Unsupported => {
+                OAuth2Error::IntrospectionFailed("connection failed".to_string())
+            }
+            HttpError::Empty | HttpError::ReadFailed => {
+                OAuth2Error::IntrospectionFailed("failed to read response".to_string())
+            }
+            HttpError::InvalidResponse => {
+                OAuth2Error::IntrospectionFailed("invalid response format".to_string())
+            }
         })?;
-
-        // Call introspection endpoint
-        let result_len =
-            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
-
-        if result_len < 0 {
-            return Err(OAuth2Error::IntrospectionFailed(
-                "connection failed".to_string(),
-            ));
-        }
-
-        // Read the response
-        let mut response_buf = vec![0u8; result_len as usize];
-        let bytes_read =
-            unsafe { host_http_read_result(response_buf.as_mut_ptr() as i32, result_len) };
-
-        if bytes_read <= 0 {
-            return Err(OAuth2Error::IntrospectionFailed(
-                "failed to read response".to_string(),
-            ));
-        }
-
-        // Parse the HTTP response
-        let http_response: HttpResponse =
-            serde_json::from_slice(&response_buf[..(bytes_read as usize).min(response_buf.len())])
-                .map_err(|e| {
-                    OAuth2Error::IntrospectionFailed(format!("invalid response format: {}", e))
-                })?;
 
         // Check HTTP status
         if http_response.status != 200 {
@@ -370,7 +318,8 @@ impl OAuth2Auth {
         }
 
         // Read response body from side-channel
-        let body = read_http_response_body()
+        let body = http_response
+            .body
             .ok_or_else(|| OAuth2Error::IntrospectionFailed("empty response body".to_string()))?;
 
         serde_json::from_slice(&body).map_err(|e| {
@@ -478,28 +427,6 @@ fn url_encode(s: &str) -> String {
         }
     }
     result
-}
-
-// Host function declarations (WASM only)
-#[cfg(target_arch = "wasm32")]
-#[link(wasm_import_module = "barbacane")]
-extern "C" {
-    /// Make an HTTP request. Returns the response length, or -1 on error.
-    fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-
-    /// Read the HTTP response into the provided buffer. Returns bytes read.
-    fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-}
-
-// Mock host functions for native tests (not called in pure logic tests)
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
-    -1
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
-    0
 }
 
 #[cfg(test)]

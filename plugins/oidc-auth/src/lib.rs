@@ -4,6 +4,7 @@
 //! JWKS key rotation, and cryptographic signature verification via the
 //! `host_verify_signature` host function.
 
+use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
 use barbacane_plugin_sdk::prelude::*;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
@@ -178,26 +179,6 @@ fn key_is_compatible(key: &Jwk, expected_kty: &str, alg: &str) -> bool {
 struct DiscoveryResponse {
     issuer: String,
     jwks_uri: String,
-}
-
-/// HTTP request format for host_http_call.
-///
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-#[derive(Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: Option<u64>,
-}
-
-/// HTTP response metadata from host_http_call.
-/// Body is read separately via `read_http_response_body()`.
-#[derive(Deserialize)]
-struct HttpResponse {
-    status: u16,
-    #[allow(dead_code)]
-    headers: BTreeMap<String, String>,
 }
 
 /// Signature verification request for host_verify_signature.
@@ -787,44 +768,20 @@ impl OidcAuth {
         }
     }
 
-    /// Make an HTTP GET request via host_http_call.
+    /// Make an HTTP GET request via the SDK HTTP helper.
     /// Returns (status, body) where body is read from the side-channel.
     fn http_get(&self, url: &str) -> Result<(u16, Option<Vec<u8>>), String> {
-        let mut headers = BTreeMap::new();
-        headers.insert("accept".to_string(), "application/json".to_string());
+        let http_request = HttpRequest::new("GET", url.to_string())
+            .header("accept", "application/json")
+            .timeout_ms((self.timeout * 1000.0) as u64);
 
-        let http_request = HttpRequest {
-            method: "GET".to_string(),
-            url: url.to_string(),
-            headers,
-            timeout_ms: Some((self.timeout * 1000.0) as u64),
-        };
+        let response = call(&http_request, None).map_err(|e| match e {
+            HttpError::Unreachable | HttpError::Unsupported => "connection failed".to_string(),
+            HttpError::Empty | HttpError::ReadFailed => "failed to read response".to_string(),
+            HttpError::InvalidResponse => "invalid response format".to_string(),
+        })?;
 
-        let request_json = serde_json::to_vec(&http_request)
-            .map_err(|e| format!("request serialization: {}", e))?;
-
-        let result_len =
-            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
-
-        if result_len < 0 {
-            return Err("connection failed".to_string());
-        }
-
-        let mut response_buf = vec![0u8; result_len as usize];
-        let bytes_read =
-            unsafe { host_http_read_result(response_buf.as_mut_ptr() as i32, result_len) };
-
-        if bytes_read <= 0 {
-            return Err("failed to read response".to_string());
-        }
-
-        let http_response: HttpResponse =
-            serde_json::from_slice(&response_buf[..(bytes_read as usize).min(response_buf.len())])
-                .map_err(|e| format!("invalid response format: {}", e))?;
-
-        let body = read_http_response_body();
-
-        Ok((http_response.status, body))
+        Ok((response.status, response.body))
     }
 
     /// Build the discovery URL from the issuer.
@@ -874,20 +831,8 @@ impl OidcAuth {
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "barbacane")]
 extern "C" {
-    fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-    fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
     fn host_verify_signature(req_ptr: i32, req_len: i32) -> i32;
     fn host_get_unix_timestamp() -> u64;
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
-    -1
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
-    0
 }
 
 #[cfg(not(target_arch = "wasm32"))]
