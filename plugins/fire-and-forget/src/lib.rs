@@ -7,10 +7,11 @@
 //! The outbound HTTP call is best-effort: if the upstream is unreachable
 //! or returns an error, the client still receives the configured response.
 
+use barbacane_plugin_sdk::http;
 #[cfg(target_arch = "wasm32")]
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// Fire-and-forget dispatcher configuration.
@@ -72,11 +73,12 @@ fn default_content_type() -> String {
     "application/json".to_string()
 }
 
-/// HTTP request format for host_http_call.
-///
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-#[derive(Serialize)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+/// Mirror of [`barbacane_plugin_sdk::http::HttpRequest`] used only by the native
+/// test mock to deserialize the request bytes captured by `host::http_call`.
+/// The SDK's own `HttpRequest` is `Serialize`-only, so tests keep this local
+/// `Deserialize` copy.
+#[cfg(test)]
+#[derive(serde::Deserialize)]
 struct HttpRequest {
     method: String,
     url: String,
@@ -97,31 +99,17 @@ impl FireAndForgetDispatcher {
     /// Forward the incoming request to the configured upstream URL.
     /// Errors are logged but never affect the client response.
     fn forward_to_upstream(&self, req: &Request) {
-        // Send request body via side-channel
-        if let Some(ref body) = req.body {
-            set_http_request_body(body);
-        }
-
-        let http_request = HttpRequest {
+        let request = http::HttpRequest {
             method: req.method.clone(),
             url: self.url.clone(),
             headers: req.headers.clone(),
             timeout_ms: Some(self.timeout_ms),
         };
 
-        let request_json = match serde_json::to_vec(&http_request) {
-            Ok(json) => json,
-            Err(e) => {
-                log_message(
-                    2, // WARN
-                    &format!("fire-and-forget: failed to serialize request: {e}"),
-                );
-                return;
-            }
-        };
-
-        // Call upstream — read and discard the response
-        if let Err(()) = host::http_call(&request_json) {
+        // Best-effort: the request body travels via the side-channel inside
+        // `http::call`, and the response is ignored (fire-and-forget). A
+        // connection failure is logged but never affects the client response.
+        if host::http_call(&request, req.body.as_deref()).is_err() {
             log_message(
                 2, // WARN
                 "fire-and-forget: upstream call failed (connection error)",
@@ -158,27 +146,15 @@ impl FireAndForgetDispatcher {
 
 #[cfg(target_arch = "wasm32")]
 mod host {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        #[link_name = "host_http_call"]
-        fn ffi_http_call(req_ptr: i32, req_len: i32) -> i32;
-        #[link_name = "host_http_read_result"]
-        fn ffi_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-
-    /// Make an outbound HTTP request. Returns Ok(()) on success, Err(()) on failure.
-    /// The response is read and discarded (fire-and-forget).
-    pub fn http_call(request_json: &[u8]) -> Result<(), ()> {
-        unsafe {
-            let result_len = ffi_http_call(request_json.as_ptr() as i32, request_json.len() as i32);
-            if result_len < 0 {
-                return Err(());
-            }
-            // Read and discard the response
-            let mut buf = vec![0u8; result_len as usize];
-            ffi_http_read_result(buf.as_mut_ptr() as i32, result_len);
-            Ok(())
-        }
+    /// Forward the request through the shared SDK HTTP helper. The response is
+    /// discarded (fire-and-forget); any transport error maps to `Err(())`.
+    pub fn http_call(
+        request: &barbacane_plugin_sdk::http::HttpRequest,
+        body: Option<&[u8]>,
+    ) -> Result<(), ()> {
+        barbacane_plugin_sdk::http::call(request, body)
+            .map(|_| ())
+            .map_err(|_| ())
     }
 }
 
@@ -192,12 +168,18 @@ mod host {
         static HTTP_CALL_SHOULD_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
-    /// Mock HTTP call: records the request bytes and returns Ok.
-    pub fn http_call(request_json: &[u8]) -> Result<(), ()> {
+    /// Mock HTTP call: serializes and records the request, returns Ok (or Err
+    /// when `set_http_call_should_fail(true)`). Mirrors the shared SDK helper's
+    /// signature so the production code path is identical on native and wasm.
+    pub fn http_call(
+        request: &barbacane_plugin_sdk::http::HttpRequest,
+        _body: Option<&[u8]>,
+    ) -> Result<(), ()> {
         if HTTP_CALL_SHOULD_FAIL.with(|f| f.get()) {
             return Err(());
         }
-        HTTP_CALLS.with(|calls| calls.borrow_mut().push(request_json.to_vec()));
+        let json = serde_json::to_vec(request).unwrap_or_default();
+        HTTP_CALLS.with(|calls| calls.borrow_mut().push(json));
         Ok(())
     }
 

@@ -12,9 +12,10 @@
 //! The plugin SDK's `Response` type uses `Option<Vec<u8>>`, so binary
 //! objects (images, PDFs, etc.) are passed through without data loss.
 
+use barbacane_plugin_sdk::http::{self, HttpError, HttpRequest, HttpResponse};
 use barbacane_plugin_sdk::prelude::*;
 use barbacane_sigv4 as sigv4;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// S3 dispatcher configuration.
@@ -85,25 +86,6 @@ fn default_key_param() -> String {
 
 fn default_timeout() -> f64 {
     30.0
-}
-
-/// HTTP request format for `host_http_call`.
-///
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-#[derive(Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: Option<u64>,
-}
-
-/// HTTP response metadata from `host_http_call`.
-/// Body is read separately via `read_http_response_body()`.
-#[derive(Deserialize)]
-struct HttpResponse {
-    status: u16,
-    headers: BTreeMap<String, String>,
 }
 
 impl S3Dispatcher {
@@ -239,55 +221,42 @@ impl S3Dispatcher {
         body: Option<&[u8]>,
         headers: &BTreeMap<String, String>,
     ) -> Result<(HttpResponse, Option<Vec<u8>>), Response> {
-        if let Some(b) = body {
-            set_http_request_body(b);
-        }
-
         let unix_secs = current_timestamp();
         let http_request =
             self.build_s3_request(bucket, key, method, query, body, headers, unix_secs);
 
-        let request_json = serde_json::to_vec(&http_request).map_err(|e| {
-            self.error_response(
-                500,
-                "Internal Error",
-                "failed to serialize request",
-                &e.to_string(),
-            )
-        })?;
+        // Perform the outbound call via the shared SDK helper. The request body
+        // is sent via the side-channel by `http::call`; the response body is
+        // attached back onto the returned `HttpResponse`.
+        let mut http_response = match http::call(&http_request, body) {
+            Ok(resp) => resp,
+            Err(HttpError::Unreachable) | Err(HttpError::Unsupported) => {
+                return Err(self.error_response(
+                    502,
+                    "Bad Gateway",
+                    "S3 connection failed",
+                    "host_http_call returned error",
+                ));
+            }
+            Err(HttpError::Empty) | Err(HttpError::ReadFailed) => {
+                return Err(self.error_response(
+                    502,
+                    "Bad Gateway",
+                    "S3 connection failed",
+                    "failed to read response",
+                ));
+            }
+            Err(HttpError::InvalidResponse) => {
+                return Err(self.error_response(
+                    502,
+                    "Bad Gateway",
+                    "invalid S3 response",
+                    "failed to parse response",
+                ));
+            }
+        };
 
-        let result_len =
-            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
-
-        if result_len < 0 {
-            return Err(self.error_response(
-                502,
-                "Bad Gateway",
-                "S3 connection failed",
-                "host_http_call returned error",
-            ));
-        }
-
-        let mut response_buf = vec![0u8; result_len as usize];
-        let bytes_read =
-            unsafe { host_http_read_result(response_buf.as_mut_ptr() as i32, result_len) };
-
-        if bytes_read <= 0 {
-            return Err(self.error_response(
-                502,
-                "Bad Gateway",
-                "S3 connection failed",
-                "failed to read response",
-            ));
-        }
-
-        let http_response: HttpResponse =
-            serde_json::from_slice(&response_buf[..(bytes_read as usize).min(response_buf.len())])
-                .map_err(|e| {
-                    self.error_response(502, "Bad Gateway", "invalid S3 response", &e.to_string())
-                })?;
-
-        let response_body = read_http_response_body();
+        let response_body = http_response.body.take();
         Ok((http_response, response_body))
     }
 
@@ -390,29 +359,6 @@ impl S3Dispatcher {
             .detail(full_detail)
             .into_response()
     }
-}
-
-// ── Host function declarations ─────────────────────────────────────────────
-
-#[cfg(target_arch = "wasm32")]
-#[link(wasm_import_module = "barbacane")]
-extern "C" {
-    /// Make an HTTP request. Returns the response length, or -1 on error.
-    fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-
-    /// Read the HTTP response into the provided buffer. Returns bytes read.
-    fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-}
-
-// Native stubs for testing (non-WASM targets)
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
-    -1
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
-    0
 }
 
 // ── Unix timestamp ─────────────────────────────────────────────────────────

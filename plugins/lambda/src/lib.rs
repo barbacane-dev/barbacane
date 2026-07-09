@@ -3,8 +3,9 @@
 //! Invokes AWS Lambda functions via Lambda Function URLs.
 //! Supports passing request headers and body to Lambda.
 
+use barbacane_plugin_sdk::http::{self, HttpError, HttpRequest};
 use barbacane_plugin_sdk::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// Lambda dispatcher configuration.
@@ -29,25 +30,6 @@ fn default_timeout() -> f64 {
 
 fn default_pass_through_headers() -> bool {
     true
-}
-
-/// HTTP request format for host_http_call.
-///
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-#[derive(Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: Option<u64>,
-}
-
-/// HTTP response metadata from host_http_call.
-/// Body is read separately via `read_http_response_body()`.
-#[derive(Deserialize)]
-struct HttpResponse {
-    status: u16,
-    headers: BTreeMap<String, String>,
 }
 
 impl LambdaDispatcher {
@@ -80,12 +62,8 @@ impl LambdaDispatcher {
             headers.insert("content-type".to_string(), "application/json".to_string());
         }
 
-        // Send request body via side-channel (avoids base64 encoding).
-        if let Some(ref b) = req.body {
-            set_http_request_body(b);
-        }
-
-        // Build the HTTP request to Lambda
+        // Build the HTTP request to Lambda. The request body travels via the
+        // SDK side-channel inside `http::call`, not embedded in JSON.
         let http_request = HttpRequest {
             method: req.method.clone(),
             url: self.url.clone(),
@@ -93,47 +71,34 @@ impl LambdaDispatcher {
             timeout_ms: Some((self.timeout * 1000.0) as u64),
         };
 
-        // Serialize request
-        let request_json = match serde_json::to_vec(&http_request) {
-            Ok(json) => json,
-            Err(e) => {
-                return self.error_response(500, "failed to serialize request", &e.to_string());
-            }
-        };
-
-        // Call Lambda via host_http_call
-        let result_len =
-            unsafe { host_http_call(request_json.as_ptr() as i32, request_json.len() as i32) };
-
-        if result_len < 0 {
-            return self.error_response(
-                502,
-                "Lambda invocation failed",
-                "host_http_call returned error",
-            );
-        }
-
-        // Read the response
-        let mut response_buf = vec![0u8; result_len as usize];
-        let bytes_read =
-            unsafe { host_http_read_result(response_buf.as_mut_ptr() as i32, result_len) };
-
-        if bytes_read <= 0 {
-            return self.error_response(502, "Lambda invocation failed", "failed to read response");
-        }
-
-        // Parse the HTTP response
-        let http_response: HttpResponse = match serde_json::from_slice(
-            &response_buf[..(bytes_read as usize).min(response_buf.len())],
-        ) {
+        // Call Lambda via the shared SDK HTTP helper.
+        let http_response = match http::call(&http_request, req.body.as_deref()) {
             Ok(resp) => resp,
-            Err(e) => {
-                return self.error_response(502, "invalid Lambda response", &e.to_string());
+            Err(HttpError::Unreachable) | Err(HttpError::Unsupported) => {
+                return self.error_response(
+                    502,
+                    "Lambda invocation failed",
+                    "host_http_call returned error",
+                );
+            }
+            Err(HttpError::Empty) | Err(HttpError::ReadFailed) => {
+                return self.error_response(
+                    502,
+                    "Lambda invocation failed",
+                    "failed to read response",
+                );
+            }
+            Err(HttpError::InvalidResponse) => {
+                return self.error_response(
+                    502,
+                    "invalid Lambda response",
+                    "failed to parse response",
+                );
             }
         };
 
-        // Read response body from side-channel.
-        let response_body = read_http_response_body();
+        // Read response body attached by `http::call` via the side-channel.
+        let response_body = http_response.body;
 
         // Build the response
         let mut response_headers = http_response.headers;
@@ -163,28 +128,6 @@ impl LambdaDispatcher {
             .detail(detail)
             .into_response()
     }
-}
-
-// Host function declarations
-#[cfg(target_arch = "wasm32")]
-#[link(wasm_import_module = "barbacane")]
-extern "C" {
-    /// Make an HTTP request. Returns the response length, or -1 on error.
-    fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-
-    /// Read the HTTP response into the provided buffer. Returns bytes read.
-    fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-}
-
-// Native stubs for testing
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_call(_req_ptr: i32, _req_len: i32) -> i32 {
-    -1
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_http_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
-    0
 }
 
 #[cfg(test)]

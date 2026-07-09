@@ -7,6 +7,7 @@
 //! Note: The outbound HTTP call is synchronous. For high-throughput
 //! production use, prefer Kafka or NATS dispatchers for log shipping.
 
+use barbacane_plugin_sdk::http;
 #[cfg(target_arch = "wasm32")]
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
@@ -94,10 +95,12 @@ struct ResponseLog {
     body_size: Option<usize>,
 }
 
-/// HTTP request format for host_http_call.
-///
-/// Body travels via side-channel (`set_http_request_body`), not in JSON.
-#[derive(Serialize, Deserialize)]
+/// Mirror of [`barbacane_plugin_sdk::http::HttpRequest`] used only by the native
+/// test mock to deserialize the request bytes captured by `host::http_call`.
+/// The SDK's own `HttpRequest` is `Serialize`-only, so tests keep this local
+/// `Deserialize` copy.
+#[cfg(test)]
+#[derive(Deserialize)]
 struct HttpRequest {
     method: String,
     url: String,
@@ -202,28 +205,16 @@ impl HttpLog {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), self.content_type.clone());
 
-        // Send body via side-channel
-        set_http_request_body(payload.as_bytes());
-
-        let http_request = HttpRequest {
+        let request = http::HttpRequest {
             method: self.method.clone(),
             url: self.endpoint.clone(),
             headers,
             timeout_ms: Some(self.timeout_ms),
         };
 
-        let request_json = match serde_json::to_vec(&http_request) {
-            Ok(json) => json,
-            Err(e) => {
-                log_message(
-                    2, // WARN
-                    &format!("http-log: failed to serialize request: {}", e),
-                );
-                return;
-            }
-        };
-
-        if let Err(()) = host::http_call(&request_json) {
+        // Best-effort: the payload travels via the side-channel inside
+        // `http::call`; a failure is logged but never affects the response.
+        if host::http_call(&request, Some(payload.as_bytes())).is_err() {
             log_message(2, "http-log: failed to send log entry (connection error)");
         }
     }
@@ -285,27 +276,15 @@ mod host {
         }
     }
 
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        #[link_name = "host_http_call"]
-        fn ffi_http_call(req_ptr: i32, req_len: i32) -> i32;
-        #[link_name = "host_http_read_result"]
-        fn ffi_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-
-    /// Make an outbound HTTP request. Returns Ok(()) on success, Err(()) on failure.
-    /// The response body is discarded (fire-and-forget for logging).
-    pub fn http_call(request_json: &[u8]) -> Result<(), ()> {
-        unsafe {
-            let result_len = ffi_http_call(request_json.as_ptr() as i32, request_json.len() as i32);
-            if result_len < 0 {
-                return Err(());
-            }
-            // Read and discard the response
-            let mut buf = vec![0u8; result_len as usize];
-            ffi_http_read_result(buf.as_mut_ptr() as i32, result_len);
-            Ok(())
-        }
+    /// Send the log entry through the shared SDK HTTP helper. The response is
+    /// discarded (best-effort logging); any transport error maps to `Err(())`.
+    pub fn http_call(
+        request: &barbacane_plugin_sdk::http::HttpRequest,
+        body: Option<&[u8]>,
+    ) -> Result<(), ()> {
+        barbacane_plugin_sdk::http::call(request, body)
+            .map(|_| ())
+            .map_err(|_| ())
     }
 }
 
@@ -337,9 +316,15 @@ mod host {
         CONTEXT.with(|ctx| ctx.borrow().get(key).cloned())
     }
 
-    /// Mock HTTP call: records the request bytes and returns Ok.
-    pub fn http_call(request_json: &[u8]) -> Result<(), ()> {
-        HTTP_CALLS.with(|calls| calls.borrow_mut().push(request_json.to_vec()));
+    /// Mock HTTP call: serializes and records the request, returns Ok. Mirrors
+    /// the shared SDK helper's signature so the production code path is identical
+    /// on native and wasm.
+    pub fn http_call(
+        request: &barbacane_plugin_sdk::http::HttpRequest,
+        _body: Option<&[u8]>,
+    ) -> Result<(), ()> {
+        let json = serde_json::to_vec(request).unwrap_or_default();
+        HTTP_CALLS.with(|calls| calls.borrow_mut().push(json));
         Ok(())
     }
 
