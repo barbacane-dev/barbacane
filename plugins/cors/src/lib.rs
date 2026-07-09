@@ -3,6 +3,7 @@
 //! Implements Cross-Origin Resource Sharing (CORS) per the Fetch specification.
 //! Handles preflight OPTIONS requests and adds appropriate CORS headers to responses.
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -318,24 +319,6 @@ fn is_simple_header(header: &str) -> bool {
         header,
         "accept" | "accept-language" | "content-language" | "content-type"
     )
-}
-
-/// Log a message via host_log (WASM only).
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe {
-        host_log(level, msg.as_ptr() as i32, msg.len() as i32);
-    }
-}
-
-/// No-op log function for non-WASM targets.
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {
-    // No-op for tests
 }
 
 /// Store a value in the request context (WASM).

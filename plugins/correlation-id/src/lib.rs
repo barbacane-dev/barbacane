@@ -4,6 +4,7 @@
 //! The correlation ID is passed to upstream services and optionally included
 //! in the response.
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 
@@ -172,23 +173,6 @@ fn generate_uuid() -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn generate_uuid() -> Option<String> {
     mock_host::generate_uuid()
-}
-
-/// Log a message via host_log.
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe {
-        host_log(level, msg.as_ptr() as i32, msg.len() as i32);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {
-    // No-op on native
 }
 
 /// Store a value in the request context.

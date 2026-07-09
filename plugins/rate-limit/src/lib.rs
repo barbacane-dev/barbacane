@@ -3,6 +3,7 @@
 //! Implements rate limiting with IETF draft-ietf-httpapi-ratelimit-headers support.
 //! Uses the host's sliding window rate limiter via host_rate_limit_check.
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 
@@ -232,18 +233,6 @@ fn call_rate_limit_read_result(buf: &mut [u8]) -> i32 {
     unsafe { host_rate_limit_read_result(buf.as_mut_ptr() as i32, buf.len() as i32) }
 }
 
-/// Log a message via host_log.
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe {
-        host_log(level, msg.as_ptr() as i32, msg.len() as i32);
-    }
-}
-
 // ============================================================================
 // Mock host functions (Native)
 // ============================================================================
@@ -292,9 +281,6 @@ fn call_rate_limit_check(key: &str, quota: u32, window_secs: u32) -> i32 {
 fn call_rate_limit_read_result(buf: &mut [u8]) -> i32 {
     mock_host::call_rate_limit_read_result(buf)
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {}
 
 // ============================================================================
 // Tests

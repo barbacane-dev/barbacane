@@ -907,13 +907,8 @@ pub(crate) mod host {
         }
     }
 
-    pub fn log_warn(msg: &str) {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-        }
-        unsafe { host_log(2, msg.as_ptr() as i32, msg.len() as i32) }
-    }
+    // Preserves the original level (2 = INFO) that the local `log_warn` emitted.
+    pub use barbacane_plugin_sdk::log::info as log_warn;
 
     pub fn time_now_ms() -> u64 {
         #[link(wasm_import_module = "barbacane")]

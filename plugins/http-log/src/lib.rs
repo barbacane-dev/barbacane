@@ -7,6 +7,8 @@
 //! Note: The outbound HTTP call is synchronous. For high-throughput
 //! production use, prefer Kafka or NATS dispatchers for log shipping.
 
+#[cfg(target_arch = "wasm32")]
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -243,17 +245,6 @@ mod host {
         unsafe { host_time_now() as u64 }
     }
 
-    /// Log a message via host_log.
-    pub fn log_message(level: i32, msg: &str) {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-        }
-        unsafe {
-            host_log(level, msg.as_ptr() as i32, msg.len() as i32);
-        }
-    }
-
     /// Store a value in the request context.
     pub fn context_set(key: &str, value: &str) {
         #[link(wasm_import_module = "barbacane")]
@@ -383,6 +374,7 @@ mod host {
 fn host_time_now_ms() -> u64 {
     host::time_now_ms()
 }
+#[cfg(not(target_arch = "wasm32"))]
 fn log_message(level: i32, msg: &str) {
     host::log_message(level, msg);
 }

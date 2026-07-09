@@ -30,6 +30,7 @@
 //! The plugin reads `ai.policy` (overridable via `context_key`). When the key
 //! is absent or names an unknown profile, `default_profile` applies.
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use regex::Regex;
 use serde::Deserialize;
@@ -436,15 +437,6 @@ fn context_get(key: &str) -> Option<String> {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe { host_log(level, msg.as_ptr() as i32, msg.len() as i32) }
-}
-
 // ---------------------------------------------------------------------------
 // Native stubs
 // ---------------------------------------------------------------------------
@@ -473,9 +465,6 @@ mod mock_host {
 fn context_get(key: &str) -> Option<String> {
     mock_host::CONTEXT.with(|m| m.borrow().get(key).cloned())
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {}
 
 // ---------------------------------------------------------------------------
 // Tests

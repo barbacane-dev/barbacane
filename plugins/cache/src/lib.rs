@@ -3,6 +3,7 @@
 //! Caches responses based on TTL configuration and vary headers.
 //! Uses the host's response cache via host_cache_get/set.
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -247,18 +248,6 @@ fn call_cache_read_result(buf: &mut [u8]) -> i32 {
     unsafe { host_cache_read_result(buf.as_mut_ptr() as i32, buf.len() as i32) }
 }
 
-/// Log a message via host_log.
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe {
-        host_log(level, msg.as_ptr() as i32, msg.len() as i32);
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 mod mock_host {
     use std::cell::RefCell;
@@ -331,9 +320,6 @@ fn call_cache_read_result(buf: &mut [u8]) -> i32 {
 fn call_cache_set(key: &str, entry_json: &str, ttl_secs: u32) -> i32 {
     mock_host::cache_set(key, entry_json, ttl_secs)
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {}
 
 #[cfg(test)]
 mod tests {
