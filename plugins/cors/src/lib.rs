@@ -299,25 +299,16 @@ impl Cors {
 
     /// Generate forbidden response for invalid CORS request.
     fn forbidden_response(&self, origin: &str) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-        headers.insert("vary".to_string(), "Origin".to_string());
-
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:cors-not-allowed",
-            "title": "CORS Not Allowed",
-            "status": 403,
-            "detail": format!("Origin '{}' is not allowed by CORS policy", origin)
-        });
-
-        Response {
-            status: 403,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        let mut resp = ProblemDetails::new(
+            403,
+            "urn:barbacane:error:cors-not-allowed",
+            "CORS Not Allowed",
+        )
+        .detail(format!("Origin '{}' is not allowed by CORS policy", origin))
+        .into_response();
+        resp.headers
+            .insert("vary".to_string(), "Origin".to_string());
+        resp
     }
 }
 

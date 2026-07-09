@@ -386,24 +386,9 @@ impl S3Dispatcher {
         };
 
         let full_detail = format!("{}: {}", detail, debug);
-        let body = serde_json::json!({
-            "type": error_type,
-            "title": title,
-            "status": status,
-            "detail": full_detail,
-        });
-
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        Response {
-            status,
-            headers,
-            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-        }
+        ProblemDetails::new(status, error_type, title)
+            .detail(full_detail)
+            .into_response()
     }
 }
 

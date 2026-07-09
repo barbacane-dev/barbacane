@@ -36,6 +36,7 @@ dependencies = [
  "barbacane-plugin-macros",
  "base64",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

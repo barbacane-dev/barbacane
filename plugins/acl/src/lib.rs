@@ -122,30 +122,16 @@ impl Acl {
 
     /// Generate a 403 Forbidden response in RFC 9457 problem+json format.
     fn forbidden_response(&self, consumer: Option<&str>) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let mut body = serde_json::json!({
-            "type": "urn:barbacane:error:acl-denied",
-            "title": "Forbidden",
-            "status": 403,
-            "detail": self.message
-        });
+        let mut problem = ProblemDetails::new(403, "urn:barbacane:error:acl-denied", "Forbidden")
+            .detail(self.message.clone());
 
         if !self.hide_consumer_in_errors {
             if let Some(consumer) = consumer {
-                body["consumer"] = serde_json::Value::String(consumer.to_string());
+                problem = problem.with("consumer", consumer.to_string());
             }
         }
 
-        Response {
-            status: 403,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        problem.into_response()
     }
 }
 
