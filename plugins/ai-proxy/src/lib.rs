@@ -281,7 +281,11 @@ impl AiProxy {
         };
         host::context_set(
             protocols::responses::CTX_STORE_DOWNGRADE,
-            if preflight.store_downgrade { "true" } else { "false" },
+            if preflight.store_downgrade {
+                "true"
+            } else {
+                "false"
+            },
         );
 
         let client_model = match extract_client_model(&req.body) {
@@ -626,51 +630,27 @@ pub(crate) fn extract_client_model(body: &Option<Vec<u8>>) -> Option<String> {
 /// provider contracts (OpenAI Chat Completions and Responses both require
 /// `model`) and ADR-0030 §0's caller-owned-model principle.
 pub(crate) fn model_required_response() -> Response {
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:model_required",
-        "title": "Bad Request",
-        "status": 400,
-        "code": "model_required",
-        "detail": "ai-proxy: request body is missing a non-empty `model` field. \
+    ProblemDetails::new(400, "urn:barbacane:error:model_required", "Bad Request")
+        .detail(
+            "ai-proxy: request body is missing a non-empty `model` field. \
                    The gateway does not pick a default model — see ADR-0030 §0.",
-    });
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    Response {
-        status: 400,
-        headers,
-        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-    }
+        )
+        .with("code", "model_required")
+        .into_response()
 }
 
 /// 400 problem+json when `routes` was declared but no entry matches and there
 /// is no `default_target` / flat fallthrough — the operator's catalog doesn't
 /// cover the model the client requested. ADR-0030 §3.
 pub(crate) fn no_route_response(client_model: &str) -> Response {
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:no_route",
-        "title": "Bad Request",
-        "status": 400,
-        "code": "no_route",
-        "detail": format!(
+    ProblemDetails::new(400, "urn:barbacane:error:no_route", "Bad Request")
+        .detail(format!(
             "ai-proxy: no route matched model {:?}. Add a `routes` entry, set `default_target`, \
              or configure a flat `provider`. See ADR-0030 §3.",
             client_model
-        ),
-    });
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    Response {
-        status: 400,
-        headers,
-        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-    }
+        ))
+        .with("code", "no_route")
+        .into_response()
 }
 
 /// 403 problem+json when a resolved target's `allow` / `deny` rules reject
@@ -688,23 +668,10 @@ pub(crate) fn model_not_permitted_response(client_model: &str, reason: PolicyDen
             client_model
         ),
     };
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:model_not_permitted",
-        "title": "Forbidden",
-        "status": 403,
-        "code": "model_not_permitted",
-        "detail": detail,
-    });
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    Response {
-        status: 403,
-        headers,
-        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-    }
+    ProblemDetails::new(403, "urn:barbacane:error:model_not_permitted", "Forbidden")
+        .detail(detail)
+        .with("code", "model_not_permitted")
+        .into_response()
 }
 
 /// Reason a target's catalog policy rejected the client's model.
@@ -819,22 +786,9 @@ pub(crate) fn error_response(status: u16, detail: &str) -> Response {
         502 => ("urn:barbacane:error:upstream-unavailable", "Bad Gateway"),
         _ => ("urn:barbacane:error:internal", "Internal Server Error"),
     };
-    let body = serde_json::json!({
-        "type": error_type,
-        "title": title,
-        "status": status,
-        "detail": detail
-    });
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    Response {
-        status,
-        headers,
-        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-    }
+    ProblemDetails::new(status, error_type, title)
+        .detail(detail)
+        .into_response()
 }
 
 /// Build a JSON labels string with one key-value pair.

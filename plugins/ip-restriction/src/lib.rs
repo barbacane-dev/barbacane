@@ -5,7 +5,6 @@
 
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::net::IpAddr;
 
 /// IP restriction middleware configuration.
@@ -90,25 +89,14 @@ impl IpRestriction {
 
     /// Generate 403 Forbidden response.
     fn forbidden_response(&self, client_ip: &str) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:ip-restricted",
-            "title": "Forbidden",
-            "status": self.status,
-            "detail": self.message,
-            "client_ip": client_ip
-        });
-
-        Response {
-            status: self.status,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        ProblemDetails::new(
+            self.status,
+            "urn:barbacane:error:ip-restricted",
+            "Forbidden",
+        )
+        .detail(self.message.clone())
+        .with("client_ip", client_ip)
+        .into_response()
     }
 }
 
@@ -169,6 +157,7 @@ fn bits_match(a: &[u8], b: &[u8], prefix_len: u8, max_bits: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn test_plugin() -> IpRestriction {
         serde_json::from_value(serde_json::json!({

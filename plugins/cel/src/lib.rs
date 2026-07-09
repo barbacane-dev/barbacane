@@ -169,10 +169,7 @@ impl CelPolicy {
             "query".to_string(),
             str_val(req.query.as_deref().unwrap_or("")),
         );
-        request_map.insert(
-            "body".to_string(),
-            str_val(req.body_str().unwrap_or("")),
-        );
+        request_map.insert("body".to_string(), str_val(req.body_str().unwrap_or("")));
         request_map.insert("body_json".to_string(), parse_body_json(req));
         request_map.insert("client_ip".to_string(), str_val(&req.client_ip));
 
@@ -207,24 +204,9 @@ impl CelPolicy {
 
     /// 403 Forbidden response for policy denial.
     fn denied_response(&self) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:cel-denied",
-            "title": "Forbidden",
-            "status": 403,
-            "detail": self.deny_message
-        });
-
-        Response {
-            status: 403,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        ProblemDetails::new(403, "urn:barbacane:error:cel-denied", "Forbidden")
+            .detail(self.deny_message.as_str())
+            .into_response()
     }
 
     /// problem+json response for `on_match.deny`. The configured `code` becomes
@@ -243,69 +225,36 @@ impl CelPolicy {
             .clone()
             .unwrap_or_else(|| action.code.clone());
 
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let body = serde_json::json!({
-            "type": format!("urn:barbacane:error:{}", action.code),
-            "title": title,
-            "status": status,
-            "code": action.code,
-            "detail": detail,
-        });
-
-        Response {
+        ProblemDetails::new(
             status,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+            format!("urn:barbacane:error:{}", action.code),
+            title,
+        )
+        .detail(detail)
+        .with("code", action.code.clone())
+        .into_response()
     }
 
     /// 500 Internal Server Error for CEL configuration errors (bad expression).
     fn config_error_response(&self, detail: &str) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:cel-config",
-            "title": "Internal Server Error",
-            "status": 500,
-            "detail": detail
-        });
-
-        Response {
-            status: 500,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        ProblemDetails::new(
+            500,
+            "urn:barbacane:error:cel-config",
+            "Internal Server Error",
+        )
+        .detail(detail)
+        .into_response()
     }
 
     /// 500 Internal Server Error for CEL evaluation errors.
     fn eval_error_response(&self, detail: &str) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:cel-evaluation",
-            "title": "Internal Server Error",
-            "status": 500,
-            "detail": detail
-        });
-
-        Response {
-            status: 500,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        ProblemDetails::new(
+            500,
+            "urn:barbacane:error:cel-evaluation",
+            "Internal Server Error",
+        )
+        .detail(detail)
+        .into_response()
     }
 }
 
@@ -339,7 +288,12 @@ fn empty_cel_map() -> cel::Value {
 /// would let an attacker take down every downstream policy by sending one bad byte.
 fn parse_body_json(req: &Request) -> cel::Value {
     let content_type = match req.headers.get("content-type") {
-        Some(v) => v.split(';').next().unwrap_or("").trim().to_ascii_lowercase(),
+        Some(v) => v
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase(),
         None => return empty_cel_map(),
     };
     let is_json = content_type == "application/json"
@@ -519,7 +473,10 @@ mod tests {
         }
     }
 
-    fn create_config_with_on_match(expression: &str, set_context: BTreeMap<String, String>) -> CelPolicy {
+    fn create_config_with_on_match(
+        expression: &str,
+        set_context: BTreeMap<String, String>,
+    ) -> CelPolicy {
         CelPolicy {
             expression: expression.to_string(),
             deny_message: default_deny_message(),
@@ -1022,9 +979,9 @@ mod tests {
         // vacuum validator doesn't recurse into on_match.deny — so the regex
         // is enforced in Rust at first-request time. Returns a config error.
         for bad in [
-            "Bad-Code",          // hyphen
-            "BadCode",           // PascalCase
-            "1leading_digit",    // digit start
+            "Bad-Code",       // hyphen
+            "BadCode",        // PascalCase
+            "1leading_digit", // digit start
             "_leading_underscore",
             "has space",
             "",
@@ -1056,12 +1013,7 @@ mod tests {
 
     #[test]
     fn on_match_deny_accepts_valid_snake_case_codes() {
-        for ok in [
-            "model_not_permitted",
-            "x",
-            "a1",
-            "z9_a_b_c",
-        ] {
+        for ok in ["model_not_permitted", "x", "a1", "z9_a_b_c"] {
             let mut config = CelPolicy {
                 expression: "true".to_string(),
                 deny_message: default_deny_message(),
@@ -1166,7 +1118,9 @@ mod tests {
 
         let warnings = host::take_warnings();
         assert!(
-            warnings.iter().any(|w| w.contains("could not be parsed as JSON")),
+            warnings
+                .iter()
+                .any(|w| w.contains("could not be parsed as JSON")),
             "expected a parse-failure warning, got {:?}",
             warnings
         );
@@ -1347,7 +1301,10 @@ mod tests {
         }
 
         let context = host::get_context();
-        assert_eq!(context.get("ai.target").map(|s| s.as_str()), Some("premium"));
+        assert_eq!(
+            context.get("ai.target").map(|s| s.as_str()),
+            Some("premium")
+        );
     }
 
     #[test]
@@ -1360,7 +1317,9 @@ mod tests {
 
         match config.on_request(req) {
             Action::Continue(_) => {} // no 403 — routing mode
-            Action::ShortCircuit(resp) => panic!("expected continue in routing mode, got {}", resp.status),
+            Action::ShortCircuit(resp) => {
+                panic!("expected continue in routing mode, got {}", resp.status)
+            }
         }
 
         // Context was NOT set (expression was false)
@@ -1380,7 +1339,10 @@ mod tests {
         let _ = config.on_request(req);
 
         let context = host::get_context();
-        assert_eq!(context.get("ai.target").map(|s| s.as_str()), Some("premium"));
+        assert_eq!(
+            context.get("ai.target").map(|s| s.as_str()),
+            Some("premium")
+        );
         assert_eq!(context.get("ai.priority").map(|s| s.as_str()), Some("high"));
     }
 
@@ -1397,7 +1359,10 @@ mod tests {
         let config: CelPolicy = serde_json::from_str(json).expect("should parse");
         assert!(config.on_match.is_some());
         let on_match = config.on_match.unwrap();
-        assert_eq!(on_match.set_context.get("ai.target").map(|s| s.as_str()), Some("premium"));
+        assert_eq!(
+            on_match.set_context.get("ai.target").map(|s| s.as_str()),
+            Some("premium")
+        );
     }
 
     #[test]

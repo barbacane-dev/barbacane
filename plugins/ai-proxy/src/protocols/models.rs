@@ -29,7 +29,7 @@
 //!   their `specs/` folder. Tracked as PR-6 in the implementation plan.
 
 use crate::providers::openai::openai_headers;
-use crate::{build_response, http_call, host, AiProxy, HttpRequest, Provider, Response};
+use crate::{build_response, host, http_call, AiProxy, HttpRequest, Provider, Response};
 use barbacane_plugin_sdk::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -84,17 +84,11 @@ pub(crate) fn handle(plugin: &AiProxy, req: &Request) -> Response {
     if !warnings.is_empty() {
         let obj = body.as_object_mut().expect("object literal");
         obj.insert("partial".to_string(), serde_json::Value::Bool(true));
-        obj.insert(
-            "warnings".to_string(),
-            serde_json::Value::Array(warnings),
-        );
+        obj.insert("warnings".to_string(), serde_json::Value::Array(warnings));
     }
 
     let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/json".to_string(),
-    );
+    headers.insert("content-type".to_string(), "application/json".to_string());
     Response {
         status: 200,
         headers,
@@ -132,10 +126,10 @@ fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
     let mut out: Vec<UpstreamProvider> = Vec::new();
 
     let push = |provider: &Provider,
-                    api_key: Option<&str>,
-                    base_url: Option<&str>,
-                    seen: &mut BTreeSet<(String, String)>,
-                    out: &mut Vec<UpstreamProvider>| {
+                api_key: Option<&str>,
+                base_url: Option<&str>,
+                seen: &mut BTreeSet<(String, String)>,
+                out: &mut Vec<UpstreamProvider>| {
         let resolved_base = base_url
             .filter(|s| !s.is_empty())
             .map(String::from)
@@ -205,10 +199,7 @@ fn fetch_provider_models(
         Provider::Anthropic => {
             let url = format!("{}/v1/models", upstream.base_url.trim_end_matches('/'));
             let mut h = BTreeMap::new();
-            h.insert(
-                "content-type".to_string(),
-                "application/json".to_string(),
-            );
+            h.insert("content-type".to_string(), "application/json".to_string());
             h.insert(
                 "anthropic-version".to_string(),
                 crate::providers::anthropic::ANTHROPIC_API_VERSION.to_string(),
@@ -254,11 +245,10 @@ fn fetch_provider_models(
     }
 
     let body_str = resp.body_str().unwrap_or("");
-    let body: serde_json::Value =
-        serde_json::from_str(body_str).map_err(|e| UpstreamFailure {
-            status: resp.status,
-            detail: format!("invalid JSON from upstream: {}", e),
-        })?;
+    let body: serde_json::Value = serde_json::from_str(body_str).map_err(|e| UpstreamFailure {
+        status: resp.status,
+        detail: format!("invalid JSON from upstream: {}", e),
+    })?;
 
     Ok(translate_models_response(upstream.provider.clone(), &body))
 }
@@ -296,9 +286,8 @@ pub(crate) fn translate_models_response(
                 // Normalize so clients can group consistently.
                 let mut o = item;
                 if let Some(obj) = o.as_object_mut() {
-                    obj.entry("owned_by".to_string()).or_insert_with(|| {
-                        serde_json::Value::String(provider.name().to_string())
-                    });
+                    obj.entry("owned_by".to_string())
+                        .or_insert_with(|| serde_json::Value::String(provider.name().to_string()));
                 }
                 o
             })
@@ -326,24 +315,16 @@ pub(crate) fn translate_models_response(
 // ---------------------------------------------------------------------------
 
 fn method_not_allowed_response() -> Response {
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:method_not_allowed",
-        "title": "Method Not Allowed",
-        "status": 405,
-        "code": "method_not_allowed",
-        "detail": "ai-proxy: /v1/models accepts GET only.",
-    });
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    headers.insert("allow".to_string(), "GET".to_string());
-    Response {
-        status: 405,
-        headers,
-        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-    }
+    let mut resp = ProblemDetails::new(
+        405,
+        "urn:barbacane:error:method_not_allowed",
+        "Method Not Allowed",
+    )
+    .detail("ai-proxy: /v1/models accepts GET only.")
+    .with("code", "method_not_allowed")
+    .into_response();
+    resp.headers.insert("allow".to_string(), "GET".to_string());
+    resp
 }
 
 #[cfg(test)]
@@ -533,8 +514,7 @@ mod tests {
         };
         let resp = handle(&plugin, &req);
         assert_eq!(resp.status, 405);
-        let body: serde_json::Value =
-            serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["code"], "method_not_allowed");
         assert_eq!(resp.headers.get("allow").map(|s| s.as_str()), Some("GET"));
     }

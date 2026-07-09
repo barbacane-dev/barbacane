@@ -6,7 +6,6 @@
 
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 /// Bot detection middleware configuration.
 #[barbacane_middleware]
@@ -93,34 +92,22 @@ impl BotDetection {
 
     /// Build the blocked response.
     fn blocked_response(&self, user_agent: Option<&str>) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let mut body = serde_json::json!({
-            "type": "urn:barbacane:error:bot-detected",
-            "title": "Forbidden",
-            "status": self.status,
-            "detail": self.message,
-        });
+        let mut problem =
+            ProblemDetails::new(self.status, "urn:barbacane:error:bot-detected", "Forbidden")
+                .detail(self.message.clone());
 
         if let Some(ua) = user_agent {
-            body["user_agent"] = serde_json::Value::String(ua.to_string());
+            problem = problem.with("user_agent", ua.to_string());
         }
 
-        Response {
-            status: self.status,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        problem.into_response()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn make_request(ua: Option<&str>) -> Request {
         let mut headers = BTreeMap::new();

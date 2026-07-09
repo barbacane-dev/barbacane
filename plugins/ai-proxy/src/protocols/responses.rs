@@ -22,7 +22,7 @@
 
 use crate::providers::openai::{openai_headers, openai_url};
 use crate::{
-    error_response, host, http_call, host_http_stream, AiProxy, HttpRequest, Provider, Response,
+    error_response, host, host_http_stream, http_call, AiProxy, HttpRequest, Provider, Response,
     TargetConfig,
 };
 use barbacane_plugin_sdk::prelude::*;
@@ -56,7 +56,11 @@ impl ResponsesPreflight {
             Ok(v) => v,
             // Malformed JSON — let downstream handlers handle their own
             // shape errors (the dispatch layer doesn't try to parse here).
-            Err(_) => return Ok(Self { store_downgrade: false }),
+            Err(_) => {
+                return Ok(Self {
+                    store_downgrade: false,
+                })
+            }
         };
 
         if v.get("previous_response_id").is_some()
@@ -90,7 +94,9 @@ pub(crate) fn handle(
 ) -> Result<Response, String> {
     match target.provider {
         Provider::OpenAI => openai_passthrough(plugin, target, req, streaming),
-        Provider::Ollama => Ok(responses_not_supported_for_provider_response(Provider::Ollama)),
+        Provider::Ollama => Ok(responses_not_supported_for_provider_response(
+            Provider::Ollama,
+        )),
         Provider::Anthropic => {
             // Parse the body for translation. The preflight already confirmed
             // `previous_response_id` is absent and stashed `store_downgrade`
@@ -104,12 +110,8 @@ pub(crate) fn handle(
                 .map(|v| v == "true")
                 .unwrap_or(true);
 
-            let translation = ResponsesToAnthropic::translate(
-                &body,
-                client_model,
-                streaming,
-                plugin.max_tokens,
-            )?;
+            let translation =
+                ResponsesToAnthropic::translate(&body, client_model, streaming, plugin.max_tokens)?;
 
             // Buffered Anthropic call — true SSE translation deferred per
             // ADR-0030 §2; mirror the Chat Completions buffering behavior.
@@ -118,7 +120,8 @@ pub(crate) fn handle(
                     "ai-proxy: Anthropic streaming for Responses not yet supported; buffering response",
                 );
             }
-            let raw_resp = plugin.anthropic_messages_call_raw(target, translation.body.as_bytes())?;
+            let raw_resp =
+                plugin.anthropic_messages_call_raw(target, translation.body.as_bytes())?;
 
             // 4xx/5xx pass through as-is (don't mangle upstream errors).
             if !(200..300).contains(&raw_resp.status) {
@@ -132,7 +135,11 @@ pub(crate) fn handle(
             // operators can quantify both "this client sends store: true" and
             // "this client sends reasoning items we dropped".
             let mut headers = raw_resp.headers;
-            attach_warnings(&mut headers, store_downgrade, translation.dropped_reasoning_count > 0);
+            attach_warnings(
+                &mut headers,
+                store_downgrade,
+                translation.dropped_reasoning_count > 0,
+            );
 
             if store_downgrade {
                 host::metric_counter_inc(
@@ -195,8 +202,7 @@ fn openai_passthrough(
         // we'd need to parse and rewrite mid-stream. True SSE handling is
         // already deferred for both protocols — see ADR-0030 §2 "Streaming".
         let req_json = serde_json::to_vec(&http_req).map_err(|e| e.to_string())?;
-        let result =
-            unsafe { host_http_stream(req_json.as_ptr() as i32, req_json.len() as i32) };
+        let result = unsafe { host_http_stream(req_json.as_ptr() as i32, req_json.len() as i32) };
         if result < 0 {
             return Err("upstream stream failed".to_string());
         }
@@ -301,7 +307,11 @@ impl ResponsesToAnthropic {
                         }
                     } else {
                         if current_role.as_deref() != Some(role) {
-                            flush_message(current_role.as_deref(), &mut current_blocks, &mut messages);
+                            flush_message(
+                                current_role.as_deref(),
+                                &mut current_blocks,
+                                &mut messages,
+                            );
                             current_role = Some(role.to_string());
                         }
                         current_blocks.extend(blocks);
@@ -379,7 +389,10 @@ impl ResponsesToAnthropic {
             .unwrap_or(4096);
 
         let mut anthropic = serde_json::Map::new();
-        anthropic.insert("model".to_string(), serde_json::Value::String(client_model.to_string()));
+        anthropic.insert(
+            "model".to_string(),
+            serde_json::Value::String(client_model.to_string()),
+        );
         anthropic.insert("messages".to_string(), serde_json::Value::Array(messages));
         if !system_parts.is_empty() {
             anthropic.insert(
@@ -441,7 +454,10 @@ fn build_text_or_array_blocks(value: Option<&serde_json::Value>) -> Vec<serde_js
         Some(serde_json::Value::Array(parts)) => parts
             .iter()
             .filter_map(|part| {
-                let pt = part.get("type").and_then(|v| v.as_str()).unwrap_or("input_text");
+                let pt = part
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("input_text");
                 match pt {
                     "input_text" | "text" => part
                         .get("text")
@@ -663,51 +679,35 @@ fn attach_warnings(
 // ---------------------------------------------------------------------------
 
 fn previous_response_id_not_supported_response() -> Response {
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:previous_response_id_not_supported",
-        "title": "Bad Request",
-        "status": 400,
-        "code": "previous_response_id_not_supported",
-        "detail": "ai-proxy: this gateway is stateless. \
+    ProblemDetails::new(
+        400,
+        "urn:barbacane:error:previous_response_id_not_supported",
+        "Bad Request",
+    )
+    .detail(
+        "ai-proxy: this gateway is stateless. \
                    `previous_response_id` requires server-side conversation \
                    storage that ADR-0030 §2 explicitly defers. Resend the \
                    full `input[]` each turn.",
-    });
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    Response {
-        status: 400,
-        headers,
-        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-    }
+    )
+    .with("code", "previous_response_id_not_supported")
+    .into_response()
 }
 
 fn responses_not_supported_for_provider_response(provider: Provider) -> Response {
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:responses_not_supported_for_provider",
-        "title": "Bad Request",
-        "status": 400,
-        "code": "responses_not_supported_for_provider",
-        "detail": format!(
-            "ai-proxy: provider {:?} does not implement the OpenAI Responses API \
+    ProblemDetails::new(
+        400,
+        "urn:barbacane:error:responses_not_supported_for_provider",
+        "Bad Request",
+    )
+    .detail(format!(
+        "ai-proxy: provider {:?} does not implement the OpenAI Responses API \
              (no upstream surface to translate to or passthrough). Use \
              `/v1/chat/completions` instead, or route to OpenAI/Anthropic.",
-            provider.name()
-        ),
-    });
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    Response {
-        status: 400,
-        headers,
-        body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-    }
+        provider.name()
+    ))
+    .with("code", "responses_not_supported_for_provider")
+    .into_response()
 }
 
 // Re-export so dispatch can use the same helper without duplicating the
@@ -741,8 +741,7 @@ mod tests {
             Err(r) => r,
         };
         assert_eq!(resp.status, 400);
-        let body: serde_json::Value =
-            serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["code"], "previous_response_id_not_supported");
         assert_eq!(
             body["type"],
@@ -761,13 +760,21 @@ mod tests {
     #[test]
     fn preflight_store_true_triggers_downgrade() {
         let body = Some(br#"{"input":[],"store":true}"#.to_vec());
-        assert!(ResponsesPreflight::from_body(&body).unwrap().store_downgrade);
+        assert!(
+            ResponsesPreflight::from_body(&body)
+                .unwrap()
+                .store_downgrade
+        );
     }
 
     #[test]
     fn preflight_store_false_skips_downgrade() {
         let body = Some(br#"{"input":[],"store":false}"#.to_vec());
-        assert!(!ResponsesPreflight::from_body(&body).unwrap().store_downgrade);
+        assert!(
+            !ResponsesPreflight::from_body(&body)
+                .unwrap()
+                .store_downgrade
+        );
     }
 
     #[test]
@@ -775,7 +782,11 @@ mod tests {
         // OpenAI server-side default for store is true; clients that don't
         // send it expect server-side persistence. We downgrade.
         let body = Some(br#"{"input":[]}"#.to_vec());
-        assert!(ResponsesPreflight::from_body(&body).unwrap().store_downgrade);
+        assert!(
+            ResponsesPreflight::from_body(&body)
+                .unwrap()
+                .store_downgrade
+        );
     }
 
     // --- Responses → Anthropic translation ---
@@ -788,9 +799,8 @@ mod tests {
 
     #[test]
     fn translate_in_input_text_becomes_text_block() {
-        let res = translate_in(
-            r#"{"input":[{"type":"input_text","role":"user","content":"Hello"}]}"#,
-        );
+        let res =
+            translate_in(r#"{"input":[{"type":"input_text","role":"user","content":"Hello"}]}"#);
         let body: serde_json::Value = serde_json::from_str(&res.body).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 1);
@@ -1035,7 +1045,11 @@ mod tests {
             r#"{"id":"msg","model":"x","content":[],"usage":{"input_tokens":0,"output_tokens":0}}"#,
         );
         let id = v["id"].as_str().unwrap();
-        assert!(id.starts_with("resp_"), "id should start with resp_, got {}", id);
+        assert!(
+            id.starts_with("resp_"),
+            "id should start with resp_, got {}",
+            id
+        );
         // After the prefix is a 36-character UUID dashed-hex form.
         let uuid_part = id.trim_start_matches("resp_");
         assert_eq!(uuid_part.len(), 36, "{}", uuid_part);
@@ -1076,8 +1090,7 @@ mod tests {
     fn responses_not_supported_for_provider_shape() {
         let resp = responses_not_supported_for_provider_response(Provider::Ollama);
         assert_eq!(resp.status, 400);
-        let body: serde_json::Value =
-            serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["code"], "responses_not_supported_for_provider");
         assert_eq!(
             body["type"],
@@ -1122,4 +1135,3 @@ mod tests {
         assert!(headers.get("warning").is_none());
     }
 }
-

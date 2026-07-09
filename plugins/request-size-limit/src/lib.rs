@@ -5,7 +5,6 @@
 
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 /// Request size limit middleware configuration.
 #[barbacane_middleware]
@@ -62,33 +61,23 @@ impl RequestSizeLimit {
 
     /// Generate 413 Payload Too Large response.
     fn payload_too_large_response(&self, actual_size: u64) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:payload-too-large",
-            "title": "Payload Too Large",
-            "status": 413,
-            "detail": format!(
-                "Request body size {} bytes exceeds maximum allowed size of {} bytes.",
-                actual_size, self.max_bytes
-            )
-        });
-
-        Response {
-            status: 413,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        ProblemDetails::new(
+            413,
+            "urn:barbacane:error:payload-too-large",
+            "Payload Too Large",
+        )
+        .detail(format!(
+            "Request body size {} bytes exceeds maximum allowed size of {} bytes.",
+            actual_size, self.max_bytes
+        ))
+        .into_response()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn test_plugin() -> RequestSizeLimit {
         serde_json::from_value(serde_json::json!({

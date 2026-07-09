@@ -249,20 +249,26 @@ impl AiTokenLimit {
         profile: &TokenProfile,
         result: &RateLimitResult,
     ) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
+        let mut resp = ProblemDetails::new(
+            429,
+            "urn:barbacane:error:ai-token-limit-exceeded",
+            "Too Many Requests",
+        )
+        .detail(format!(
+            "Token budget exhausted under profile '{}' (quota: {} tokens per {} seconds).",
+            profile_name, profile.quota, profile.window
+        ))
+        .with("profile", profile_name)
+        .into_response();
 
-        headers.insert(
+        resp.headers.insert(
             "ratelimit-policy".to_string(),
             format!(
                 "{}-{};q={};w={}",
                 self.policy_name, profile_name, profile.quota, profile.window
             ),
         );
-        headers.insert(
+        resp.headers.insert(
             "ratelimit".to_string(),
             format!(
                 "limit={}, remaining=0, reset={}",
@@ -270,25 +276,11 @@ impl AiTokenLimit {
             ),
         );
         if let Some(retry_after) = result.retry_after {
-            headers.insert("retry-after".to_string(), retry_after.to_string());
+            resp.headers
+                .insert("retry-after".to_string(), retry_after.to_string());
         }
 
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:ai-token-limit-exceeded",
-            "title": "Too Many Requests",
-            "status": 429,
-            "detail": format!(
-                "Token budget exhausted under profile '{}' (quota: {} tokens per {} seconds).",
-                profile_name, profile.quota, profile.window
-            ),
-            "profile": profile_name,
-        });
-
-        Response {
-            status: 429,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        resp
     }
 }
 
@@ -299,22 +291,13 @@ impl AiTokenLimit {
 /// 503 response returned when the host rate limiter is unavailable and the
 /// plugin is configured to fail closed (the default).
 fn unavailable_response() -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-token-limit-unavailable",
-        "title": "Service Unavailable",
-        "status": 503,
-        "detail": "Token-budget limiter is unavailable; request rejected (fail closed).",
-    });
-    Response {
-        status: 503,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        503,
+        "urn:barbacane:error:ai-token-limit-unavailable",
+        "Service Unavailable",
+    )
+    .detail("Token-budget limiter is unavailable; request rejected (fail closed).")
+    .into_response()
 }
 
 /// 500 response returned when `default_profile` isn't in the `profiles` map.
@@ -329,25 +312,16 @@ fn misconfig_response(default_profile: &str) -> Response {
             default_profile
         ),
     );
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-token-limit-misconfigured",
-        "title": "Internal Server Error",
-        "status": 500,
-        "detail": format!(
-            "ai-token-limit default_profile '{}' does not exist in the profiles map; fix the plugin configuration.",
-            default_profile
-        ),
-    });
-    Response {
-        status: 500,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        500,
+        "urn:barbacane:error:ai-token-limit-misconfigured",
+        "Internal Server Error",
+    )
+    .detail(format!(
+        "ai-token-limit default_profile '{}' does not exist in the profiles map; fix the plugin configuration.",
+        default_profile
+    ))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------

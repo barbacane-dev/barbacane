@@ -239,47 +239,29 @@ impl AiResponseGuard {
 // ---------------------------------------------------------------------------
 
 fn misconfig_response(default_profile: &str) -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-response-guard-misconfigured",
-        "title": "Internal Server Error",
-        "status": 500,
-        "detail": format!(
-            "ai-response-guard default_profile '{}' does not exist in the profiles map; fix the plugin configuration.",
-            default_profile
-        ),
-    });
-    Response {
-        status: 500,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        500,
+        "urn:barbacane:error:ai-response-guard-misconfigured",
+        "Internal Server Error",
+    )
+    .detail(format!(
+        "ai-response-guard default_profile '{}' does not exist in the profiles map; fix the plugin configuration.",
+        default_profile
+    ))
+    .into_response()
 }
 
 fn regex_compile_error_response(profile_name: &str, detail: &str) -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-response-guard-misconfigured",
-        "title": "Internal Server Error",
-        "status": 500,
-        "detail": format!(
-            "ai-response-guard profile '{}' has an invalid regex: {}",
-            profile_name, detail
-        ),
-    });
-    Response {
-        status: 500,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        500,
+        "urn:barbacane:error:ai-response-guard-misconfigured",
+        "Internal Server Error",
+    )
+    .detail(format!(
+        "ai-response-guard profile '{}' has an invalid regex: {}",
+        profile_name, detail
+    ))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -323,22 +305,13 @@ fn apply_redactions(input: &str, rules: &[CompiledRedact]) -> String {
 // ---------------------------------------------------------------------------
 
 fn blocked_response() -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-response-blocked",
-        "title": "Bad Gateway",
-        "status": 502,
-        "detail": "Upstream response was blocked by content policy.",
-    });
-    Response {
-        status: 502,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        502,
+        "urn:barbacane:error:ai-response-blocked",
+        "Bad Gateway",
+    )
+    .detail("Upstream response was blocked by content policy.")
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------

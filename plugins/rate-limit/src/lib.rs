@@ -5,7 +5,6 @@
 
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 /// Rate limit middleware configuration.
 #[barbacane_middleware]
@@ -162,22 +161,13 @@ impl RateLimit {
     /// Generate a 503 response used when the limiter is unavailable and the
     /// plugin is configured to fail closed.
     fn unavailable_response(&self) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:rate-limiter-unavailable",
-            "title": "Service Unavailable",
-            "status": 503,
-            "detail": "Rate limiter is unavailable; request rejected (fail closed)."
-        });
-        Response {
-            status: 503,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        ProblemDetails::new(
+            503,
+            "urn:barbacane:error:rate-limiter-unavailable",
+            "Service Unavailable",
+        )
+        .detail("Rate limiter is unavailable; request rejected (fail closed).")
+        .into_response()
     }
 
     /// Generate 429 Too Many Requests response.
@@ -186,15 +176,21 @@ impl RateLimit {
         result: &RateLimitResult,
         policy_header: &str,
     ) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
+        let mut resp = ProblemDetails::new(
+            429,
+            "urn:barbacane:error:rate-limit-exceeded",
+            "Too Many Requests",
+        )
+        .detail(format!(
+            "Rate limit exceeded. Limit: {} requests per {} seconds.",
+            self.quota, self.window
+        ))
+        .into_response();
 
         // IETF draft rate limit headers
-        headers.insert("ratelimit-policy".to_string(), policy_header.to_string());
-        headers.insert(
+        resp.headers
+            .insert("ratelimit-policy".to_string(), policy_header.to_string());
+        resp.headers.insert(
             "ratelimit".to_string(),
             format!(
                 "limit={}, remaining=0, reset={}",
@@ -204,24 +200,11 @@ impl RateLimit {
 
         // Retry-After header
         if let Some(retry_after) = result.retry_after {
-            headers.insert("retry-after".to_string(), retry_after.to_string());
+            resp.headers
+                .insert("retry-after".to_string(), retry_after.to_string());
         }
 
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:rate-limit-exceeded",
-            "title": "Too Many Requests",
-            "status": 429,
-            "detail": format!(
-                "Rate limit exceeded. Limit: {} requests per {} seconds.",
-                self.quota, self.window
-            )
-        });
-
-        Response {
-            status: 429,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        resp
     }
 }
 
@@ -320,6 +303,7 @@ fn log_message(_level: i32, _msg: &str) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_extract_partition_key_client_ip_from_x_forwarded_for() {

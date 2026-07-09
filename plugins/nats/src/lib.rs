@@ -178,24 +178,9 @@ impl NatsDispatcher {
             _ => "urn:barbacane:error:internal",
         };
 
-        let body = serde_json::json!({
-            "type": error_type,
-            "title": title,
-            "status": status,
-            "detail": detail
-        });
-
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        Response {
-            status,
-            headers,
-            body: Some(serde_json::to_vec(&body).unwrap_or_default()),
-        }
+        ProblemDetails::new(status, error_type, title)
+            .detail(detail)
+            .into_response()
     }
 }
 

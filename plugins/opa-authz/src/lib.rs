@@ -240,51 +240,26 @@ impl OpaAuthz {
 
     /// 403 Forbidden response for policy denial.
     fn denied_response(&self) -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
-
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:opa-denied",
-            "title": "Forbidden",
-            "status": 403,
-            "detail": self.deny_message
-        });
-
-        Response {
-            status: 403,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        ProblemDetails::new(403, "urn:barbacane:error:opa-denied", "Forbidden")
+            .detail(self.deny_message.clone())
+            .into_response()
     }
 
     /// 503 Service Unavailable response for OPA errors.
     fn error_response(&self, error: &OpaError) -> Response {
         let status = error.status_code();
-        let mut headers = BTreeMap::new();
-        headers.insert(
-            "content-type".to_string(),
-            "application/problem+json".to_string(),
-        );
 
         let detail = match error {
             OpaError::ServiceError(msg) => msg.clone(),
         };
 
-        let body = serde_json::json!({
-            "type": "urn:barbacane:error:opa-unavailable",
-            "title": "Service Unavailable",
-            "status": status,
-            "detail": detail
-        });
-
-        Response {
+        ProblemDetails::new(
             status,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+            "urn:barbacane:error:opa-unavailable",
+            "Service Unavailable",
+        )
+        .detail(detail)
+        .into_response()
     }
 }
 

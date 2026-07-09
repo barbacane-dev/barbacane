@@ -306,47 +306,29 @@ impl AiPromptGuard {
 // ---------------------------------------------------------------------------
 
 fn misconfig_response(default_profile: &str) -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-prompt-guard-misconfigured",
-        "title": "Internal Server Error",
-        "status": 500,
-        "detail": format!(
-            "ai-prompt-guard default_profile '{}' does not exist in the profiles map; fix the plugin configuration.",
-            default_profile
-        ),
-    });
-    Response {
-        status: 500,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        500,
+        "urn:barbacane:error:ai-prompt-guard-misconfigured",
+        "Internal Server Error",
+    )
+    .detail(format!(
+        "ai-prompt-guard default_profile '{}' does not exist in the profiles map; fix the plugin configuration.",
+        default_profile
+    ))
+    .into_response()
 }
 
 fn regex_compile_error_response(profile_name: &str, detail: &str) -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-prompt-guard-misconfigured",
-        "title": "Internal Server Error",
-        "status": 500,
-        "detail": format!(
-            "ai-prompt-guard profile '{}' has an invalid regex: {}",
-            profile_name, detail
-        ),
-    });
-    Response {
-        status: 500,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        500,
+        "urn:barbacane:error:ai-prompt-guard-misconfigured",
+        "Internal Server Error",
+    )
+    .detail(format!(
+        "ai-prompt-guard profile '{}' has an invalid regex: {}",
+        profile_name, detail
+    ))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -354,22 +336,13 @@ fn regex_compile_error_response(profile_name: &str, detail: &str) -> Response {
 // ---------------------------------------------------------------------------
 
 fn reject(profile: &PromptProfile, detail: &str) -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/problem+json".to_string(),
-    );
-    let body = serde_json::json!({
-        "type": "urn:barbacane:error:ai-prompt-guard",
-        "title": "Bad Request",
-        "status": profile.reject_status,
-        "detail": detail,
-    });
-    Response {
-        status: profile.reject_status,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    ProblemDetails::new(
+        profile.reject_status,
+        "urn:barbacane:error:ai-prompt-guard",
+        "Bad Request",
+    )
+    .detail(detail)
+    .into_response()
 }
 
 /// Extract a string representation of a message's `content` field.
