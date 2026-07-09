@@ -9,6 +9,7 @@
 //! Supports variable interpolation: `$client_ip`, `$path.<name>`, `$header.<name>`,
 //! `$query.<name>`, `context:<key>`
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use form_urlencoded::{parse as parse_urlencoded, Serializer};
 use jsonptr::{Assign, Delete, Pointer};
@@ -483,22 +484,6 @@ fn to_json_value(s: &str) -> Value {
 // ---------------------------------------------------------------------------
 // Host function bindings
 // ---------------------------------------------------------------------------
-
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe {
-        host_log(level, msg.as_ptr() as i32, msg.len() as i32);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {
-    // No-op on native
-}
 
 #[cfg(target_arch = "wasm32")]
 fn context_get(key: &str) -> Option<String> {
@@ -1203,8 +1188,7 @@ mod tests {
     #[test]
     fn test_body_remove_nested_field() {
         let req = create_post_request();
-        let body =
-            Some(br#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_vec());
+        let body = Some(br#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.remove.push("/metadata/internal".to_string());
@@ -1281,10 +1265,9 @@ mod tests {
         let body = Some(br#"{"items":[{"oldKey":"val1"},{"oldKey":"val2"}]}"#.to_vec());
 
         let mut config = BodyConfig::default();
-        config.rename.insert(
-            "/items/0/oldKey".to_string(),
-            "/items/0/newKey".to_string(),
-        );
+        config
+            .rename
+            .insert("/items/0/oldKey".to_string(), "/items/0/newKey".to_string());
 
         let result = transform_body(&body, &config, &req);
         let json: Value =

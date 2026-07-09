@@ -5,6 +5,7 @@
 //! - Headers (add, set, remove, rename)
 //! - JSON body (add, remove, rename using JSON Pointer — RFC 6901)
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use jsonptr::{Assign, Delete, Pointer};
 use serde::Deserialize;
@@ -242,26 +243,6 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Option<Vec<u8>
             body.clone()
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Host function bindings
-// ---------------------------------------------------------------------------
-
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe {
-        host_log(level, msg.as_ptr() as i32, msg.len() as i32);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {
-    // No-op on native
 }
 
 // ---------------------------------------------------------------------------
@@ -580,8 +561,7 @@ mod tests {
 
     #[test]
     fn test_body_remove_nested_field() {
-        let body =
-            Some(br#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_vec());
+        let body = Some(br#"{"user":"john","metadata":{"internal":true,"public":"yes"}}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.remove.push("/metadata/internal".to_string());
@@ -742,10 +722,9 @@ mod tests {
         let body = Some(br#"{"items":[{"oldKey":"val1"},{"oldKey":"val2"}]}"#.to_vec());
 
         let mut config = BodyConfig::default();
-        config.rename.insert(
-            "/items/0/oldKey".to_string(),
-            "/items/0/newKey".to_string(),
-        );
+        config
+            .rename
+            .insert("/items/0/oldKey".to_string(), "/items/0/newKey".to_string());
 
         let result = transform_body(&body, &config);
         let json: Value =
@@ -759,8 +738,7 @@ mod tests {
 
     #[test]
     fn test_body_remove_array_element_field() {
-        let body =
-            Some(br#"{"items":[{"id":1,"secret":"x"},{"id":2,"secret":"y"}]}"#.to_vec());
+        let body = Some(br#"{"items":[{"id":1,"secret":"x"},{"id":2,"secret":"y"}]}"#.to_vec());
 
         let mut config = BodyConfig::default();
         config.remove.push("/items/0/secret".to_string());

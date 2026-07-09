@@ -9,7 +9,16 @@
 //! Prices are expressed in USD per 1,000 tokens — the industry-standard
 //! notation used by OpenAI, Anthropic, and most vendors.
 
+// On wasm, log via the shared SDK helper. On native, keep a recording shim so
+// the tests that assert on emitted log lines (mock_host::LOGS) still observe them.
+#[cfg(target_arch = "wasm32")]
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn log_message(level: i32, msg: &str) {
+    mock_host::LOGS.with(|m| m.borrow_mut().push((level, msg.to_string())));
+}
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -158,15 +167,6 @@ fn metric_counter_add(name: &str, labels_json: &str, value: f64) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe { host_log(level, msg.as_ptr() as i32, msg.len() as i32) }
-}
-
 // ---------------------------------------------------------------------------
 // Native stubs
 // ---------------------------------------------------------------------------
@@ -216,11 +216,6 @@ fn metric_counter_add(name: &str, labels: &str, value: f64) {
         m.borrow_mut()
             .push((name.to_string(), labels.to_string(), value))
     });
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(level: i32, msg: &str) {
-    mock_host::LOGS.with(|m| m.borrow_mut().push((level, msg.to_string())));
 }
 
 // ---------------------------------------------------------------------------

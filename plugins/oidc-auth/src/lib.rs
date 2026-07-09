@@ -154,12 +154,8 @@ fn warn_once_no_audience() {
     WARNED.with(|w| {
         if !w.get() {
             w.set(true);
-            #[link(wasm_import_module = "barbacane")]
-            extern "C" {
-                fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-            }
             let msg = "oidc-auth: no 'audience' configured; tokens for any audience at this issuer are accepted (confused-deputy risk). Set 'audience' for multi-RP IdPs.";
-            unsafe { host_log(1, msg.as_ptr() as i32, msg.len() as i32) };
+            barbacane_plugin_sdk::log::warn(msg);
         }
     });
 }

@@ -7,6 +7,8 @@
 //! The outbound HTTP call is best-effort: if the upstream is unreachable
 //! or returns an error, the client still receives the configured response.
 
+#[cfg(target_arch = "wasm32")]
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -130,7 +132,10 @@ impl FireAndForgetDispatcher {
     /// Build the configured static response.
     fn build_response(&self) -> Response {
         let mut headers = self.response.headers.clone();
-        headers.insert("content-type".to_string(), self.response.content_type.clone());
+        headers.insert(
+            "content-type".to_string(),
+            self.response.content_type.clone(),
+        );
 
         let body = if self.response.body.is_empty() {
             None
@@ -159,7 +164,6 @@ mod host {
         fn ffi_http_call(req_ptr: i32, req_len: i32) -> i32;
         #[link_name = "host_http_read_result"]
         fn ffi_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
     }
 
     /// Make an outbound HTTP request. Returns Ok(()) on success, Err(()) on failure.
@@ -174,13 +178,6 @@ mod host {
             let mut buf = vec![0u8; result_len as usize];
             ffi_http_read_result(buf.as_mut_ptr() as i32, result_len);
             Ok(())
-        }
-    }
-
-    /// Log a message via host_log.
-    pub fn log_message(level: i32, msg: &str) {
-        unsafe {
-            host_log(level, msg.as_ptr() as i32, msg.len() as i32);
         }
     }
 }
@@ -233,6 +230,7 @@ mod host {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn log_message(level: i32, msg: &str) {
     host::log_message(level, msg);
 }
@@ -407,7 +405,9 @@ mod tests {
 
         // Warning was logged
         let logs = host::get_log_messages();
-        assert!(logs.iter().any(|(level, msg)| *level == 2 && msg.contains("connection error")));
+        assert!(logs
+            .iter()
+            .any(|(level, msg)| *level == 2 && msg.contains("connection error")));
     }
 
     #[test]
@@ -427,8 +427,10 @@ mod tests {
 
         let mut plugin = minimal_plugin();
         let mut req = test_request();
-        req.headers.insert("authorization".to_string(), "Bearer tok".to_string());
-        req.headers.insert("x-custom".to_string(), "value".to_string());
+        req.headers
+            .insert("authorization".to_string(), "Bearer tok".to_string());
+        req.headers
+            .insert("x-custom".to_string(), "value".to_string());
         plugin.dispatch(req);
 
         let calls = host::get_http_calls();

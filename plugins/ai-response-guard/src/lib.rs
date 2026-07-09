@@ -17,6 +17,7 @@
 //! unchanged. Operators who need strict redaction with streaming must
 //! disable `"stream": true` on those routes.
 
+use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use regex::Regex;
 use serde::Deserialize;
@@ -362,15 +363,6 @@ fn metric_counter_inc(name: &str, labels_json: &str, value: u64) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn log_message(level: i32, msg: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_log(level: i32, msg_ptr: i32, msg_len: i32);
-    }
-    unsafe { host_log(level, msg.as_ptr() as i32, msg.len() as i32) }
-}
-
 // ---------------------------------------------------------------------------
 // Native stubs
 // ---------------------------------------------------------------------------
@@ -414,9 +406,6 @@ fn metric_counter_inc(name: &str, labels: &str, value: u64) {
             .push((name.to_string(), labels.to_string(), value))
     });
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-fn log_message(_level: i32, _msg: &str) {}
 
 // ---------------------------------------------------------------------------
 // Tests
