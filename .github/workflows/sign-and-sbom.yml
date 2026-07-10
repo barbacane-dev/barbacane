@@ -1,0 +1,94 @@
+name: Sign & SBOM
+
+# Keyless (Sigstore/Fulcio) signing + CycloneDX SBOM attestation for the release
+# container images. Identity is the GitHub Actions OIDC token — no long-lived
+# signing keys (#87, option A).
+#
+# Two entry points:
+#   - workflow_call: invoked by release.yml after the multi-arch manifests exist.
+#   - workflow_dispatch: run manually against an already-published version to
+#     (re)sign it or to dry-run the mechanism (e.g. against the current release).
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to sign (with or without a leading v)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to sign, e.g. 0.8.0 (with or without leading v)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write      # push signatures/attestations to GHCR
+  id-token: write       # OIDC token for keyless signing
+
+jobs:
+  sign:
+    name: Sign & SBOM (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [barbacane, barbacane-control, barbacane-standalone]
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      - name: Sign images and attest SBOMs (keyless)
+        env:
+          IMAGE: ${{ matrix.image }}
+          OWNER: ${{ github.repository_owner }}
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          VERSION="${VERSION#v}"   # tolerate a leading v
+
+          for ref in "ghcr.io/${OWNER}/${IMAGE}" "docker.io/barbacane/${IMAGE}"; do
+            # Sign the multi-arch index by DIGEST (never by a mutable tag).
+            digest="$(docker buildx imagetools inspect "${ref}:${VERSION}" --format '{{.Manifest.Digest}}')"
+            target="${ref}@${digest}"
+            echo "::group::${target}"
+
+            echo "cosign sign ${target}"
+            cosign sign "${target}"
+
+            echo "syft SBOM (CycloneDX) for ${target}"
+            syft "${target}" -o cyclonedx-json > "sbom-${IMAGE}.cdx.json"
+
+            echo "cosign attest CycloneDX SBOM to ${target}"
+            cosign attest --predicate "sbom-${IMAGE}.cdx.json" --type cyclonedx "${target}"
+            echo "::endgroup::"
+          done
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ matrix.image }}
+          path: sbom-${{ matrix.image }}.cdx.json
+          retention-days: 30
