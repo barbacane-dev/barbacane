@@ -2,15 +2,20 @@
 //!
 //! Implements fire-and-forget export to OpenTelemetry Collector.
 
+use std::sync::OnceLock;
+
 use crate::{OtlpProtocol, TelemetryConfig, TelemetryError};
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
-    runtime::Tokio,
-    trace::{Sampler, TracerProvider},
+    trace::{Sampler, SdkTracerProvider},
     Resource,
 };
+
+/// The installed OTLP provider, kept so [`shutdown_otlp`] can flush it (OTel 0.29+
+/// removed the global `shutdown_tracer_provider`; shutdown is per-provider).
+static OTLP_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
 /// Initialize OTLP trace exporter.
 ///
@@ -46,20 +51,22 @@ pub fn init_otlp_tracer(config: &TelemetryConfig) -> Result<(), TelemetryError> 
     };
 
     // Build resource with service name
-    let resource = Resource::new(vec![
-        KeyValue::new("service.name", config.service_name.clone()),
-        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-    ]);
+    let resource = Resource::builder()
+        .with_service_name(config.service_name.clone())
+        .with_attribute(KeyValue::new("service.version", env!("CARGO_PKG_VERSION")))
+        .build();
 
-    // Build the tracer provider with the updated API
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, Tokio)
+    // Build the tracer provider (batch export runs on a dedicated thread; no
+    // runtime handle needed since OTel 0.30).
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .with_sampler(sampler)
         .with_resource(resource)
         .build();
 
-    // Set as global provider
-    global::set_tracer_provider(provider);
+    // Set as global provider; keep a handle for graceful shutdown/flush.
+    global::set_tracer_provider(provider.clone());
+    let _ = OTLP_PROVIDER.set(provider);
 
     // Set up W3C Trace Context propagator
     global::set_text_map_propagator(TraceContextPropagator::new());
@@ -71,7 +78,9 @@ pub fn init_otlp_tracer(config: &TelemetryConfig) -> Result<(), TelemetryError> 
 ///
 /// Flushes any remaining spans before shutdown.
 pub fn shutdown_otlp() {
-    global::shutdown_tracer_provider();
+    if let Some(provider) = OTLP_PROVIDER.get() {
+        let _ = provider.shutdown();
+    }
 }
 
 #[cfg(test)]
