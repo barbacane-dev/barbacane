@@ -573,12 +573,20 @@ jobs:
       - name: Extract release notes from changelog
         id: changelog
         run: |
-          # Extract the section for this version from CHANGELOG.md
+          # Extract the body of this version's CHANGELOG section (everything after
+          # the `## [VERSION]` header, up to the next `## [` section). A range like
+          # /^## \[VERSION\]/,/^## \[/ does NOT work: the header line also matches
+          # the end pattern, so the range collapses to a single line. Use a flag.
           VERSION=${{ steps.tag.outputs.version }}
-          awk "/^## \[$VERSION\]/,/^## \[/{if(/^## \[/ && !/^## \[$VERSION\]/)exit; print}" CHANGELOG.md > release-notes.md
-          # Remove the header line
-          tail -n +2 release-notes.md > release-notes-trimmed.md
-          mv release-notes-trimmed.md release-notes.md
+          awk -v ver="$VERSION" '
+            $0 ~ ("^## \\[" ver "\\]") { f = 1; next }
+            f && /^## \[/ { exit }
+            f { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::No CHANGELOG entry found for $VERSION"
+            exit 1
+          fi
           echo "Release notes:"
           cat release-notes.md
 
