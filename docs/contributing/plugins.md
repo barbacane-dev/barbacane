@@ -214,6 +214,11 @@ pub enum Action {
 
 Plugins can call host functions to access gateway capabilities. Declare required capabilities in `plugin.toml`:
 
+The SDK wraps the most common host functions so you don't hand-roll the FFI:
+`barbacane_plugin_sdk::log`, `::http`, `::errors::ProblemDetails`, and `::jwt`.
+Each has a native (non-wasm) stub so your plugin still compiles and unit-tests
+off-target. You still declare the underlying capability in `plugin.toml`.
+
 ### Logging
 
 ```toml
@@ -222,58 +227,12 @@ host_functions = ["log"]
 ```
 
 ```rust
-use barbacane_plugin_sdk::host;
+use barbacane_plugin_sdk::log;
 
-host::log("info", "Processing request");
-host::log("error", "Something went wrong");
-```
-
-### Context (per-request key-value store)
-
-```toml
-[capabilities]
-host_functions = ["context_get", "context_set"]
-```
-
-```rust
-use barbacane_plugin_sdk::host;
-
-// Set a value for downstream middleware/dispatcher
-host::context_set("user_id", "12345");
-
-// Get a value set by upstream middleware
-if let Some(value) = host::context_get("auth_token") {
-    // use value
-}
-```
-
-### Clock
-
-```toml
-[capabilities]
-host_functions = ["clock_now"]
-```
-
-```rust
-use barbacane_plugin_sdk::host;
-
-let timestamp_ms = host::clock_now();
-```
-
-### Secrets
-
-```toml
-[capabilities]
-host_functions = ["get_secret"]
-```
-
-```rust
-use barbacane_plugin_sdk::host;
-
-// Secrets are resolved at gateway startup from env:// or file:// references
-if let Some(api_key) = host::get_secret("api_key") {
-    // use api_key
-}
+log::info("Processing request");
+log::warn("rate limit exceeded");
+log::error("something went wrong");
+// or an explicit level: log::log(log::LEVEL_DEBUG, "verbose detail");
 ```
 
 ### HTTP Calls (Dispatcher only)
@@ -284,29 +243,64 @@ host_functions = ["http_call"]
 ```
 
 ```rust
-use barbacane_plugin_sdk::prelude::*;
-use serde::Serialize;
+use barbacane_plugin_sdk::http;
 
-// HTTP request struct — body travels via side-channel, not in JSON.
-#[derive(Serialize)]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: BTreeMap<String, String>,
-    timeout_ms: Option<u64>,
+let req = http::HttpRequest::new("GET", "https://api.example.com")
+    .header("accept", "application/json")
+    .timeout_ms(5000);
+
+// The optional request body is passed separately (sent via the side-channel):
+match http::call(&req, None) {
+    Ok(resp) => {
+        let _status = resp.status;
+        let _body = resp.body_str(); // Option<&str>
+    }
+    Err(e) => { /* http::HttpError: Unreachable / Empty / ReadFailed / ... */ }
 }
-
-// Optionally set request body via side-channel:
-// barbacane_plugin_sdk::body::set_http_request_body(b"request body");
-
-// Serialize and call:
-let req = HttpRequest { method: "GET".into(), url: "https://api.example.com".into(), headers: BTreeMap::new(), timeout_ms: Some(5000) };
-let json = serde_json::to_vec(&req).unwrap();
-unsafe { host_http_call(json.as_ptr() as i32, json.len() as i32); }
-
-// Read response body via side-channel:
-// let body = barbacane_plugin_sdk::body::read_http_response_body();
 ```
+
+### Error responses (RFC 9457 problem+json)
+
+Build consistent `application/problem+json` error responses with the shared builder:
+
+```rust
+use barbacane_plugin_sdk::errors::ProblemDetails;
+
+return Action::ShortCircuit(
+    ProblemDetails::new(403, "urn:barbacane:error:forbidden", "Forbidden")
+        .detail("Access denied")
+        .with("consumer", "alice") // optional extension members
+        .into_response(),
+);
+```
+
+### JWT parsing (auth plugins)
+
+```rust
+use barbacane_plugin_sdk::jwt;
+
+if let Some(token) = jwt::bearer_token(auth_header) {
+    // Decode claims for inspection — signature is verified separately
+    // (host `verify_signature` capability), not by this helper.
+    let claims: MyClaims = jwt::decode_claims_unverified(token)?;
+    if claims.aud.contains("my-api") { /* jwt::Audience: string or array */ }
+}
+```
+
+### Context, clock, secrets (host imports)
+
+These host functions do not (yet) have SDK wrappers — declare the capability and
+import the function directly. See any official plugin (e.g. `correlation-id` for
+context, `oidc-auth` for secrets) for the exact `extern "C"` binding pattern.
+
+```toml
+[capabilities]
+host_functions = ["context_get", "context_set", "clock_now", "get_secret"]
+```
+
+Secrets are resolved at gateway startup from `env://` / `file://` references, so
+`get_secret` returns the resolved value (never a plaintext literal baked into the
+artifact).
 
 ## Using Plugins in Specs
 

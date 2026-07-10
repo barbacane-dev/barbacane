@@ -82,9 +82,11 @@ A few tests are `#[ignore]`d with a precise blocker:
   *all* host functions). The load-time positive control additionally needs
   `barbacane-wasm` added as a dev-dependency of `barbacane-test` so
   `validate::validate_imports` can be called directly.
-- **Crypto (BARB-SEC-005)** — the "validly-signed JWT is accepted" case needs
-  real RS256 signature verification (`public_key_pem`) in the `jwt-auth` plugin
-  plus a matching private key in the fixture to sign with.
+- **Crypto (BARB-SEC-005)** — real signature verification now exists: `jwt-auth`
+  performs RS256/384/512 verification via the host `verify_signature` capability
+  against an inline `public_key_jwk`. The remaining gap for the "validly-signed
+  JWT is accepted" case is only a test fixture — a matching private key plus a
+  token signed with it to exercise the positive path.
 - **DoS slowloris (BARB-SEC-003)** — needs a configurable + observable
   read/header timeout to assert against without flaky wall-clock sleeps.
 - **Authz IDOR phase 2 (BARB-SEC-001)** — needs per-project credentials and

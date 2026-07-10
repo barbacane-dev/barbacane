@@ -27,7 +27,7 @@ Be respectful. We're all here to build something useful.
 ### Pull Request Process
 
 1. PRs require at least one approving review
-2. All CI checks must pass (fmt, clippy, tests, benchmarks)
+2. All CI checks must pass (fmt, clippy, tests, benchmarks, cargo deny check)
 3. Commits should be signed off (see below)
 4. Keep PRs focused — one logical change per PR
 
@@ -35,7 +35,7 @@ Be respectful. We're all here to build something useful.
 
 ### Prerequisites
 
-- Rust stable (install via [rustup](https://rustup.rs/))
+- Rust 1.91+ (the project MSRV, enforced by CI)
 - PostgreSQL (for control plane tests)
 
 ### Building
@@ -59,7 +59,7 @@ We use standard Rust formatting and lints:
 cargo fmt
 
 # Run lints
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 ```
 
 **Guidelines:**
@@ -136,13 +136,15 @@ Barbacane/
 ├── adr/                    # Architecture Decision Records
 ├── specs/                  # Technical specifications
 ├── crates/
-│   ├── barbacane/          # Data plane binary
-│   ├── barbacane-control/  # Control plane CLI
-│   ├── barbacane-spec-parser/
-│   ├── barbacane-compiler/
-│   ├── barbacane-router/
-│   ├── barbacane-plugin-sdk/
-│   └── barbacane-test/
+│   ├── barbacane/            # Data-plane binary + CLI: router, validator, TLS, WS proxy
+│   ├── barbacane-control/    # Control-plane binary
+│   ├── barbacane-compiler/   # Spec compilation + parser + .bca format
+│   ├── barbacane-wasm/       # WASM runtime
+│   ├── barbacane-telemetry/  # OTel + Prometheus
+│   ├── barbacane-plugin-sdk/ # Plugin SDK
+│   ├── barbacane-plugin-macros/ # Proc macros
+│   ├── barbacane-sigv4/      # AWS SigV4
+│   └── barbacane-test/       # Integration tests
 └── tests/fixtures/         # Test spec files
 ```
 
@@ -153,4 +155,4 @@ Barbacane/
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
+By contributing, you agree that your contributions will be licensed under the GNU AGPLv3.

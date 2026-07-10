@@ -4,7 +4,7 @@ This guide helps you set up a development environment for contributing to Barbac
 
 ## Prerequisites
 
-- **Rust 1.75+** - Install via [rustup](https://rustup.rs/)
+- **Rust 1.91+** - Install via [rustup](https://rustup.rs/). This is the project MSRV (enforced by CI); the dependency floor (wasmtime/cranelift) requires it.
 - **Git** - For version control
 - **Node.js 20+** - For the UI (if working on the web interface)
 - **PostgreSQL 14+** - For the control plane (or use Docker)
@@ -102,13 +102,13 @@ cargo build --workspace --release
 cargo test --workspace
 
 # Run tests for a specific crate
-cargo test -p barbacane-router
+cargo test -p barbacane-compiler
 
 # Run tests with output
 cargo test --workspace -- --nocapture
 
-# Run a specific test
-cargo test -p barbacane-router trie::tests::static_takes_precedence
+# Run a specific test (routing trie lives in the barbacane crate)
+cargo test -p barbacane router::trie::tests::static_takes_precedence_over_param
 ```
 
 ### Run
@@ -146,50 +146,34 @@ barbacane/
 ├── README.md
 │
 ├── crates/
-│   ├── barbacane/          # Data plane CLI (compile, validate, serve)
+│   ├── barbacane/          # Data-plane binary + CLI (serve/compile/validate/dev)
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       └── main.rs
+│   │       ├── main.rs
+│   │       ├── router/     # Prefix-trie routing (trie.rs)
+│   │       ├── validator.rs
+│   │       └── mcp/        # MCP server
 │   │
-│   ├── barbacane-control/  # Control plane server
+│   ├── barbacane-control/  # Control plane server (REST API, PostgreSQL)
 │   │   ├── Cargo.toml
-│   │   ├── openapi.yaml    # API specification
 │   │   └── src/
 │   │       ├── main.rs
 │   │       ├── server.rs
 │   │       └── db/
 │   │
-│   ├── barbacane-compiler/ # Compilation logic
+│   ├── barbacane-compiler/ # Spec compilation + parser + .bca format
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── artifact.rs
-│   │       └── error.rs
+│   │       └── spec_parser/   # OpenAPI/AsyncAPI parsing
 │   │
-│   ├── barbacane-spec-parser/  # OpenAPI/AsyncAPI parsing
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── openapi.rs
-│   │       ├── asyncapi.rs
-│   │       └── error.rs
-│   │
-│   ├── barbacane-router/   # Request routing
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       └── trie.rs
-│   │
-│   ├── barbacane-plugin-sdk/  # Plugin development SDK
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       └── lib.rs
-│   │
-│   └── barbacane-test/     # Test harness
-│       ├── Cargo.toml
-│       └── src/
-│           ├── lib.rs
-│           └── gateway.rs
+│   ├── barbacane-wasm/     # WASM plugin runtime (wasmtime), host functions
+│   ├── barbacane-telemetry/# OpenTelemetry tracing + Prometheus metrics
+│   ├── barbacane-plugin-sdk/  # Plugin SDK (types + log/http/errors/jwt helpers)
+│   ├── barbacane-plugin-macros/ # #[barbacane_middleware] / #[barbacane_dispatcher]
+│   ├── barbacane-sigv4/    # AWS SigV4 signing (s3 / lambda dispatchers)
+│   └── barbacane-test/     # Integration tests (+ adversarial security suite)
 │
 ├── plugins/                # Built-in WASM plugins
 │   ├── http-upstream/      # HTTP reverse proxy dispatcher
@@ -497,18 +481,16 @@ Criterion benchmarks are available for performance-critical components:
 # Run all benchmarks
 cargo bench --workspace
 
-# Run router benchmarks (trie lookup and insertion)
-cargo bench -p barbacane-router
-
-# Run validator benchmarks (schema validation)
-cargo bench -p barbacane-validator
+# Run router + validator benchmarks (both live in the barbacane crate)
+cargo bench -p barbacane --bench routing
+cargo bench -p barbacane --bench validation
 ```
 
-**Router benchmarks** (`crates/barbacane-router/benches/routing.rs`):
+**Router benchmarks** (`crates/barbacane/benches/routing.rs`):
 - `router_lookup` - Measures lookup performance for static paths, parameterized paths, and not-found cases
 - `router_insert` - Measures route insertion performance at various route counts (10-1000 routes)
 
-**Validator benchmarks** (`crates/barbacane-validator/benches/validation.rs`):
+**Validator benchmarks** (`crates/barbacane/benches/validation.rs`):
 - `validator_creation` - Measures schema compilation time
 - `path_param_validation` - Validates path parameters against schemas
 - `query_param_validation` - Validates query parameters

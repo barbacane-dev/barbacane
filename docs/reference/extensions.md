@@ -316,9 +316,9 @@ info:
   version: "1.0.0"
 
 x-barbacane-middlewares:
-  - name: request-id
+  - name: correlation-id
     config:
-      header: X-Request-ID
+      header_name: x-correlation-id
   - name: rate-limit
     config:
       quota: 100
@@ -381,10 +381,10 @@ paths:
 
 ## Available Middlewares
 
-### auth-jwt
+### jwt-auth
 
 ```yaml
-- name: auth-jwt
+- name: jwt-auth
   config:
     required: true
     header: Authorization
@@ -436,22 +436,15 @@ Adds `X-Cache` header to responses:
 - `HIT`: Response served from cache
 - `MISS`: Response not in cache (will be cached if cacheable)
 
-### request-id
+### correlation-id
 
 ```yaml
-- name: request-id
+- name: correlation-id
   config:
-    header: X-Request-ID
-    generate_if_missing: true
-```
-
-### idempotency
-
-```yaml
-- name: idempotency
-  config:
-    header: Idempotency-Key
-    ttl: 86400
+    header_name: x-correlation-id   # Header carrying the correlation ID
+    generate_if_missing: true       # Generate one if the request has none
+    trust_incoming: true            # Propagate an incoming correlation ID
+    include_in_response: true       # Echo the correlation ID in the response
 ```
 
 ### acl

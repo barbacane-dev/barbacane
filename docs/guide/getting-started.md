@@ -257,7 +257,7 @@ curl http://127.0.0.1:8080/health
 
 # Gateway health
 curl http://127.0.0.1:8080/__barbacane/health
-# {"status":"healthy","artifact_version":1,"compiler_version":"0.1.0","routes_count":3}
+# {"status":"healthy","artifact_version":1,"compiler_version":"0.8.0","routes_count":3}
 
 # View the API specs
 curl http://127.0.0.1:8080/__barbacane/specs

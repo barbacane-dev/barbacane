@@ -567,8 +567,7 @@ See [API Lifecycle](#api-lifecycle) for configuration details.
 | Code | Meaning |
 |------|---------|
 | 0 | Clean shutdown |
-| 1 | Startup error (artifact not found, bind failed) |
-| 11 | Plugin hash mismatch (artifact tampering detected) |
+| 1 | Startup error (artifact not found, bind failed, integrity/signature/capability failure) |
 | 13 | Secret resolution failure (missing env var or file) |
 
 Exit code 13 occurs when a secret reference in your spec cannot be resolved:
