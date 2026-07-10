@@ -303,6 +303,19 @@ jobs:
             docker.io/barbacane/barbacane-standalone:$VERSION-amd64 \
             docker.io/barbacane/barbacane-standalone:$VERSION-arm64
 
+  # Keyless (Sigstore) signing + CycloneDX SBOM attestation of the release images.
+  sign-and-sbom:
+    name: Sign & SBOM
+    needs: [validate-version, create-manifests]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/sign-and-sbom.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit
+
   # Security scan the multi-arch images
   scan-containers:
     name: Scan Containers
