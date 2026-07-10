@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-10
+
+Headline: a comprehensive security-hardening pass (adversarial review + full remediation) landed on top of the earlier sweep, plus pre-release housekeeping — plugin SDK consolidation, an MSRV/toolchain floor, supply-chain CI gates, and an OpenTelemetry stack upgrade.
+
+> **Upgrade notes (breaking):**
+> - **MSRV is now Rust 1.85+** at the source level; the dependency floor (wasmtime 43 / cranelift 0.130) requires **rustc 1.91**. Build with 1.91 or newer.
+> - **`.bca` artifact hash format changed.** The signed hash now covers the capability-enforcement surface (`capabilities_enforced`, per-plugin `host_functions`/`body_access`, MCP config), so **existing *signed* artifacts must be recompiled** (`BARBACANE_SIGNING_KEY`); unsigned artifacts are unaffected beyond the hash value.
+
 ### Added
 
 - **security**: control-plane admin authentication (`BARBACANE_CONTROL_ADMIN_TOKEN`), CORS allowlist (`BARBACANE_CONTROL_ALLOWED_ORIGINS`).
@@ -43,6 +51,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **security (control plane)**: request-body size limits — 1 MiB default for JSON endpoints, 32 MiB for spec/plugin uploads — bound in-memory buffering; database errors are routed through the generic error mapper (no schema disclosure); upload filenames are sanitized to a safe basename (defeating path traversal into the compile temp dir and CRLF/quote injection in `Content-Disposition`); and concurrent WebSocket sessions are capped so unauthenticated sockets can't pile up during the registration window.
 - **security (data plane)**: a single canonical, UTF-8-correct percent-decoder is applied to query and path parameters before validation and dispatch (the previous per-byte decode corrupted multi-byte sequences); request header limits are enforced on the raw header map so duplicate header names can't undercount the header limit or skip per-value size checks; and the unauthenticated admin port (`/health`, `/metrics`, `/provenance`) logs a startup warning when bound to a non-loopback address.
 - **deps**: bump `anyhow` to 1.0.103 (RUSTSEC-2026-0190).
+- **security**: the signed `.bca` hash now binds the capability-enforcement surface (`capabilities_enforced`, per-plugin `host_functions`/`body_access`, MCP config), so a tampered-but-still-signature-verifying artifact can no longer silently disable the WASM sandbox.
+- **security**: MCP tool-call path parameters are validated and percent-encoded (rejecting `/`/`..` traversal and prefix-authz confusion that bypassed the router), and unauthenticated MCP `initialize` sessions are capped with the attacker-controlled `clientInfo` no longer retained (memory-exhaustion DoS).
+- **security**: per-plugin isolation of shared host state — response-cache keys and rate-limiter partitions are namespaced by the calling plugin (no cross-plugin cache poisoning/DoS), and plugin metrics gain name/label length caps, a per-plugin cardinality budget, and non-finite-value rejection (host-heap exhaustion).
+- **security**: WS / NATS / Kafka egress now pin the SSRF-vetted IP at connect time (DNS-rebinding safe), matching the HTTP client; the Kafka bootstrap connection is pinned (advertised-broker filtering is tracked as a follow-up, blocked on the client library).
+- **security**: WASI `random_get` is backed by the host CSPRNG — plugin-side `getrandom` / `uuid` / crypto nonces are no longer predictable, and HashDoS via a fixed hasher seed is closed. Plugin-supplied response headers are validated before insertion, so a malicious/buggy plugin can no longer panic the connection task (per-route DoS).
+- **security (hygiene)**: duplicate declared query parameters are rejected (HTTP parameter pollution); offline `data_plane` rows are reaped past a retention window (unbounded-row DoS); the E1070 plaintext-secret scan now covers version-pinned plugin references; remote plugin downloads are size-capped.
+
+### Changed
+
+- **plugin-sdk**: shared building blocks (`errors::ProblemDetails`, `log`, `http`, `jwt`) added and adopted across the plugin fleet, removing over 1,000 lines of duplicated error/logging/HTTP/JWT plumbing. The `#[barbacane_middleware]` / `#[barbacane_dispatcher]` macros now hold plugin state in a `thread_local` `RefCell` instead of `static mut` (sound under Rust 2024's `static_mut_refs`).
+- **build**: declared MSRV (`rust-version = 1.91`) enforced by a CI job; clippy now runs `--all-targets` (tests/benches included).
+- **ci/supply-chain**: third-party GitHub Actions are SHA-pinned (incl. `trivy` off `@master`), jobs run with least-privilege `permissions`, the `/bench` comment trigger is gated on author association, and the full `cargo deny check` (advisories + licenses + bans + sources) is a CI gate with a weekly scheduled run.
+- **deps**: OpenTelemetry stack upgraded to 0.32 (`tracing-opentelemetry` 0.33); workspace `tokio` features narrowed from `full` to the set actually used. The OTel upgrade also eliminated the duplicate axum 0.7 / tower 0.4 major versions previously pulled in transitively.
 
 ## [0.7.0] - 2026-05-05
 
