@@ -5,8 +5,8 @@
 //! `host_verify_signature` host function.
 
 use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
+use barbacane_plugin_sdk::jwt::{self, Audience};
 use barbacane_plugin_sdk::prelude::*;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -225,23 +225,6 @@ struct JwtClaims {
     extra: BTreeMap<String, serde_json::Value>,
 }
 
-/// Audience can be a single string or array of strings.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(untagged)]
-enum Audience {
-    Single(String),
-    Multiple(Vec<String>),
-}
-
-impl Audience {
-    fn contains(&self, value: &str) -> bool {
-        match self {
-            Audience::Single(s) => s == value,
-            Audience::Multiple(v) => v.iter().any(|s| s == value),
-        }
-    }
-}
-
 /// Parsed JWT token.
 struct ParsedJwt {
     header: JwtHeader,
@@ -458,20 +441,15 @@ impl OidcAuth {
 
     /// Parse a JWT token into its components.
     fn parse_jwt(&self, token: &str) -> Result<ParsedJwt, OidcError> {
-        let parts: Vec<&str> = token.split('.').collect();
-        if parts.len() != 3 {
-            return Err(OidcError::MalformedToken);
-        }
+        let (header_part, claims_part, signature_part) =
+            jwt::split(token).ok_or(OidcError::MalformedToken)?;
 
-        let header_bytes = URL_SAFE_NO_PAD
-            .decode(parts[0])
-            .map_err(|_| OidcError::InvalidBase64)?;
-        let claims_bytes = URL_SAFE_NO_PAD
-            .decode(parts[1])
-            .map_err(|_| OidcError::InvalidBase64)?;
-        let signature = URL_SAFE_NO_PAD
-            .decode(parts[2])
-            .map_err(|_| OidcError::InvalidBase64)?;
+        let header_bytes =
+            jwt::decode_segment(header_part).map_err(|_| OidcError::InvalidBase64)?;
+        let claims_bytes =
+            jwt::decode_segment(claims_part).map_err(|_| OidcError::InvalidBase64)?;
+        let signature =
+            jwt::decode_segment(signature_part).map_err(|_| OidcError::InvalidBase64)?;
 
         let header: JwtHeader =
             serde_json::from_slice(&header_bytes).map_err(|_| OidcError::InvalidJson)?;
@@ -481,7 +459,7 @@ impl OidcAuth {
         Ok(ParsedJwt {
             header,
             claims,
-            signing_input: format!("{}.{}", parts[0], parts[1]),
+            signing_input: format!("{}.{}", header_part, claims_part),
             signature,
         })
     }

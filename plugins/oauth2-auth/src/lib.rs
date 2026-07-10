@@ -274,11 +274,9 @@ impl OAuth2Auth {
             .or_else(|| req.headers.get("Authorization"))
             .ok_or(OAuth2Error::MissingToken)?;
 
-        if !auth_header.starts_with("Bearer ") && !auth_header.starts_with("bearer ") {
-            return Err(OAuth2Error::InvalidAuthHeader);
-        }
-
-        Ok(auth_header[7..].trim().to_string())
+        barbacane_plugin_sdk::jwt::bearer_token(auth_header)
+            .map(|token| token.to_string())
+            .ok_or(OAuth2Error::InvalidAuthHeader)
     }
 
     /// Call the introspection endpoint to validate the token.

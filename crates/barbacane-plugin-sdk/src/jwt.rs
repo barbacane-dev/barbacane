@@ -9,10 +9,10 @@
 //! decode; callers still verify before trusting claims.
 
 use base64::Engine;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The JWT `aud` claim: a single audience or a list (RFC 7519 §4.1.3).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Audience {
     Single(String),
