@@ -75,5 +75,33 @@ BARBACANE_TRUSTED_PUBKEY=<hex-public-key> \
 The signature covers the artifact's content hash (`artifact_hash`), which binds
 every spec, route, and plugin WASM checksum **plus the capability-enforcement
 surface** (`capabilities_enforced`, each plugin's declared `host_functions` /
-`body_access`, and the MCP config), so any tampering with the artifact — including
-attempts to weaken the sandbox — fails verification on load.
+`body_access`, and the MCP config), so any tampering with the artifact (including
+attempts to weaken the sandbox) fails verification on load.
+
+## Verifying release container images
+
+Release images are signed keylessly with [Sigstore cosign](https://docs.sigstore.dev/)
+using the GitHub Actions OIDC identity (no long-lived signing keys), and each image
+carries a CycloneDX SBOM as a cosign attestation. Verify a published image before
+running it:
+
+```bash
+# Signature
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/barbacane-dev/barbacane:0.8.0
+
+# SBOM attestation (CycloneDX)
+cosign verify-attestation --type cyclonedx \
+  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/barbacane-dev/barbacane:0.8.0
+```
+
+The same commands work against Docker Hub (`docker.io/barbacane/barbacane:0.8.0`)
+and the other images (`barbacane-control`, `barbacane-standalone`). The identity
+regexp intentionally matches any workflow under the repo, so it covers both
+tagged-release signing and manual re-signing runs. A successful verification
+confirms the signature was checked against the Rekor transparency log and a
+trusted Fulcio certificate authority.
