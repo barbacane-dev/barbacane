@@ -26,9 +26,9 @@ Metadata about the artifact.
 
 ```json
 {
-  "barbacane_artifact_version": 2,
-  "compiled_at": "2026-03-01T10:30:00Z",
-  "compiler_version": "0.2.1",
+  "barbacane_artifact_version": 4,
+  "compiled_at": "2026-07-10T10:30:00Z",
+  "compiler_version": "0.8.0",
   "source_specs": [
     {
       "file": "api.yaml",
@@ -37,20 +37,28 @@ Metadata about the artifact.
       "version": "3.1.0"
     }
   ],
-  "bundled_plugins": [
+  "plugins": [
     {
       "name": "rate-limit",
       "version": "1.0.0",
       "plugin_type": "middleware",
       "wasm_path": "plugins/rate-limit.wasm",
-      "sha256": "789abc..."
+      "sha256": "789abc...",
+      "capabilities": {
+        "body_access": false,
+        "host_functions": ["rate_limit"]
+      }
     }
   ],
   "routes_count": 12,
   "checksums": {
     "routes.json": "sha256:def456..."
   },
+  "capabilities_enforced": true,
+  "mcp": { "enabled": false },
   "artifact_hash": "sha256:a1b2c3d4e5f6...",
+  "signature": "…hex…",
+  "signing_public_key": "…hex…",
   "provenance": {
     "commit": "abc123def456",
     "source": "ci/github-actions"
@@ -62,17 +70,32 @@ Metadata about the artifact.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `barbacane_artifact_version` | integer | Format version (currently `2`) |
+| `barbacane_artifact_version` | integer | Format version (currently `4`) |
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
 | `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
-| `bundled_plugins` | array | List of bundled WASM plugins (optional) |
+| `plugins` | array | List of bundled WASM plugins (optional) |
 | `routes_count` | integer | Number of compiled routes |
-| `checksums` | object | SHA-256 checksums for integrity |
-| `artifact_hash` | string | Combined SHA-256 fingerprint of all artifact inputs (hash-of-hashes) |
+| `checksums` | object | SHA-256 checksums for integrity (`routes.json` + each plugin WASM) |
+| `capabilities_enforced` | bool | Whether per-plugin `host_functions` are authoritative and enforced on load (WA-1) |
+| `mcp` | object | MCP server config (`enabled`, optional `server_name`/`server_version`) |
+| `artifact_hash` | string | Combined SHA-256 fingerprint (see below) |
+| `signature` | string? | Detached Ed25519 signature over `artifact_hash` (present when signed with `BARBACANE_SIGNING_KEY`) |
+| `signing_public_key` | string? | Hex public key the signature was produced with (informational) |
 | `provenance` | object | Build provenance metadata |
 | `provenance.commit` | string? | Git commit SHA (if provided via `--provenance-commit`) |
 | `provenance.source` | string? | Build source identifier (if provided via `--provenance-source`) |
+
+`artifact_hash` binds not just the spec/route/plugin-WASM checksums but also the
+**capability-enforcement surface** — `capabilities_enforced`, each plugin's
+declared `host_functions` / `body_access` / type / version, and the MCP config —
+so a tampered artifact cannot flip the sandbox off while still passing signature
+verification. The data plane recomputes and verifies `artifact_hash` on **every**
+load, independent of signing.
+
+> **Migration to 0.8:** the `artifact_hash` inputs changed in 0.8, so **any `.bca`
+> built before 0.8 fails to load** (`artifact integrity check failed`). Recompile
+> every artifact with 0.8 (`barbacane compile`); re-sign any signed artifacts.
 
 #### source_specs entry
 
@@ -83,7 +106,7 @@ Metadata about the artifact.
 | `type` | string | Spec type (`openapi` or `asyncapi`) |
 | `version` | string | Spec version (e.g., `3.1.0`) |
 
-#### bundled_plugins entry
+#### plugins entry
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -92,6 +115,7 @@ Metadata about the artifact.
 | `plugin_type` | string | Plugin type (`middleware` or `dispatcher`) |
 | `wasm_path` | string | Path to WASM file within artifact |
 | `sha256` | string | SHA-256 hash of WASM file |
+| `capabilities` | object | `{ body_access: bool, host_functions: [string] }` — declared in `plugin.toml`, enforced on load when `capabilities_enforced` is true |
 
 ### routes.json
 

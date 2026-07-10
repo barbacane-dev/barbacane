@@ -45,72 +45,55 @@ The project is organized as a Cargo workspace with specialized crates:
 
 ```
 crates/
-├── barbacane/              # Main CLI (compile, validate, serve)
-├── barbacane-control/      # Control plane CLI (spec upload, plugin register)
-├── barbacane-compiler/     # Spec compilation & artifact format
-├── barbacane-spec-parser/  # OpenAPI/AsyncAPI parsing
-├── barbacane-router/       # Prefix trie request routing
-├── barbacane-validator/    # Request validation
-├── barbacane-wasm/         # WASM plugin runtime (wasmtime)
-├── barbacane-plugin-sdk/   # WASM plugin development kit
-├── barbacane-plugin-macros/# Proc macros for plugin development
-└── barbacane-test/         # Integration test harness
+├── barbacane/              # Data-plane binary + CLI — router (prefix trie), validator, TLS, WebSocket proxy; serve/compile/validate/dev
+├── barbacane-control/      # Control-plane binary — REST API, PostgreSQL, spec/artifact management
+├── barbacane-compiler/     # Spec compilation & .bca artifact format (includes the OpenAPI/AsyncAPI spec parser)
+├── barbacane-wasm/         # WASM plugin runtime (wasmtime), host functions, sandboxing
+├── barbacane-telemetry/    # OpenTelemetry tracing + Prometheus metrics
+├── barbacane-plugin-sdk/   # WASM plugin SDK (Request/Response/Action + log/http/errors/jwt helpers)
+├── barbacane-plugin-macros/# Proc macros (#[barbacane_middleware] / #[barbacane_dispatcher])
+├── barbacane-sigv4/        # AWS SigV4 request signing (used by the s3 / lambda dispatchers)
+└── barbacane-test/         # Integration test harness (incl. the adversarial security suite)
 ```
+
+Routing, request validation, and spec parsing are modules within `barbacane` /
+`barbacane-compiler`, not separate crates.
 
 ### Crate Dependencies
 
 ```
-barbacane (CLI / data plane)
-    ├── barbacane-compiler
-    │   ├── barbacane-spec-parser
-    │   └── barbacane-router
-    ├── barbacane-validator
-    ├── barbacane-router
-    └── barbacane-wasm
-        └── barbacane-plugin-sdk
+barbacane (CLI / data plane)      — router + validator modules live here
+    ├── barbacane-compiler        — includes the spec parser
+    ├── barbacane-wasm
+    │   └── barbacane-plugin-sdk
+    │       └── barbacane-plugin-macros
+    └── barbacane-telemetry
 
-barbacane-plugin-sdk
-    └── barbacane-plugin-macros
+barbacane-control
+    ├── barbacane-compiler
+    └── barbacane-telemetry
 
 barbacane-test
-    └── barbacane-compiler
+    └── barbacane-compiler (+ builds fixture plugins)
 ```
 
 ## Crate Details
 
-### barbacane-spec-parser
+### barbacane-compiler
 
-Parses OpenAPI and AsyncAPI specifications and extracts Barbacane extensions.
+Parses OpenAPI/AsyncAPI specs (spec-parser module) and compiles them into
+deployable `.bca` artifacts.
 
-**Key types:**
+**Key spec types:**
 - `ApiSpec` - Parsed specification with operations and metadata
 - `Operation` - Single API operation with dispatch/middleware config
-- `DispatchConfig` - Dispatcher name and configuration
-- `MiddlewareConfig` - Middleware name and configuration
-- `Channel` - AsyncAPI channel with publish/subscribe operations
+- `DispatchConfig` / `MiddlewareConfig` - Dispatcher / middleware name + config
 
-**Supported formats:**
-- OpenAPI 3.0.x
-- OpenAPI 3.1.x
-- OpenAPI 3.2.x (draft)
-- AsyncAPI 3.x (with Kafka and NATS dispatchers)
+**Supported formats:** OpenAPI 3.0.x / 3.1.x / 3.2.x (draft), AsyncAPI 3.x (Kafka/NATS).
 
-### barbacane-router
-
-Prefix trie implementation for fast HTTP request routing.
-
-**Key types:**
-- `Router` - The routing trie
-- `RouteEntry` - Points to compiled operation index
-- `RouteMatch` - Found / MethodNotAllowed / NotFound
-
-**Features:**
-- O(path length) lookup
-- Static routes take precedence over parameters
-- Path parameter extraction
-- Path normalization (trailing slashes, double slashes)
-
-### barbacane-compiler
+**Routing** is a prefix-trie module in `barbacane` (`router/trie.rs`): O(path-length)
+lookup, static routes take precedence over parameters, path-parameter extraction,
+and path normalization.
 
 Compiles parsed specs into deployable artifacts.
 
@@ -174,21 +157,22 @@ WASM plugin runtime built on wasmtime.
 - `PluginInstance` - Single WASM instance with host function bindings
 - `MiddlewareChain` - Ordered middleware execution
 
-**Host functions:**
-- `host_set_output` - Plugin writes result to host buffer
-- `host_log` - Structured logging with trace context
-- `host_context_get/set` - Per-request key-value store
-- `host_clock_now` - Monotonic time in milliseconds
-- `host_http_call` - Make outbound HTTP requests
-- `host_http_read_result` - Read HTTP response data
-- `host_get_secret` - Get a resolved secret by reference
-- `host_secret_read_result` - Read secret value into plugin memory
-- `host_kafka_publish` - Publish messages to Kafka topics
-- `host_nats_publish` - Publish messages to NATS subjects
-- `host_rate_limit_check` - Check rate limits
-- `host_cache_read/write` - Read/write response cache
-- `host_metric_counter_inc` - Increment Prometheus counter
-- `host_metric_histogram_observe` - Record histogram observation
+**Host functions** (grouped; `*_read_result` variants copy a staged value into plugin memory):
+- Output: `host_set_output` - plugin writes its result to the host buffer
+- Logging: `host_log` - structured logging with trace context
+- Context: `host_context_get`/`host_context_set`/`host_context_read_result` - per-request key-value store
+- Clock: `host_clock_now`/`host_get_unix_timestamp`/`host_time_now` - time access
+- Secrets: `host_get_secret`/`host_secret_read_result` - resolved secret by reference
+- HTTP: `host_http_call`/`host_http_read_result`/`host_http_stream`/`host_http_request_body_set`/`host_http_response_body_len`/`host_http_response_body_read` - outbound HTTP requests
+- Cache: `host_cache_get`/`host_cache_set`/`host_cache_read_result` - response cache
+- Rate limiting: `host_rate_limit_check`/`host_rate_limit_read_result`
+- Brokers: `host_kafka_publish`/`host_nats_publish`/`host_broker_read_result`
+- Metrics: `host_metric_counter_inc`/`host_metric_histogram_observe`
+- Spans: `host_span_start`/`host_span_end`/`host_span_set_attribute`
+- UUID: `host_uuid_generate`/`host_uuid_read_result`
+- Crypto: `host_verify_signature` - signature verification (e.g. RS256/384/512)
+- WebSocket: `host_ws_upgrade`
+- Body access: `host_body_get`/`host_body_set`/`host_body_len`/`host_body_clear`
 
 **Resource limits:**
 - 16 MB linear memory
@@ -204,6 +188,12 @@ SDK for developing WASM plugins (dispatchers and middlewares).
 - `#[barbacane_middleware]` macro - generates WASM exports for middlewares
 - `#[barbacane_dispatcher]` macro - generates WASM exports for dispatchers
 - Host function FFI bindings
+- Helper modules (0.8+):
+  - `log` - host logging
+  - `http` - outbound HTTP via `host_http_call`
+  - `errors::ProblemDetails` - RFC 9457 problem+json builder
+  - `jwt` - `Audience` / `Bearer` / base64url / claims parsing
+  - `body` - request/response body side-channel
 
 ### barbacane-plugin-macros
 

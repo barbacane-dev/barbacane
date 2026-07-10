@@ -226,9 +226,9 @@ info:
 
 # Global middlewares
 x-barbacane-middlewares:
-  - name: request-id
+  - name: correlation-id
     config:
-      header: X-Request-ID
+      header_name: X-Request-ID
   - name: cors
     config:
       allowed_origins: ["https://shop.example.com"]
@@ -273,9 +273,6 @@ paths:
         - name: jwt-auth
           config:
             required: true
-        - name: idempotency
-          config:
-            header: Idempotency-Key
       x-barbacane-dispatch:
         name: http-upstream
         config:

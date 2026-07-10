@@ -13,7 +13,7 @@ Headline: a comprehensive security-hardening pass (adversarial review + full rem
 
 > **Upgrade notes (breaking):**
 > - **MSRV is now Rust 1.85+** at the source level; the dependency floor (wasmtime 43 / cranelift 0.130) requires **rustc 1.91**. Build with 1.91 or newer.
-> - **`.bca` artifact hash format changed.** The signed hash now covers the capability-enforcement surface (`capabilities_enforced`, per-plugin `host_functions`/`body_access`, MCP config), so **existing *signed* artifacts must be recompiled** (`BARBACANE_SIGNING_KEY`); unsigned artifacts are unaffected beyond the hash value.
+> - **`.bca` artifact hash format changed → all pre-0.8 artifacts must be recompiled.** `artifact_hash` now also binds the capability-enforcement surface (`capabilities_enforced`, per-plugin `host_functions`/`body_access`, MCP config). The data plane recomputes and verifies `artifact_hash` on load **unconditionally** (independent of signing), so a `.bca` built before 0.8 fails with `artifact integrity check failed`. Recompile every artifact with 0.8 (`barbacane compile`); re-sign signed artifacts (`BARBACANE_SIGNING_KEY`). The artifact format version is now **4**.
 
 ### Added
 

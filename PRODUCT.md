@@ -63,7 +63,7 @@ Large organizations moving from legacy gateways who want:
 
 ## Business Model
 
-Barbacane is fully open source under the Apache 2.0 license.
+Barbacane is open source under the GNU AGPLv3, with a commercial license available for organizations that can't comply with AGPLv3.
 
 ### How We Make Money
 
@@ -81,7 +81,7 @@ Everything in this repository:
 - The plugin SDK
 - Documentation and specifications
 
-There is no "enterprise edition" with gated features. The open source version is the complete product.
+There is no "enterprise edition" with gated features. The full gateway is AGPLv3; the commercial license is an alternative licensing option for AGPL-incompatible use, not a separate feature-gated edition. The open source version is the complete product.
 
 ## Roadmap
 

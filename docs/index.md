@@ -113,4 +113,4 @@ Barbacane supports AsyncAPI 3.x for event-driven APIs. AsyncAPI `send` operation
 
 ## License
 
-Apache 2.0 - See [LICENSE](../LICENSE)
+GNU AGPLv3 (with a commercial license option for AGPL-incompatible use) - See [LICENSE](../LICENSE)

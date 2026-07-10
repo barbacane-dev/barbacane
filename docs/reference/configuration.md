@@ -72,6 +72,8 @@ BARBACANE_TRUSTED_PUBKEY=<hex-public-key> \
   barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
 
-The signature covers the artifact's content hash, which binds every spec, route,
-and plugin WASM checksum, so any tampering with the artifact fails verification
-on load.
+The signature covers the artifact's content hash (`artifact_hash`), which binds
+every spec, route, and plugin WASM checksum **plus the capability-enforcement
+surface** (`capabilities_enforced`, each plugin's declared `host_functions` /
+`body_access`, and the MCP config), so any tampering with the artifact — including
+attempts to weaken the sandbox — fails verification on load.
