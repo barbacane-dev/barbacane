@@ -13,9 +13,13 @@ use opentelemetry::{
 };
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
-    trace::{IdGenerator, RandomIdGenerator, Sampler, TracerProvider},
+    trace::{IdGenerator, RandomIdGenerator, Sampler, SdkTracerProvider},
     Resource,
 };
+use std::sync::OnceLock;
+
+/// The installed basic provider, kept so [`shutdown_tracer`] can flush it.
+static BASIC_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -197,15 +201,17 @@ pub fn init_basic_tracer(service_name: &str, sampling_rate: f64) {
         Sampler::TraceIdRatioBased(sampling_rate)
     };
 
-    let provider = TracerProvider::builder()
+    let provider = SdkTracerProvider::builder()
         .with_sampler(sampler)
-        .with_resource(Resource::new(vec![KeyValue::new(
-            "service.name",
-            service_name.to_string(),
-        )]))
+        .with_resource(
+            Resource::builder()
+                .with_service_name(service_name.to_string())
+                .build(),
+        )
         .build();
 
-    global::set_tracer_provider(provider);
+    global::set_tracer_provider(provider.clone());
+    let _ = BASIC_PROVIDER.set(provider);
 
     // Set up W3C Trace Context propagator
     global::set_text_map_propagator(TraceContextPropagator::new());
@@ -213,7 +219,9 @@ pub fn init_basic_tracer(service_name: &str, sampling_rate: f64) {
 
 /// Shutdown the tracer provider gracefully.
 pub fn shutdown_tracer() {
-    global::shutdown_tracer_provider();
+    if let Some(provider) = BASIC_PROVIDER.get() {
+        let _ = provider.shutdown();
+    }
 }
 
 /// Get a tracer for creating spans.
