@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-15
+
+Patch release: fixes a regression that made the `barbacane-standalone` image unable to serve specs under 0.8's capability enforcement.
+
+### Fixed
+
+- **plugins**: WASM plugins are now **self-describing**. The SDK macros (`#[barbacane_middleware]` / `#[barbacane_dispatcher]`) embed each plugin's `plugin.toml` into a custom wasm section (`barbacane_manifest`), and the compiler reads declared capabilities directly from the binary (falling back to a sibling/downloaded `plugin.toml` for plugins built before 0.8.1). The standalone image shipped plugins as bare `.wasm` files with no sidecar `plugin.toml`, so every bundled plugin was compiled with empty capabilities and the data plane rejected the first one to import a host function under `capabilities_enforced` (`plugin '<name>' violates its declared capabilities: plugin imports undeclared host function: ...`). As a result the standalone image could compile a spec but not serve it. Capability contracts now travel inside the `.wasm`, so no sidecar file has to accompany a plugin. A compile-time warning is emitted when a plugin resolves with no manifest from either source.
+
 ## [0.8.0] - 2026-07-10
 
 Headline: a comprehensive security-hardening pass (adversarial review + full remediation) landed on top of the earlier sweep, plus pre-release housekeeping — plugin SDK consolidation, an MSRV/toolchain floor, supply-chain CI gates, and an OpenTelemetry stack upgrade.
