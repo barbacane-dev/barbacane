@@ -424,6 +424,7 @@ dependencies = [
 name = "barbacane-plugin-macros"
 version = "0.8.0"
 dependencies = [
+ "proc-macro2",
  "quote",
  "syn",
 ]

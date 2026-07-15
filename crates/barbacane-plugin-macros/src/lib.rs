@@ -30,6 +30,25 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, ItemStruct};
 
+/// Tokens that embed the plugin's `plugin.toml` into a custom WASM section named
+/// `barbacane_manifest`, making the plugin self-describing: the compiler reads
+/// declared capabilities directly from the binary, so no sidecar file has to
+/// travel alongside the `.wasm`. Emitted only for `wasm32` (a custom
+/// `link_section` name is not portable to native object formats such as Mach-O,
+/// and native builds are for unit tests only). `#[used]` keeps the linker from
+/// garbage-collecting the section, and the const-generic length reads the exact
+/// byte size at compile time. `plugin.toml` is resolved from the plugin crate's
+/// `CARGO_MANIFEST_DIR`, so it must exist at the crate root.
+fn manifest_section_tokens() -> proc_macro2::TokenStream {
+    quote! {
+        #[used]
+        #[link_section = "barbacane_manifest"]
+        static BARBACANE_MANIFEST: [u8; include_bytes!(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/plugin.toml")
+        ).len()] = *include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/plugin.toml"));
+    }
+}
+
 /// Generates WASM exports for a middleware plugin.
 ///
 /// The annotated struct must implement:
@@ -47,6 +66,7 @@ use syn::{parse_macro_input, ItemStruct};
 pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemStruct);
     let struct_name = &input.ident;
+    let manifest_section = manifest_section_tokens();
 
     let expanded = quote! {
         #input
@@ -57,6 +77,8 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
         #[cfg(target_arch = "wasm32")]
         mod __barbacane_wasm_abi {
             use super::*;
+
+            #manifest_section
 
             // Per-instance plugin state. WASM plugins are single-threaded, so a
             // thread-local RefCell provides sound interior mutability without the
@@ -231,6 +253,7 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
 pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemStruct);
     let struct_name = &input.ident;
+    let manifest_section = manifest_section_tokens();
 
     let expanded = quote! {
         #input
@@ -239,6 +262,8 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
         #[cfg(target_arch = "wasm32")]
         mod __barbacane_wasm_abi {
             use super::*;
+
+            #manifest_section
 
             // Per-instance plugin state. WASM plugins are single-threaded, so a
             // thread-local RefCell provides sound interior mutability without the

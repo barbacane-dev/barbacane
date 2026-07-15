@@ -63,6 +63,59 @@ fn read_plugin_metadata(wasm_path: &Path) -> Option<PluginMetadata> {
     parse_plugin_metadata(&content)
 }
 
+/// Name of the custom WASM section into which the plugin macros embed the
+/// plugin's `plugin.toml`. Keep in sync with `barbacane-plugin-macros`.
+const MANIFEST_SECTION: &str = "barbacane_manifest";
+
+/// Read a LEB128-encoded unsigned integer, returning the value and the number
+/// of bytes consumed. Bounded to `u32` (WASM section sizes and name lengths fit).
+fn read_uleb128(bytes: &[u8]) -> Option<(u32, usize)> {
+    let mut result: u32 = 0;
+    let mut shift = 0;
+    for (i, &byte) in bytes.iter().enumerate() {
+        // 5 bytes is the maximum for a u32 LEB128; reject anything longer.
+        if i >= 5 {
+            return None;
+        }
+        result |= u32::from(byte & 0x7f).checked_shl(shift)?;
+        if byte & 0x80 == 0 {
+            return Some((result, i + 1));
+        }
+        shift += 7;
+    }
+    None
+}
+
+/// Extract the plugin manifest (`plugin.toml`) embedded in the WASM binary's
+/// `barbacane_manifest` custom section, if present. Plugins built with the
+/// current SDK macros are self-describing this way, so their declared
+/// capabilities travel inside the `.wasm` with no sidecar file. Returns `None`
+/// for plugins built before this convention (the caller then falls back to a
+/// sibling `plugin.toml`).
+fn read_embedded_manifest(wasm: &[u8]) -> Option<String> {
+    // Skip the 8-byte module header (magic + version); validated by the caller.
+    let mut pos = 8usize;
+    while pos < wasm.len() {
+        let section_id = wasm[pos];
+        pos += 1;
+        let (section_len, consumed) = read_uleb128(wasm.get(pos..)?)?;
+        pos += consumed;
+        let section_end = pos.checked_add(section_len as usize)?;
+        let section = wasm.get(pos..section_end)?;
+        // Section id 0 is a custom section: name (LEB128 len + bytes) then payload.
+        if section_id == 0 {
+            let (name_len, n) = read_uleb128(section)?;
+            let name_end = n.checked_add(name_len as usize)?;
+            let name = section.get(n..name_end)?;
+            if name == MANIFEST_SECTION.as_bytes() {
+                return String::from_utf8(section.get(name_end..)?.to_vec()).ok();
+            }
+        }
+        pos = section_end;
+    }
+    None
+}
+
 /// Read config-schema.json next to the WASM and return the names of fields
 /// marked `writeOnly` (secret). Best-effort: an absent or invalid schema yields
 /// an empty list (no secret-field warnings for that plugin).
@@ -125,16 +178,35 @@ fn resolve_plugin(
         )));
     }
 
-    // Try to read plugin metadata from plugin.toml
-    let metadata = match source {
-        PluginSource::Path(path_source) => {
-            let wasm_path = resolve_wasm_path(path_source, base_path);
-            read_plugin_metadata(&wasm_path)
-        }
-        PluginSource::Url(_) => plugin_toml_content
-            .as_deref()
-            .and_then(parse_plugin_metadata),
-    };
+    // Declared capabilities come from the plugin's manifest. Prefer the copy
+    // embedded in the WASM (self-describing plugins built with the current SDK
+    // macros), so the .wasm carries its capability contract with no sidecar.
+    // Fall back to a sibling plugin.toml (local path) or the downloaded
+    // plugin.toml (URL) for plugins built before this convention.
+    let metadata = read_embedded_manifest(&wasm_bytes)
+        .as_deref()
+        .and_then(parse_plugin_metadata)
+        .or_else(|| match source {
+            PluginSource::Path(path_source) => {
+                let wasm_path = resolve_wasm_path(path_source, base_path);
+                read_plugin_metadata(&wasm_path)
+            }
+            PluginSource::Url(_) => plugin_toml_content
+                .as_deref()
+                .and_then(parse_plugin_metadata),
+        });
+
+    // No manifest from either source means declared capabilities record as
+    // empty. With enforcement on, the data plane then rejects the plugin the
+    // moment it imports any host function, so surface this loudly rather than
+    // letting it fail opaquely at load time.
+    if metadata.is_none() {
+        tracing::warn!(
+            plugin = name,
+            "no embedded manifest or plugin.toml found for plugin; declared \
+             capabilities will be empty and the data plane may reject it on load"
+        );
+    }
 
     // Secret (writeOnly) config fields from config-schema.json (path plugins
     // only; URL plugins do not fetch the schema).
@@ -503,6 +575,79 @@ mod tests {
         assert!(manifest.plugins.is_empty());
     }
 
+    /// Build a minimal WASM module (valid header) carrying a single custom
+    /// section with the given name and payload.
+    fn wasm_with_custom_section(name: &str, payload: &[u8]) -> Vec<u8> {
+        fn uleb128(mut v: u32, out: &mut Vec<u8>) {
+            loop {
+                let mut byte = (v & 0x7f) as u8;
+                v >>= 7;
+                if v != 0 {
+                    byte |= 0x80;
+                }
+                out.push(byte);
+                if v == 0 {
+                    break;
+                }
+            }
+        }
+        let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        let mut content = Vec::new();
+        uleb128(name.len() as u32, &mut content);
+        content.extend_from_slice(name.as_bytes());
+        content.extend_from_slice(payload);
+        wasm.push(0x00); // custom section id
+        uleb128(content.len() as u32, &mut wasm);
+        wasm.extend_from_slice(&content);
+        wasm
+    }
+
+    #[test]
+    fn uleb128_roundtrip() {
+        assert_eq!(read_uleb128(&[0x00]), Some((0, 1)));
+        assert_eq!(read_uleb128(&[0x7f]), Some((127, 1)));
+        assert_eq!(read_uleb128(&[0x80, 0x01]), Some((128, 2)));
+        assert_eq!(read_uleb128(&[0xe5, 0x8e, 0x26]), Some((624485, 3)));
+        // Overlong (> 5 bytes) is rejected.
+        assert_eq!(read_uleb128(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x01]), None);
+    }
+
+    #[test]
+    fn embedded_manifest_extracted() {
+        let toml = b"[plugin]\nversion = \"1.0.0\"\ntype = \"middleware\"\n";
+        let wasm = wasm_with_custom_section(MANIFEST_SECTION, toml);
+        assert_eq!(
+            read_embedded_manifest(&wasm).as_deref(),
+            Some("[plugin]\nversion = \"1.0.0\"\ntype = \"middleware\"\n")
+        );
+    }
+
+    #[test]
+    fn embedded_manifest_absent_when_other_sections() {
+        let wasm = wasm_with_custom_section("producers", b"rustc");
+        assert_eq!(read_embedded_manifest(&wasm), None);
+        // Header-only module has no sections.
+        assert_eq!(
+            read_embedded_manifest(&[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]),
+            None
+        );
+    }
+
+    #[test]
+    fn embedded_manifest_capabilities_parse() {
+        let toml = concat!(
+            "[plugin]\nname=\"cors\"\nversion=\"0.1.0\"\ntype=\"middleware\"\n",
+            "[capabilities]\nhost_functions=[\"log\",\"context_get\",\"context_set\"]\n"
+        );
+        let wasm = wasm_with_custom_section(MANIFEST_SECTION, toml.as_bytes());
+        let embedded = read_embedded_manifest(&wasm).expect("section present");
+        let meta = parse_plugin_metadata(&embedded).expect("valid toml");
+        assert_eq!(
+            meta.host_functions,
+            vec!["log", "context_get", "context_set"]
+        );
+    }
+
     #[test]
     fn parse_manifest_with_path_sources() {
         let content = r#"
@@ -593,6 +738,62 @@ plugins:
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].name, "mock");
         assert_eq!(resolved[0].wasm_bytes, wasm_content);
+    }
+
+    #[test]
+    fn resolve_reads_capabilities_from_embedded_manifest_without_sidecar() {
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+
+        // A self-describing wasm: manifest embedded in the custom section, and
+        // deliberately NO sidecar plugin.toml on disk.
+        let toml = concat!(
+            "[plugin]\nname=\"cors\"\nversion=\"0.1.0\"\ntype=\"middleware\"\n",
+            "[capabilities]\nhost_functions=[\"log\",\"context_get\",\"context_set\"]\n"
+        );
+        let wasm = wasm_with_custom_section(MANIFEST_SECTION, toml.as_bytes());
+        std::fs::write(plugin_dir.join("cors.wasm"), &wasm).unwrap();
+        assert!(!plugin_dir.join("plugin.toml").exists());
+
+        let content = "plugins:\n  cors:\n    path: ./plugins/cors.wasm\n";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+        let resolved = manifest.resolve_plugins(temp.path(), false).unwrap();
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].plugin_type.as_deref(), Some("middleware"));
+        assert_eq!(
+            resolved[0].host_functions,
+            vec!["log", "context_get", "context_set"]
+        );
+    }
+
+    #[test]
+    fn embedded_manifest_takes_precedence_over_sidecar() {
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+
+        let embedded = concat!(
+            "[plugin]\nname=\"p\"\nversion=\"2.0.0\"\ntype=\"middleware\"\n",
+            "[capabilities]\nhost_functions=[\"log\"]\n"
+        );
+        let wasm = wasm_with_custom_section(MANIFEST_SECTION, embedded.as_bytes());
+        std::fs::write(plugin_dir.join("p.wasm"), &wasm).unwrap();
+        // Stale sidecar with different capabilities — must be ignored.
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            "[plugin]\nname=\"p\"\nversion=\"1.0.0\"\ntype=\"middleware\"\n\
+             [capabilities]\nhost_functions=[\"http_call\"]\n",
+        )
+        .unwrap();
+
+        let content = "plugins:\n  p:\n    path: ./plugins/p.wasm\n";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+        let resolved = manifest.resolve_plugins(temp.path(), false).unwrap();
+
+        assert_eq!(resolved[0].version.as_deref(), Some("2.0.0"));
+        assert_eq!(resolved[0].host_functions, vec!["log"]);
     }
 
     #[test]
