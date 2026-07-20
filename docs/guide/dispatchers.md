@@ -913,6 +913,15 @@ OpenAI-compatible providers (OpenAI, Ollama) stream natively via `host_http_stre
 
 Anthropic streaming is buffered: the dispatcher waits for the full response and returns it non-streamed (a warning is logged). True SSE translation is deferred per ADR-0024 / ADR-0030 §2.
 
+#### Tool use (Anthropic translation)
+
+For OpenAI/Ollama the tool surface is passthrough. For the **Anthropic** provider the dispatcher translates tools in both directions on Chat Completions and Responses:
+
+- **Request:** the client's `tools` are mapped to Anthropic's `tools` (`function.parameters` / flat `parameters` → `input_schema`), and `tool_choice` is mapped (`"auto"`/`"none"` → same, `"required"` → `any`, `{function:{name}}`/`{name}` → `{type:"tool", name}`); `parallel_tool_calls: false` becomes `disable_parallel_tool_use: true`.
+- **Response:** Anthropic `tool_use` blocks become OpenAI `tool_calls` (Chat Completions) / `function_call` items (Responses); the assistant `content` is `null` on a tool-only turn, and `finish_reason` is `tool_calls`.
+- **History:** an assistant `tool_calls` message → `tool_use` blocks, and `role:"tool"` messages → `tool_result` blocks (consecutive results merged into one user turn).
+- **Unsupported tool types:** Codex freeform `custom` tools (e.g. `apply_patch`), `local_shell`, and hosted server tools have no Anthropic representation. On the Responses path they are rejected with `400 custom_tools_not_supported_for_provider` rather than dropped silently. Route those to OpenAI.
+
 #### Responses API specifics
 
 `POST /v1/responses` is **stateless-only** (ADR-0030 §2):

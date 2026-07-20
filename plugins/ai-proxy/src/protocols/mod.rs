@@ -8,3 +8,4 @@
 pub mod chat_completion;
 pub mod models;
 pub mod responses;
+pub mod tools;
