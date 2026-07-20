@@ -189,6 +189,11 @@ x-barbacane-dispatch:
       - pattern: "gpt-*"
         provider: openai
         api_key: env://OPENAI_API_KEY
+      - pattern: "brave-*"    # OpenAI-compatible endpoint with a custom auth header
+        provider: openai
+        base_url: https://api.search.brave.com/res
+        api_key: env://BRAVE_API_KEY
+        auth: { header: "X-Subscription-Token" }
     targets:                # Optional. Named provider targets selected via ai.target context
       premium:
         provider: openai
@@ -203,6 +208,7 @@ x-barbacane-dispatch:
     provider: string        # Optional. openai | anthropic | ollama
     api_key: string         # Optional. env://VAR supported
     base_url: string        # Optional. Override provider default (Azure, vLLM, etc.)
+    auth: string | object   # Optional. bearer | api_key | {header: "Name"} | {query: "param"}. Default: provider convention
 ```
 
 The dispatcher also ships as a multi-file spec fragment under [`schemas/ai-gateway.yaml`](../guide/spec-configuration.md) — drop it into a project's `specs/` folder to bind all three operations to the same `ai-proxy` config via a YAML anchor.

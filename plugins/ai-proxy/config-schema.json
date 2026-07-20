@@ -10,6 +10,38 @@
       "description": "Glob pattern (`*`, `?`, `[...]`). Matched case-sensitively against the client's `model` field. Restricted character set so vacuum surfaces nonsense like regex syntax at lint time; runtime uses the `globset` crate.",
       "pattern": "^[A-Za-z0-9_*?\\[\\]\\-:.+/]+$"
     },
+    "Auth": {
+      "description": "Credential attachment strategy. Orthogonal to `provider` (which picks the wire protocol): the provider only supplies a default convention, which this overrides. Lets an OpenAI-compatible endpoint with a non-standard credential header be configured without a new provider — e.g. Brave AI Grounding (`X-Subscription-Token`), Azure OpenAI (`api-key`), or a key-in-query API. When omitted, defaults to `bearer` for OpenAI/Ollama and `api_key` (the `x-api-key` header) for Anthropic.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["bearer", "api_key"],
+          "description": "`bearer` → `Authorization: Bearer <key>` (OpenAI/Ollama default). `api_key` → `x-api-key: <key>` (Anthropic default)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["header"],
+          "properties": {
+            "header": {
+              "type": "string",
+              "description": "Arbitrary credential header name; the key is sent as its value (e.g. `X-Subscription-Token`, `api-key`)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["query"],
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Query-string parameter name; the key is appended to the upstream URL as `?<param>=<key>` (e.g. Google Gemini's `key`)."
+            }
+          }
+        }
+      ]
+    },
     "TargetConfig": {
       "type": "object",
       "description": "A named provider target: provider type, credentials, optional custom endpoint, and optional catalog `allow` / `deny` policy. The model identifier comes from the client request body, never from this config (ADR-0030 §0).",
@@ -31,6 +63,7 @@
           "format": "uri",
           "description": "Custom provider base URL. Defaults: OpenAI → `https://api.openai.com`, Anthropic → `https://api.anthropic.com`, Ollama → `http://localhost:11434`. Use this for Azure OpenAI, self-hosted vLLM, remote Ollama, etc."
         },
+        "auth": { "$ref": "#/$defs/Auth" },
         "allow": {
           "type": "array",
           "description": "Catalog allow-list of glob patterns. When set, the client's `model` must match at least one entry, otherwise 403 `model_not_permitted`. Combine with `deny` if needed (`deny` is evaluated after `allow`).",
@@ -66,6 +99,7 @@
           "type": "string",
           "format": "uri"
         },
+        "auth": { "$ref": "#/$defs/Auth" },
         "allow": {
           "type": "array",
           "items": { "$ref": "#/$defs/GlobPattern" }
@@ -94,6 +128,7 @@
       "format": "uri",
       "description": "Custom base URL for the flat config. Overrides the provider default."
     },
+    "auth": { "$ref": "#/$defs/Auth" },
     "timeout": {
       "type": "integer",
       "description": "Request timeout in seconds for LLM dispatch (chat completions, responses). LLM calls can take 10–60 s; set higher for long-running completions.",

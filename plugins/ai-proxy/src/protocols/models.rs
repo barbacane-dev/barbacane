@@ -28,8 +28,8 @@
 //! - **`schemas/ai-gateway.yaml` spec fragment** that operators drop into
 //!   their `specs/` folder. Tracked as PR-6 in the implementation plan.
 
-use crate::providers::openai::openai_headers;
-use crate::{build_response, host, http_call, AiProxy, HttpRequest, Provider, Response};
+use crate::providers::openai::openai_base_headers;
+use crate::{build_response, host, http_call, AiProxy, Auth, HttpRequest, Provider, Response};
 use barbacane_plugin_sdk::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -119,6 +119,7 @@ struct UpstreamProvider {
     provider: Provider,
     base_url: String,
     api_key: Option<String>,
+    auth: Option<Auth>,
 }
 
 fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
@@ -128,6 +129,7 @@ fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
     let push = |provider: &Provider,
                 api_key: Option<&str>,
                 base_url: Option<&str>,
+                auth: Option<&Auth>,
                 seen: &mut BTreeSet<(String, String)>,
                 out: &mut Vec<UpstreamProvider>| {
         let resolved_base = base_url
@@ -140,6 +142,7 @@ fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
                 provider: provider.clone(),
                 base_url: resolved_base,
                 api_key: api_key.map(String::from),
+                auth: auth.cloned(),
             });
         }
     };
@@ -149,6 +152,7 @@ fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
             &route.provider,
             route.api_key.as_deref(),
             route.base_url.as_deref(),
+            route.auth.as_ref(),
             &mut seen,
             &mut out,
         );
@@ -158,6 +162,7 @@ fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
             &target.provider,
             target.api_key.as_deref(),
             target.base_url.as_deref(),
+            target.auth.as_ref(),
             &mut seen,
             &mut out,
         );
@@ -167,6 +172,7 @@ fn collect_unique_providers(plugin: &AiProxy) -> Vec<UpstreamProvider> {
             p,
             plugin.api_key.as_deref(),
             plugin.base_url.as_deref(),
+            plugin.auth.as_ref(),
             &mut seen,
             &mut out,
         );
@@ -190,34 +196,33 @@ fn fetch_provider_models(
     plugin: &AiProxy,
     upstream: &UpstreamProvider,
 ) -> Result<Vec<serde_json::Value>, UpstreamFailure> {
-    let (url, headers) = match upstream.provider {
-        Provider::OpenAI => {
-            let url = format!("{}/v1/models", upstream.base_url.trim_end_matches('/'));
-            let target = synthetic_target(upstream);
-            (url, openai_headers(&target))
-        }
+    let base = upstream.base_url.trim_end_matches('/');
+    let (mut url, mut headers) = match upstream.provider {
+        Provider::OpenAI => (format!("{}/v1/models", base), openai_base_headers()),
         Provider::Anthropic => {
-            let url = format!("{}/v1/models", upstream.base_url.trim_end_matches('/'));
             let mut h = BTreeMap::new();
             h.insert("content-type".to_string(), "application/json".to_string());
             h.insert(
                 "anthropic-version".to_string(),
                 crate::providers::anthropic::ANTHROPIC_API_VERSION.to_string(),
             );
-            if let Some(key) = upstream.api_key.as_deref() {
-                h.insert("x-api-key".to_string(), key.to_string());
-            }
-            (url, h)
+            (format!("{}/v1/models", base), h)
         }
-        Provider::Ollama => {
-            // Ollama has no `/v1/models`; the OpenAI-compat surface uses
-            // `/api/tags`, which we translate to OpenAI list shape below.
-            (
-                format!("{}/api/tags", upstream.base_url.trim_end_matches('/')),
-                BTreeMap::new(),
-            )
-        }
+        // Ollama has no `/v1/models`; the OpenAI-compat surface uses
+        // `/api/tags`, which we translate to OpenAI list shape below. It's an
+        // unauthenticated local endpoint, so no credential is attached.
+        Provider::Ollama => (format!("{}/api/tags", base), BTreeMap::new()),
     };
+    if !matches!(upstream.provider, Provider::Ollama) {
+        if let Some(key) = upstream.api_key.as_deref() {
+            crate::providers::apply_auth(
+                &synthetic_target(upstream).effective_auth(),
+                key,
+                &mut headers,
+                &mut url,
+            );
+        }
+    }
 
     let req = HttpRequest {
         method: "GET".to_string(),
@@ -254,12 +259,14 @@ fn fetch_provider_models(
 }
 
 /// Build a synthetic [`crate::TargetConfig`] from an [`UpstreamProvider`] so
-/// we can reuse [`openai_headers`] without duplicating the auth-header logic.
+/// we can reuse [`crate::providers::apply_auth`] without duplicating the
+/// auth-attachment logic.
 fn synthetic_target(upstream: &UpstreamProvider) -> crate::TargetConfig {
     crate::TargetConfig {
         provider: upstream.provider.clone(),
         api_key: upstream.api_key.clone(),
         base_url: Some(upstream.base_url.clone()),
+        auth: upstream.auth.clone(),
         allow: Vec::new(),
         deny: Vec::new(),
     }
@@ -337,6 +344,7 @@ mod tests {
             provider: None,
             api_key: None,
             base_url: None,
+            auth: None,
             timeout: 120,
             models_timeout_ms: 5_000,
             max_tokens: None,
@@ -353,6 +361,7 @@ mod tests {
             provider,
             api_key: None,
             base_url: base_url.map(String::from),
+            auth: None,
             allow: Vec::new(),
             deny: Vec::new(),
         }
@@ -364,6 +373,7 @@ mod tests {
             provider,
             api_key: None,
             base_url: Some(base_url.to_string()),
+            auth: None,
             allow: Vec::new(),
             deny: Vec::new(),
         }

@@ -8,6 +8,7 @@ const schemas = {
       provider: { type: "string" },
       api_key: { type: "string", writeOnly: true },
       base_url: { type: "string" },
+      auth: { type: "undefined" },
       timeout: { type: "integer", minimum: 1 },
       models_timeout_ms: { type: "integer", minimum: 1 },
       max_tokens: { type: "integer", minimum: 1 },
