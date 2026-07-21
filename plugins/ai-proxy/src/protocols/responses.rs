@@ -20,6 +20,7 @@
 //! path (mirrors ADR-0024 Chat Completions until true SSE translation lands).
 //! The OpenAI passthrough streams normally via `host_http_stream`.
 
+use crate::protocols::tools;
 use crate::providers::openai::{openai_base_headers, openai_url};
 use crate::{
     error_response, host, host_http_stream, http_call, AiProxy, HttpRequest, Provider, Response,
@@ -107,8 +108,29 @@ pub(crate) fn handle(
                 .map(|v| v == "true")
                 .unwrap_or(true);
 
-            let translation =
-                ResponsesToAnthropic::translate(&body, client_model, streaming, plugin.max_tokens)?;
+            // Tool declarations must reach Anthropic or it can never call
+            // them. Codex freeform tools (`apply_patch`), `local_shell`, and
+            // hosted tools have no Anthropic representation — reject with a
+            // precise 400 rather than dropping them silently.
+            let anthropic_tools = match tools::responses_tools_to_anthropic(&body) {
+                Ok(t) => t,
+                Err(unsupported) => {
+                    return Ok(custom_tools_not_supported_response(&unsupported.tool_type))
+                }
+            };
+            let anthropic_tool_choice = tools::tool_choice_to_anthropic(
+                body.get("tool_choice"),
+                body.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+            );
+
+            let translation = ResponsesToAnthropic::translate(
+                &body,
+                client_model,
+                streaming,
+                plugin.max_tokens,
+                anthropic_tools,
+                anthropic_tool_choice,
+            )?;
 
             // Buffered Anthropic call — true SSE translation deferred per
             // ADR-0030 §2; mirror the Chat Completions buffering behavior.
@@ -271,6 +293,8 @@ impl ResponsesToAnthropic {
         client_model: &str,
         stream: bool,
         default_max_tokens: Option<u32>,
+        anthropic_tools: Option<serde_json::Value>,
+        anthropic_tool_choice: Option<serde_json::Value>,
     ) -> Result<Self, String> {
         let input_items = responses
             .get("input")
@@ -409,6 +433,12 @@ impl ResponsesToAnthropic {
         }
         if let Some(t) = responses.get("top_p").cloned() {
             anthropic.insert("top_p".to_string(), t);
+        }
+        if let Some(t) = anthropic_tools {
+            anthropic.insert("tools".to_string(), t);
+        }
+        if let Some(tc) = anthropic_tool_choice {
+            anthropic.insert("tool_choice".to_string(), tc);
         }
         if stream {
             anthropic.insert("stream".to_string(), serde_json::Value::Bool(true));
@@ -694,6 +724,24 @@ fn previous_response_id_not_supported_response() -> Response {
     .into_response()
 }
 
+fn custom_tools_not_supported_response(tool_type: &str) -> Response {
+    ProblemDetails::new(
+        400,
+        "urn:barbacane:error:custom_tools_not_supported_for_provider",
+        "Bad Request",
+    )
+    .detail(format!(
+        "ai-proxy: tool type {:?} has no Anthropic Messages representation \
+             (Codex freeform `custom` tools such as `apply_patch`, \
+             `local_shell`, and hosted server tools). Only `function` tools \
+             translate to the Anthropic provider; route these to OpenAI, or \
+             drop the tool.",
+        tool_type
+    ))
+    .with("code", "custom_tools_not_supported_for_provider")
+    .into_response()
+}
+
 fn responses_not_supported_for_provider_response(provider: Provider) -> Response {
     ProblemDetails::new(
         400,
@@ -793,8 +841,36 @@ mod tests {
 
     fn translate_in(json: &str) -> ResponsesToAnthropic {
         let v: serde_json::Value = serde_json::from_str(json).unwrap();
-        ResponsesToAnthropic::translate(&v, "claude-sonnet-4-6", false, Some(1024))
-            .expect("translate")
+        // Mirror the handle() path: map tools/tool_choice before translating.
+        let anthropic_tools = tools::responses_tools_to_anthropic(&v).expect("tools");
+        let anthropic_tool_choice = tools::tool_choice_to_anthropic(
+            v.get("tool_choice"),
+            v.get("parallel_tool_calls").and_then(|x| x.as_bool()),
+        );
+        ResponsesToAnthropic::translate(
+            &v,
+            "claude-sonnet-4-6",
+            false,
+            Some(1024),
+            anthropic_tools,
+            anthropic_tool_choice,
+        )
+        .expect("translate")
+    }
+
+    #[test]
+    fn translate_in_forwards_function_tools_and_choice() {
+        let res = translate_in(
+            r#"{
+              "input":[{"type":"input_text","role":"user","content":"hi"}],
+              "tools":[{"type":"function","name":"get_time","parameters":{"type":"object"}}],
+              "tool_choice":{"type":"function","name":"get_time"}
+            }"#,
+        );
+        let body: serde_json::Value = serde_json::from_str(&res.body).unwrap();
+        assert_eq!(body["tools"][0]["name"], "get_time");
+        assert_eq!(body["tools"][0]["input_schema"], serde_json::json!({"type":"object"}));
+        assert_eq!(body["tool_choice"], serde_json::json!({"type":"tool","name":"get_time"}));
     }
 
     #[test]
