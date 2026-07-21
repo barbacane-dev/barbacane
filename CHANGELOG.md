@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **plugins/ai-proxy**: configurable credential attachment via a new `auth` field on targets, routes, and the flat config. `auth` is orthogonal to `provider` (which selects the wire protocol): `bearer` → `Authorization: Bearer`, `api_key` → `x-api-key`, `{ header: "Name" }` → an arbitrary credential header, `{ query: "param" }` → key in the query string. When omitted it defaults to the provider's convention (bearer for OpenAI/Ollama, `x-api-key` for Anthropic), so existing configs are unchanged. This lets OpenAI-compatible endpoints with non-standard credential headers (e.g. Brave AI Grounding's `X-Subscription-Token`, Azure OpenAI's `api-key`) be configured without a dedicated provider type. Internally, the three previously hardcoded auth call sites (OpenAI transport, Anthropic transport, `/v1/models` aggregator) now share a single `apply_auth` implementation.
+
 ## [0.8.1] - 2026-07-15
 
 Patch release: fixes a regression that made the `barbacane-standalone` image unable to serve specs under 0.8's capability enforcement.

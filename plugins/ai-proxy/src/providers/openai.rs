@@ -15,8 +15,11 @@ impl AiProxy {
         target: &TargetConfig,
         req: &Request,
     ) -> Result<Response, String> {
-        let url = openai_url(target, &req.path);
-        let headers = openai_headers(target);
+        let mut url = openai_url(target, &req.path);
+        let mut headers = openai_base_headers();
+        if let Some(key) = &target.api_key {
+            super::apply_auth(&target.effective_auth(), key, &mut headers, &mut url);
+        }
 
         let body = self.maybe_inject_max_tokens(&req.body);
         if let Some(ref b) = body {
@@ -39,8 +42,11 @@ impl AiProxy {
         target: &TargetConfig,
         req: &Request,
     ) -> Result<Response, String> {
-        let url = openai_url(target, &req.path);
-        let mut headers = openai_headers(target);
+        let mut url = openai_url(target, &req.path);
+        let mut headers = openai_base_headers();
+        if let Some(key) = &target.api_key {
+            super::apply_auth(&target.effective_auth(), key, &mut headers, &mut url);
+        }
         // Ensure Accept header for SSE
         headers.insert("accept".to_string(), "text/event-stream".to_string());
 
@@ -94,11 +100,11 @@ pub(crate) fn openai_url(target: &TargetConfig, req_path: &str) -> String {
     format!("{}{}", base, req_path)
 }
 
-pub(crate) fn openai_headers(target: &TargetConfig) -> BTreeMap<String, String> {
+/// Base headers common to every OpenAI-compatible request. Credential
+/// attachment is applied separately via [`super::apply_auth`] at the call site,
+/// so `Auth::Query` can also reach the URL.
+pub(crate) fn openai_base_headers() -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     headers.insert("content-type".to_string(), "application/json".to_string());
-    if let Some(key) = &target.api_key {
-        headers.insert("authorization".to_string(), format!("Bearer {}", key));
-    }
     headers
 }

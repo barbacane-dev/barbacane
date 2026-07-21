@@ -20,7 +20,7 @@
 //! path (mirrors ADR-0024 Chat Completions until true SSE translation lands).
 //! The OpenAI passthrough streams normally via `host_http_stream`.
 
-use crate::providers::openai::{openai_headers, openai_url};
+use crate::providers::openai::{openai_base_headers, openai_url};
 use crate::{
     error_response, host, host_http_stream, http_call, AiProxy, HttpRequest, Provider, Response,
     TargetConfig,
@@ -72,10 +72,7 @@ impl ResponsesPreflight {
         // OpenAI defaults `store` to true server-side. Treat `Some(true)` and
         // a missing field as downgrade-required; only an explicit `store: false`
         // skips the warning.
-        let store_downgrade = match v.get("store") {
-            Some(serde_json::Value::Bool(false)) => false,
-            _ => true,
-        };
+        let store_downgrade = !matches!(v.get("store"), Some(serde_json::Value::Bool(false)));
 
         Ok(Self { store_downgrade })
     }
@@ -177,8 +174,11 @@ fn openai_passthrough(
     req: &Request,
     streaming: bool,
 ) -> Result<Response, String> {
-    let url = openai_url(target, &req.path);
-    let mut headers = openai_headers(target);
+    let mut url = openai_url(target, &req.path);
+    let mut headers = openai_base_headers();
+    if let Some(key) = &target.api_key {
+        crate::providers::apply_auth(&target.effective_auth(), key, &mut headers, &mut url);
+    }
     if streaming {
         headers.insert("accept".to_string(), "text/event-stream".to_string());
     }

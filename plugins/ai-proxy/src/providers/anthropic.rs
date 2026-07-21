@@ -26,7 +26,7 @@ impl AiProxy {
         body: &[u8],
     ) -> Result<Response, String> {
         let base = target.effective_base_url().trim_end_matches('/');
-        let url = format!("{}/v1/messages", base);
+        let mut url = format!("{}/v1/messages", base);
 
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
@@ -35,7 +35,7 @@ impl AiProxy {
             ANTHROPIC_API_VERSION.to_string(),
         );
         if let Some(key) = &target.api_key {
-            headers.insert("x-api-key".to_string(), key.clone());
+            super::apply_auth(&target.effective_auth(), key, &mut headers, &mut url);
         }
 
         set_http_request_body(body);

@@ -845,6 +845,7 @@ Now `gpt-3.5-turbo` falls through to ollama; `gpt-4o-mini` still routes to OpenA
 | `provider` | string | If no `targets`/`routes` | - | Provider type: `openai`, `anthropic`, or `ollama` |
 | `api_key` | string | No | - | API key. Supports `env://VAR` substitution. Omit for Ollama |
 | `base_url` | string | No | Provider default | Custom endpoint URL (Azure OpenAI, self-hosted vLLM, remote Ollama, etc.) |
+| `auth` | string \| object | No | Provider convention | How the `api_key` is attached. `bearer` → `Authorization: Bearer` (OpenAI/Ollama default), `api_key` → `x-api-key` (Anthropic default), `{ header: "Name" }` → arbitrary credential header, `{ query: "param" }` → key in the query string. See [Custom credential headers](#custom-credential-headers) |
 | `timeout` | integer | No | 120 | LLM request timeout (seconds) for chat completions and responses |
 | `models_timeout_ms` | integer | No | 5000 | Per-provider timeout (**milliseconds**) for the `/v1/models` aggregator only — separate from `timeout` because discovery doesn't need 120s of patience |
 | `max_tokens` | integer | No | - | Default `max_tokens` injected when the client omits it. Required for Anthropic (enforced by their API). Cost guardrail for OpenAI/Ollama |
@@ -853,15 +854,41 @@ Now `gpt-3.5-turbo` falls through to ollama; `gpt-4o-mini` still routes to OpenA
 | `targets` | object | No | - | Named provider targets selectable via `ai.target` context |
 | `default_target` | string | No | - | Target to use when no `ai.target` context key is set and no route matched |
 
-`TargetConfig` (entries in `targets` map and `fallback` array): `provider` (required), `api_key`, `base_url`, `allow`, `deny`. Same shape as `routes[]` minus the `pattern`.
+`TargetConfig` (entries in `targets` map and `fallback` array): `provider` (required), `api_key`, `base_url`, `auth`, `allow`, `deny`. Same shape as `routes[]` minus the `pattern`.
 
 **Provider defaults:**
 
-| Provider | Default Base URL |
-|----------|-----------------|
-| `openai` | `https://api.openai.com` |
-| `anthropic` | `https://api.anthropic.com` |
-| `ollama` | `http://localhost:11434` |
+| Provider | Default Base URL | Default `auth` |
+|----------|-----------------|----------------|
+| `openai` | `https://api.openai.com` | `bearer` (`Authorization: Bearer`) |
+| `anthropic` | `https://api.anthropic.com` | `api_key` (`x-api-key`) |
+| `ollama` | `http://localhost:11434` | `bearer` |
+
+#### Custom credential headers
+
+`provider` selects the **wire protocol** (OpenAI Chat Completions / Responses vs Anthropic Messages); `auth` selects **how the key is attached**, independently. This lets an OpenAI-compatible endpoint that uses a non-standard credential header be configured without a dedicated provider type.
+
+```yaml
+x-barbacane-dispatch:
+  name: ai-proxy
+  config:
+    routes:
+      # Brave AI Grounding — OpenAI-compatible surface, but the credential
+      # rides in X-Subscription-Token instead of Authorization: Bearer.
+      - pattern: "brave-*"
+        provider: openai
+        base_url: "https://api.search.brave.com/res"
+        api_key: "env://BRAVE_API_KEY"
+        auth: { header: "X-Subscription-Token" }
+      # Azure OpenAI — OpenAI protocol, api-key header.
+      - pattern: "gpt-*"
+        provider: openai
+        base_url: "env://AZURE_OPENAI_ENDPOINT"
+        api_key: "env://AZURE_OPENAI_KEY"
+        auth: { header: "api-key" }
+```
+
+Omit `auth` to use the provider's conventional header (the common case). Use `{ query: "key" }` for APIs that expect the credential as a query-string parameter.
 
 #### Provider fallback
 

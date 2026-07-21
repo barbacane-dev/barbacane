@@ -64,6 +64,38 @@ impl Provider {
     pub(crate) fn is_openai_compatible(&self) -> bool {
         matches!(self, Provider::OpenAI | Provider::Ollama)
     }
+
+    /// Default credential convention for the provider. `Provider` selects the
+    /// wire protocol; the auth header it conventionally uses is a *separate*
+    /// concern that [`Auth`] can override (ADR-0030 §0 refinement). OpenAI-shape
+    /// providers default to bearer; Anthropic to its `x-api-key` header.
+    pub(crate) fn default_auth(&self) -> Auth {
+        match self {
+            Provider::Anthropic => Auth::ApiKey,
+            Provider::OpenAI | Provider::Ollama => Auth::Bearer,
+        }
+    }
+}
+
+/// How the API key is attached to the upstream request. Orthogonal to
+/// [`Provider`] (which picks the wire protocol): the provider only supplies a
+/// *default* convention, which an explicit `auth` overrides. This lets an
+/// OpenAI-compatible endpoint with a non-standard credential header be
+/// configured without minting a new provider variant — e.g. Brave AI Grounding
+/// (`X-Subscription-Token`), Azure OpenAI (`api-key`), or a key-in-query API.
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Auth {
+    /// `Authorization: Bearer <key>` — the OpenAI/Ollama default.
+    Bearer,
+    /// `x-api-key: <key>` — the Anthropic default.
+    ApiKey,
+    /// Arbitrary credential header: `<name>: <key>`. Covers Brave
+    /// `X-Subscription-Token`, Azure OpenAI `api-key`, and similar.
+    Header(String),
+    /// Credential passed in the query string: `?<param>=<key>` (e.g. Google
+    /// Gemini's `key` parameter).
+    Query(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +119,10 @@ pub(crate) struct TargetConfig {
     /// Custom base URL (Azure, self-hosted, Ollama remote, etc.).
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Credential attachment strategy. When absent, defaults to the provider's
+    /// conventional header ([`Provider::default_auth`]).
+    #[serde(default)]
+    pub auth: Option<Auth>,
     /// Allow-list of glob patterns. When set, the client's `model` must match
     /// at least one entry; otherwise 403 `model_not_permitted`.
     #[serde(default)]
@@ -103,6 +139,14 @@ impl TargetConfig {
             .as_deref()
             .unwrap_or_else(|| self.provider.default_base_url())
     }
+
+    /// Resolved credential strategy: the explicit `auth` if set, else the
+    /// provider's default convention.
+    pub(crate) fn effective_auth(&self) -> Auth {
+        self.auth
+            .clone()
+            .unwrap_or_else(|| self.provider.default_auth())
+    }
 }
 
 /// A `routes` entry: dispatch to `provider` when the client's `model` field
@@ -117,6 +161,8 @@ pub(crate) struct Route {
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
+    pub auth: Option<Auth>,
+    #[serde(default)]
     pub allow: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
@@ -130,6 +176,7 @@ impl Route {
             provider: self.provider.clone(),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
+            auth: self.auth.clone(),
             allow: self.allow.clone(),
             deny: self.deny.clone(),
         }
@@ -157,6 +204,10 @@ pub struct AiProxy {
     pub(crate) api_key: Option<String>,
     #[serde(default)]
     pub(crate) base_url: Option<String>,
+    /// Credential attachment strategy for the flat config. Defaults to the
+    /// provider's conventional header when absent.
+    #[serde(default)]
+    pub(crate) auth: Option<Auth>,
 
     /// Request timeout in seconds for LLM dispatch (chat completions,
     /// responses). LLM calls can be slow; default is 120s.
@@ -475,6 +526,7 @@ impl AiProxy {
                     provider: p.clone(),
                     api_key: self.api_key.clone(),
                     base_url: self.base_url.clone(),
+                    auth: self.auth.clone(),
                     allow: Vec::new(),
                     deny: Vec::new(),
                 },
@@ -1027,6 +1079,7 @@ mod tests {
             }),
             api_key: Some("test-key".to_string()),
             base_url: None,
+            auth: None,
             timeout: 120,
             models_timeout_ms: 5_000,
             max_tokens: None,
@@ -1046,6 +1099,7 @@ mod tests {
             provider: None,
             api_key: None,
             base_url: None,
+            auth: None,
             timeout: 120,
             models_timeout_ms: 5_000,
             max_tokens: None,
@@ -1063,6 +1117,7 @@ mod tests {
             provider,
             api_key: None,
             base_url: None,
+            auth: None,
             allow: Vec::new(),
             deny: Vec::new(),
         }
@@ -1253,6 +1308,7 @@ mod tests {
             provider,
             api_key: None,
             base_url: None,
+            auth: None,
             allow: Vec::new(),
             deny: Vec::new(),
         }
@@ -2037,6 +2093,43 @@ mod tests {
             ..target_with(Provider::OpenAI)
         };
         assert_eq!(t.effective_base_url(), "https://my-azure.openai.com");
+    }
+
+    // --- auth strategy (ADR-0030 §0 refinement) ---
+
+    #[test]
+    fn auth_deserializes_unit_and_map_forms() {
+        assert_eq!(serde_json::from_str::<Auth>(r#""bearer""#).unwrap(), Auth::Bearer);
+        assert_eq!(serde_json::from_str::<Auth>(r#""api_key""#).unwrap(), Auth::ApiKey);
+        assert_eq!(
+            serde_json::from_str::<Auth>(r#"{"header":"X-Subscription-Token"}"#).unwrap(),
+            Auth::Header("X-Subscription-Token".to_string())
+        );
+        assert_eq!(
+            serde_json::from_str::<Auth>(r#"{"query":"key"}"#).unwrap(),
+            Auth::Query("key".to_string())
+        );
+    }
+
+    #[test]
+    fn effective_auth_defaults_to_provider_convention() {
+        assert_eq!(target_with(Provider::OpenAI).effective_auth(), Auth::Bearer);
+        assert_eq!(target_with(Provider::Ollama).effective_auth(), Auth::Bearer);
+        assert_eq!(target_with(Provider::Anthropic).effective_auth(), Auth::ApiKey);
+    }
+
+    #[test]
+    fn effective_auth_explicit_overrides_provider_default() {
+        // Brave AI Grounding: OpenAI wire protocol, but a custom credential
+        // header — configured without a new provider variant.
+        let brave = TargetConfig {
+            auth: Some(Auth::Header("X-Subscription-Token".to_string())),
+            ..target_with(Provider::OpenAI)
+        };
+        assert_eq!(
+            brave.effective_auth(),
+            Auth::Header("X-Subscription-Token".to_string())
+        );
     }
 
     #[test]
