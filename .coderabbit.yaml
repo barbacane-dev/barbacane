@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+tone_instructions: "Be concise and technical. Focus on correctness, safety, and adherence to the project conventions. Skip nitpicks already enforced by rustfmt/clippy/eslint."
+early_access: false
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  poem: false
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  changed_files_summary: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+
+  # Skip generated, vendored, or lockfile noise — nothing to review there.
+  path_filters:
+    - "!**/target/**"
+    - "!**/*.lock"
+    - "!**/Cargo.lock"
+    - "!ui/package-lock.json"
+    - "!ui/dist/**"
+    - "!**/*.bca"
+    - "!schemas/**"
+    - "!book/**"
+    - "!assets/**"
+    - "!**/*.snap"
+    - "!**/testdata/**"
+
+  path_instructions:
+    - path: "crates/**/*.rs"
+      instructions: >
+        Enforce the project's Rust conventions.
+        Flag any unwrap() or panic!() in production code (tests are exempt).
+        expect() is only acceptable for provably-infallible cases with a
+        justifying reason string. Prefer thiserror for library error types and
+        anyhow for binary/application code. Prefer parking_lot Mutex/RwLock over
+        std::sync. Reject #[allow(dead_code)] without a justification comment.
+        Prefer .is_some_and(...) over .map(...).unwrap_or(false), and
+        HeaderValue::from_static for compile-time-known header values.
+        Do not restate what rustfmt or clippy already enforce.
+    - path: "crates/barbacane-wasm/**/*.rs"
+      instructions: >
+        This is the WASM plugin runtime (wasmtime), host functions, and
+        sandboxing. Scrutinize sandbox-escape risks, host-function input
+        validation, resource limits, and any trust-boundary crossing between
+        host and guest.
+    - path: "crates/barbacane-control/**/*.rs"
+      instructions: >
+        Control plane: REST API + PostgreSQL. Watch for SQL injection, missing
+        authorization checks, and unvalidated request input.
+    - path: "ui/src/**/*.{ts,tsx,vue,js}"
+      instructions: >
+        TypeScript UI. Flag any usage of `any`, unhandled promise rejections,
+        and XSS-prone patterns. Do not restate what eslint already enforces.
+    - path: "**/*.{yml,yaml}"
+      instructions: >
+        For GitHub Actions workflows, watch for unpinned third-party actions,
+        script injection via untrusted ${{ }} interpolation, and overly broad
+        GITHUB_TOKEN permissions.
+
+  tools:
+    clippy:
+      enabled: true
+    eslint:
+      enabled: true
+    hadolint:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    gitleaks:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: "auto"
