@@ -88,7 +88,7 @@ The first FIPS build takes longer because `aws-lc-fips-sys` compiles AWS-LC from
 Update the Dockerfile to install Go for the FIPS build:
 
 ```dockerfile
-FROM rust:1.93-slim-bookworm AS builder
+FROM rust:1.94-slim-bookworm AS builder
 
 # Build dependencies — Go required for aws-lc-fips-sys
 RUN apt-get update && apt-get install -y --no-install-recommends \

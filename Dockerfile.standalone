@@ -20,7 +20,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build the barbacane binary
 # ---------------------------------------------------------------------------
-FROM rust:1.93-slim-bookworm AS binary-builder
+FROM rust:1.94-slim-bookworm AS binary-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
@@ -40,7 +40,7 @@ RUN cargo build --release --package barbacane && \
 # ---------------------------------------------------------------------------
 # Stage 2: Build all WASM plugins
 # ---------------------------------------------------------------------------
-FROM rust:1.93-slim-bookworm AS plugin-builder
+FROM rust:1.94-slim-bookworm AS plugin-builder
 
 RUN rustup target add wasm32-unknown-unknown
 
