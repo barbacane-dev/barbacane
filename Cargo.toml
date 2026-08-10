@@ -21,9 +21,9 @@ resolver = "2"
 [workspace.package]
 version = "0.8.1"
 edition = "2021"
-# Minimum supported Rust version, set by the dependency floor: wasmtime 43 and
-# cranelift 0.130 require rustc 1.91. Enforced by the `msrv` CI job.
-rust-version = "1.91"
+# Minimum supported Rust version, set by the dependency floor: wasmtime 47
+# requires rustc 1.94. Enforced by the `msrv` CI job.
+rust-version = "1.94"
 license = "AGPL-3.0-only"
 repository = "https://github.com/barbacane-dev/Barbacane"
 homepage = "https://github.com/barbacane-dev/Barbacane"
@@ -101,8 +101,8 @@ parking_lot = "0.12"
 jsonschema = "0.26"
 
 # WASM runtime
-wasmtime = { version = "43", features = ["cranelift", "pooling-allocator"] }
-wasmtime-wasi = { version = "43" }
+wasmtime = { version = "47", features = ["cranelift", "pooling-allocator"] }
+wasmtime-wasi = { version = "47" }
 
 # Plugin manifest
 toml = "0.8"
