@@ -4,7 +4,7 @@ This guide helps you set up a development environment for contributing to Barbac
 
 ## Prerequisites
 
-- **Rust 1.91+** - Install via [rustup](https://rustup.rs/). This is the project MSRV (enforced by CI); the dependency floor (wasmtime/cranelift) requires it.
+- **Rust 1.94+** - Install via [rustup](https://rustup.rs/). This is the project MSRV (enforced by CI); the dependency floor (wasmtime/cranelift) requires it.
 - **Git** - For version control
 - **Node.js 20+** - For the UI (if working on the web interface)
 - **PostgreSQL 14+** - For the control plane (or use Docker)

@@ -35,7 +35,7 @@ Be respectful. We're all here to build something useful.
 
 ### Prerequisites
 
-- Rust 1.91+ (the project MSRV, enforced by CI)
+- Rust 1.94+ (the project MSRV, enforced by CI)
 - PostgreSQL (for control plane tests)
 
 ### Building
