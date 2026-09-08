@@ -71,6 +71,12 @@ impl WafStage {
             );
         };
 
+        // The manifest is authenticated by this point, but the archive
+        // members are not: check the extracted bytes against the checksums
+        // before compiling them, exactly as plugin WASM is checked.
+        barbacane_compiler::artifact::verify_waf_rules(manifest, &sealed)
+            .map_err(|e| format!("WAF rule set integrity check failed: {e}"))?;
+
         // The sealed rule set is its own data loader: `@pmFromFile` phrase
         // lists travel in the artifact beside the rules, so the gateway needs
         // no filesystem access to compile them.
@@ -245,6 +251,12 @@ impl WafInspection<'_> {
         // correlation and audit decisions, so it still runs.
         let verdict = self.tx.process_logging();
         WafStage::decide(&self.tx, verdict)
+    }
+
+    /// The ids of every rule that matched, for the match counter. Includes
+    /// rules that only scored, which is what detection-only mode needs.
+    pub fn matched_rule_ids(&self) -> Vec<u32> {
+        self.tx.matched_ids()
     }
 
     /// The inbound anomaly score the request accumulated, for logging.

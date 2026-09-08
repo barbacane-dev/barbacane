@@ -145,6 +145,13 @@ pub struct MetricsRegistry {
 
     /// Requests the WAF interrupted, by rule.
     pub waf_blocked_total: Family<WafLabels, Counter>,
+    /// Requests a rule matched, by rule, whether or not the request was
+    /// interrupted.
+    ///
+    /// This is the signal detection-only mode needs. `waf_blocked_total`
+    /// stays at zero when nothing is interrupted, so tuning a rule set before
+    /// switching to blocking requires counting matches rather than blocks.
+    pub waf_matched_total: Family<WafLabels, Counter>,
     /// Requests the WAF inspected without interrupting. With
     /// `waf_blocked_total` this gives the block rate, which is the number an
     /// operator watches when tuning a rule set.
@@ -237,6 +244,13 @@ impl MetricsRegistry {
         );
 
         // Validation metrics
+        let waf_matched_total = Family::<WafLabels, Counter>::default();
+        registry.register(
+            "barbacane_waf_matched_total",
+            "Rules matched by the web application firewall, whether or not the request was blocked",
+            waf_matched_total.clone(),
+        );
+
         let waf_blocked_total = Family::<WafLabels, Counter>::default();
         registry.register(
             "barbacane_waf_blocked_total",
@@ -373,6 +387,7 @@ impl MetricsRegistry {
             connections_total,
             validation_failures_total,
             waf_blocked_total,
+            waf_matched_total,
             waf_allowed_total,
             waf_duration_seconds,
             middleware_duration_seconds,
@@ -433,6 +448,17 @@ impl MetricsRegistry {
     /// Record a request the WAF interrupted.
     pub fn record_waf_blocked(&self, method: &str, path: &str, rule_id: u32) {
         self.waf_blocked_total
+            .get_or_create(&WafLabels {
+                method: method.to_string(),
+                path: path.to_string(),
+                rule_id: rule_id.to_string(),
+            })
+            .inc();
+    }
+
+    /// Record a rule that matched, whether or not the request was blocked.
+    pub fn record_waf_match(&self, method: &str, path: &str, rule_id: u32) {
+        self.waf_matched_total
             .get_or_create(&WafLabels {
                 method: method.to_string(),
                 path: path.to_string(),

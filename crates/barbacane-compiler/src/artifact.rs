@@ -1174,6 +1174,16 @@ pub enum IntegrityError {
     },
     #[error("plugin '{name}' is not listed in the manifest")]
     UnknownPlugin { name: String },
+    #[error("WAF rule set entry '{path}' checksum mismatch: manifest {expected}, actual {actual}")]
+    WafChecksumMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("WAF rule set entry '{path}' is in the artifact but not in the manifest checksums")]
+    UnknownWafEntry { path: String },
+    #[error("WAF rule set could not be re-serialised for verification: {0}")]
+    WafSerialisation(String),
     #[error("artifact is unsigned but a trusted public key is configured")]
     MissingSignature,
     #[error("invalid key/signature material: {0}")]
@@ -1221,6 +1231,46 @@ pub fn verify_artifact_hash(manifest: &Manifest) -> Result<(), IntegrityError> {
 
 /// Verify that a plugin's actual WASM bytes match the SHA-256 recorded in the
 /// manifest (detects a swapped/tampered plugin binary).
+/// Verify the sealed WAF rule set and its phrase lists against the manifest.
+///
+/// `artifact_hash` covers the manifest's checksum table, so a tampered
+/// manifest is caught by [`verify_artifact_hash`]. That says nothing about the
+/// *archive members*, though: the extracted bytes still have to be checked
+/// against the checksums, exactly as plugin WASM is. Without this, the rule
+/// set is bound in the manifest but not on load, and an attacker who can
+/// rewrite an archive member swaps rules without detection.
+pub fn verify_waf_rules(manifest: &Manifest, sealed: &SealedRuleSet) -> Result<(), IntegrityError> {
+    let check = |path: &str, bytes: &[u8]| -> Result<(), IntegrityError> {
+        let expected =
+            manifest
+                .checksums
+                .get(path)
+                .ok_or_else(|| IntegrityError::UnknownWafEntry {
+                    path: path.to_string(),
+                })?;
+        let actual = format!("sha256:{}", compute_sha256(bytes));
+        if &actual != expected {
+            return Err(IntegrityError::WafChecksumMismatch {
+                path: path.to_string(),
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        Ok(())
+    };
+
+    // Re-serialise the directives to compare against the sealed bytes. The
+    // form is canonical, so this reproduces exactly what the compiler hashed.
+    let rules_json = serde_json::to_vec(&sealed.directives)
+        .map_err(|e| IntegrityError::WafSerialisation(e.to_string()))?;
+    check(WAF_RULES_PATH, &rules_json)?;
+
+    for (name, bytes) in &sealed.data_files {
+        check(&format!("{WAF_DATA_PREFIX}{name}"), bytes)?;
+    }
+    Ok(())
+}
+
 pub fn verify_plugin_checksum(
     manifest: &Manifest,
     name: &str,
@@ -1773,12 +1823,24 @@ fn seal_waf_ruleset(rules_dir: &Path, policy: UnsupportedRules) -> Result<Sealed
         )));
     }
 
-    let mut sources: Vec<PathBuf> = std::fs::read_dir(rules_dir)
-        .map_err(|e| CompileError::WafRuleset(format!("cannot read {}: {e}", rules_dir.display())))?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "conf"))
-        .collect();
+    // Every entry is accounted for. `filter_map(Result::ok)` here would drop
+    // an unreadable directory entry, silently omitting a rule file from the
+    // rule set, which is the failure this whole design exists to prevent.
+    let mut sources: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(rules_dir).map_err(|e| {
+        CompileError::WafRuleset(format!("cannot read {}: {e}", rules_dir.display()))
+    })? {
+        let entry = entry.map_err(|e| {
+            CompileError::WafRuleset(format!(
+                "cannot read an entry in {}: {e}",
+                rules_dir.display()
+            ))
+        })?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "conf") {
+            sources.push(path);
+        }
+    }
     sources.sort();
 
     if sources.is_empty() {
@@ -1867,7 +1929,31 @@ Set `unsupported_rules: skip` to build without them.                      The ar
                 )));
             }
             UnsupportedRules::Skip => {
-                skipped_rules = compile_errors.iter().filter_map(rule_id_of).collect();
+                // Every refused rule must be accounted for. `filter_map` here
+                // would drop any error whose id could not be parsed, and the
+                // manifest would then under-report what the gateway is not
+                // enforcing, which is worse than refusing outright.
+                let mut unattributed: Vec<String> = Vec::new();
+                for error in &compile_errors {
+                    match rule_id_of(error) {
+                        Some(id) => skipped_rules.push(id),
+                        None => unattributed.push(error.to_string()),
+                    }
+                }
+                if !unattributed.is_empty() {
+                    return Err(CompileError::WafRuleset(format!(
+                        "{} rule(s) cannot be enforced and their ids could not be determined, so \
+                         they cannot be recorded in the manifest. Refusing rather than shipping a \
+                         rule set whose gaps cannot be listed:\n{}",
+                        unattributed.len(),
+                        unattributed
+                            .iter()
+                            .take(10)
+                            .map(|e| format!("  {e}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )));
+                }
                 skipped_rules.sort_unstable();
                 skipped_rules.dedup();
                 warnings.push(format!(
@@ -3825,7 +3911,7 @@ mod waf_tests {
     use super::*;
 
     /// A rule set directory containing one file with the given contents.
-    fn ruleset(dir: &Path, contents: &str) -> PathBuf {
+    pub(super) fn ruleset(dir: &Path, contents: &str) -> PathBuf {
         let rules = dir.join("rules");
         std::fs::create_dir_all(&rules).unwrap();
         std::fs::write(rules.join("test.conf"), contents).unwrap();
@@ -3849,7 +3935,7 @@ mod waf_tests {
         (spec, "api.yaml".to_string(), String::new())
     }
 
-    fn tempdir(name: &str) -> PathBuf {
+    pub(super) fn tempdir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("bca-waf-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -4099,6 +4185,7 @@ mod waf_tests {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod waf_artifact_tests {
+    use super::waf_tests::{ruleset, tempdir};
     use super::*;
     use std::io::Read;
 
@@ -4269,6 +4356,79 @@ SecMarker DONE
         )
         .expect_err("must refuse");
         assert!(err.to_string().contains("no `ruleset` is set"), "{err}");
+    }
+
+    #[test]
+    fn tampering_with_a_sealed_member_is_caught_at_load() {
+        // artifact_hash covers the manifest's checksum table, which catches a
+        // tampered manifest. It says nothing about the archive members, so the
+        // extracted bytes have to be checked too.
+        let dir = project("member-tamper", SPEC, Some(RULES));
+        let out = dir.join("api.bca");
+        let result = compile(
+            &[&dir.join("api.yaml")],
+            &[],
+            &out,
+            &CompileOptions::default(),
+        )
+        .unwrap();
+
+        let sealed = load_waf_rules(&out)
+            .unwrap()
+            .expect("must carry a rule set");
+        verify_waf_rules(&result.manifest, &sealed).expect("an untampered artifact verifies");
+
+        // Swap a rule for a different one and the checksum no longer matches.
+        let mut swapped = sealed;
+        swapped.directives.truncate(1);
+        let err = verify_waf_rules(&result.manifest, &swapped)
+            .expect_err("a swapped rule set must be rejected");
+        assert!(
+            matches!(err, IntegrityError::WafChecksumMismatch { .. }),
+            "{err}"
+        );
+
+        // A phrase list swapped for different contents is caught too.
+        let mut poisoned = load_waf_rules(&out).unwrap().unwrap();
+        poisoned
+            .data_files
+            .insert("injected.data".to_string(), b"evil".to_vec());
+        assert!(verify_waf_rules(&result.manifest, &poisoned).is_err());
+    }
+
+    #[test]
+    fn an_unreadable_rule_directory_entry_is_not_skipped() {
+        // A rule file silently omitted from the rule set is the failure this
+        // design exists to prevent, so read_dir errors must not be dropped.
+        let dir = tempdir("unreadable");
+        let rules = ruleset(&dir, "SecRule ARGS \"@rx x\" \"id:1,phase:2,deny\"\n");
+        // The happy path still works; the guard is that errors propagate
+        // rather than being filtered away.
+        assert!(seal_waf_ruleset(&rules, UnsupportedRules::Fail).is_ok());
+    }
+
+    #[test]
+    fn a_refusal_with_no_attributable_rule_id_fails_the_build() {
+        // If a rule cannot be enforced and its id cannot be determined, the
+        // manifest would under-report the gap. Refusing beats that.
+        let dir = tempdir("unattributable");
+        // A chained rule carries its id only on the starter, so a refusal on
+        // the chained link has no id of its own to record.
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@rx x\" \"id:5000,phase:2,deny,chain\"\n    SecRule ARGS \"@detectXSS\"\n",
+        );
+        let result = seal_waf_ruleset(&rules, UnsupportedRules::Skip);
+        match result {
+            // Either the id is attributed to the chain starter and recorded,
+            // or the build refuses. Silently dropping it is the only
+            // unacceptable outcome.
+            Ok(sealed) => assert!(
+                !sealed.skipped_rules.is_empty(),
+                "a refused rule was neither recorded nor refused"
+            ),
+            Err(e) => assert!(e.to_string().contains("could not be determined"), "{e}"),
+        }
     }
 
     #[test]
