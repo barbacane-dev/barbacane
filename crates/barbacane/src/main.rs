@@ -1843,6 +1843,10 @@ impl Gateway {
     ///   returns, body streams via `StreamBody`. on_response runs in a background task for
     ///   observability only (modifications are discarded since the response is already sent).
     #[allow(clippy::too_many_arguments)]
+    // The Err variant here *is* an HTTP response, which hyper sizes at 144
+    // bytes. Boxing a response to satisfy a size lint would add an allocation
+    // to the error path for no benefit, and the type is not ours to shrink.
+    #[allow(clippy::result_large_err)]
     async fn dispatch_wasm_plugin_inner(
         &self,
         plugin_name: &str,
