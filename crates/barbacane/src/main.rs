@@ -1405,6 +1405,8 @@ impl Gateway {
                             message = %message,
                             "WAF blocked request"
                         );
+                        self.metrics
+                            .record_waf_blocked(&method_str, &route_path, rule_id);
                         self.metrics.record_validation_failure(
                             &method_str,
                             &route_path,
