@@ -3,6 +3,18 @@
 //! Provides `serve` and `seed-plugins` subcommands for running the control plane server
 //! and seeding the plugin registry.
 
+// Handlers return `Result<_, ProblemDetails>`, and `ProblemDetails` is exactly
+// 128 bytes: the six fields RFC 9457 defines, five of them String, Option<String>
+// or Vec. There is nothing to trim, and it sits exactly on this lint's default
+// threshold.
+//
+// Boxing it would trade a 128-byte move on the success path for a heap
+// allocation on every error path, in an administrative API whose handlers run
+// at human frequency. That is a worse trade, not a better one, so the lint is
+// allowed here rather than satisfied. The data plane, where per-request cost
+// does matter, keeps it enabled.
+#![allow(clippy::result_large_err)]
+
 use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
