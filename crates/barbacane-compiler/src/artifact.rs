@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::Builder;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::spec_parser::{
     parse_spec_file, ApiSpec, DispatchConfig, Message, MiddlewareConfig, Parameter, RequestBody,
@@ -60,6 +60,9 @@ impl Default for CompileOptions {
 
 /// Path of the sealed WAF rule set inside the artifact.
 pub const WAF_RULES_PATH: &str = "waf/rules.json";
+
+/// Directory holding the `@pmFromFile` phrase lists inside the artifact.
+pub const WAF_DATA_PREFIX: &str = "waf/data/";
 
 /// Compiler version (from Cargo.toml).
 pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -423,6 +426,64 @@ pub fn load_manifest(artifact_path: &Path) -> Result<Manifest, CompileError> {
         std::io::ErrorKind::NotFound,
         "manifest.json not found in artifact",
     )))
+}
+
+/// Load the sealed WAF rule set from a `.bca` artifact.
+///
+/// Returns the validated directives, which the caller compiles once. `None`
+/// when the artifact carries no rule set.
+///
+/// The caller must have verified `artifact_hash` first: the rule set is bound
+/// by it, and loading rules from an artifact whose hash has not been checked
+/// would accept a swapped rule set.
+pub fn load_waf_rules(artifact_path: &Path) -> Result<Option<SealedRuleSet>, CompileError> {
+    let file = File::open(artifact_path)?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+
+    let mut rules: Option<Vec<parapet::Directive>> = None;
+    let mut data_files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.to_string_lossy().into_owned();
+        if path == WAF_RULES_PATH {
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content)?;
+            rules = Some(serde_json::from_slice(&content)?);
+        } else if let Some(name) = path.strip_prefix(WAF_DATA_PREFIX) {
+            let name = name.to_string();
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content)?;
+            data_files.insert(name, content);
+        }
+    }
+
+    Ok(rules.map(|directives| SealedRuleSet {
+        directives,
+        data_files,
+    }))
+}
+
+/// A rule set as it comes out of an artifact: the rules, plus the phrase lists
+/// their `@pmFromFile` operators reference.
+#[derive(Debug)]
+pub struct SealedRuleSet {
+    /// The validated rules.
+    pub directives: Vec<parapet::Directive>,
+    /// Phrase lists, keyed by the name the rules reference.
+    pub data_files: BTreeMap<String, Vec<u8>>,
+}
+
+impl parapet::DataLoader for SealedRuleSet {
+    fn load(&self, name: &str) -> Result<Vec<u8>, String> {
+        self.data_files.get(name).cloned().ok_or_else(|| {
+            format!(
+                "phrase list {name:?} is referenced by the rule set but not present in the \
+                 artifact; recompile it"
+            )
+        })
+    }
 }
 
 /// Load compiled routes from a .bca artifact.
@@ -897,6 +958,7 @@ fn compile_inner(
     // prove which rules a running gateway carries.
     let mut waf = extract_root_waf_config(specs);
     let mut sealed_waf: Option<Vec<u8>> = None;
+    let mut sealed_waf_data: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     if waf.enabled {
         let Some(ruleset) = waf.ruleset.clone() else {
             return Err(CompileError::WafRuleset(
@@ -916,6 +978,13 @@ fn compile_inner(
             WAF_RULES_PATH.to_string(),
             format!("sha256:{}", compute_sha256(&sealed.rules_json)),
         );
+        for (name, bytes) in &sealed.data_files {
+            checksums.insert(
+                format!("{WAF_DATA_PREFIX}{name}"),
+                format!("sha256:{}", compute_sha256(bytes)),
+            );
+        }
+        sealed_waf_data = sealed.data_files;
         sealed_waf = Some(sealed.rules_json);
     }
 
@@ -966,6 +1035,9 @@ fn compile_inner(
     add_file_to_tar(&mut archive, "routes.json", routes_json.as_bytes())?;
     if let Some(rules_json) = &sealed_waf {
         add_file_to_tar(&mut archive, WAF_RULES_PATH, rules_json)?;
+        for (name, bytes) in &sealed_waf_data {
+            add_file_to_tar(&mut archive, &format!("{WAF_DATA_PREFIX}{name}"), bytes)?;
+        }
     }
 
     // Add source specs under specs/ directory
@@ -1677,6 +1749,10 @@ fn extract_root_waf_config(specs: &[(ApiSpec, String, String)]) -> WafConfig {
 struct SealedWaf {
     /// The validated rule set, serialised for the artifact.
     rules_json: Vec<u8>,
+    /// Phrase lists referenced by `@pmFromFile`, keyed by the name the rule
+    /// used. Sealed alongside the rules, because a rule set that references
+    /// files the artifact does not carry cannot be compiled by the gateway.
+    data_files: BTreeMap<String, Vec<u8>>,
     /// Ids of rules left out because they could not be compiled.
     skipped_rules: Vec<u32>,
     /// Compile-time warnings for the operator.
@@ -1744,6 +1820,26 @@ fn seal_waf_ruleset(rules_dir: &Path, policy: UnsupportedRules) -> Result<Sealed
         directives.extend(parsed);
     }
 
+    // `@pmFromFile` names a phrase list on disk. Collect the ones this rule
+    // set actually references and seal those, rather than every .data file in
+    // the directory.
+    let mut data_files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for name in referenced_data_files(&directives) {
+        if name.contains("..") || name.starts_with('/') {
+            return Err(CompileError::WafRuleset(format!(
+                "@pmFromFile {name:?} escapes the rule set directory"
+            )));
+        }
+        let path = rules_dir.join(&name);
+        let bytes = std::fs::read(&path).map_err(|e| {
+            CompileError::WafRuleset(format!(
+                "@pmFromFile {name:?} could not be read from {}: {e}",
+                path.display()
+            ))
+        })?;
+        data_files.insert(name, bytes);
+    }
+
     let loader = parapet::DirDataLoader::new(rules_dir);
     let (_, compile_errors) = parapet::RuleSet::compile_all(&directives, &loader);
 
@@ -1802,9 +1898,26 @@ Set `unsupported_rules: skip` to build without them.                      The ar
     let rules_json = serde_json::to_vec(&directives)?;
     Ok(SealedWaf {
         rules_json,
+        data_files,
         skipped_rules,
         warnings,
     })
+}
+
+/// Every phrase list a rule set references through `@pmFromFile`.
+fn referenced_data_files(directives: &[parapet::Directive]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut visit = |op: &Option<parapet::operator::Operator>| {
+        if let Some(parapet::operator::Operator::PmFromFile(name)) = op {
+            names.insert(name.clone());
+        }
+    };
+    for directive in directives {
+        if let parapet::Directive::Rule(rule) | parapet::Directive::Action(rule) = directive {
+            visit(&rule.operator);
+        }
+    }
+    names
 }
 
 /// Pull the rule id out of a Parapet compile error, which formats as
@@ -3813,6 +3926,92 @@ mod waf_tests {
             "the sealed rule set still contains rules that cannot compile"
         );
         assert_eq!(rebuilt.rule_count(), 1);
+    }
+
+    #[test]
+    fn phrase_lists_referenced_by_pmfromfile_are_sealed() {
+        // Found by running the gateway: sealing only the rules leaves
+        // @pmFromFile unresolvable, so the data plane cannot compile the rule
+        // set it was handed.
+        let dir = tempdir("pmfromfile");
+        let rules = ruleset(
+            &dir,
+            "SecRule REQUEST_HEADERS:User-Agent \"@pmFromFile scanners.data\" \
+             \"id:2000,phase:1,deny\"\n",
+        );
+        std::fs::write(rules.join("scanners.data"), "# comment\nnikto\nsqlmap\n").unwrap();
+
+        let sealed = seal_waf_ruleset(&rules, UnsupportedRules::Fail).expect("must seal");
+        assert_eq!(sealed.data_files.len(), 1);
+        assert!(sealed.data_files.contains_key("scanners.data"));
+
+        // And the sealed pair compiles with no filesystem access at all.
+        let directives: Vec<parapet::Directive> =
+            serde_json::from_slice(&sealed.rules_json).unwrap();
+        let loaded = SealedRuleSet {
+            directives,
+            data_files: sealed.data_files.clone(),
+        };
+        parapet::RuleSet::compile(&loaded.directives, &loaded)
+            .expect("the sealed rule set must compile without touching the filesystem");
+    }
+
+    #[test]
+    fn only_referenced_phrase_lists_are_sealed() {
+        let dir = tempdir("pmfromfile-subset");
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@pmFromFile used.data\" \"id:2001,phase:2,deny\"\n",
+        );
+        std::fs::write(rules.join("used.data"), "a\n").unwrap();
+        std::fs::write(rules.join("unused.data"), "b\n").unwrap();
+
+        let sealed = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap();
+        assert_eq!(
+            sealed.data_files.keys().collect::<Vec<_>>(),
+            vec!["used.data"]
+        );
+    }
+
+    #[test]
+    fn a_missing_phrase_list_refuses_the_build() {
+        let dir = tempdir("pmfromfile-missing");
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@pmFromFile absent.data\" \"id:2002,phase:2,deny\"\n",
+        );
+        let err = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap_err();
+        assert!(err.to_string().contains("absent.data"), "{err}");
+    }
+
+    #[test]
+    fn a_phrase_list_cannot_escape_the_ruleset_directory() {
+        let dir = tempdir("pmfromfile-escape");
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@pmFromFile ../../etc/passwd\" \"id:2003,phase:2,deny\"\n",
+        );
+        let err = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap_err();
+        assert!(err.to_string().contains("escapes"), "{err}");
+    }
+
+    #[test]
+    fn multi_word_phrases_survive_sealing() {
+        // 2,008 phrases in CRS contain spaces, so the sealed form must not
+        // re-split them.
+        let dir = tempdir("pmfromfile-spaces");
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@pmFromFile phrases.data\" \"id:2004,phase:2,deny\"\n",
+        );
+        std::fs::write(
+            rules.join("phrases.data"),
+            "class java.lang.\nat java.lang.\n",
+        )
+        .unwrap();
+        let sealed = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap();
+        let text = String::from_utf8(sealed.data_files["phrases.data"].clone()).unwrap();
+        assert!(text.contains("class java.lang."));
     }
 
     #[test]

@@ -348,6 +348,7 @@ dependencies = [
  "hyper-util",
  "jsonschema",
  "notify",
+ "parapet",
  "parking_lot",
  "reqwest 0.12.28",
  "rustls",

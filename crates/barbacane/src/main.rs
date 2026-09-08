@@ -2,6 +2,8 @@
 //!
 //! Compiles OpenAPI specs into artifacts and runs the data plane server.
 
+mod waf;
+
 use barbacane_lib::{admin, control_plane, hot_reload};
 
 use std::convert::Infallible;
@@ -653,6 +655,9 @@ struct Gateway {
     operations: Vec<CompiledOperation>,
     /// Pre-compiled validators for each operation.
     validators: Vec<OperationValidator>,
+    /// WAF stage, when the artifact carries a rule set. Compiled once at
+    /// startup; evaluation borrows it.
+    waf: Option<waf::WafStage>,
     /// Source specs embedded in the artifact (filename -> content).
     specs: HashMap<String, String>,
     /// Request limits (body size, headers, URI length).
@@ -735,6 +740,30 @@ impl Gateway {
         let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
         let wasm_engine = Arc::new(wasm_engine);
+
+        // Build the WAF stage before serving. Refusing to start beats
+        // starting with a rule set that silently did not load.
+        let waf_stage = match waf::WafStage::from_artifact(artifact_path, &manifest) {
+            Ok(stage) => stage,
+            Err(e) => return Err(format!("WAF: {e}")),
+        };
+        if let Some(stage) = &waf_stage {
+            tracing::info!(
+                rules = stage.rule_count(),
+                blocking = stage.is_blocking(),
+                paranoia_level = manifest.waf.paranoia_level,
+                skipped_rules = ?manifest.waf.skipped_rules,
+                "WAF enabled"
+            );
+            if !manifest.waf.skipped_rules.is_empty() {
+                // Loud on every boot: an operator should not have to read the
+                // manifest to discover the rule set is incomplete.
+                tracing::warn!(
+                    skipped_rules = ?manifest.waf.skipped_rules,
+                    "WAF rule set is incomplete: these rules are not enforced by this build"
+                );
+            }
+        }
 
         // Load plugins from the artifact
         let bundled_plugins = load_plugins(artifact_path)
@@ -974,6 +1003,7 @@ impl Gateway {
             router,
             operations: resolved_operations,
             validators,
+            waf: waf_stage,
             specs,
             limits,
             dev_mode,
@@ -1278,6 +1308,59 @@ impl Gateway {
                         &request_id,
                         &trace_id,
                     )));
+                }
+
+                // WAF inspection sits between the two models: the spec has
+                // already said what the request may look like, and the rule
+                // set now looks for attack shapes that are schema-valid.
+                if let Some(stage) = &self.waf {
+                    let header_pairs: Vec<(String, String)> = headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    let decision = stage.inspect_request(
+                        &method_str,
+                        &uri_string,
+                        "HTTP/1.1",
+                        &header_pairs,
+                        &body_bytes,
+                        content_type,
+                        client_addr.map(|a| a.ip().to_string()).as_deref(),
+                    );
+                    if let waf::WafDecision::Block {
+                        status,
+                        rule_id,
+                        message,
+                    } = decision
+                    {
+                        tracing::warn!(
+                            rule_id,
+                            status,
+                            method = %method_str,
+                            path = %route_path,
+                            message = %message,
+                            "WAF blocked request"
+                        );
+                        self.metrics.record_validation_failure(
+                            &method_str,
+                            &route_path,
+                            "waf_blocked",
+                        );
+                        let response = self.waf_blocked_response(status, rule_id, &message);
+                        self.record_request_metrics(
+                            &method_str,
+                            &route_path,
+                            response.status().as_u16(),
+                            request_size,
+                            0,
+                            start_time,
+                        );
+                        return Ok(box_full(Self::add_standard_headers(
+                            response,
+                            &request_id,
+                            &trace_id,
+                        )));
+                    }
                 }
 
                 // Validate request against OpenAPI spec
@@ -2797,6 +2880,37 @@ impl Gateway {
             .status(StatusCode::BAD_REQUEST)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(problem.to_json())))
+            .expect("valid response")
+    }
+
+    /// Build a 403 response for a request the WAF blocked (RFC 9457).
+    ///
+    /// The rule id and message appear only in dev mode. In production they
+    /// tell an attacker exactly which rule to shape the next payload around,
+    /// so they go to the log instead.
+    fn waf_blocked_response(
+        &self,
+        status: u16,
+        rule_id: u32,
+        message: &str,
+    ) -> Response<Full<Bytes>> {
+        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
+        let mut body = serde_json::json!({
+            "type": "urn:barbacane:error:waf-blocked",
+            "title": "Forbidden",
+            "status": status.as_u16(),
+            "detail": "The request was blocked by the web application firewall.",
+        });
+        if self.dev_mode {
+            body["rule_id"] = serde_json::json!(rule_id);
+            if !message.is_empty() {
+                body["rule_message"] = serde_json::json!(message);
+            }
+        }
+        Response::builder()
+            .status(status)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")
     }
 
