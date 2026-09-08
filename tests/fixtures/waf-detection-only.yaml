@@ -1,0 +1,81 @@
+openapi: "3.0.3"
+info:
+  title: WAF Detection-Only Test API
+  version: "1.0.0"
+  description: API for testing the WAF pipeline stage in detection-only mode
+
+x-barbacane-waf:
+  ruleset: ./waf-rules
+  paranoia_level: 1
+  mode: detection-only
+  thresholds:
+    inbound: 5
+    outbound: 4
+
+paths:
+  /waf/search:
+    get:
+      summary: Free-form query parameters the rule set inspects
+      operationId: wafSearch
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: file
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: debug
+          in: query
+          required: false
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "ok"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /waf/submit:
+    post:
+      summary: JSON body the rule set inspects as phase 2 arguments
+      operationId: wafSubmit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "accepted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string

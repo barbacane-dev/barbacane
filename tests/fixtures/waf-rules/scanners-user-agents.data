@@ -1,0 +1,6 @@
+# Phrase list for rule 1001500. One phrase per line, # comments ignored.
+nikto
+sqlmap
+nmap scripting engine
+dirbuster
+masscan

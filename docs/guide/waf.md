@@ -113,7 +113,7 @@ thing, and it is the single most common reason a WAF gets turned off again.
 
 ## Observing it
 
-Three metrics on the admin endpoint:
+Four metrics on the admin endpoint:
 
 | Metric | Meaning |
 |---|---|
@@ -121,6 +121,13 @@ Three metrics on the admin endpoint:
 | `barbacane_waf_blocked_total{method,path,rule_id}` | Requests actually interrupted, by the rule that did it. Zero in detection-only mode. |
 | `barbacane_waf_allowed_total{method,path}` | Requests inspected and allowed. With the above, the block rate. |
 | `barbacane_waf_duration_seconds{method,path}` | Time spent inspecting, so the WAF's share of latency is visible rather than inferred. |
+
+`barbacane_waf_matched_total` counts every rule that matched, including the
+control-flow rules CRS uses to gate paranoia levels. Those are `pass,nolog`
+rules whose only job is to skip a block of higher-paranoia rules, and they
+match on most requests, so they dominate the counter by volume. Filter them out
+when reading the tuning signal: the rule ids that matter are the ones that
+carry a score.
 
 A blocked request is logged at WARN with the rule id, the accumulated anomaly
 score and the rule's message, and answers `403` with an RFC 9457 body. The rule
