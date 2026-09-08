@@ -748,13 +748,29 @@ impl Gateway {
             Err(e) => return Err(format!("WAF: {e}")),
         };
         if let Some(stage) = &waf_stage {
+            let (request_rules, response_rules) = stage.rules_by_direction();
             tracing::info!(
                 rules = stage.rule_count(),
+                request_phase_rules = request_rules,
+                response_phase_rules = response_rules,
                 blocking = stage.is_blocking(),
                 paranoia_level = manifest.waf.paranoia_level,
                 skipped_rules = ?manifest.waf.skipped_rules,
                 "WAF enabled"
             );
+            if response_rules > 0 {
+                // Outbound inspection is implemented but not yet wired into
+                // the response path, which has several exits (streaming,
+                // WebSocket upgrade, middleware short-circuit) and a streamed
+                // response is already on the wire before a phase-4 rule could
+                // act on it. Saying so on every boot beats letting an operator
+                // assume the response rules in their artifact are running.
+                tracing::warn!(
+                    response_phase_rules = response_rules,
+                    "WAF response-phase rules are present in the artifact but not evaluated: \
+                     outbound inspection is not wired yet. Request-phase rules are enforced."
+                );
+            }
             if !manifest.waf.skipped_rules.is_empty() {
                 // Loud on every boot: an operator should not have to read the
                 // manifest to discover the rule set is incomplete.
@@ -1318,7 +1334,8 @@ impl Gateway {
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    let decision = stage.inspect_request(
+                    let waf_start = std::time::Instant::now();
+                    let (decision, inspection) = stage.inspect_request(
                         &method_str,
                         &uri_string,
                         "HTTP/1.1",
@@ -1326,6 +1343,12 @@ impl Gateway {
                         &body_bytes,
                         content_type,
                         client_addr.map(|a| a.ip().to_string()).as_deref(),
+                    );
+                    self.metrics.record_waf_inspection(
+                        &method_str,
+                        &route_path,
+                        waf_start.elapsed().as_secs_f64(),
+                        matches!(decision, waf::WafDecision::Allow),
                     );
                     if let waf::WafDecision::Block {
                         status,
@@ -1338,6 +1361,7 @@ impl Gateway {
                             status,
                             method = %method_str,
                             path = %route_path,
+                            inbound_score = inspection.inbound_score(),
                             message = %message,
                             "WAF blocked request"
                         );

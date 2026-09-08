@@ -2886,7 +2886,7 @@ dependencies = [
 [[package]]
 name = "parapet"
 version = "0.0.0"
-source = "git+https://github.com/barbacane-dev/parapet?rev=bddd39c94a8814fe7bacd4527ff0cf0bf829a7c8#bddd39c94a8814fe7bacd4527ff0cf0bf829a7c8"
+source = "git+https://github.com/barbacane-dev/parapet?rev=a9218569f57219b897c87416c7a9240f228aca01#a9218569f57219b897c87416c7a9240f228aca01"
 dependencies = [
  "aho-corasick",
  "quick-xml",
