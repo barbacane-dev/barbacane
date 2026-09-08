@@ -80,6 +80,7 @@ barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 - [AI Gateway](guide/ai-gateway.md) - OpenAI-compatible AI gateway: Chat Completions, Responses API, model catalog
 - [Middlewares](guide/middlewares/index.md) - Add authentication, rate limiting, and more
 - [Secrets](guide/secrets.md) - Manage secrets in plugin configurations
+- [Web application firewall](guide/waf.md) - Run OWASP CRS as a native pipeline stage
 - [Observability](guide/observability.md) - Metrics, logging, and distributed tracing
 - [Control Plane](guide/control-plane.md) - REST API for spec and artifact management
 - [Web UI](guide/web-ui.md) - Web-based management interface

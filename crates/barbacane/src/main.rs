@@ -2,6 +2,8 @@
 //!
 //! Compiles OpenAPI specs into artifacts and runs the data plane server.
 
+mod waf;
+
 use barbacane_lib::{admin, control_plane, hot_reload};
 
 use std::convert::Infallible;
@@ -653,6 +655,9 @@ struct Gateway {
     operations: Vec<CompiledOperation>,
     /// Pre-compiled validators for each operation.
     validators: Vec<OperationValidator>,
+    /// WAF stage, when the artifact carries a rule set. Compiled once at
+    /// startup; evaluation borrows it.
+    waf: Option<waf::WafStage>,
     /// Source specs embedded in the artifact (filename -> content).
     specs: HashMap<String, String>,
     /// Request limits (body size, headers, URI length).
@@ -754,6 +759,7 @@ impl Gateway {
             barbacane_compiler::verify_plugin_checksum(&manifest, name, &loaded.wasm_bytes)
                 .map_err(|e| format!("artifact integrity check failed: {}", e))?;
         }
+
         match std::env::var("BARBACANE_TRUSTED_PUBKEY") {
             Ok(pubkey) if !pubkey.trim().is_empty() => {
                 barbacane_compiler::verify_artifact_signature(&manifest, &pubkey)
@@ -763,6 +769,49 @@ impl Gateway {
             _ => {
                 tracing::warn!(
                     "artifact signature verification disabled; set BARBACANE_TRUSTED_PUBKEY to require a valid Ed25519 signature"
+                );
+            }
+        }
+
+        // Build the WAF stage only after the artifact has been authenticated.
+        // The rule set is bound by artifact_hash, so compiling it before that
+        // check would mean acting on rules an attacker could have swapped.
+        // Refusing to start beats starting with a rule set that silently did
+        // not load.
+        let waf_stage = match waf::WafStage::from_artifact(artifact_path, &manifest) {
+            Ok(stage) => stage,
+            Err(e) => return Err(format!("WAF: {e}")),
+        };
+        if let Some(stage) = &waf_stage {
+            let (request_rules, response_rules) = stage.rules_by_direction();
+            tracing::info!(
+                rules = stage.rule_count(),
+                request_phase_rules = request_rules,
+                response_phase_rules = response_rules,
+                blocking = stage.is_blocking(),
+                paranoia_level = manifest.waf.paranoia_level,
+                skipped_rules = ?manifest.waf.skipped_rules,
+                "WAF enabled"
+            );
+            if response_rules > 0 {
+                // Outbound inspection is implemented but not yet wired into
+                // the response path, which has several exits (streaming,
+                // WebSocket upgrade, middleware short-circuit) and a streamed
+                // response is already on the wire before a phase-4 rule could
+                // act on it. Saying so on every boot beats letting an operator
+                // assume the response rules in their artifact are running.
+                tracing::warn!(
+                    response_phase_rules = response_rules,
+                    "WAF response-phase rules are present in the artifact but not evaluated: \
+                     outbound inspection is not wired yet. Request-phase rules are enforced."
+                );
+            }
+            if !manifest.waf.skipped_rules.is_empty() {
+                // Loud on every boot: an operator should not have to read the
+                // manifest to discover the rule set is incomplete.
+                tracing::warn!(
+                    skipped_rules = ?manifest.waf.skipped_rules,
+                    "WAF rule set is incomplete: these rules are not enforced by this build"
                 );
             }
         }
@@ -974,6 +1023,7 @@ impl Gateway {
             router,
             operations: resolved_operations,
             validators,
+            waf: waf_stage,
             specs,
             limits,
             dev_mode,
@@ -1151,6 +1201,39 @@ impl Gateway {
             .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
             .collect();
 
+        // The map above is what routing and validation use, and it is lossy in
+        // two ways the WAF cannot afford: duplicate header names collapse, and
+        // a value containing non-UTF-8 bytes is dropped entirely. A rule set
+        // needs both. CRS 920620 exists to catch duplicate Content-Type
+        // headers, and a payload hidden in a header with one invalid byte
+        // would otherwise never be inspected at all.
+        //
+        // Values are converted lossily rather than dropped: the payload still
+        // reaches the rules, and CRS's own encoding rules flag the mangling.
+        // Passing raw bytes needs a byte-oriented header API in the engine.
+        let waf_headers: Vec<(String, String)> = req
+            .headers()
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.as_str().to_string(),
+                    String::from_utf8_lossy(v.as_bytes()).into_owned(),
+                )
+            })
+            .collect();
+
+        // The real protocol, not a constant: CRS 920430 checks REQUEST_PROTOCOL
+        // against an allowed list and 920171 keys off HTTP/1.0 specifically, so
+        // a hardcoded version makes both judge the wrong request.
+        let waf_protocol = match req.version() {
+            hyper::Version::HTTP_09 => "HTTP/0.9",
+            hyper::Version::HTTP_10 => "HTTP/1.0",
+            hyper::Version::HTTP_11 => "HTTP/1.1",
+            hyper::Version::HTTP_2 => "HTTP/2.0",
+            hyper::Version::HTTP_3 => "HTTP/3.0",
+            _ => "HTTP/1.1",
+        };
+
         // Check header limits
         if let Some(e) = header_limit_error {
             let response = self.validation_error_response(&[e]);
@@ -1278,6 +1361,70 @@ impl Gateway {
                         &request_id,
                         &trace_id,
                     )));
+                }
+
+                // WAF inspection sits between the two models: the spec has
+                // already said what the request may look like, and the rule
+                // set now looks for attack shapes that are schema-valid.
+                if let Some(stage) = &self.waf {
+                    let waf_start = std::time::Instant::now();
+                    let (decision, inspection) = stage.inspect_request(
+                        &method_str,
+                        &uri_string,
+                        waf_protocol,
+                        &waf_headers,
+                        &body_bytes,
+                        content_type,
+                        client_addr.map(|a| a.ip().to_string()).as_deref(),
+                    );
+                    self.metrics.record_waf_inspection(
+                        &method_str,
+                        &route_path,
+                        waf_start.elapsed().as_secs_f64(),
+                        matches!(decision, waf::WafDecision::Allow),
+                    );
+                    // Count every rule that matched, not just the one that
+                    // blocked. In detection-only mode nothing blocks, so this
+                    // is the only signal available for tuning a rule set
+                    // before switching it on.
+                    for id in inspection.matched_rule_ids() {
+                        self.metrics.record_waf_match(&method_str, &route_path, id);
+                    }
+                    if let waf::WafDecision::Block {
+                        status,
+                        rule_id,
+                        message,
+                    } = decision
+                    {
+                        tracing::warn!(
+                            rule_id,
+                            status,
+                            method = %method_str,
+                            path = %route_path,
+                            inbound_score = inspection.inbound_score(),
+                            message = %message,
+                            "WAF blocked request"
+                        );
+                        self.metrics.record_validation_failure(
+                            &method_str,
+                            &route_path,
+                            "waf_blocked",
+                        );
+                        let response = self.waf_blocked_response(status, rule_id, &message);
+                        self.record_request_metrics(
+                            &method_str,
+                            &route_path,
+                            response.status().as_u16(),
+                            request_size,
+                            0,
+                            start_time,
+                        );
+                        return Ok(box_full(Self::add_standard_headers(
+                            response,
+                            &request_id,
+                            &trace_id,
+                        )));
+                    }
                 }
 
                 // Validate request against OpenAPI spec
@@ -2801,6 +2948,40 @@ impl Gateway {
             .status(StatusCode::BAD_REQUEST)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(problem.to_json())))
+            .expect("valid response")
+    }
+
+    /// Build a 403 response for a request the WAF blocked (RFC 9457).
+    ///
+    /// The rule id and message appear only in dev mode. In production they
+    /// tell an attacker exactly which rule to shape the next payload around,
+    /// so they go to the log instead.
+    fn waf_blocked_response(
+        &self,
+        status: u16,
+        rule_id: u32,
+        message: &str,
+    ) -> Response<Full<Bytes>> {
+        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
+        // Derive the title from the resolved status: a rule can specify
+        // `status:406`, and answering 406 with a title of "Forbidden" is a
+        // contradiction in an RFC 9457 body.
+        let mut body = serde_json::json!({
+            "type": "urn:barbacane:error:waf-blocked",
+            "title": status.canonical_reason().unwrap_or("Blocked"),
+            "status": status.as_u16(),
+            "detail": "The request was blocked by the web application firewall.",
+        });
+        if self.dev_mode {
+            body["rule_id"] = serde_json::json!(rule_id);
+            if !message.is_empty() {
+                body["rule_message"] = serde_json::json!(message);
+            }
+        }
+        Response::builder()
+            .status(status)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")
     }
 

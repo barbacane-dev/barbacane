@@ -50,6 +50,27 @@ pub struct ValidationLabels {
     pub reason: String,
 }
 
+/// WAF labels.
+///
+/// `rule_id` is bounded by the rule set, and only blocking rules ever appear,
+/// so the cardinality is the number of rules that can block rather than the
+/// number of rules. `paranoia_level` is on the gauge, not here, because it is
+/// fixed per artifact.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct WafLabels {
+    pub method: String,
+    pub path: String,
+    /// The rule that interrupted the request.
+    pub rule_id: String,
+}
+
+/// Labels for WAF inspection counters and timings.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct WafInspectionLabels {
+    pub method: String,
+    pub path: String,
+}
+
 /// Middleware labels.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct MiddlewareLabels {
@@ -121,6 +142,23 @@ pub struct MetricsRegistry {
 
     // Validation metrics
     pub validation_failures_total: Family<ValidationLabels, Counter>,
+
+    /// Requests the WAF interrupted, by rule.
+    pub waf_blocked_total: Family<WafLabels, Counter>,
+    /// Requests a rule matched, by rule, whether or not the request was
+    /// interrupted.
+    ///
+    /// This is the signal detection-only mode needs. `waf_blocked_total`
+    /// stays at zero when nothing is interrupted, so tuning a rule set before
+    /// switching to blocking requires counting matches rather than blocks.
+    pub waf_matched_total: Family<WafLabels, Counter>,
+    /// Requests the WAF inspected without interrupting. With
+    /// `waf_blocked_total` this gives the block rate, which is the number an
+    /// operator watches when tuning a rule set.
+    pub waf_allowed_total: Family<WafInspectionLabels, Counter>,
+    /// Time spent inspecting, so the WAF's share of request latency is
+    /// visible rather than inferred.
+    pub waf_duration_seconds: Family<WafInspectionLabels, Histogram>,
 
     // Middleware metrics
     pub middleware_duration_seconds: Family<MiddlewareLabels, Histogram>,
@@ -206,6 +244,45 @@ impl MetricsRegistry {
         );
 
         // Validation metrics
+        let waf_matched_total = Family::<WafLabels, Counter>::default();
+        registry.register(
+            "barbacane_waf_matched_total",
+            "Rules matched by the web application firewall, whether or not the request was blocked",
+            waf_matched_total.clone(),
+        );
+
+        let waf_blocked_total = Family::<WafLabels, Counter>::default();
+        registry.register(
+            "barbacane_waf_blocked_total",
+            "Requests blocked by the web application firewall",
+            waf_blocked_total.clone(),
+        );
+
+        let waf_allowed_total = Family::<WafInspectionLabels, Counter>::default();
+        registry.register(
+            "barbacane_waf_allowed_total",
+            "Requests inspected by the web application firewall and allowed",
+            waf_allowed_total.clone(),
+        );
+
+        let waf_duration_seconds =
+            Family::<WafInspectionLabels, Histogram>::new_with_constructor(|| {
+                // Inspection with a full rule set runs in hundreds of
+                // microseconds, so the buckets straddle that rather than the
+                // millisecond range a request-level histogram would use.
+                Histogram::new(
+                    [
+                        0.000_05, 0.000_1, 0.000_25, 0.000_5, 0.001, 0.002_5, 0.005, 0.01, 0.05,
+                    ]
+                    .into_iter(),
+                )
+            });
+        registry.register(
+            "barbacane_waf_duration_seconds",
+            "Time spent inspecting a request with the web application firewall",
+            waf_duration_seconds.clone(),
+        );
+
         let validation_failures_total = Family::<ValidationLabels, Counter>::default();
         registry.register(
             "barbacane_validation_failures_total",
@@ -309,6 +386,10 @@ impl MetricsRegistry {
             active_connections,
             connections_total,
             validation_failures_total,
+            waf_blocked_total,
+            waf_matched_total,
+            waf_allowed_total,
+            waf_duration_seconds,
             middleware_duration_seconds,
             middleware_short_circuits_total,
             dispatch_duration_seconds,
@@ -362,6 +443,49 @@ impl MetricsRegistry {
             reason: reason.to_string(),
         };
         self.validation_failures_total.get_or_create(&labels).inc();
+    }
+
+    /// Record a request the WAF interrupted.
+    pub fn record_waf_blocked(&self, method: &str, path: &str, rule_id: u32) {
+        self.waf_blocked_total
+            .get_or_create(&WafLabels {
+                method: method.to_string(),
+                path: path.to_string(),
+                rule_id: rule_id.to_string(),
+            })
+            .inc();
+    }
+
+    /// Record a rule that matched, whether or not the request was blocked.
+    pub fn record_waf_match(&self, method: &str, path: &str, rule_id: u32) {
+        self.waf_matched_total
+            .get_or_create(&WafLabels {
+                method: method.to_string(),
+                path: path.to_string(),
+                rule_id: rule_id.to_string(),
+            })
+            .inc();
+    }
+
+    /// Record a request the WAF inspected and allowed, and how long inspection
+    /// took. Called for blocked requests too, since the time was still spent.
+    pub fn record_waf_inspection(
+        &self,
+        method: &str,
+        path: &str,
+        duration_secs: f64,
+        allowed: bool,
+    ) {
+        let labels = WafInspectionLabels {
+            method: method.to_string(),
+            path: path.to_string(),
+        };
+        self.waf_duration_seconds
+            .get_or_create(&labels)
+            .observe(duration_secs);
+        if allowed {
+            self.waf_allowed_total.get_or_create(&labels).inc();
+        }
     }
 
     /// Record middleware execution.

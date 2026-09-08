@@ -17,6 +17,7 @@
   - [Caching](guide/middlewares/caching.md)
   - [AI Gateway](guide/middlewares/ai-gateway.md)
 - [Secrets](guide/secrets.md)
+- [Web application firewall](guide/waf.md)
 - [Observability](guide/observability.md)
 - [Control plane (REST API)](guide/control-plane.md)
 - [Web UI](guide/web-ui.md)
