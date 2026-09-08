@@ -125,7 +125,9 @@ Barbacane already compiles the spec into a sealed, hashed, signable artifact and
 3. **The rule set is covered by artifact integrity.** Rule hashes fold into `Manifest::artifact_hash` and therefore into the Ed25519 signature ([ADR-0021](0021-config-provenance.md)), so "which rules is this gateway running" is answerable from the artifact.
 4. **Spec-aware rule scoping becomes possible.** Because the compiler holds the OpenAPI schema and the rule set at the same time, it can attach rule groups per operation, drop rules whose attack class the schema already rejects for that operation, and present path parameters and validated body fields to the engine as named `ARGS` rather than as one opaque blob. "Your spec tunes your WAF" is a claim that requires engine-level access, and it is the actual differentiator.
 
-**Feasibility probe (run 2026-09-07, CRS v4.9.0).** The largest assumption in Option E is that CRS's regex corpus compiles under the Rust `regex` crate. Measured rather than assumed.
+**Feasibility probe.** The largest assumption in Option E is that CRS's regex corpus compiles under the Rust `regex` crate. Measured rather than assumed.
+
+Inputs, so the numbers below can be reproduced or challenged: CRS v4.9.0 (the release tag, `coreruleset/coreruleset`), `regex` 1.12.3, Go 1.27.0 for the RE2 cross-check, run 2026-09-07. The harness is in the Parapet repository under `crates/parapet-conformance/`, and its README carries the exact commands; CI reruns all of it against the pinned CRS version on every commit, so the figures cannot drift silently from the code.
 
 Extracted every `@rx` pattern from `rules/*.conf` (660 `SecRule` plus 7 `SecAction` across 25 files): 299 patterns, 273 unique.
 
@@ -174,9 +176,9 @@ The residual risk is unchanged and is not in the first 90%. It is in multipart p
 Stage the work. Ship the prerequisites, ship a bridge, build the strategic option behind a conformance gate.
 
 **Stage 0: runtime prerequisites (P1-P3).** Do this regardless of the WAF outcome.
-- P1: reuse instances keyed on `(plugin, config)` so `init` runs once per key rather than once per request. Per-request instantiation is a cost every plugin pays today.
+- P1: reuse instances keyed on `(plugin, config)` so `init` runs once per key rather than once per request. Per-request instantiation is a cost every plugin pays today. The pooling is the easy half; the contract is the real work. A reused instance carries whatever the guest left in its linear memory, so reuse needs exclusive checkout for the duration of a request, request-scoped state created fresh per request rather than carried over, and a defined reset before an instance returns to the pool. Without that, one request can observe another's state, which is worse than the cost being fixed. Tracked in [#138](https://github.com/barbacane-dev/barbacane/issues/138).
 - P2: per-plugin `[limits]` (memory, fuel, wall clock) in `plugin.toml`, carried through `PluginCapabilities` into the manifest and enforced per instance.
-- P3: replace the seven stubs with `wasmtime-wasi` (already a workspace dependency), and set `define_unknown_imports_as_trap` so a missing import fails loudly at a known point instead of at instantiation.
+- P3: replace the seven stubs with `wasmtime-wasi` (already a workspace dependency), or keep the stubs and call `Linker::define_unknown_imports_as_traps(&module)`, which gives every unresolved import a trapping stub so instantiation succeeds and the trap fires only if the guest actually calls it. That turns "this plugin will not load" into "this plugin traps on the call it should not have made", which is both easier to diagnose and safer to default to.
 
 **Stage 1: `waf-coraza` (Option B), marked experimental.** A middleware over `host_http_call` against a Coraza sidecar. No runtime changes needed, full CRS semantics, and it answers procurement while Stage 2 is built. It also tells us whether anyone actually turns a WAF on before we spend months on one.
 
@@ -188,19 +190,39 @@ paths:
     post:
       operationId: createOrder
       x-barbacane-waf:
-        ruleset: owasp-crs@4          # bundled, or a path/OCI reference
+        ruleset: ./crs-4.9.0/rules    # directory of SecLang .conf files
         paranoia_level: 1
-        mode: blocking                # blocking | detection
-        anomaly_threshold: { inbound: 5, outbound: 4 }
-        spec_scoped: true             # drop rules the schema already covers
+        mode: blocking                # blocking | detection-only
+        thresholds: { inbound: 5, outbound: 4 }
+        unsupported_rules: fail       # fail (default) | skip
+        spec_scoped: false            # Stage 3; see the warning below
         exclusions:
           - rule_id: 942100
             target: "ARGS:query"
 ```
 
+`ruleset` is a path to a directory of SecLang files, resolved relative to the
+spec that declares it, and the compiler hashes the sealed result into
+`artifact_hash`. A floating version alias such as `owasp-crs@4`, which an
+earlier draft used, is deliberately not the interface: it would make two builds
+of the same spec enforce different rules. If a bundled-ruleset shorthand is
+added later it has to resolve to an immutable pinned version, recorded in the
+artifact, or reproducible builds are lost.
+
+`spec_scoped` defaults to **off**, and should stay off until Stage 3 has an
+audited mapping from rule to schema coverage. The feature drops WAF rules on
+the grounds that the schema already rejects that class of input, so a wrong
+mapping silently removes protection, which is the exact failure this ADR is
+built to avoid elsewhere. The safe default when coverage is uncertain is to
+keep the rule. Enabling it by default before that mapping exists and is tested
+would trade the ADR's central property for a latency saving.
+
 Release gates for Stage 2 GA:
-- 100% of the CRS regression suite for the enabled paranoia level, in blocking mode, via `go-ftw`.
-- Unknown directive, operator, transformation or action is a hard compile error. No silent skips, ever.
+
+- **`@detectSQLi` and `@detectXSS` implemented.** These are a GA prerequisite, not an optional extra. Without them the CRS rules 941100, 941101, 942100 and 942101 cannot be enforced, and those are the libinjection classifiers, not peripheral rules. The audit of `libinjectionrs` (see below) concluded it is not adoptable in its current state, so this gate is currently unmet and the route to meeting it is open.
+- **100% of the CRS regression suite** for the enabled paranoia level, in blocking mode, via `go-ftw`, **with an empty exclusion list**. An earlier draft of this ADR asked for 100% while two operators were refused, which is unreachable: those four rules account for 30 stages of the suite. Rather than define a reduced suite, GA requires the exclusion list to be empty, so the gate cannot be met by shrinking the target.
+- Until GA, the shortfall is reported rather than hidden: the compiler refuses a rule set it cannot fully enforce unless the operator opts in with `unsupported_rules: skip`, and the artifact then records the skipped rule ids in the manifest, where `artifact_hash` and the signature cover them. An operator can prove which rules a running gateway is not enforcing.
+- Unknown directive, operator, transformation, action or target is a hard compile error. No silent skips, ever.
 - Rule evaluation budget enforced per request, with a documented p99 for CRS PL1.
 - Rule set hashes folded into `artifact_hash`.
 
