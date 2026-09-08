@@ -467,6 +467,25 @@ impl Drop for TestGateway {
 
 /// Find the barbacane binary in the target directory.
 fn find_barbacane_binary() -> Result<String, TestError> {
+    // An explicit path wins, then the active target directory. Both come before
+    // the fixed candidates so a build under a redirected CARGO_TARGET_DIR (which
+    // is how `cargo llvm-cov` instruments the gateway) runs the binary it just
+    // built rather than a stale one under ./target.
+    if let Ok(path) = std::env::var("BARBACANE_TEST_BINARY") {
+        if Path::new(&path).exists() {
+            return Ok(path);
+        }
+        return Err(TestError::BinaryNotFound(path));
+    }
+    if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
+        for profile in ["debug", "release"] {
+            let path = format!("{dir}/{profile}/barbacane");
+            if Path::new(&path).exists() {
+                return Ok(path);
+            }
+        }
+    }
+
     // Try debug build first, then release
     let candidates = [
         "target/debug/barbacane",

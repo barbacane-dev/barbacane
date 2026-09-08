@@ -53,6 +53,10 @@ Then open http://localhost:5173 in your browser.
 | `make compile` | Compile spec to artifact.bca |
 | `make seed-plugins` | Build plugins and seed registry |
 | `make clean` | Clean all build artifacts |
+| `make coverage` | Line coverage of the unit tests |
+| `make coverage-integration` | Coverage including the integration suite |
+| `make coverage-html` | Coverage as a browsable HTML report |
+| `make coverage-lcov` | Coverage as `lcov.info` |
 | **Development** | |
 | `make control-plane` | Start control plane server (port 9090) |
 | `make ui` | Start UI dev server (port 5173) |
@@ -110,6 +114,36 @@ cargo test --workspace -- --nocapture
 # Run a specific test (routing trie lives in the barbacane crate)
 cargo test -p barbacane router::trie::tests::static_takes_precedence_over_param
 ```
+
+### Coverage
+
+Coverage uses [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov),
+which instruments the build rather than sampling, so a line is covered only if
+it actually executed.
+
+```bash
+cargo install cargo-llvm-cov
+rustup component add llvm-tools-preview
+
+# Unit tests only: fast, needs no services
+make coverage
+
+# Adds the integration suite, which boots the gateway as a child process
+make coverage-integration
+
+# Browsable report at target/llvm-cov/html/index.html
+make coverage-html
+```
+
+`make coverage-integration` measures the gateway process too. The test harness
+resolves the binary through `CARGO_TARGET_DIR`, which `cargo llvm-cov`
+redirects, so the instrumented build is the one that runs. Set
+`BARBACANE_TEST_BINARY` to point the harness at a specific binary instead.
+
+CI runs the same combined measurement in the **Coverage** job, publishes the
+summary to the run page, uploads `lcov.info` as an artifact, and fails if line
+coverage drops below `COVERAGE_FLOOR`. Raise that floor when the real number
+rises; do not lower it to turn a red build green.
 
 ### Run
 

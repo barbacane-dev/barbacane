@@ -19,6 +19,8 @@ target/
 
 # Coverage
 coverage/
+lcov.info
+coverage.txt
 *.profraw
 *.profdata
 

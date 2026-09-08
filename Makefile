@@ -78,7 +78,8 @@ clean:
 # Test & Lint
 # -----------------------------------------------------------------------------
 
-.PHONY: test test-verbose test-one check clippy fmt fmt-check security-test security-test-build fuzz-build
+.PHONY: test test-verbose test-one check clippy fmt fmt-check security-test security-test-build fuzz-build \
+	coverage coverage-html coverage-lcov coverage-open
 
 test:
 	cargo test --workspace
@@ -101,6 +102,45 @@ security-test: plugins
 # Compile-only check of the security suite (does not require running services).
 security-test-build:
 	cargo test -p barbacane-test --test security --no-run
+
+# Coverage (cargo-llvm-cov, source-based LLVM instrumentation).
+#
+# Install once with:
+#   cargo install cargo-llvm-cov
+#   rustup component add llvm-tools-preview
+#
+# COVERAGE_FLOOR is the line-coverage percentage CI enforces. Raise it when the
+# real number rises; never lower it to make a red build green.
+COVERAGE_FLOOR ?= 55
+
+# Integration targets are discovered so a new suite is measured automatically.
+# `security` is excluded because it needs PostgreSQL and the control plane.
+INTEGRATION_TARGETS = $(shell ls crates/barbacane-test/tests/*.rs \
+	| xargs -n1 basename | sed 's/\.rs$$//' \
+	| grep -vx security \
+	| sed 's/^/--test /' | tr '\n' ' ')
+
+# Unit and binary tests only. Fast, needs no services.
+coverage:
+	cargo llvm-cov --workspace --lib --bins --exclude barbacane-test --summary-only
+
+# Adds the integration suite, which drives the gateway as a child process. The
+# harness resolves the binary through CARGO_TARGET_DIR, so the process that runs
+# is the instrumented one and its coverage lands in the same report.
+coverage-integration: plugins
+	cargo llvm-cov clean --workspace
+	cargo llvm-cov --no-report --workspace --lib --bins --exclude barbacane-test
+	cargo llvm-cov --no-report -p barbacane-test --lib $(INTEGRATION_TARGETS) -- --test-threads=2
+	cargo llvm-cov report --summary-only
+	cargo llvm-cov report --fail-under-lines $(COVERAGE_FLOOR)
+
+coverage-html:
+	cargo llvm-cov --workspace --lib --bins --exclude barbacane-test --html
+	@echo "Report: target/llvm-cov/html/index.html"
+
+coverage-lcov:
+	cargo llvm-cov --workspace --lib --bins --exclude barbacane-test --lcov --output-path lcov.info
+	@echo "Wrote lcov.info"
 
 # Build (not run) the standalone cargo-fuzz targets on stable, to catch bit-rot.
 # Actually fuzzing needs nightly + cargo-fuzz: `cd fuzz && cargo +nightly fuzz run <target>`.
@@ -209,6 +249,10 @@ help:
 	@echo "  make test-verbose   Run tests with output"
 	@echo "  make security-test  Run the adversarial security suite (RED until fixed)"
 	@echo "  make fuzz-build     Build the cargo-fuzz targets (run with +nightly)"
+	@echo "  make coverage       Line coverage of the unit tests"
+	@echo "  make coverage-integration  Coverage including the integration suite"
+	@echo "  make coverage-html  Coverage as a browsable HTML report"
+	@echo "  make coverage-lcov  Coverage as lcov.info (for editors and CI)"
 	@echo "  make test-one TEST=name"
 	@echo "  make check          Run fmt-check + clippy"
 	@echo "  make clippy         Run clippy lints"
