@@ -105,7 +105,10 @@ one until you have tuned for false positives.
 Run in `detection-only` first, watch **`barbacane_waf_matched_total`** by rule
 id, and add exclusions before switching to `blocking`. Note the metric:
 `barbacane_waf_blocked_total` stays at zero in detection-only mode, because
-nothing is blocked, so it tells you nothing while you are tuning. Upstream says the same
+nothing is blocked, so it tells you nothing while you are tuning. The allowed
+counter and the duration histogram do still record, so you can size the cost
+before you switch blocking on, but only the matched counter tells you which
+rule is responsible. Upstream says the same
 thing, and it is the single most common reason a WAF gets turned off again.
 
 ## Observing it
@@ -114,7 +117,7 @@ Three metrics on the admin endpoint:
 
 | Metric | Meaning |
 |---|---|
-| `barbacane_waf_matched_total{method,path,rule_id}` | Rules that matched, whether or not the request was blocked. **This is the tuning signal**, and the only one that moves in detection-only mode. A single noisy rule is usually the whole false-positive problem. |
+| `barbacane_waf_matched_total{method,path,rule_id}` | Rules that matched, whether or not the request was blocked. **This is the tuning signal**: a single noisy rule is usually the whole false-positive problem, and this is the only metric that identifies which rule. |
 | `barbacane_waf_blocked_total{method,path,rule_id}` | Requests actually interrupted, by the rule that did it. Zero in detection-only mode. |
 | `barbacane_waf_allowed_total{method,path}` | Requests inspected and allowed. With the above, the block rate. |
 | `barbacane_waf_duration_seconds{method,path}` | Time spent inspecting, so the WAF's share of latency is visible rather than inferred. |
