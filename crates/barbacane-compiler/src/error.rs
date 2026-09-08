@@ -19,6 +19,14 @@ pub enum CompileError {
     #[error(transparent)]
     Parse(#[from] crate::spec_parser::ParseError),
 
+    /// E1080: The WAF rule set is missing, unreadable, or cannot be enforced.
+    ///
+    /// Compilation refuses rather than shipping a rule set the gateway would
+    /// only partly enforce: a rule that never fires is indistinguishable from
+    /// a rule that found nothing.
+    #[error("E1080: x-barbacane-waf: {0}")]
+    WafRuleset(String),
+
     /// E1010: Routing conflict.
     #[error("E1010: routing conflict: {0}")]
     RoutingConflict(String),

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -58,6 +58,9 @@ impl Default for CompileOptions {
     }
 }
 
+/// Path of the sealed WAF rule set inside the artifact.
+pub const WAF_RULES_PATH: &str = "waf/rules.json";
+
 /// Compiler version (from Cargo.toml).
 pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -71,6 +74,7 @@ const KNOWN_EXTENSIONS: &[&str] = &[
     "x-barbacane-dispatch",    // Operation level - dispatcher config (required)
     "x-barbacane-middlewares", // Root or operation level - middleware chain
     "x-barbacane-mcp",         // Root or operation level - MCP server config
+    "x-barbacane-waf",         // Root level - WAF rule set and policy
 ];
 
 /// Result of compilation including the manifest and any warnings.
@@ -101,6 +105,9 @@ pub struct Manifest {
     /// MCP server configuration (from root-level x-barbacane-mcp).
     #[serde(default)]
     pub mcp: McpConfig,
+    /// WAF configuration (from root-level x-barbacane-waf).
+    #[serde(default)]
+    pub waf: WafConfig,
     /// Detached Ed25519 signature (hex) over `artifact_hash`. Present when the
     /// artifact was signed at compile time (AR-1). Excluded from `artifact_hash`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,6 +134,70 @@ pub struct McpConfig {
     /// MCP server version (defaults to info.version).
     #[serde(default)]
     pub server_version: Option<String>,
+}
+
+/// What a matching WAF rule does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WafMode {
+    /// Disruptive actions take effect.
+    #[default]
+    Blocking,
+    /// Rules are evaluated and recorded, but nothing is interrupted. Useful
+    /// for tuning a rule set against real traffic, and not a security control.
+    DetectionOnly,
+}
+
+/// What to do about a rule the engine cannot compile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UnsupportedRules {
+    /// Refuse to produce an artifact. The default, because a rule that cannot
+    /// be compiled cannot be enforced, and shipping the rest of the rule set
+    /// as if it were complete is how a rule silently becomes a bypass.
+    #[default]
+    Fail,
+    /// Produce the artifact without them, recording their ids in the manifest
+    /// and warning at compile time. Opt-in: the operator has to ask for a rule
+    /// set that is knowingly incomplete, and the artifact then says which
+    /// rules are missing.
+    Skip,
+}
+
+/// WAF configuration extracted from root-level `x-barbacane-waf`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WafConfig {
+    /// Whether the WAF runs.
+    pub enabled: bool,
+    /// Directory of SecLang `.conf` files, relative to the spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruleset: Option<String>,
+    /// CRS paranoia level, seeded as `tx.blocking_paranoia_level`.
+    #[serde(default)]
+    pub paranoia_level: u8,
+    /// Blocking or detection-only.
+    #[serde(default)]
+    pub mode: WafMode,
+    /// Inbound anomaly score at which the rule set blocks.
+    #[serde(default)]
+    pub inbound_threshold: i64,
+    /// Outbound anomaly score at which the rule set blocks.
+    #[serde(default)]
+    pub outbound_threshold: i64,
+    /// Policy for rules the engine cannot compile.
+    #[serde(default)]
+    pub unsupported_rules: UnsupportedRules,
+    /// Path of the sealed rule set inside the artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules_path: Option<String>,
+    /// Rules present in the source rule set that are not in the artifact,
+    /// because they could not be compiled and `unsupported_rules` was `skip`.
+    ///
+    /// Part of the manifest, so it is covered by `artifact_hash` and therefore
+    /// by the signature: an operator can prove which rules a running gateway
+    /// is not enforcing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped_rules: Vec<u32>,
 }
 
 /// Build provenance metadata embedded in the manifest.
@@ -263,7 +334,14 @@ pub fn compile(
     // may not have been read from plugin.toml (e.g. the control plane builds
     // bundles from the registry, which does not yet persist capabilities), so
     // the resulting artifact is not marked capability-authoritative.
-    compile_inner(&specs, plugins, output, options, false)
+    compile_inner(
+        &specs,
+        plugins,
+        output,
+        options,
+        false,
+        spec_paths.first().and_then(|p| p.parent()),
+    )
 }
 
 /// Compile specs with a project manifest into a .bca artifact.
@@ -313,7 +391,14 @@ pub fn compile_with_manifest(
 
     // Bundles were resolved from plugin.toml, so their declared capabilities are
     // authoritative and the artifact is eligible for load-time enforcement.
-    compile_inner(&specs, &plugin_bundles, output, options, true)
+    compile_inner(
+        &specs,
+        &plugin_bundles,
+        output,
+        options,
+        true,
+        spec_paths.first().and_then(|p| p.parent()),
+    )
 }
 
 /// Load a manifest from a .bca artifact.
@@ -490,6 +575,10 @@ fn compile_inner(
     output: &Path,
     options: &CompileOptions,
     capabilities_authoritative: bool,
+    // Directory the specs were read from, used to resolve relative paths
+    // declared in extensions. `None` when compiling specs held in memory, in
+    // which case a relative path cannot be resolved and is refused.
+    spec_dir: Option<&Path>,
 ) -> Result<CompileResult, CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut operations: Vec<CompiledOperation> = Vec::new();
@@ -803,14 +892,42 @@ fn compile_inner(
         cfg
     };
 
+    // Validate and seal the WAF rule set. Done before the hash so the rule
+    // set is bound by it, and therefore by the signature: an operator can
+    // prove which rules a running gateway carries.
+    let mut waf = extract_root_waf_config(specs);
+    let mut sealed_waf: Option<Vec<u8>> = None;
+    if waf.enabled {
+        let Some(ruleset) = waf.ruleset.clone() else {
+            return Err(CompileError::WafRuleset(
+                "x-barbacane-waf is enabled but no `ruleset` is set".to_string(),
+            ));
+        };
+        let rules_dir = spec_relative_path(spec_dir, &ruleset)?;
+        let sealed = seal_waf_ruleset(&rules_dir, waf.unsupported_rules)?;
+        warnings.extend(sealed.warnings.into_iter().map(|message| CompileWarning {
+            code: "W1080".to_string(),
+            message,
+            location: Some(format!("x-barbacane-waf in '{ruleset}'")),
+        }));
+        waf.skipped_rules = sealed.skipped_rules;
+        waf.rules_path = Some(WAF_RULES_PATH.to_string());
+        checksums.insert(
+            WAF_RULES_PATH.to_string(),
+            format!("sha256:{}", compute_sha256(&sealed.rules_json)),
+        );
+        sealed_waf = Some(sealed.rules_json);
+    }
+
     // Compute the artifact hash after every hashed input is final (specs,
-    // checksums, plugin capability surface, capabilities_enforced, mcp).
+    // checksums, plugin capability surface, capabilities_enforced, mcp, waf).
     let artifact_hash = compute_artifact_hash(
         &source_specs,
         &checksums,
         &bundled_plugins,
         capabilities_authoritative,
         &mcp,
+        &waf,
     );
 
     let mut manifest = Manifest {
@@ -824,6 +941,7 @@ fn compile_inner(
         artifact_hash,
         provenance,
         mcp,
+        waf,
         signature: None,
         signing_public_key: None,
         capabilities_enforced: capabilities_authoritative,
@@ -846,6 +964,9 @@ fn compile_inner(
     // Add manifest.json and routes.json
     add_file_to_tar(&mut archive, "manifest.json", manifest_json.as_bytes())?;
     add_file_to_tar(&mut archive, "routes.json", routes_json.as_bytes())?;
+    if let Some(rules_json) = &sealed_waf {
+        add_file_to_tar(&mut archive, WAF_RULES_PATH, rules_json)?;
+    }
 
     // Add source specs under specs/ directory
     for (spec, content, _) in specs {
@@ -901,6 +1022,7 @@ fn compute_artifact_hash(
     plugins: &[BundledPlugin],
     capabilities_enforced: bool,
     mcp: &McpConfig,
+    waf: &WafConfig,
 ) -> String {
     let mut hasher = Sha256::new();
     // Source spec hashes (already sorted by filename before this call)
@@ -937,6 +1059,26 @@ fn compute_artifact_hash(
             mcp.enabled,
             mcp.server_name.as_deref().unwrap_or(""),
             mcp.server_version.as_deref().unwrap_or(""),
+        )
+        .as_bytes(),
+    );
+    // WAF policy surface. The rule set itself is already bound through
+    // `checksums`, but these decide what the rules do, so a change to any of
+    // them must change the hash.
+    hasher.update(
+        format!(
+            "waf:enabled={}\tparanoia={}\tmode={:?}\tinbound={}\toutbound={}\tunsupported={:?}\tskipped={}\n",
+            waf.enabled,
+            waf.paranoia_level,
+            waf.mode,
+            waf.inbound_threshold,
+            waf.outbound_threshold,
+            waf.unsupported_rules,
+            waf.skipped_rules
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
         )
         .as_bytes(),
     );
@@ -988,6 +1130,7 @@ pub fn recompute_artifact_hash(manifest: &Manifest) -> String {
         &manifest.plugins,
         manifest.capabilities_enforced,
         &manifest.mcp,
+        &manifest.waf,
     )
 }
 
@@ -1464,6 +1607,213 @@ mod hex {
         }
         result
     }
+}
+
+/// Resolve a path declared in a spec extension, relative to the directory the
+/// spec was read from, so a rule set can sit beside the spec rather than
+/// relative to wherever the compiler was invoked.
+fn spec_relative_path(spec_dir: Option<&Path>, declared: &str) -> Result<PathBuf, CompileError> {
+    let declared_path = Path::new(declared);
+    if declared_path.is_absolute() {
+        return Ok(declared_path.to_path_buf());
+    }
+    match spec_dir {
+        Some(dir) => Ok(dir.join(declared_path)),
+        None => Err(CompileError::WafRuleset(format!(
+            "ruleset {declared:?} is a relative path, but these specs were not read from disk,              so there is nothing to resolve it against. Use an absolute path."
+        ))),
+    }
+}
+
+/// Extract root-level `x-barbacane-waf` config from the first spec that
+/// defines it.
+fn extract_root_waf_config(specs: &[(ApiSpec, String, String)]) -> WafConfig {
+    for (spec, _, _) in specs {
+        let Some(value) = spec.extensions.get("x-barbacane-waf") else {
+            continue;
+        };
+        let num = |key: &str, default: i64| -> i64 {
+            value.get(key).and_then(|v| v.as_i64()).unwrap_or(default)
+        };
+        let thresholds = value.get("thresholds");
+        let threshold = |key: &str, default: i64| -> i64 {
+            thresholds
+                .and_then(|t| t.get(key))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(default)
+        };
+        return WafConfig {
+            enabled: value
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            ruleset: value
+                .get("ruleset")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            // CRS's own default.
+            paranoia_level: num("paranoia_level", 1).clamp(1, 4) as u8,
+            mode: match value.get("mode").and_then(|v| v.as_str()) {
+                Some("detection-only") | Some("detection_only") | Some("detectiononly") => {
+                    WafMode::DetectionOnly
+                }
+                _ => WafMode::Blocking,
+            },
+            inbound_threshold: threshold("inbound", 5),
+            outbound_threshold: threshold("outbound", 4),
+            unsupported_rules: match value.get("unsupported_rules").and_then(|v| v.as_str()) {
+                Some("skip") => UnsupportedRules::Skip,
+                _ => UnsupportedRules::Fail,
+            },
+            rules_path: None,
+            skipped_rules: Vec::new(),
+        };
+    }
+    WafConfig::default()
+}
+
+/// The outcome of validating and sealing a WAF rule set.
+#[derive(Debug)]
+struct SealedWaf {
+    /// The validated rule set, serialised for the artifact.
+    rules_json: Vec<u8>,
+    /// Ids of rules left out because they could not be compiled.
+    skipped_rules: Vec<u32>,
+    /// Compile-time warnings for the operator.
+    warnings: Vec<String>,
+}
+
+/// Parse and validate a SecLang rule set, and serialise it for the artifact.
+///
+/// Validation is the point of doing this at compile time: a directive,
+/// operator, action or target the engine does not implement fails here, with a
+/// file and line, rather than being dropped at request time where a rule that
+/// never fires looks exactly like a rule that found nothing.
+fn seal_waf_ruleset(rules_dir: &Path, policy: UnsupportedRules) -> Result<SealedWaf, CompileError> {
+    if !rules_dir.is_dir() {
+        return Err(CompileError::WafRuleset(format!(
+            "x-barbacane-waf ruleset {} is not a directory",
+            rules_dir.display()
+        )));
+    }
+
+    let mut sources: Vec<PathBuf> = std::fs::read_dir(rules_dir)
+        .map_err(|e| CompileError::WafRuleset(format!("cannot read {}: {e}", rules_dir.display())))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "conf"))
+        .collect();
+    sources.sort();
+
+    if sources.is_empty() {
+        return Err(CompileError::WafRuleset(format!(
+            "x-barbacane-waf ruleset {} contains no .conf files",
+            rules_dir.display()
+        )));
+    }
+
+    let mut directives = Vec::new();
+    for path in &sources {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let text = std::fs::read_to_string(path).map_err(|e| {
+            CompileError::WafRuleset(format!("cannot read {}: {e}", path.display()))
+        })?;
+        let (parsed, errors) = parapet::parse_all(&text, &name);
+        if !errors.is_empty() {
+            // Every error, not just the first: fixing a rule set one message
+            // per build is miserable.
+            let detail = errors
+                .iter()
+                .take(20)
+                .map(|e| format!("  {e}"))
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                );
+            return Err(CompileError::WafRuleset(format!(
+                "x-barbacane-waf: {} parse error(s) in the rule set:
+{detail}",
+                errors.len()
+            )));
+        }
+        directives.extend(parsed);
+    }
+
+    let loader = parapet::DirDataLoader::new(rules_dir);
+    let (_, compile_errors) = parapet::RuleSet::compile_all(&directives, &loader);
+
+    let mut warnings = Vec::new();
+    let mut skipped_rules = Vec::new();
+
+    if !compile_errors.is_empty() {
+        match policy {
+            UnsupportedRules::Fail => {
+                let detail = compile_errors
+                    .iter()
+                    .take(20)
+                    .map(|e| format!("  {e}"))
+                    .collect::<Vec<_>>()
+                    .join(
+                        "
+",
+                    );
+                return Err(CompileError::WafRuleset(format!(
+                    "x-barbacane-waf: {} rule(s) in the rule set cannot be enforced by this                      build:
+{detail}
+
+Set `unsupported_rules: skip` to build without them.                      The artifact then records their ids and the gateway will not enforce them.",
+                    compile_errors.len()
+                )));
+            }
+            UnsupportedRules::Skip => {
+                skipped_rules = compile_errors.iter().filter_map(rule_id_of).collect();
+                skipped_rules.sort_unstable();
+                skipped_rules.dedup();
+                warnings.push(format!(
+                    "{} rule(s) will not be enforced because this build cannot compile them: {}. \
+                     Their ids are recorded in the manifest, where the artifact hash and \
+                     signature cover them.",
+                    compile_errors.len(),
+                    skipped_rules
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                // Drop them so the artifact contains only what will run: an
+                // artifact whose rule set does not match what the gateway
+                // enforces is worse than one that is honestly smaller.
+                let skip: std::collections::HashSet<u32> = skipped_rules.iter().copied().collect();
+                directives.retain(|d| match d {
+                    parapet::Directive::Rule(rule) | parapet::Directive::Action(rule) => {
+                        rule.id().is_none_or(|id| !skip.contains(&id))
+                    }
+                    _ => true,
+                });
+            }
+        }
+    }
+
+    let rules_json = serde_json::to_vec(&directives)?;
+    Ok(SealedWaf {
+        rules_json,
+        skipped_rules,
+        warnings,
+    })
+}
+
+/// Pull the rule id out of a Parapet compile error, which formats as
+/// `rule <id> (line <n>): ...`.
+fn rule_id_of(error: &parapet::CompileError) -> Option<u32> {
+    let text = error.to_string();
+    let rest = text.strip_prefix("rule ")?;
+    let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    id.parse().ok()
 }
 
 /// Extract root-level `x-barbacane-mcp` config from the first spec that defines it.
@@ -2733,10 +3083,22 @@ paths:
         checksums.insert("routes.json".to_string(), "ccc".to_string());
         checksums.insert("plugins/mock.wasm".to_string(), "ddd".to_string());
 
-        let hash1 =
-            compute_artifact_hash(&source_specs, &checksums, &[], false, &McpConfig::default());
-        let hash2 =
-            compute_artifact_hash(&source_specs, &checksums, &[], false, &McpConfig::default());
+        let hash1 = compute_artifact_hash(
+            &source_specs,
+            &checksums,
+            &[],
+            false,
+            &McpConfig::default(),
+            &WafConfig::default(),
+        );
+        let hash2 = compute_artifact_hash(
+            &source_specs,
+            &checksums,
+            &[],
+            false,
+            &McpConfig::default(),
+            &WafConfig::default(),
+        );
 
         assert_eq!(hash1, hash2, "Same inputs must produce same hash");
         assert!(
@@ -2761,8 +3123,22 @@ paths:
         }];
         let checksums = BTreeMap::new();
 
-        let hash_a = compute_artifact_hash(&specs_a, &checksums, &[], false, &McpConfig::default());
-        let hash_b = compute_artifact_hash(&specs_b, &checksums, &[], false, &McpConfig::default());
+        let hash_a = compute_artifact_hash(
+            &specs_a,
+            &checksums,
+            &[],
+            false,
+            &McpConfig::default(),
+            &WafConfig::default(),
+        );
+        let hash_b = compute_artifact_hash(
+            &specs_b,
+            &checksums,
+            &[],
+            false,
+            &McpConfig::default(),
+            &WafConfig::default(),
+        );
 
         assert_ne!(
             hash_a, hash_b,
@@ -2783,8 +3159,22 @@ paths:
         let mut checksums_b = BTreeMap::new();
         checksums_b.insert("routes.json".to_string(), "v2".to_string());
 
-        let hash_a = compute_artifact_hash(&specs, &checksums_a, &[], false, &McpConfig::default());
-        let hash_b = compute_artifact_hash(&specs, &checksums_b, &[], false, &McpConfig::default());
+        let hash_a = compute_artifact_hash(
+            &specs,
+            &checksums_a,
+            &[],
+            false,
+            &McpConfig::default(),
+            &WafConfig::default(),
+        );
+        let hash_b = compute_artifact_hash(
+            &specs,
+            &checksums_b,
+            &[],
+            false,
+            &McpConfig::default(),
+            &WafConfig::default(),
+        );
 
         assert_ne!(
             hash_a, hash_b,
@@ -3174,6 +3564,7 @@ paths:
             artifact_hash: String::new(),
             provenance: Provenance::default(),
             mcp: McpConfig::default(),
+            waf: WafConfig::default(),
             signature: None,
             signing_public_key: None,
             capabilities_enforced: true,
@@ -3312,5 +3703,402 @@ paths:
                 "recomputing the hash after tampering must invalidate the signature"
             );
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod waf_tests {
+    use super::*;
+
+    /// A rule set directory containing one file with the given contents.
+    fn ruleset(dir: &Path, contents: &str) -> PathBuf {
+        let rules = dir.join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(rules.join("test.conf"), contents).unwrap();
+        rules
+    }
+
+    /// A spec carrying only the WAF extension, for config-extraction tests.
+    fn spec_with_waf(value: serde_json::Value) -> (ApiSpec, String, String) {
+        let spec = ApiSpec {
+            filename: Some("api.yaml".to_string()),
+            format: crate::spec_parser::SpecFormat::OpenApi,
+            version: "3.1.0".to_string(),
+            title: "test".to_string(),
+            api_version: "1.0.0".to_string(),
+            operations: Vec::new(),
+            global_middlewares: Vec::new(),
+            extensions: [("x-barbacane-waf".to_string(), value)]
+                .into_iter()
+                .collect(),
+        };
+        (spec, "api.yaml".to_string(), String::new())
+    }
+
+    fn tempdir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bca-waf-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn seals_a_valid_rule_set() {
+        let dir = tempdir("valid");
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@rx attack\" \"id:1,phase:2,deny\"\nSecMarker END\n",
+        );
+        let sealed = seal_waf_ruleset(&rules, UnsupportedRules::Fail).expect("must seal");
+        assert!(sealed.skipped_rules.is_empty());
+        assert!(sealed.warnings.is_empty());
+
+        // The sealed form must rebuild into the same rule set.
+        let directives: Vec<parapet::Directive> =
+            serde_json::from_slice(&sealed.rules_json).unwrap();
+        let (rebuilt, errors) = parapet::RuleSet::compile_all(&directives, &parapet::NoDataLoader);
+        assert!(errors.is_empty());
+        assert_eq!(rebuilt.rule_count(), 1);
+        assert_eq!(rebuilt.marker_count(), 1);
+    }
+
+    #[test]
+    fn a_parse_error_refuses_the_artifact() {
+        // An unknown directive must fail the build, not be dropped. This is
+        // the property that makes compile-time rule handling worth doing.
+        let dir = tempdir("parse-error");
+        let rules = ruleset(&dir, "SecWhatever on\n");
+        let err = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("E1080"), "{text}");
+        assert!(text.contains("parse error"), "{text}");
+    }
+
+    #[test]
+    fn an_unenforceable_rule_refuses_the_artifact_by_default() {
+        // @detectSQLi has no implementation, so the rule cannot be enforced.
+        // The default policy refuses rather than shipping a rule set that
+        // looks complete.
+        let dir = tempdir("unsupported-fail");
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n",
+        );
+        let err = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("cannot be enforced"), "{text}");
+        assert!(text.contains("unsupported_rules: skip"), "{text}");
+    }
+
+    #[test]
+    fn skip_records_the_rule_ids_and_drops_them_from_the_artifact() {
+        let dir = tempdir("unsupported-skip");
+        let rules = ruleset(
+            &dir,
+            "SecRule ARGS \"@rx attack\" \"id:1,phase:2,deny\"\n\
+             SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n",
+        );
+        let sealed = seal_waf_ruleset(&rules, UnsupportedRules::Skip).expect("must seal");
+        assert_eq!(sealed.skipped_rules, vec![942100]);
+        assert_eq!(sealed.warnings.len(), 1);
+        assert!(sealed.warnings[0].contains("942100"));
+
+        // The artifact carries only what the gateway will enforce.
+        let directives: Vec<parapet::Directive> =
+            serde_json::from_slice(&sealed.rules_json).unwrap();
+        let (rebuilt, errors) = parapet::RuleSet::compile_all(&directives, &parapet::NoDataLoader);
+        assert!(
+            errors.is_empty(),
+            "the sealed rule set still contains rules that cannot compile"
+        );
+        assert_eq!(rebuilt.rule_count(), 1);
+    }
+
+    #[test]
+    fn an_empty_or_missing_ruleset_refuses() {
+        let dir = tempdir("empty");
+        let rules = dir.join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        assert!(seal_waf_ruleset(&rules, UnsupportedRules::Fail)
+            .unwrap_err()
+            .to_string()
+            .contains("no .conf files"));
+        assert!(seal_waf_ruleset(&dir.join("nope"), UnsupportedRules::Fail)
+            .unwrap_err()
+            .to_string()
+            .contains("not a directory"));
+    }
+
+    #[test]
+    fn the_waf_policy_surface_is_bound_by_the_artifact_hash() {
+        // The rule set is bound through `checksums`, but the policy decides
+        // what the rules do, so changing it must change the hash. Otherwise a
+        // signed artifact could be flipped from blocking to detection-only.
+        let specs: Vec<SourceSpec> = Vec::new();
+        let checksums = BTreeMap::new();
+        let plugins: Vec<BundledPlugin> = Vec::new();
+        let mcp = McpConfig::default();
+
+        let base = WafConfig {
+            enabled: true,
+            paranoia_level: 1,
+            mode: WafMode::Blocking,
+            inbound_threshold: 5,
+            outbound_threshold: 4,
+            ..Default::default()
+        };
+        let hash_of =
+            |waf: &WafConfig| compute_artifact_hash(&specs, &checksums, &plugins, true, &mcp, waf);
+        let baseline = hash_of(&base);
+
+        let mut detection = base.clone();
+        detection.mode = WafMode::DetectionOnly;
+        assert_ne!(baseline, hash_of(&detection), "mode is not bound");
+
+        let mut paranoia = base.clone();
+        paranoia.paranoia_level = 4;
+        assert_ne!(baseline, hash_of(&paranoia), "paranoia level is not bound");
+
+        let mut threshold = base.clone();
+        threshold.inbound_threshold = 100;
+        assert_ne!(baseline, hash_of(&threshold), "threshold is not bound");
+
+        let mut skipped = base.clone();
+        skipped.skipped_rules = vec![942100];
+        assert_ne!(baseline, hash_of(&skipped), "skipped rules are not bound");
+
+        let mut off = base.clone();
+        off.enabled = false;
+        assert_ne!(baseline, hash_of(&off), "enabled is not bound");
+    }
+
+    #[test]
+    fn config_defaults_match_crs_conventions() {
+        let cfg = extract_root_waf_config(&[spec_with_waf(
+            serde_json::json!({ "ruleset": "./crs/rules" }),
+        )]);
+        assert!(cfg.enabled, "declaring the extension should enable it");
+        assert_eq!(cfg.paranoia_level, 1);
+        assert_eq!(cfg.mode, WafMode::Blocking);
+        assert_eq!(cfg.inbound_threshold, 5);
+        assert_eq!(cfg.outbound_threshold, 4);
+        assert_eq!(cfg.unsupported_rules, UnsupportedRules::Fail);
+    }
+
+    #[test]
+    fn paranoia_level_is_clamped_to_the_valid_range() {
+        for (given, expected) in [(0, 1), (1, 1), (4, 4), (9, 4)] {
+            let cfg = extract_root_waf_config(&[spec_with_waf(
+                serde_json::json!({ "ruleset": "r", "paranoia_level": given }),
+            )]);
+            assert_eq!(cfg.paranoia_level, expected, "paranoia_level {given}");
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod waf_artifact_tests {
+    use super::*;
+    use std::io::Read;
+
+    const SPEC: &str = r#"openapi: 3.1.0
+info:
+  title: waf-test
+  version: 1.0.0
+x-barbacane-waf:
+  ruleset: ./rules
+  paranoia_level: 2
+  mode: blocking
+  thresholds:
+    inbound: 7
+    outbound: 3
+paths:
+  /ping:
+    get:
+      operationId: ping
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: ok
+"#;
+
+    const RULES: &str = "SecRule ARGS \"@rx attack\" \\
+    \"id:1000,phase:2,deny,msg:'blocked'\"
+SecRule REQUEST_METHOD \"!@within GET HEAD\" \"id:1001,phase:1,deny\"
+SecMarker DONE
+";
+
+    fn project(name: &str, spec: &str, rules: Option<&str>) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bca-wafe2e-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("api.yaml"), spec).unwrap();
+        if let Some(rules) = rules {
+            let rules_dir = dir.join("rules");
+            std::fs::create_dir_all(&rules_dir).unwrap();
+            std::fs::write(rules_dir.join("test.conf"), rules).unwrap();
+        }
+        dir
+    }
+
+    /// Read one file out of the compiled `.bca` (a gzipped tar).
+    fn read_from_artifact(artifact: &Path, wanted: &str) -> Option<Vec<u8>> {
+        let file = File::open(artifact).unwrap();
+        let decoder = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap().to_string_lossy().into_owned();
+            if path == wanted {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf).unwrap();
+                return Some(buf);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_spec_with_a_waf_ruleset_seals_it_into_the_artifact() {
+        let dir = project("seal", SPEC, Some(RULES));
+        let out = dir.join("api.bca");
+        let result = compile(
+            &[&dir.join("api.yaml")],
+            &[],
+            &out,
+            &CompileOptions::default(),
+        )
+        .expect("compile must succeed");
+
+        // The policy reached the manifest.
+        let waf = &result.manifest.waf;
+        assert!(waf.enabled);
+        assert_eq!(waf.paranoia_level, 2);
+        assert_eq!(waf.mode, WafMode::Blocking);
+        assert_eq!(waf.inbound_threshold, 7);
+        assert_eq!(waf.outbound_threshold, 3);
+        assert_eq!(waf.rules_path.as_deref(), Some(WAF_RULES_PATH));
+        assert!(waf.skipped_rules.is_empty());
+
+        // The rule set is in the archive, and is the validated form rather
+        // than the original text.
+        let sealed = read_from_artifact(&out, WAF_RULES_PATH)
+            .expect("the artifact must contain the sealed rule set");
+        let directives: Vec<parapet::Directive> = serde_json::from_slice(&sealed).unwrap();
+        let (rules, errors) = parapet::RuleSet::compile_all(&directives, &parapet::NoDataLoader);
+        assert!(errors.is_empty());
+        assert_eq!(rules.rule_count(), 2);
+        assert_eq!(rules.marker_count(), 1);
+
+        // And it is bound by the hash, so tampering is detectable.
+        assert!(result.manifest.checksums.contains_key(WAF_RULES_PATH));
+        assert_eq!(
+            result.manifest.artifact_hash,
+            recompute_artifact_hash(&result.manifest),
+            "the manifest hash is not self-consistent"
+        );
+    }
+
+    #[test]
+    fn tampering_with_the_sealed_rule_set_breaks_the_hash() {
+        // The property that makes compile-time sealing worth doing: an
+        // operator can prove which rules a running gateway carries.
+        let dir = project("tamper", SPEC, Some(RULES));
+        let out = dir.join("api.bca");
+        let result = compile(
+            &[&dir.join("api.yaml")],
+            &[],
+            &out,
+            &CompileOptions::default(),
+        )
+        .unwrap();
+
+        let mut tampered = result.manifest.clone();
+        tampered.checksums.insert(
+            WAF_RULES_PATH.to_string(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        );
+        assert_ne!(
+            tampered.artifact_hash,
+            recompute_artifact_hash(&tampered),
+            "swapping the rule set checksum did not invalidate the hash"
+        );
+
+        // Flipping the policy has to be detectable too, not just the rules.
+        let mut relaxed = result.manifest.clone();
+        relaxed.waf.mode = WafMode::DetectionOnly;
+        assert_ne!(
+            relaxed.artifact_hash,
+            recompute_artifact_hash(&relaxed),
+            "turning off blocking did not invalidate the hash"
+        );
+    }
+
+    #[test]
+    fn a_waf_ruleset_that_cannot_be_enforced_fails_the_build() {
+        let dir = project(
+            "unenforceable",
+            SPEC,
+            Some("SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n"),
+        );
+        let err = compile(
+            &[&dir.join("api.yaml")],
+            &[],
+            &dir.join("api.bca"),
+            &CompileOptions::default(),
+        )
+        .expect_err("must refuse");
+        let text = err.to_string();
+        assert!(text.contains("E1080"), "{text}");
+        assert!(text.contains("cannot be enforced"), "{text}");
+    }
+
+    #[test]
+    fn enabling_the_waf_without_a_ruleset_fails_the_build() {
+        let spec = SPEC.replace("  ruleset: ./rules\n", "");
+        let dir = project("no-ruleset", &spec, None);
+        let err = compile(
+            &[&dir.join("api.yaml")],
+            &[],
+            &dir.join("api.bca"),
+            &CompileOptions::default(),
+        )
+        .expect_err("must refuse");
+        assert!(err.to_string().contains("no `ruleset` is set"), "{err}");
+    }
+
+    #[test]
+    fn a_spec_without_the_extension_compiles_unchanged() {
+        // The feature must be inert when unused: no archive entry, no
+        // checksum, and the manifest hash still self-consistent.
+        let spec = SPEC.split("x-barbacane-waf:").next().unwrap().to_string()
+            + SPEC
+                .split("paths:")
+                .nth(1)
+                .map(|p| format!("paths:{p}"))
+                .unwrap()
+                .as_str();
+        let dir = project("absent", &spec, None);
+        let out = dir.join("api.bca");
+        let result = compile(
+            &[&dir.join("api.yaml")],
+            &[],
+            &out,
+            &CompileOptions::default(),
+        )
+        .expect("compile must succeed");
+        assert!(!result.manifest.waf.enabled);
+        assert!(result.manifest.waf.rules_path.is_none());
+        assert!(!result.manifest.checksums.contains_key(WAF_RULES_PATH));
+        assert!(read_from_artifact(&out, WAF_RULES_PATH).is_none());
+        assert_eq!(
+            result.manifest.artifact_hash,
+            recompute_artifact_hash(&result.manifest)
+        );
     }
 }
