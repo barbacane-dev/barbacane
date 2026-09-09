@@ -16,6 +16,11 @@ on:
         description: "Version to sign (with or without a leading v)"
         required: true
         type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       version:
@@ -64,9 +69,10 @@ jobs:
           IMAGE: ${{ matrix.image }}
           OWNER: ${{ github.repository_owner }}
           COSIGN_YES: "true"
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.version }}"
+          VERSION="${INPUT_VERSION}"
           VERSION="${VERSION#v}"   # tolerate a leading v
 
           for ref in "ghcr.io/${OWNER}/${IMAGE}" "docker.io/barbacane/${IMAGE}"; do

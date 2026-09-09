@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Extract version from tag
         id: tag
@@ -44,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Extract version from tag
         id: tag
@@ -90,6 +94,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -148,6 +154,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Extract version from tag
         id: tag
@@ -314,7 +322,11 @@ jobs:
     uses: ./.github/workflows/sign-and-sbom.yml
     with:
       version: ${{ github.ref_name }}
-    secrets: inherit
+    # Only the registry credentials it declares. GITHUB_TOKEN is provided to
+    # called workflows automatically and does not need passing.
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
   # Security scan the multi-arch images
   scan-containers:
@@ -327,6 +339,8 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Extract version from tag
         id: tag
@@ -392,6 +406,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -476,22 +492,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-plugins-${{ hashFiles('plugins/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-plugins-
-
+      # No dependency cache. These plugins ship as release artifacts and are
+      # signed, so their only inputs are the checked-out sources and the
+      # lockfiles, not a cache another workflow can write to.
       - name: Build all plugins
         run: |
           mkdir -p dist/plugins
@@ -541,6 +552,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Extract version from tag
         id: tag
