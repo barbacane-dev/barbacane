@@ -78,7 +78,8 @@ clean:
 # Test & Lint
 # -----------------------------------------------------------------------------
 
-.PHONY: test test-verbose test-one check clippy fmt fmt-check security-test security-test-build fuzz-build
+.PHONY: test test-verbose test-one check clippy fmt fmt-check security-test security-test-build fuzz-build \
+	coverage coverage-integration coverage-html coverage-lcov
 
 test:
 	cargo test --workspace
@@ -101,6 +102,31 @@ security-test: plugins
 # Compile-only check of the security suite (does not require running services).
 security-test-build:
 	cargo test -p barbacane-test --test security --no-run
+
+# Coverage (cargo-llvm-cov, source-based LLVM instrumentation).
+#
+# Install once with:
+#   cargo install cargo-llvm-cov
+#   rustup component add llvm-tools-preview
+#
+# COVERAGE_FLOOR is the line-coverage percentage CI enforces. Raise it when the
+# real number rises; never lower it to make a red build green.
+COVERAGE_FLOOR ?= 60
+
+# Unit and binary tests only. Fast, needs no services.
+coverage:
+	./scripts/coverage.sh --unit
+
+# Adds the integration suite, which drives the gateway as a child process.
+coverage-integration: plugins
+	./scripts/coverage.sh --floor $(COVERAGE_FLOOR)
+
+coverage-html:
+	./scripts/coverage.sh --unit --html
+
+coverage-lcov:
+	./scripts/coverage.sh --unit --lcov lcov.info
+	@echo "Wrote lcov.info"
 
 # Build (not run) the standalone cargo-fuzz targets on stable, to catch bit-rot.
 # Actually fuzzing needs nightly + cargo-fuzz: `cd fuzz && cargo +nightly fuzz run <target>`.
@@ -209,6 +235,10 @@ help:
 	@echo "  make test-verbose   Run tests with output"
 	@echo "  make security-test  Run the adversarial security suite (RED until fixed)"
 	@echo "  make fuzz-build     Build the cargo-fuzz targets (run with +nightly)"
+	@echo "  make coverage       Line coverage of the unit tests"
+	@echo "  make coverage-integration  Coverage including the integration suite"
+	@echo "  make coverage-html  Coverage as a browsable HTML report"
+	@echo "  make coverage-lcov  Coverage as lcov.info (for editors and CI)"
 	@echo "  make test-one TEST=name"
 	@echo "  make check          Run fmt-check + clippy"
 	@echo "  make clippy         Run clippy lints"

@@ -83,23 +83,39 @@ fn main() {
 fn build_fixture_plugin(plugin_dir: &Path, wasm_path: &Path, wasm_name: &str) {
     let status = Command::new("cargo")
         .current_dir(plugin_dir)
+        // The fixture plugins build for wasm32-unknown-unknown and must not
+        // inherit the outer build's flags or output paths. Coverage
+        // instrumentation in particular is unsupported on that target and makes
+        // this build fail. Each plugin crate keeps its own target directory.
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTDOCFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTDOCFLAGS")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .env_remove("LLVM_PROFILE_FILE")
         .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
-        .status();
+        .output();
 
     match status {
-        Ok(s) if s.success() => {
+        Ok(o) if o.status.success() => {
             println!(
                 "cargo:warning=Built fixture plugin: {}",
                 wasm_path.display()
             );
         }
-        Ok(s) => {
+        Ok(o) => {
             println!(
                 "cargo:warning=Fixture plugin build failed (exit {}): {}. \
                  Streaming integration tests will be skipped.",
-                s.code().unwrap_or(-1),
+                o.status.code().unwrap_or(-1),
                 wasm_name
             );
+            // Cargo captures build-script output, so without relaying the
+            // child's diagnostics a failure here reports only an exit code.
+            for line in String::from_utf8_lossy(&o.stderr).lines() {
+                println!("cargo:warning=  {wasm_name}: {line}");
+            }
         }
         Err(e) => {
             println!(
