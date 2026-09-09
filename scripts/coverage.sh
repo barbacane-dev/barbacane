@@ -61,6 +61,18 @@ done < <(
     | grep -vx security | sort
 )
 
+# The fixture plugins target wasm32-unknown-unknown, which cannot carry
+# coverage instrumentation, so they are built before the instrumented
+# environment exists. barbacane-test's build.rs skips any that are already
+# present.
+if [[ "$unit_only" -eq 0 ]]; then
+  for plugin in tests/fixture-plugins/*/; do
+    [[ -f "$plugin/Cargo.toml" ]] || continue
+    echo "Building fixture plugin: $(basename "$plugin")"
+    (cd "$plugin" && cargo build --target wasm32-unknown-unknown --release)
+  done
+fi
+
 # shellcheck disable=SC1090
 source <(cargo llvm-cov show-env --export-prefix)
 cargo llvm-cov clean --workspace
