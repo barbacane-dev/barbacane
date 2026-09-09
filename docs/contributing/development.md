@@ -135,15 +135,21 @@ make coverage-integration
 make coverage-html
 ```
 
-`make coverage-integration` measures the gateway process too. The test harness
-resolves the binary through `CARGO_TARGET_DIR`, which `cargo llvm-cov`
-redirects, so the instrumented build is the one that runs. Set
-`BARBACANE_TEST_BINARY` to point the harness at a specific binary instead.
+`make coverage-integration` measures the gateway process too. `cargo llvm-cov
+show-env` puts the instrumented build under `CARGO_TARGET_DIR`, and the test
+harness resolves the gateway binary from there, so the process the tests drive
+is the instrumented one. Set `BARBACANE_TEST_BINARY` to point the harness at a
+specific binary instead.
 
-CI runs the same combined measurement in the **Coverage** job, publishes the
-summary to the run page, uploads `lcov.info` as an artifact, and fails if line
-coverage drops below `COVERAGE_FLOOR`. Raise that floor when the real number
-rises; do not lower it to turn a red build green.
+The targets wrap `scripts/coverage.sh`, which CI calls directly in the
+**Coverage** job, so local and CI runs measure the same thing. The job
+publishes the summary to the run page, uploads `lcov.info` as an artifact and
+fails if line coverage drops below the floor. Raise that floor when the real
+number rises; do not lower it to turn a red build green.
+
+```bash
+./scripts/coverage.sh --help
+```
 
 ### Run
 

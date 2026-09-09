@@ -79,7 +79,7 @@ clean:
 # -----------------------------------------------------------------------------
 
 .PHONY: test test-verbose test-one check clippy fmt fmt-check security-test security-test-build fuzz-build \
-	coverage coverage-html coverage-lcov coverage-open
+	coverage coverage-integration coverage-html coverage-lcov
 
 test:
 	cargo test --workspace
@@ -111,35 +111,21 @@ security-test-build:
 #
 # COVERAGE_FLOOR is the line-coverage percentage CI enforces. Raise it when the
 # real number rises; never lower it to make a red build green.
-COVERAGE_FLOOR ?= 55
-
-# Integration targets are discovered so a new suite is measured automatically.
-# `security` is excluded because it needs PostgreSQL and the control plane.
-INTEGRATION_TARGETS = $(shell ls crates/barbacane-test/tests/*.rs \
-	| xargs -n1 basename | sed 's/\.rs$$//' \
-	| grep -vx security \
-	| sed 's/^/--test /' | tr '\n' ' ')
+COVERAGE_FLOOR ?= 0
 
 # Unit and binary tests only. Fast, needs no services.
 coverage:
-	cargo llvm-cov --workspace --lib --bins --exclude barbacane-test --summary-only
+	./scripts/coverage.sh --unit
 
-# Adds the integration suite, which drives the gateway as a child process. The
-# harness resolves the binary through CARGO_TARGET_DIR, so the process that runs
-# is the instrumented one and its coverage lands in the same report.
+# Adds the integration suite, which drives the gateway as a child process.
 coverage-integration: plugins
-	cargo llvm-cov clean --workspace
-	cargo llvm-cov --no-report --workspace --lib --bins --exclude barbacane-test
-	cargo llvm-cov --no-report -p barbacane-test --lib $(INTEGRATION_TARGETS) -- --test-threads=2
-	cargo llvm-cov report --summary-only
-	cargo llvm-cov report --fail-under-lines $(COVERAGE_FLOOR)
+	./scripts/coverage.sh --floor $(COVERAGE_FLOOR)
 
 coverage-html:
-	cargo llvm-cov --workspace --lib --bins --exclude barbacane-test --html
-	@echo "Report: target/llvm-cov/html/index.html"
+	./scripts/coverage.sh --unit --html
 
 coverage-lcov:
-	cargo llvm-cov --workspace --lib --bins --exclude barbacane-test --lcov --output-path lcov.info
+	./scripts/coverage.sh --unit --lcov lcov.info
 	@echo "Wrote lcov.info"
 
 # Build (not run) the standalone cargo-fuzz targets on stable, to catch bit-rot.

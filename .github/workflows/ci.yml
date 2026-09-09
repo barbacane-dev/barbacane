@@ -400,37 +400,26 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      # The floor is enforced here rather than in a step of its own: the report
+      # needs the environment `show-env` sets up inside the script.
+      # Raise the floor when the real number rises. Never lower it to turn a
+      # red build green.
       - name: Measure coverage
-        run: |
-          targets=$(ls crates/barbacane-test/tests/*.rs \
-            | xargs -n1 basename | sed 's/\.rs$//' \
-            | grep -vx security \
-            | sed 's/^/--test /' | tr '\n' ' ')
-          echo "Integration targets: $targets"
-          cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report --workspace --lib --bins --exclude barbacane-test
-          cargo llvm-cov --no-report -p barbacane-test --lib $targets -- --test-threads=2
-          cargo llvm-cov report --lcov --output-path lcov.info
-          cargo llvm-cov report --summary-only | tee coverage.txt
+        run: ./scripts/coverage.sh --lcov lcov.info --summary coverage.txt --floor 0
 
       - name: Publish summary
+        if: always()
         run: |
           {
             echo '### Coverage'
             echo
             echo '```'
-            cat coverage.txt
+            cat coverage.txt || echo '(no summary produced)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Enforce the coverage floor
-        run: cargo llvm-cov report --fail-under-lines "${COVERAGE_FLOOR}"
-        env:
-          # Raise this when the real number rises. Never lower it to turn a red
-          # build green.
-          COVERAGE_FLOOR: 0
-
       - name: Upload lcov
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
