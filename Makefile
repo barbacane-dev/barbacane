@@ -111,7 +111,7 @@ security-test-build:
 #
 # COVERAGE_FLOOR is the line-coverage percentage CI enforces. Raise it when the
 # real number rises; never lower it to make a red build green.
-COVERAGE_FLOOR ?= 0
+COVERAGE_FLOOR ?= 60
 
 # Unit and binary tests only. Fast, needs no services.
 coverage:

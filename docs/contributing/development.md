@@ -144,8 +144,8 @@ specific binary instead.
 The targets wrap `scripts/coverage.sh`, which CI calls directly in the
 **Coverage** job, so local and CI runs measure the same thing. The job
 publishes the summary to the run page, uploads `lcov.info` as an artifact and
-fails if line coverage drops below the floor. Raise that floor when the real
-number rises; do not lower it to turn a red build green.
+fails if line coverage drops below the floor, currently 60%. Raise that floor
+when the real number rises; do not lower it to turn a red build green.
 
 ```bash
 ./scripts/coverage.sh --help

@@ -408,7 +408,7 @@ jobs:
       # Raise the floor when the real number rises. Never lower it to turn a
       # red build green.
       - name: Measure coverage
-        run: ./scripts/coverage.sh --lcov lcov.info --summary coverage.txt --floor 0
+        run: ./scripts/coverage.sh --lcov lcov.info --summary coverage.txt --floor 60
 
       - name: Publish summary
         if: always()
