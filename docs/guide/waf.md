@@ -60,11 +60,15 @@ into `artifact_hash`, so a signed artifact cannot be switched from blocking to
 detection-only, or have its paranoia level lowered, without invalidating the
 signature.
 
-A rule the build cannot enforce fails the build:
+A rule the build cannot enforce fails the build. Stock CRS v4.9.0 compiles in
+full; a failure comes from a custom rule, for example an unknown directive, a
+missing `@pmFromFile` data file, or an invalid regex. `unsupported_rules: skip`
+covers only rules whose operator will not compile; a parse error or a missing
+data file always fails the build:
 
 ```text
-error[E1080]: x-barbacane-waf: 4 rule(s) in the rule set cannot be enforced by
-this build: rule 942100 (line 46): operator @detectSQLi is not implemented yet
+error[E1080]: x-barbacane-waf: 1 rule(s) in the rule set cannot be enforced by
+this build: rule 900500 (line 12): @rx (: unclosed group
 ...
 Set `unsupported_rules: skip` to build without them. The artifact then records
 their ids and the gateway will not enforce them.
@@ -79,13 +83,6 @@ them at WARN on every boot.
 ## Current limitations
 
 Read these before enabling it in production.
-
-**`@detectSQLi` and `@detectXSS` are not implemented.** Four CRS rules use
-them (941100, 941101, 942100, 942101) and they are the libinjection
-classifiers, not peripheral rules. With `unsupported_rules: skip` the rest of
-CRS runs without them. Regex-based SQLi and XSS rules still fire, so a
-`UNION SELECT` or a `<script>` tag is still caught; a tautology such as
-`1' OR '1'='1` may not be.
 
 **Response-phase rules are not evaluated.** A CRS artifact carries around 152
 rules in phases 3 to 5, mostly outbound data-leakage detection, and they are

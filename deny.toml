@@ -52,7 +52,11 @@ wildcards = "warn"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# Parapet, the SecLang/CRS engine (ADR-0031). Pinned by revision in
-# Cargo.toml, and moves to crates.io once its API settles, at which point this
-# entry comes back out.
-allow-git = ["https://github.com/barbacane-dev/parapet"]
+# Parapet, the SecLang/CRS engine (ADR-0031), and libinjectionrs, the
+# libinjection port it uses for @detectSQLi/@detectXSS. Both pinned by revision
+# in Cargo.toml, and move to crates.io once their APIs settle, at which point
+# these entries come back out.
+allow-git = [
+    "https://github.com/barbacane-dev/parapet",
+    "https://github.com/barbacane-dev/libinjectionrs",
+]

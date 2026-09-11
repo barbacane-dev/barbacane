@@ -2012,7 +2012,12 @@ fn rule_id_of(error: &parapet::CompileError) -> Option<u32> {
     let text = error.to_string();
     let rest = text.strip_prefix("rule ")?;
     let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    id.parse().ok()
+    // Parapet reports a rule with no id of its own (a chain link) as "rule 0".
+    // Rule ids are positive, so treat 0 as unattributable rather than a real id.
+    match id.parse().ok()? {
+        0 => None,
+        id => Some(id),
+    }
 }
 
 /// Extract root-level `x-barbacane-mcp` config from the first spec that defines it.
@@ -3976,14 +3981,11 @@ mod waf_tests {
 
     #[test]
     fn an_unenforceable_rule_refuses_the_artifact_by_default() {
-        // @detectSQLi has no implementation, so the rule cannot be enforced.
+        // An invalid regex cannot be compiled, so the rule cannot be enforced.
         // The default policy refuses rather than shipping a rule set that
         // looks complete.
         let dir = tempdir("unsupported-fail");
-        let rules = ruleset(
-            &dir,
-            "SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n",
-        );
+        let rules = ruleset(&dir, "SecRule ARGS \"@rx (\" \"id:942100,phase:2,deny\"\n");
         let err = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap_err();
         let text = err.to_string();
         assert!(text.contains("cannot be enforced"), "{text}");
@@ -3996,7 +3998,7 @@ mod waf_tests {
         let rules = ruleset(
             &dir,
             "SecRule ARGS \"@rx attack\" \"id:1,phase:2,deny\"\n\
-             SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n",
+             SecRule ARGS \"@rx (\" \"id:942100,phase:2,deny\"\n",
         );
         let sealed = seal_waf_ruleset(&rules, UnsupportedRules::Skip).expect("must seal");
         assert_eq!(sealed.skipped_rules, vec![942100]);
@@ -4330,7 +4332,7 @@ SecMarker DONE
         let dir = project(
             "unenforceable",
             SPEC,
-            Some("SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n"),
+            Some("SecRule ARGS \"@rx (\" \"id:942100,phase:2,deny\"\n"),
         );
         let err = compile(
             &[&dir.join("api.yaml")],
@@ -4416,17 +4418,27 @@ SecMarker DONE
         // the chained link has no id of its own to record.
         let rules = ruleset(
             &dir,
-            "SecRule ARGS \"@rx x\" \"id:5000,phase:2,deny,chain\"\n    SecRule ARGS \"@detectXSS\"\n",
+            "SecRule ARGS \"@rx x\" \"id:5000,phase:2,deny,chain\"\n    SecRule ARGS \"@rx (\"\n",
         );
         let result = seal_waf_ruleset(&rules, UnsupportedRules::Skip);
         match result {
-            // Either the id is attributed to the chain starter and recorded,
-            // or the build refuses. Silently dropping it is the only
-            // unacceptable outcome.
-            Ok(sealed) => assert!(
-                !sealed.skipped_rules.is_empty(),
-                "a refused rule was neither recorded nor refused"
-            ),
+            // Either the id is attributed and recorded, or the build refuses.
+            // Silently dropping it is the only unacceptable outcome, and a
+            // sealed set must contain only rules the gateway can enforce.
+            Ok(sealed) => {
+                assert!(
+                    !sealed.skipped_rules.is_empty(),
+                    "a refused rule was neither recorded nor refused"
+                );
+                let directives: Vec<parapet::Directive> =
+                    serde_json::from_slice(&sealed.rules_json).unwrap();
+                let (_, errors) =
+                    parapet::RuleSet::compile_all(&directives, &parapet::NoDataLoader);
+                assert!(
+                    errors.is_empty(),
+                    "sealed rule set still has unenforceable rules"
+                );
+            }
             Err(e) => assert!(e.to_string().contains("could not be determined"), "{e}"),
         }
     }

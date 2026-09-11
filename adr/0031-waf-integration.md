@@ -1,7 +1,7 @@
 # ADR-0031: WAF Integration (ModSecurity / OWASP CRS Compatible)
 
-**Status:** Proposed
-**Date:** 2026-09-07
+**Status:** Accepted
+**Date:** 2026-09-07 (accepted 2026-09-11)
 
 ## Context
 
@@ -105,7 +105,7 @@ This is the option that fits the architecture rather than working around it.
 
 - **CRS is already RE2-shaped, and this is now measured, not assumed.** Coraza evaluates `@rx` with Go's `regexp` (RE2), so CRS maintains RE2 compatibility as a hard constraint. 268 of 273 unique CRS `@rx` patterns compile unmodified under the Rust `regex` crate, and all 273 do after a lexical repair pass. See the feasibility probe below. The `regex` crate also gives the same linear-time guarantee, so there is no ReDoS surface from operator-supplied rules.
 - **`@pm` / `@pmFromFile` is Aho-Corasick**, and `aho-corasick` is a first-class Rust crate.
-- **`@detectSQLi` / `@detectXSS` is libinjection**, available as a pure-Rust port ([`libinjectionrs`](https://github.com/saarw/libinjectionrs), BSD-3-Clause), so no C dependency. Audited 2026-09-08 against the C original: 1,631 of 162,963 inputs tokenise differently, four divergence classes characterised including one false positive, and differential fuzzing finds a new class every few minutes once its NUL blind spot is removed. Verdict: **do not adopt yet**. See `docs/audit-libinjectionrs.md` in the Parapet repository.
+- **`@detectSQLi` / `@detectXSS` is libinjection**, adopted as a pure-Rust port ([`barbacane-dev/libinjectionrs`](https://github.com/barbacane-dev/libinjectionrs), BSD-3-Clause), so no C dependency. The 2026-09-08 audit found it diverged from the C original on 1,631 of 162,963 inputs with an open false-positive surface, verdict "do not adopt yet". The fork closed that: it is differential-tested against the C library through an FFI harness over the same corpus and now matches on every input, both verdicts and fingerprints (0 of 162,963 each), with any divergence failing CI. Six char-semantics classes were fixed following the C control flow, and a long differential-fuzzing campaign hardens the surface beyond the corpus.
 - **`@ipMatch` is `ipnet`.** Multipart parsing is `multer`. JSON body parsing is `serde_json`, already a dependency.
 - **A conformance suite exists for free.** The CRS regression corpus is 322 YAML files (roughly 5,000 cases) driven by [`go-ftw`](https://github.com/coreruleset/go-ftw). We do not have to invent a definition of "CRS compatible"; we have to pass someone else's.
 - **Prior art to read, not to depend on:** `zentinel-modsec`, per the survey above. A useful existence proof and a source of design decisions, not a dependency we would take on for a security-critical path at that maturity.
@@ -219,7 +219,7 @@ would trade the ADR's central property for a latency saving.
 
 Release gates for Stage 2 GA:
 
-- **`@detectSQLi` and `@detectXSS` implemented.** These are a GA prerequisite, not an optional extra. Without them the CRS rules 941100, 941101, 942100 and 942101 cannot be enforced, and those are the libinjection classifiers, not peripheral rules. The audit of `libinjectionrs` (see below) concluded it is not adoptable in its current state, so this gate is currently unmet and the route to meeting it is open.
+- **`@detectSQLi` and `@detectXSS` implemented.** These are a GA prerequisite, not an optional extra. Without them the CRS rules 941100, 941101, 942100 and 942101 cannot be enforced, and those are the libinjection classifiers, not peripheral rules. Met: both operators are implemented in Parapet over `libinjectionrs`, whose corpus differential against the C library is at zero.
 - **100% of the CRS regression suite** for the enabled paranoia level, in blocking mode, via `go-ftw`, **with an empty exclusion list**. An earlier draft of this ADR asked for 100% while two operators were refused, which is unreachable: those four rules account for 30 stages of the suite. Rather than define a reduced suite, GA requires the exclusion list to be empty, so the gate cannot be met by shrinking the target.
 - Until GA, the shortfall is reported rather than hidden: the compiler refuses a rule set it cannot fully enforce unless the operator opts in with `unsupported_rules: skip`, and the artifact then records the skipped rule ids in the manifest, where `artifact_hash` and the signature cover them. An operator can prove which rules a running gateway is not enforcing.
 - Unknown directive, operator, transformation, action or target is a hard compile error. No silent skips, ever.
@@ -329,7 +329,7 @@ The Rust-native gateways that ship a WAF do so with their own rule format, which
 - Is `waf-coraza` (Stage 1) worth publishing at all if Stage 2 is committed, given the deprecation cost?
 - ~~Does the engine repository sit in the `barbacane-dev` org or under a neutral name?~~ Resolved: `barbacane-dev/parapet`, with a deliberately Barbacane-agnostic README.
 - Barbacane's own dual-licensing exposure under DCO is broader than the WAF: does the project want a CLA for in-tree contributions generally, or to keep DCO and accept that contributed code is AGPL-only? Out of scope here, but this ADR is the second time it has come up.
-- ~~Which libinjection route: adopt `libinjectionrs`, or port the fingerprint tables?~~ Resolved for now: neither. The audit's verdict is that `libinjectionrs` is not adoptable until its divergence surface is bounded, because differential fuzzing keeps finding new classes and one of them is a false positive. Parapet keeps refusing `@detectSQLi` and `@detectXSS`, which costs 30 regression stages and fails loudly. The missing test infrastructure and the three tooling fixes that were hiding the evidence are contributed upstream in [saarw/libinjectionrs#1](https://github.com/saarw/libinjectionrs/pull/1). Revisit when fuzzing runs clean for hours rather than minutes.
+- ~~Which libinjection route: adopt `libinjectionrs`, or port the fingerprint tables?~~ Resolved: adopt the [`barbacane-dev/libinjectionrs`](https://github.com/barbacane-dev/libinjectionrs) fork. The divergence surface the audit flagged is now bounded: the corpus differential against the C library is at zero on both verdicts and fingerprints, gated in CI, and a long differential-fuzzing campaign drives the surface beyond the corpus. Parapet implements `@detectSQLi` and `@detectXSS` over it, so the 30 regression stages those four rules cover are enforced rather than refused.
 
 ## Related ADRs
 
