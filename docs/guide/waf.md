@@ -61,8 +61,10 @@ detection-only, or have its paranoia level lowered, without invalidating the
 signature.
 
 A rule the build cannot enforce fails the build. Stock CRS v4.9.0 compiles in
-full; a rule fails only when its operator cannot be built, for example an
-invalid regex in a custom rule:
+full; a failure comes from a custom rule, for example an unknown directive, a
+missing `@pmFromFile` data file, or an invalid regex. `unsupported_rules: skip`
+covers only rules whose operator will not compile; a parse error or a missing
+data file always fails the build:
 
 ```text
 error[E1080]: x-barbacane-waf: 1 rule(s) in the rule set cannot be enforced by

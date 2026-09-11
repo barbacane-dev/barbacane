@@ -2012,7 +2012,12 @@ fn rule_id_of(error: &parapet::CompileError) -> Option<u32> {
     let text = error.to_string();
     let rest = text.strip_prefix("rule ")?;
     let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    id.parse().ok()
+    // Parapet reports a rule with no id of its own (a chain link) as "rule 0".
+    // Rule ids are positive, so treat 0 as unattributable rather than a real id.
+    match id.parse().ok()? {
+        0 => None,
+        id => Some(id),
+    }
 }
 
 /// Extract root-level `x-barbacane-mcp` config from the first spec that defines it.
@@ -4417,13 +4422,20 @@ SecMarker DONE
         );
         let result = seal_waf_ruleset(&rules, UnsupportedRules::Skip);
         match result {
-            // Either the id is attributed to the chain starter and recorded,
-            // or the build refuses. Silently dropping it is the only
-            // unacceptable outcome.
-            Ok(sealed) => assert!(
-                !sealed.skipped_rules.is_empty(),
-                "a refused rule was neither recorded nor refused"
-            ),
+            // Either the id is attributed and recorded, or the build refuses.
+            // Silently dropping it is the only unacceptable outcome, and a
+            // sealed set must contain only rules the gateway can enforce.
+            Ok(sealed) => {
+                assert!(
+                    !sealed.skipped_rules.is_empty(),
+                    "a refused rule was neither recorded nor refused"
+                );
+                let directives: Vec<parapet::Directive> =
+                    serde_json::from_slice(&sealed.rules_json).unwrap();
+                let (_, errors) =
+                    parapet::RuleSet::compile_all(&directives, &parapet::NoDataLoader);
+                assert!(errors.is_empty(), "sealed rule set still has unenforceable rules");
+            }
             Err(e) => assert!(e.to_string().contains("could not be determined"), "{e}"),
         }
     }
