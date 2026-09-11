@@ -27,6 +27,12 @@ x-barbacane-waf:
   unsupported_rules: fail      # fail (default) | skip
 ```
 
+`thresholds.outbound` has no effect yet. The rule that reads it is a
+response-phase rule, and response phases are not evaluated (see
+[Current limitations](#current-limitations)). It is still covered by
+`artifact_hash`, so changing it changes the artifact without changing how any
+request is handled.
+
 `ruleset` is resolved relative to the spec. Point it at a directory containing
 the `.conf` files and, for CRS, the setup file:
 
@@ -83,7 +89,8 @@ CRS runs without them. Regex-based SQLi and XSS rules still fire, so a
 
 **Response-phase rules are not evaluated.** A CRS artifact carries around 152
 rules in phases 3 to 5, mostly outbound data-leakage detection, and they are
-present in the artifact but not run. Request-phase rules, around 439 of them,
+present in the artifact but not run. This is also why `thresholds.outbound` is
+inert: the rule that compares against it runs in phase 4. Request-phase rules, around 439 of them,
 are enforced. The gateway warns about this at startup. Outbound inspection is
 implemented in the engine but not yet wired into the response path, which has
 several exits and one unresolved question: a streamed response has already

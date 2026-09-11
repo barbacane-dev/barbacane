@@ -10,10 +10,10 @@ on:
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
+# Only the deploy job needs the Pages and OIDC tokens; the build job runs
+# mdbook over repository content and needs nothing but the checkout.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: "pages"
@@ -22,9 +22,13 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@ee69d230fe19748b7abf22df32acaa93833fad08 # v2
@@ -52,6 +56,9 @@ jobs:
           path: './book'
 
   deploy:
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
