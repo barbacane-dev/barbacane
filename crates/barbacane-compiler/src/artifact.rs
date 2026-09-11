@@ -4434,7 +4434,10 @@ SecMarker DONE
                     serde_json::from_slice(&sealed.rules_json).unwrap();
                 let (_, errors) =
                     parapet::RuleSet::compile_all(&directives, &parapet::NoDataLoader);
-                assert!(errors.is_empty(), "sealed rule set still has unenforceable rules");
+                assert!(
+                    errors.is_empty(),
+                    "sealed rule set still has unenforceable rules"
+                );
             }
             Err(e) => assert!(e.to_string().contains("could not be determined"), "{e}"),
         }
