@@ -3976,14 +3976,11 @@ mod waf_tests {
 
     #[test]
     fn an_unenforceable_rule_refuses_the_artifact_by_default() {
-        // @detectSQLi has no implementation, so the rule cannot be enforced.
+        // An invalid regex cannot be compiled, so the rule cannot be enforced.
         // The default policy refuses rather than shipping a rule set that
         // looks complete.
         let dir = tempdir("unsupported-fail");
-        let rules = ruleset(
-            &dir,
-            "SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n",
-        );
+        let rules = ruleset(&dir, "SecRule ARGS \"@rx (\" \"id:942100,phase:2,deny\"\n");
         let err = seal_waf_ruleset(&rules, UnsupportedRules::Fail).unwrap_err();
         let text = err.to_string();
         assert!(text.contains("cannot be enforced"), "{text}");
@@ -3996,7 +3993,7 @@ mod waf_tests {
         let rules = ruleset(
             &dir,
             "SecRule ARGS \"@rx attack\" \"id:1,phase:2,deny\"\n\
-             SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n",
+             SecRule ARGS \"@rx (\" \"id:942100,phase:2,deny\"\n",
         );
         let sealed = seal_waf_ruleset(&rules, UnsupportedRules::Skip).expect("must seal");
         assert_eq!(sealed.skipped_rules, vec![942100]);
@@ -4330,7 +4327,7 @@ SecMarker DONE
         let dir = project(
             "unenforceable",
             SPEC,
-            Some("SecRule ARGS \"@detectSQLi\" \"id:942100,phase:2,deny\"\n"),
+            Some("SecRule ARGS \"@rx (\" \"id:942100,phase:2,deny\"\n"),
         );
         let err = compile(
             &[&dir.join("api.yaml")],
@@ -4416,7 +4413,7 @@ SecMarker DONE
         // the chained link has no id of its own to record.
         let rules = ruleset(
             &dir,
-            "SecRule ARGS \"@rx x\" \"id:5000,phase:2,deny,chain\"\n    SecRule ARGS \"@detectXSS\"\n",
+            "SecRule ARGS \"@rx x\" \"id:5000,phase:2,deny,chain\"\n    SecRule ARGS \"@rx (\"\n",
         );
         let result = seal_waf_ruleset(&rules, UnsupportedRules::Skip);
         match result {

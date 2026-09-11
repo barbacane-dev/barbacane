@@ -2377,6 +2377,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f"
 
 [[package]]
+name = "libinjectionrs"
+version = "0.1.1"
+source = "git+https://github.com/barbacane-dev/libinjectionrs?rev=7f35f8097e9dd06005334a0c8f50661ce544a8df#7f35f8097e9dd06005334a0c8f50661ce544a8df"
+dependencies = [
+ "bitflags 2.11.0",
+ "serde_json",
+ "smallvec",
+]
+
+[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2886,9 +2896,10 @@ dependencies = [
 [[package]]
 name = "parapet"
 version = "0.0.0"
-source = "git+https://github.com/barbacane-dev/parapet?rev=a9218569f57219b897c87416c7a9240f228aca01#a9218569f57219b897c87416c7a9240f228aca01"
+source = "git+https://github.com/barbacane-dev/parapet?rev=695ee8b46bd73eaa0daffdbdd73df0e45b26c6d3#695ee8b46bd73eaa0daffdbdd73df0e45b26c6d3"
 dependencies = [
  "aho-corasick",
+ "libinjectionrs",
  "quick-xml",
  "regex",
  "serde",
