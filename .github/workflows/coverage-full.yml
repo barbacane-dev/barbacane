@@ -1,0 +1,99 @@
+name: Coverage (full)
+
+# The full instrumented coverage run: unit + integration (the gateway driven as
+# an instrumented child process) + the control-plane tests over a real
+# PostgreSQL. It is heavy (~35 min), so it runs on main, nightly, and on demand
+# rather than on every pull request. The enforced floor lives here; the
+# per-pull-request CI job runs a fast unit-only report instead.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'plugins/**'
+      - 'scripts/coverage.sh'
+      - '.github/workflows/coverage-full.yml'
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage-full:
+    name: Coverage (full)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: barbacane
+          POSTGRES_PASSWORD: barbacane
+          POSTGRES_DB: barbacane
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-
+            ${{ runner.os }}-cargo-
+
+      - name: Build WASM plugins
+        run: make plugins
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
+        with:
+          tool: cargo-llvm-cov
+
+      # Raise the floor when the real number rises. Never lower it to turn a
+      # red build green.
+      - name: Measure coverage
+        run: ./scripts/coverage.sh --lcov lcov.info --summary coverage.txt --floor 63
+
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo '### Coverage (full)'
+            echo
+            echo '```'
+            cat coverage.txt || echo '(no summary produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lcov
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          if-no-files-found: ignore
