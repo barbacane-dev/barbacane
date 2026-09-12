@@ -175,6 +175,20 @@ impl WafStage {
         for (name, value) in headers {
             tx.add_request_header(name, value);
         }
+        // HTTP/2 carries the authority in the :authority pseudo-header, which
+        // hyper exposes on the URI rather than as a Host header, so an h2
+        // request arrives with no Host header. Synthesize one from the URI
+        // authority when absent, so Host-based rules (CRS 920280 "missing Host",
+        // 920350 "Host is a numeric IP", ...) see the value an HTTP/1.1 client
+        // would send. add_request_header also records it in REQUEST_HEADERS_NAMES.
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("host"))
+        {
+            if let Some(authority) = authority_of(uri) {
+                tx.add_request_header("Host", authority);
+            }
+        }
         let verdict = tx.process_request_headers();
         if let decision @ WafDecision::Block { .. } = Self::decide(&tx, verdict) {
             return (decision, WafInspection { tx });
@@ -265,6 +279,19 @@ impl WafInspection<'_> {
     }
 }
 
+/// The authority (host and optional port) of an absolute URI, or `None` for an
+/// origin-form URI (`/path`) that carries no authority. HTTP/2 request URIs are
+/// absolute, so this recovers the `:authority` value hyper places on the URI.
+fn authority_of(uri: &str) -> Option<&str> {
+    let after_scheme = uri.split_once("://")?.1;
+    let end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    // Strip any userinfo; the h2 :authority has none, but be defensive.
+    let authority = after_scheme[..end].rsplit('@').next().unwrap_or("");
+    (!authority.is_empty()).then_some(authority)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -331,6 +358,68 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
     fn a_clean_request_is_allowed() {
         let stage = stage(EngineMode::Blocking);
         assert!(matches!(inspect(&stage, "/?q=fine").0, WafDecision::Allow));
+    }
+
+    /// A stage whose only rule mirrors CRS 920280: block when there is no Host
+    /// header.
+    fn host_rule_stage() -> WafStage {
+        let source = r#"SecRule &REQUEST_HEADERS:Host "@eq 0" "id:920280,phase:2,deny,status:403,msg:'missing host'""#;
+        let directives = parapet::parse(source, "host.conf").expect("must parse");
+        let rules = RuleSet::compile(&directives, &parapet::NoDataLoader).expect("must compile");
+        WafStage {
+            rules,
+            mode: EngineMode::Blocking,
+            paranoia_level: 1,
+            inbound_threshold: 5,
+            outbound_threshold: 4,
+        }
+    }
+
+    #[test]
+    fn http2_authority_is_exposed_as_host_header() {
+        // HTTP/2 carries the authority in :authority, which hyper puts on the
+        // URI rather than a Host header, so an h2 request arrives with no Host
+        // header. It must not trip the missing-Host rule.
+        let stage = host_rule_stage();
+        let (decision, _) = stage.inspect_request(
+            "GET",
+            "https://api.example.test/path",
+            "HTTP/2.0",
+            &[], // h2: no Host header
+            b"",
+            None,
+            Some("203.0.113.7"),
+        );
+        assert!(
+            matches!(decision, WafDecision::Allow),
+            "Host synthesized from the URI authority should satisfy 920280"
+        );
+    }
+
+    #[test]
+    fn a_genuinely_missing_host_still_matches_920280() {
+        // No Host header and no authority in the URI (origin-form) is a real
+        // missing-Host request and must still be caught.
+        let stage = host_rule_stage();
+        let (decision, _) = stage.inspect_request(
+            "GET",
+            "/path",
+            "HTTP/1.1",
+            &[],
+            b"",
+            None,
+            Some("203.0.113.7"),
+        );
+        assert!(
+            matches!(
+                decision,
+                WafDecision::Block {
+                    rule_id: 920280,
+                    ..
+                }
+            ),
+            "a request with neither Host header nor authority must match 920280"
+        );
     }
 
     #[test]
