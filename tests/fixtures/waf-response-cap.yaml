@@ -1,0 +1,45 @@
+openapi: "3.0.3"
+info:
+  title: WAF Response Cap Test API
+  version: "1.0.0"
+  description: A tiny max_response_body so phase-4 body inspection is skipped
+
+x-barbacane-waf:
+  ruleset: ./waf-rules
+  paranoia_level: 1
+  mode: blocking
+  max_response_body: 16
+  thresholds:
+    inbound: 5
+    outbound: 4
+
+paths:
+  /waf/big-body-leak:
+    get:
+      summary: Body over the cap; phase-4 body inspection is skipped
+      operationId: wafBigBodyLeak
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "SECRET_TOKEN in a body well over the sixteen byte cap"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /waf/big-body-with-header:
+    get:
+      summary: Body over the cap plus a leaking header; phase 3 still runs
+      operationId: wafBigBodyWithHeader
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "a clean body that is well over the sixteen byte cap"}'
+          content_type: application/json
+          headers:
+            X-Leak: internal-detail
+      responses:
+        "200":
+          description: Success

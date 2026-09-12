@@ -24,14 +24,16 @@ x-barbacane-waf:
   thresholds:
     inbound: 5
     outbound: 4
+  max_response_body: 1048576   # bytes; phase-4 body inspection cap (default 1 MiB)
   unsupported_rules: fail      # fail (default) | skip
 ```
 
-`thresholds.outbound` has no effect yet. The rule that reads it is a
-response-phase rule, and response phases are not evaluated (see
-[Current limitations](#current-limitations)). It is still covered by
-`artifact_hash`, so changing it changes the artifact without changing how any
-request is handled.
+`thresholds.inbound` blocks a request when its accumulated inbound anomaly score
+crosses it; `thresholds.outbound` does the same for the response, scored by
+phase 3 and 4 rules. `max_response_body` bounds phase-4 body inspection: a
+buffered response body at or under it is inspected, a larger or streamed one is
+not (see [Response-phase inspection](#response-phase-inspection)). All three are
+covered by `artifact_hash`.
 
 `ruleset` is resolved relative to the spec. Point it at a directory containing
 the `.conf` files and, for CRS, the setup file:
@@ -80,18 +82,25 @@ explicit opt-in, and it is not silent: the compiler warns with the rule ids,
 the ids go into the manifest where the hash covers them, and the gateway logs
 them at WARN on every boot.
 
+## Response-phase inspection
+
+Response-phase rules (CRS phases 3, 4 and 5) run on the response the same
+transaction started on the request, so outbound blocking rules read the scores
+the inbound rules accumulated. Phase 3 inspects response headers, phase 4
+inspects the response body, and phase 5 is logging and correlation.
+
+Phase 4 body inspection has a bound. A buffered response body at or under
+`max_response_body` (default 1 MiB) is collected and inspected. A response that
+is streamed, or whose body is larger than the cap, has its headers inspected
+(phase 3) but its body skipped: it has already begun reaching the client by the
+time a phase-4 rule could act on it. Each skip is counted in
+`barbacane_waf_response_body_skipped_total` rather than dropped silently, so a
+rule set that promises outbound body inspection can be checked against what the
+gateway actually inspects. A WebSocket upgrade has no response phases.
+
 ## Current limitations
 
 Read these before enabling it in production.
-
-**Response-phase rules are not evaluated.** A CRS artifact carries around 152
-rules in phases 3 to 5, mostly outbound data-leakage detection, and they are
-present in the artifact but not run. This is also why `thresholds.outbound` is
-inert: the rule that compares against it runs in phase 4. Request-phase rules, around 439 of them,
-are enforced. The gateway warns about this at startup. Outbound inspection is
-implemented in the engine but not yet wired into the response path, which has
-several exits and one unresolved question: a streamed response has already
-reached the client before a phase-4 rule could act on it.
 
 **Cost is around 2 ms per request.** Measured with full CRS at paranoia level
 1 through a real gateway: 1.9 ms mean, 97% under 2.5 ms. One core sustains on
@@ -117,7 +126,7 @@ thing, and it is the single most common reason a WAF gets turned off again.
 
 ## Observing it
 
-Four metrics on the admin endpoint:
+Five metrics on the admin endpoint:
 
 | Metric | Meaning |
 |---|---|
@@ -125,6 +134,7 @@ Four metrics on the admin endpoint:
 | `barbacane_waf_blocked_total{method,path,rule_id}` | Requests actually interrupted, by the rule that did it. Zero in detection-only mode. |
 | `barbacane_waf_allowed_total{method,path}` | Requests inspected and allowed. With the above, the block rate. |
 | `barbacane_waf_duration_seconds{method,path}` | Time spent inspecting, so the WAF's share of latency is visible rather than inferred. |
+| `barbacane_waf_response_body_skipped_total{method,path}` | Responses whose body phase-4 rules did not inspect, because it was streamed or over `max_response_body`. Response headers were still inspected. |
 
 `barbacane_waf_matched_total` counts every rule that matched, including the
 control-flow rules CRS uses to gate paranoia levels. Those are `pass,nolog`

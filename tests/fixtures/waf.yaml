@@ -79,3 +79,47 @@ paths:
                 properties:
                   status:
                     type: string
+
+  /waf/leak-body:
+    get:
+      summary: Response whose body a phase-4 rule inspects
+      operationId: wafLeakBody
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "SECRET_TOKEN leaked in the body"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
+  /waf/leak-header:
+    get:
+      summary: Response whose headers a phase-3 rule inspects
+      operationId: wafLeakHeader
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "ok"}'
+          content_type: application/json
+          headers:
+            X-Leak: internal-detail
+      responses:
+        "200":
+          description: Success
+
+  /waf/clean-response:
+    get:
+      summary: Response with nothing for the response-phase rules to match
+      operationId: wafCleanResponse
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status": "all clear"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success

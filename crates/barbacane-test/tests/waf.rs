@@ -27,8 +27,11 @@ fn fixture(name: &str) -> String {
         .to_string()
 }
 
-/// The rule that makes the blocking decision on the accumulated score.
+/// The rule that makes the blocking decision on the accumulated inbound score.
 const ANOMALY_RULE: u64 = 1_009_110;
+
+/// The rule that makes the blocking decision on the accumulated outbound score.
+const OUTBOUND_ANOMALY_RULE: u64 = 1_009_120;
 
 async fn blocking_gateway() -> TestGateway {
     TestGateway::from_spec(&fixture("waf.yaml"))
@@ -163,6 +166,114 @@ async fn a_benign_json_body_passes_through() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+}
+
+// ---------------------------------------------------------------------------
+// Response-phase inspection (phases 3, 4 and 5)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_leaking_response_body_is_blocked() {
+    let gateway = blocking_gateway().await;
+    let resp = gateway.get("/waf/leak-body").await.unwrap();
+    assert_eq!(assert_blocked(resp, 403).await, OUTBOUND_ANOMALY_RULE);
+
+    let body = metrics(&gateway).await;
+    assert_eq!(
+        sample(
+            &body,
+            "barbacane_waf_matched_total",
+            &["rule_id=\"1004100\"", "path=\"/waf/leak-body\""]
+        ),
+        Some(1.0),
+        "the phase-4 body rule must be counted"
+    );
+}
+
+#[tokio::test]
+async fn a_leaking_response_header_is_blocked() {
+    let gateway = blocking_gateway().await;
+    let resp = gateway.get("/waf/leak-header").await.unwrap();
+    assert_eq!(assert_blocked(resp, 403).await, OUTBOUND_ANOMALY_RULE);
+
+    let body = metrics(&gateway).await;
+    assert_eq!(
+        sample(
+            &body,
+            "barbacane_waf_matched_total",
+            &["rule_id=\"1003100\"", "path=\"/waf/leak-header\""]
+        ),
+        Some(1.0),
+        "the phase-3 header rule must be counted"
+    );
+}
+
+#[tokio::test]
+async fn a_clean_response_passes_through() {
+    let gateway = blocking_gateway().await;
+    let resp = gateway.get("/waf/clean-response").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "all clear");
+}
+
+/// A body over `max_response_body` is not collected, so phase-4 body rules do
+/// not see it and the skip is counted. The response is not blocked on its body.
+#[tokio::test]
+async fn an_oversized_response_body_is_not_inspected_and_the_skip_is_counted() {
+    let gateway = TestGateway::from_spec(&fixture("waf-response-cap.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/waf/big-body-leak").await.unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "the leaking body is over the cap, so it is not inspected or blocked"
+    );
+
+    let body = metrics(&gateway).await;
+    assert_eq!(
+        sample(
+            &body,
+            "barbacane_waf_response_body_skipped_total",
+            &["path=\"/waf/big-body-leak\""]
+        ),
+        Some(1.0),
+        "skipping the body must be counted, not silent"
+    );
+    assert!(
+        sample(
+            &body,
+            "barbacane_waf_matched_total",
+            &["rule_id=\"1004100\""]
+        )
+        .is_none(),
+        "the phase-4 body rule must not match a body that was never inspected"
+    );
+}
+
+/// Response headers are inspected (phase 3) even when the body is skipped, so a
+/// leaking header on an oversized response still blocks.
+#[tokio::test]
+async fn response_headers_are_inspected_even_when_the_body_is_skipped() {
+    let gateway = TestGateway::from_spec(&fixture("waf-response-cap.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/waf/big-body-with-header").await.unwrap();
+    assert_eq!(assert_blocked(resp, 403).await, OUTBOUND_ANOMALY_RULE);
+
+    let body = metrics(&gateway).await;
+    assert_eq!(
+        sample(
+            &body,
+            "barbacane_waf_response_body_skipped_total",
+            &["path=\"/waf/big-body-with-header\""]
+        ),
+        Some(1.0),
+        "the body was over the cap, so its inspection was skipped and counted"
+    );
 }
 
 // ---------------------------------------------------------------------------

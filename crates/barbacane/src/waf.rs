@@ -25,6 +25,8 @@ pub struct WafStage {
     paranoia_level: u8,
     inbound_threshold: i64,
     outbound_threshold: i64,
+    /// Largest response body, in bytes, that phase-4 rules inspect.
+    max_response_body: usize,
 }
 
 /// An inspection in progress, held between the request and response phases.
@@ -101,7 +103,15 @@ impl WafStage {
             paranoia_level: manifest.waf.paranoia_level,
             inbound_threshold: manifest.waf.inbound_threshold,
             outbound_threshold: manifest.waf.outbound_threshold,
+            max_response_body: manifest.waf.max_response_body as usize,
         }))
+    }
+
+    /// Largest response body, in bytes, that phase-4 rules inspect. A buffered
+    /// response at or under this is collected and inspected; a larger or
+    /// streamed one has its body skipped.
+    pub fn response_body_cap(&self) -> usize {
+        self.max_response_body
     }
 
     /// How many rules the stage carries.
@@ -110,11 +120,7 @@ impl WafStage {
     }
 
     /// How many rules run on the request side (phases 1 and 2) versus the
-    /// response side (phases 3, 4 and 5).
-    ///
-    /// Reported at startup so an operator can see that response-phase rules
-    /// are present but not yet evaluated, rather than assuming the whole rule
-    /// set is running.
+    /// response side (phases 3, 4 and 5). Reported at startup.
     pub fn rules_by_direction(&self) -> (usize, usize) {
         use parapet::Phase::*;
         let request =
@@ -223,21 +229,11 @@ impl WafStage {
 impl WafInspection<'_> {
     /// Inspect the response through phases 3, 4 and 5.
     ///
-    /// Not yet called from the request pipeline: the response path has several
-    /// exits and a streamed response reaches the client before a phase-4 rule
-    /// could act on it, so wiring it is a separate change. Kept and tested so
-    /// the capability is verified rather than written twice, and the gateway
-    /// warns at startup that these rules are not being evaluated.
-    #[allow(dead_code)]
-    ///
-    /// CRS puts 39 rules in phase 3 and 100 in phase 4, mostly data-leakage
-    /// detection: stack traces, SQL errors, source code and credentials in a
-    /// response body. Without running them those rules are dead weight in the
-    /// artifact.
-    ///
-    /// The body is inspected only when one is supplied. A streamed response
-    /// has already reached the client by the time this could block, so callers
-    /// that stream should pass `None` and treat the result as detection only.
+    /// The body is inspected only when one is supplied. A streamed or oversized
+    /// response passes `None`: its headers are inspected (phase 3) but its body
+    /// is not, since it has already reached the client by the time a phase-4
+    /// rule could block. CRS phase-4 rules are mostly data-leakage detection:
+    /// stack traces, SQL errors, source code and credentials in a response body.
     pub fn inspect_response(
         &mut self,
         status: u16,
@@ -312,6 +308,7 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
             paranoia_level: 1,
             inbound_threshold: 5,
             outbound_threshold: 4,
+            max_response_body: 1_048_576,
         }
     }
 
@@ -405,6 +402,7 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
             paranoia_level: 1,
             inbound_threshold: 5,
             outbound_threshold: 4,
+            max_response_body: 1_048_576,
         }
     }
 

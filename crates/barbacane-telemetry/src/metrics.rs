@@ -159,6 +159,10 @@ pub struct MetricsRegistry {
     /// Time spent inspecting, so the WAF's share of request latency is
     /// visible rather than inferred.
     pub waf_duration_seconds: Family<WafInspectionLabels, Histogram>,
+    /// Responses whose body phase-4 rules did not inspect, because the response
+    /// was streamed or its body exceeded `max_response_body`. Response headers
+    /// (phase 3) were still inspected; the body was not.
+    pub waf_response_body_skipped_total: Family<WafInspectionLabels, Counter>,
 
     // Middleware metrics
     pub middleware_duration_seconds: Family<MiddlewareLabels, Histogram>,
@@ -283,6 +287,13 @@ impl MetricsRegistry {
             waf_duration_seconds.clone(),
         );
 
+        let waf_response_body_skipped_total = Family::<WafInspectionLabels, Counter>::default();
+        registry.register(
+            "barbacane_waf_response_body_skipped_total",
+            "Responses whose body was not inspected by phase-4 rules (streamed or over the size cap)",
+            waf_response_body_skipped_total.clone(),
+        );
+
         let validation_failures_total = Family::<ValidationLabels, Counter>::default();
         registry.register(
             "barbacane_validation_failures_total",
@@ -390,6 +401,7 @@ impl MetricsRegistry {
             waf_matched_total,
             waf_allowed_total,
             waf_duration_seconds,
+            waf_response_body_skipped_total,
             middleware_duration_seconds,
             middleware_short_circuits_total,
             dispatch_duration_seconds,
@@ -486,6 +498,16 @@ impl MetricsRegistry {
         if allowed {
             self.waf_allowed_total.get_or_create(&labels).inc();
         }
+    }
+
+    /// Record a response whose body phase-4 rules did not inspect.
+    pub fn record_waf_response_body_skipped(&self, method: &str, path: &str) {
+        self.waf_response_body_skipped_total
+            .get_or_create(&WafInspectionLabels {
+                method: method.to_string(),
+                path: path.to_string(),
+            })
+            .inc();
     }
 
     /// Record middleware execution.
