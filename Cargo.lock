@@ -502,9 +502,9 @@ dependencies = [
 
 [[package]]
 name = "barbacane-waf"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3fdc4f8d76d6ba9dda6ec2e1c88febc74793f4542475212110f4d90f48f143d"
+checksum = "da037d22b11789d2fbc73239b0d83f5fa7b5c1866ff6e876d55a9c8c34361471"
 dependencies = [
  "aho-corasick",
  "barbacane-libinjection",
