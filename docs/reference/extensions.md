@@ -500,7 +500,7 @@ Declarative request transformations before upstream dispatch.
       rename: { /userName: /user_name }   # JSON Pointer rename
 ```
 
-Supports variable interpolation: `$client_ip`, `$header.*`, `$query.*`, `$path.*`, `context:*`. Variables resolve against the original request.
+Supports variable interpolation: `$client_ip`, `$header.*`, `$query.*`, `$path.*`, `$cookie.*`, `context:*`. The `$`-variables can be embedded in a larger value (e.g. `Bearer $cookie.sso_token`); `context:*` resolves only as a whole value. Variables resolve against the original request.
 
 See [Middlewares Guide](../guide/middlewares/transformation.md#request-transformer) for full documentation.
 

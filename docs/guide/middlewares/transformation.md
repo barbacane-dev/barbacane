@@ -104,11 +104,24 @@ Values in `add`, `set`, and body `add` support variable templates:
 | `$header.<name>` | Request header value (case-insensitive) | `$header.host` |
 | `$query.<name>` | Query parameter value | `$query.page` |
 | `$path.<name>` | Path parameter value | `$path.userId` |
+| `$cookie.<name>` | Cookie value from the `Cookie` header (name case-sensitive) | `$cookie.sso_token` |
 | `context:<key>` | Request context value (set by other middlewares) | `context:auth.sub` |
+
+The `$`-variables resolve wherever they appear, so they can be embedded in a larger value. For example, to derive a bearer token from an SSO cookie only when the request has no `Authorization` header yet:
+
+```yaml
+- name: request-transformer
+  config:
+    headers:
+      set:                                  # set = only when absent
+        Authorization: "Bearer $cookie.sso_token"
+```
+
+(`context:<key>` is the exception: it resolves only as a whole value, not embedded.)
 
 Variables always resolve against the **original** incoming request, regardless of transformations applied by earlier sections. This means a query parameter removed in `querystring.remove` is still available via `$query.<name>` in `body.add`.
 
-If a variable cannot be resolved, it is replaced with an empty string.
+A known variable whose value is absent (a missing header, cookie, query or path parameter) resolves to an empty string. A `$` expression that is not a known variable (for example `$unknown.thing`, or a literal `$5`) is left unchanged.
 
 ### Transformation order
 

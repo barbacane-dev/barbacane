@@ -7,7 +7,9 @@
 //! - JSON body (add, remove, rename using JSON Pointer — RFC 6901)
 //!
 //! Supports variable interpolation: `$client_ip`, `$path.<name>`, `$header.<name>`,
-//! `$query.<name>`, `context:<key>`
+//! `$query.<name>`, `$cookie.<name>`, `context:<key>`. The `$`-variables resolve
+//! wherever they appear, so they can be embedded in a larger value (e.g.
+//! `Bearer $cookie.sso_token`).
 
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
@@ -170,37 +172,134 @@ impl RequestTransformer {
 // Variable interpolation
 // ---------------------------------------------------------------------------
 
-/// Interpolate a value template with request data.
-///
-/// Returns the resolved value, or an empty string if the variable cannot be resolved.
+/// Interpolate variables in a template. `$`-variables (`$client_ip`,
+/// `$path.<name>`, `$header.<name>`, `$query.<name>`, `$cookie.<name>`) are
+/// resolved wherever they appear, so they can be embedded in a larger string
+/// (e.g. `Bearer $cookie.sso_token`). An unresolved variable becomes an empty
+/// string; a `$` that does not begin a known variable stays literal.
 fn interpolate_value(template: &str, req: &Request) -> String {
-    if template == "$client_ip" {
-        return req.client_ip.clone();
-    }
-
-    if let Some(param_name) = template.strip_prefix("$path.") {
-        return req.path_params.get(param_name).cloned().unwrap_or_default();
-    }
-
-    if let Some(header_name) = template.strip_prefix("$header.") {
-        return req
-            .headers
-            .get(header_name)
-            .or_else(|| req.headers.get(&header_name.to_lowercase()))
-            .cloned()
-            .unwrap_or_default();
-    }
-
-    if let Some(query_name) = template.strip_prefix("$query.") {
-        return extract_query_param(&req.query, query_name);
-    }
-
+    // context:<key> has no delimiter, so it is resolved only as a whole value.
     if let Some(context_key) = template.strip_prefix("context:") {
         return context_get(context_key).unwrap_or_default();
     }
 
-    // Literal value (no variable prefix)
-    template.to_string()
+    if !template.contains('$') {
+        return template.to_string();
+    }
+
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(pos) = rest.find('$') {
+        out.push_str(&rest[..pos]);
+        let at_var = &rest[pos..];
+        match resolve_variable(at_var, req) {
+            Some((value, consumed)) => {
+                out.push_str(&value);
+                rest = &at_var[consumed..];
+            }
+            None => {
+                out.push('$');
+                rest = &at_var[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Resolve the `$`-variable at the start of `s` (which begins with `$`),
+/// returning its value and the number of bytes it spans, or `None` if `s` does
+/// not begin with a known variable.
+fn resolve_variable(s: &str, req: &Request) -> Option<(String, usize)> {
+    if let Some(after) = s.strip_prefix("$client_ip") {
+        // A fixed token: only a match when followed by a name boundary.
+        let boundary = after.chars().next().map(is_name_char) != Some(true);
+        if boundary {
+            return Some((req.client_ip.clone(), "$client_ip".len()));
+        }
+    }
+
+    if let Some(after) = s.strip_prefix("$path.") {
+        let name = leading_name(after);
+        if !name.is_empty() {
+            let value = req.path_params.get(name).cloned().unwrap_or_default();
+            return Some((value, "$path.".len() + name.len()));
+        }
+    }
+
+    if let Some(after) = s.strip_prefix("$header.") {
+        let name = leading_name(after);
+        if !name.is_empty() {
+            let value = req
+                .headers
+                .get(name)
+                .or_else(|| req.headers.get(&name.to_lowercase()))
+                .cloned()
+                .unwrap_or_default();
+            return Some((value, "$header.".len() + name.len()));
+        }
+    }
+
+    if let Some(after) = s.strip_prefix("$query.") {
+        let name = leading_name(after);
+        if !name.is_empty() {
+            return Some((
+                extract_query_param(&req.query, name),
+                "$query.".len() + name.len(),
+            ));
+        }
+    }
+
+    if let Some(after) = s.strip_prefix("$cookie.") {
+        let name = leading_name(after);
+        if !name.is_empty() {
+            return Some((cookie_value(req, name), "$cookie.".len() + name.len()));
+        }
+    }
+
+    None
+}
+
+/// A variable name is a run of ASCII letters, digits, `_`, `-` or `.`. The `.`
+/// is included so dotted names resolve as a whole (e.g. an RFC 6265 cookie
+/// named `session.id`, or `$header.x-forwarded-for`), matching how a whole-value
+/// variable was read before. A trailing `.` in surrounding text is therefore
+/// part of the name; put the variable last, or avoid a following `.`, if that
+/// matters.
+fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
+}
+
+/// The leading run of name characters at the start of `s`.
+fn leading_name(s: &str) -> &str {
+    let end = s.find(|c: char| !is_name_char(c)).unwrap_or(s.len());
+    &s[..end]
+}
+
+/// The value of the named cookie from the request's `Cookie` header, or an
+/// empty string if absent. Cookie names are case-sensitive (RFC 6265); a value
+/// wrapped in double quotes is unwrapped.
+fn cookie_value(req: &Request, name: &str) -> String {
+    let Some(header) = req
+        .headers
+        .get("cookie")
+        .or_else(|| req.headers.get("Cookie"))
+    else {
+        return String::new();
+    };
+    for pair in header.split(';') {
+        if let Some((key, value)) = pair.split_once('=') {
+            if key.trim() == name {
+                let value = value.trim();
+                let unquoted = value
+                    .strip_prefix('"')
+                    .and_then(|v| v.strip_suffix('"'))
+                    .unwrap_or(value);
+                return unquoted.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 /// Extract a single query parameter value from a query string.
@@ -593,6 +692,79 @@ mod tests {
             "application/json"
         );
         assert_eq!(interpolate_value("$header.missing", &req), "");
+    }
+
+    #[test]
+    fn test_interpolate_cookie() {
+        let mut req = create_test_request();
+        req.headers.insert(
+            "cookie".to_string(),
+            "sso_token=jwt-abc; theme=dark".to_string(),
+        );
+
+        // A named cookie resolves to its value.
+        assert_eq!(interpolate_value("$cookie.sso_token", &req), "jwt-abc");
+        // A later cookie in the list resolves too.
+        assert_eq!(interpolate_value("$cookie.theme", &req), "dark");
+        // An absent cookie yields an empty string, like the other variables.
+        assert_eq!(interpolate_value("$cookie.missing", &req), "");
+        // No cookie header at all yields an empty string, not a panic.
+        req.headers.remove("cookie");
+        assert_eq!(interpolate_value("$cookie.sso_token", &req), "");
+    }
+
+    #[test]
+    fn test_interpolate_cookie_spacing_and_quotes() {
+        let mut req = create_test_request();
+        // No space after the separator, and a double-quoted value (RFC 6265).
+        req.headers.insert(
+            "cookie".to_string(),
+            "a=1;sso_token=\"jwt-xyz\";b=2".to_string(),
+        );
+        assert_eq!(interpolate_value("$cookie.a", &req), "1");
+        assert_eq!(interpolate_value("$cookie.sso_token", &req), "jwt-xyz");
+        assert_eq!(interpolate_value("$cookie.b", &req), "2");
+    }
+
+    #[test]
+    fn test_interpolate_cookie_dotted_name() {
+        let mut req = create_test_request();
+        // RFC 6265 permits `.` in cookie names.
+        req.headers.insert(
+            "cookie".to_string(),
+            "session.id=s-123; plain=ok".to_string(),
+        );
+        assert_eq!(interpolate_value("$cookie.session.id", &req), "s-123");
+        assert_eq!(interpolate_value("$cookie.plain", &req), "ok");
+    }
+
+    #[test]
+    fn test_interpolate_embedded_variables() {
+        let mut req = create_test_request();
+        req.headers
+            .insert("cookie".to_string(), "sso_token=jwt-abc".to_string());
+
+        // The requested use case: a variable embedded in a larger string.
+        assert_eq!(
+            interpolate_value("Bearer $cookie.sso_token", &req),
+            "Bearer jwt-abc"
+        );
+        // Embedding works for the other variables too.
+        assert_eq!(
+            interpolate_value("host=$header.host id=$path.id", &req),
+            "host=api.example.com id=123"
+        );
+        // An unresolved variable embeds as empty, matching whole-value behavior.
+        assert_eq!(interpolate_value("Bearer $cookie.absent", &req), "Bearer ");
+    }
+
+    #[test]
+    fn test_interpolate_preserves_literal_dollar() {
+        let req = create_test_request();
+        // A `$` that does not begin a known variable stays literal.
+        assert_eq!(interpolate_value("price is $5", &req), "price is $5");
+        assert_eq!(interpolate_value("$unknown.thing", &req), "$unknown.thing");
+        assert_eq!(interpolate_value("plain text", &req), "plain text");
     }
 
     #[test]
