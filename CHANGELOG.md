@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-12
+
+Headline: the WAF now inspects responses (CRS phases 3 to 5) and writes a per-transaction audit log, and request transformers can read cookies.
+
+> **Upgrade note (breaking):** **all pre-0.10 `.bca` artifacts must be recompiled.** The manifest now binds two new WAF policy fields (`max_response_body`, `audit`) into `artifact_hash`, and the data plane recomputes and verifies `artifact_hash` on load unconditionally, so an artifact built before 0.10 fails with `artifact integrity check failed`. Recompile every artifact with 0.10 (`barbacane compile`); re-sign signed artifacts (`BARBACANE_SIGNING_KEY`). The artifact format version is now **5**.
+
+### Added
+
+- **WAF**: response-phase inspection (CRS phases 3, 4 and 5). Phase 3 (response headers) runs on every path including streaming; phase 4 (response body) runs on a buffered body at or under a configurable `max_response_body` cap (default 1 MiB), while a streamed or oversized body has its headers inspected and its body skipped and counted in `barbacane_waf_response_body_skipped_total`; phase 5 (logging and correlation) runs on every transaction, including a blocked one. `thresholds.outbound` is now live (it scored nothing before, because response phases were not evaluated). A WebSocket upgrade has no response phases.
+- **WAF**: per-transaction audit logging. One structured record per inspected transaction on the `waf.audit` tracing target, carrying the request id, client address, method, path, the rules that matched (id, message, logdata, tags, matched variable), the inbound and outbound anomaly scores, the verdict, and the response status. Controlled by `x-barbacane-waf.audit`: `off`, `relevant-only` (default; only blocked or rule-matching transactions, the CRS crs-setup default), or `on`. `nolog` rules are excluded, as in the ModSecurity audit log. Records written are counted by `barbacane_waf_audit_total`.
+- **plugins/request-transformer**: variables can read request cookies with `$cookie.<name>` (RFC 6265, case-sensitive names, quoted values unwrapped), and `$`-variables now interpolate when embedded in a larger string rather than only as a whole value.
+
+### Changed
+
+- **WAF**: the engine ([`barbacane-waf`](https://crates.io/crates/barbacane-waf)) is now a crates.io dependency (0.1.1) rather than a git pin.
+- **CI**: the pipeline is faster: coverage moved off the per-PR path (full coverage runs on `main` and nightly), and integration tests are sharded. Unit-test coverage was also raised (validator ~96%, `waf.rs` ~88.5%).
+
+### Fixed
+
+- **WAF**: the HTTP/2 `:authority` pseudo-header is exposed as a `Host` header, so CRS Host rules (for example 920280, missing Host) evaluate correctly on HTTP/2 requests instead of always seeing an absent Host.
+
 ## [0.9.0] - 2026-09-11
 
 Headline: the WAF's libinjection classifiers are live, so OWASP CRS SQL injection and XSS rules are enforced end to end.

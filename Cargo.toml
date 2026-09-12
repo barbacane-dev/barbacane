@@ -19,7 +19,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 # Minimum supported Rust version, set by the dependency floor: wasmtime 47
 # requires rustc 1.94. Enforced by the `msrv` CI job.
@@ -100,10 +100,10 @@ parking_lot = "0.12"
 # JSON Schema validation
 jsonschema = "0.26"
 
-# WASM runtime
-# SecLang/CRS engine. Pinned by revision while its API settles; moves to a
-# crates.io version when it stabilises (ADR-0031).
+# SecLang/CRS engine (ADR-0031), published as `barbacane-waf`.
 parapet = { package = "barbacane-waf", version = "0.1.1", features = ["serde"] }
+
+# WASM runtime
 wasmtime = { version = "47", features = ["cranelift", "pooling-allocator"] }
 wasmtime-wasi = { version = "47" }
 
@@ -158,15 +158,15 @@ assert_cmd = "2"
 predicates = "3"
 
 # Workspace crates (version required for crates.io publishing)
-barbacane-sigv4 = { path = "crates/barbacane-sigv4", version = "0.9.0" }
-barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.9.0" }
-barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.9.0" }
-barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "0.9.0" }
-barbacane-wasm = { path = "crates/barbacane-wasm", version = "0.9.0" }
-barbacane-telemetry = { path = "crates/barbacane-telemetry", version = "0.9.0" }
-barbacane-test = { path = "crates/barbacane-test", version = "0.9.0" }
-barbacane = { path = "crates/barbacane", version = "0.9.0" }
-barbacane-control = { path = "crates/barbacane-control", version = "0.9.0" }
+barbacane-sigv4 = { path = "crates/barbacane-sigv4", version = "0.10.0" }
+barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.10.0" }
+barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.10.0" }
+barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "0.10.0" }
+barbacane-wasm = { path = "crates/barbacane-wasm", version = "0.10.0" }
+barbacane-telemetry = { path = "crates/barbacane-telemetry", version = "0.10.0" }
+barbacane-test = { path = "crates/barbacane-test", version = "0.10.0" }
+barbacane = { path = "crates/barbacane", version = "0.10.0" }
+barbacane-control = { path = "crates/barbacane-control", version = "0.10.0" }
 
 [profile.dev]
 opt-level = 0
