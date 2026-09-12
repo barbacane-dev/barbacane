@@ -355,6 +355,39 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
     }
 
     #[test]
+    fn a_request_body_rule_blocks() {
+        // The phase-2 ARGS rule must also see JSON body fields: the body
+        // inspection path (set_request_body + process_request_body) runs when a
+        // body is supplied. A JSON body is flattened into ARGS by content type.
+        let stage = stage(EngineMode::Blocking);
+        let (decision, _) = stage.inspect_request(
+            "POST",
+            "/submit",
+            "HTTP/1.1",
+            &[("Host".to_string(), "example.test".to_string())],
+            br#"{"comment":"attack"}"#,
+            Some("application/json"),
+            Some("203.0.113.7"),
+        );
+        assert!(
+            matches!(decision, WafDecision::Block { rule_id: 1, .. }),
+            "an attack in a JSON body should match the ARGS rule"
+        );
+    }
+
+    #[test]
+    fn matched_ids_and_score_are_exposed() {
+        let stage = stage(EngineMode::Blocking);
+        let (_, inspection) = inspect(&stage, "/?q=attack");
+        assert!(
+            inspection.matched_rule_ids().contains(&1),
+            "the matched rule id should be reported"
+        );
+        // The scoring rule ran, so a non-negative inbound score is available.
+        assert!(inspection.inbound_score() >= 0);
+    }
+
+    #[test]
     fn a_clean_request_is_allowed() {
         let stage = stage(EngineMode::Blocking);
         assert!(matches!(inspect(&stage, "/?q=fine").0, WafDecision::Allow));
