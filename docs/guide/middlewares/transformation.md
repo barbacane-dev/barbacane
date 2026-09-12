@@ -121,7 +121,7 @@ The `$`-variables resolve wherever they appear, so they can be embedded in a lar
 
 Variables always resolve against the **original** incoming request, regardless of transformations applied by earlier sections. This means a query parameter removed in `querystring.remove` is still available via `$query.<name>` in `body.add`.
 
-If a variable cannot be resolved, it is replaced with an empty string.
+A known variable whose value is absent (a missing header, cookie, query or path parameter) resolves to an empty string. A `$` expression that is not a known variable (for example `$unknown.thing`, or a literal `$5`) is left unchanged.
 
 ### Transformation order
 

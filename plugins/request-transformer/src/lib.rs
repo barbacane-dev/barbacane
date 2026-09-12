@@ -260,9 +260,14 @@ fn resolve_variable(s: &str, req: &Request) -> Option<(String, usize)> {
     None
 }
 
-/// A variable name is a run of ASCII letters, digits, `_` or `-`.
+/// A variable name is a run of ASCII letters, digits, `_`, `-` or `.`. The `.`
+/// is included so dotted names resolve as a whole (e.g. an RFC 6265 cookie
+/// named `session.id`, or `$header.x-forwarded-for`), matching how a whole-value
+/// variable was read before. A trailing `.` in surrounding text is therefore
+/// part of the name; put the variable last, or avoid a following `.`, if that
+/// matters.
 fn is_name_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.'
 }
 
 /// The leading run of name characters at the start of `s`.
@@ -719,6 +724,18 @@ mod tests {
         assert_eq!(interpolate_value("$cookie.a", &req), "1");
         assert_eq!(interpolate_value("$cookie.sso_token", &req), "jwt-xyz");
         assert_eq!(interpolate_value("$cookie.b", &req), "2");
+    }
+
+    #[test]
+    fn test_interpolate_cookie_dotted_name() {
+        let mut req = create_test_request();
+        // RFC 6265 permits `.` in cookie names.
+        req.headers.insert(
+            "cookie".to_string(),
+            "session.id=s-123; plain=ok".to_string(),
+        );
+        assert_eq!(interpolate_value("$cookie.session.id", &req), "s-123");
+        assert_eq!(interpolate_value("$cookie.plain", &req), "ok");
     }
 
     #[test]
