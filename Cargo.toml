@@ -100,10 +100,10 @@ parking_lot = "0.12"
 # JSON Schema validation
 jsonschema = "0.26"
 
-# WASM runtime
-# SecLang/CRS engine. Pinned by revision while its API settles; moves to a
-# crates.io version when it stabilises (ADR-0031).
+# SecLang/CRS engine (ADR-0031), published as `barbacane-waf`.
 parapet = { package = "barbacane-waf", version = "0.1.1", features = ["serde"] }
+
+# WASM runtime
 wasmtime = { version = "47", features = ["cranelift", "pooling-allocator"] }
 wasmtime-wasi = { version = "47" }
 
