@@ -896,6 +896,88 @@ mod tests {
         assert!(json.contains("field"));
     }
 
+    #[test]
+    fn dev_mode_formats_every_validation_error_variant() {
+        // One request can accumulate any mix of these, and dev mode renders a
+        // detail object per variant. Exercise all of them, plus the
+        // multiple-errors summary branch.
+        let errors = vec![
+            ValidationError2::MissingRequiredParameter {
+                name: "id".into(),
+                location: "path".into(),
+            },
+            ValidationError2::InvalidParameter {
+                name: "page".into(),
+                location: "query".into(),
+                reason: "expected integer".into(),
+            },
+            ValidationError2::MissingRequiredBody,
+            ValidationError2::UnsupportedContentType("text/xml".into()),
+            ValidationError2::InvalidBody("does not match schema".into()),
+            ValidationError2::BodyTooLarge {
+                size: 2048,
+                limit: 1024,
+            },
+            ValidationError2::TooManyHeaders {
+                count: 120,
+                limit: 100,
+            },
+            ValidationError2::UriTooLong {
+                length: 9000,
+                limit: 8192,
+            },
+            ValidationError2::HeaderTooLarge {
+                name: "X-Big".into(),
+                size: 40000,
+                limit: 8192,
+            },
+        ];
+
+        let problem = ProblemDetails::validation_error(&errors, true);
+        assert_eq!(problem.status, 400);
+        // More than one error collapses to a count summary.
+        assert_eq!(problem.detail.as_deref(), Some("9 validation errors"));
+
+        let details = match problem.extensions.get("errors") {
+            Some(Value::Array(a)) => a,
+            other => panic!("expected an errors array in dev mode, got {other:?}"),
+        };
+        assert_eq!(details.len(), 9);
+
+        let reasons: Vec<&str> = details
+            .iter()
+            .filter_map(|d| d.get("reason").and_then(Value::as_str))
+            .collect();
+        assert!(reasons.iter().any(|r| r.contains("unsupported: text/xml")));
+        assert!(reasons
+            .iter()
+            .any(|r| r.contains("body too large: 2048 bytes")));
+        assert!(reasons.iter().any(|r| r.contains("too many headers: 120")));
+        assert!(reasons
+            .iter()
+            .any(|r| r.contains("URI too long: 9000 chars")));
+        assert!(reasons
+            .iter()
+            .any(|r| r.contains("header too large: 40000 bytes")));
+        assert!(reasons.contains(&"does not match schema"));
+        // The header field carries the header name.
+        assert!(details
+            .iter()
+            .any(|d| d.get("field").and_then(Value::as_str) == Some("header:X-Big")));
+    }
+
+    #[test]
+    fn non_dev_mode_omits_error_details() {
+        let errors = vec![ValidationError2::MissingRequiredBody];
+        let problem = ProblemDetails::validation_error(&errors, false);
+        assert!(!problem.extensions.contains_key("errors"));
+        // A single error keeps its own message as the detail.
+        assert_eq!(
+            problem.detail.as_deref(),
+            Some(errors[0].to_string().as_str())
+        );
+    }
+
     // ========================
     // Request Limits Tests
     // ========================
