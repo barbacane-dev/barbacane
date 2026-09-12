@@ -167,6 +167,21 @@ pub enum UnsupportedRules {
     Skip,
 }
 
+/// When the WAF writes a per-transaction audit record.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditEngine {
+    /// Never write an audit record.
+    Off,
+    /// Write a record only for a transaction that matched at least one logged
+    /// rule or was blocked. Near-zero volume on clean traffic, and the CRS
+    /// crs-setup default.
+    #[default]
+    RelevantOnly,
+    /// Write a record for every inspected transaction.
+    On,
+}
+
 /// Default largest response body phase-4 rules inspect, in bytes (1 MiB).
 pub const fn default_max_response_body() -> u64 {
     1_048_576
@@ -198,6 +213,9 @@ pub struct WafConfig {
     /// with the skip counted.
     #[serde(default = "default_max_response_body")]
     pub max_response_body: u64,
+    /// When to write a per-transaction audit record.
+    #[serde(default)]
+    pub audit: AuditEngine,
     /// Policy for rules the engine cannot compile.
     #[serde(default)]
     pub unsupported_rules: UnsupportedRules,
@@ -224,6 +242,7 @@ impl Default for WafConfig {
             inbound_threshold: 0,
             outbound_threshold: 0,
             max_response_body: default_max_response_body(),
+            audit: AuditEngine::default(),
             unsupported_rules: UnsupportedRules::default(),
             rules_path: None,
             skipped_rules: Vec::new(),
@@ -1167,13 +1186,14 @@ fn compute_artifact_hash(
     // them must change the hash.
     hasher.update(
         format!(
-            "waf:enabled={}\tparanoia={}\tmode={:?}\tinbound={}\toutbound={}\tmax_response_body={}\tunsupported={:?}\tskipped={}\n",
+            "waf:enabled={}\tparanoia={}\tmode={:?}\tinbound={}\toutbound={}\tmax_response_body={}\taudit={:?}\tunsupported={:?}\tskipped={}\n",
             waf.enabled,
             waf.paranoia_level,
             waf.mode,
             waf.inbound_threshold,
             waf.outbound_threshold,
             waf.max_response_body,
+            waf.audit,
             waf.unsupported_rules,
             waf.skipped_rules
                 .iter()
@@ -1816,6 +1836,11 @@ fn extract_root_waf_config(specs: &[(ApiSpec, String, String)]) -> WafConfig {
                 .get("max_response_body")
                 .and_then(|v| v.as_u64())
                 .unwrap_or_else(default_max_response_body),
+            audit: match value.get("audit").and_then(|v| v.as_str()) {
+                Some("off") => AuditEngine::Off,
+                Some("on") => AuditEngine::On,
+                _ => AuditEngine::RelevantOnly,
+            },
             unsupported_rules: match value.get("unsupported_rules").and_then(|v| v.as_str()) {
                 Some("skip") => UnsupportedRules::Skip,
                 _ => UnsupportedRules::Fail,
@@ -4192,6 +4217,10 @@ mod waf_tests {
         cap.max_response_body = 42;
         assert_ne!(baseline, hash_of(&cap), "max_response_body is not bound");
 
+        let mut audit = base.clone();
+        audit.audit = AuditEngine::On;
+        assert_ne!(baseline, hash_of(&audit), "audit engine is not bound");
+
         let mut off = base.clone();
         off.enabled = false;
         assert_ne!(baseline, hash_of(&off), "enabled is not bound");
@@ -4208,6 +4237,7 @@ mod waf_tests {
         assert_eq!(cfg.inbound_threshold, 5);
         assert_eq!(cfg.outbound_threshold, 4);
         assert_eq!(cfg.max_response_body, 1_048_576);
+        assert_eq!(cfg.audit, AuditEngine::RelevantOnly);
         assert_eq!(cfg.unsupported_rules, UnsupportedRules::Fail);
     }
 

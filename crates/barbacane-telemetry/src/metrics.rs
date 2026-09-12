@@ -163,6 +163,9 @@ pub struct MetricsRegistry {
     /// was streamed or its body exceeded `max_response_body`. Response headers
     /// (phase 3) were still inspected; the body was not.
     pub waf_response_body_skipped_total: Family<WafInspectionLabels, Counter>,
+    /// Per-transaction audit records written, by method and path. Governed by
+    /// the audit engine policy, so it counts records actually emitted.
+    pub waf_audit_total: Family<WafInspectionLabels, Counter>,
 
     // Middleware metrics
     pub middleware_duration_seconds: Family<MiddlewareLabels, Histogram>,
@@ -294,6 +297,13 @@ impl MetricsRegistry {
             waf_response_body_skipped_total.clone(),
         );
 
+        let waf_audit_total = Family::<WafInspectionLabels, Counter>::default();
+        registry.register(
+            "barbacane_waf_audit_total",
+            "Per-transaction WAF audit records written",
+            waf_audit_total.clone(),
+        );
+
         let validation_failures_total = Family::<ValidationLabels, Counter>::default();
         registry.register(
             "barbacane_validation_failures_total",
@@ -402,6 +412,7 @@ impl MetricsRegistry {
             waf_allowed_total,
             waf_duration_seconds,
             waf_response_body_skipped_total,
+            waf_audit_total,
             middleware_duration_seconds,
             middleware_short_circuits_total,
             dispatch_duration_seconds,
@@ -503,6 +514,16 @@ impl MetricsRegistry {
     /// Record a response whose body phase-4 rules did not inspect.
     pub fn record_waf_response_body_skipped(&self, method: &str, path: &str) {
         self.waf_response_body_skipped_total
+            .get_or_create(&WafInspectionLabels {
+                method: method.to_string(),
+                path: path.to_string(),
+            })
+            .inc();
+    }
+
+    /// Record a per-transaction audit record being written.
+    pub fn record_waf_audit(&self, method: &str, path: &str) {
+        self.waf_audit_total
             .get_or_create(&WafInspectionLabels {
                 method: method.to_string(),
                 path: path.to_string(),

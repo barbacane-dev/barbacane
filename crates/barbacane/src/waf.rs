@@ -12,9 +12,10 @@
 
 use std::path::Path;
 
-use barbacane_compiler::artifact::{Manifest, WafMode};
+use barbacane_compiler::artifact::{AuditEngine, Manifest, WafMode};
 use parapet::transaction::EngineMode;
 use parapet::{RuleSet, Transaction, Verdict};
+use serde::Serialize;
 
 /// A compiled rule set plus the policy that decides what it does.
 pub struct WafStage {
@@ -27,6 +28,34 @@ pub struct WafStage {
     outbound_threshold: i64,
     /// Largest response body, in bytes, that phase-4 rules inspect.
     max_response_body: usize,
+    /// When to write a per-transaction audit record.
+    audit: AuditEngine,
+}
+
+/// One rule that matched, for an audit record. Only rules that would appear in
+/// the audit log (not `nolog`) are included.
+#[derive(Debug, Clone, Serialize)]
+pub struct WafAuditMatch {
+    /// The rule's id.
+    pub rule_id: u32,
+    /// The rule's expanded `msg:`.
+    pub message: String,
+    /// The rule's expanded `logdata:`, empty if it had none.
+    pub data: String,
+    /// The rule's tags.
+    pub tags: Vec<String>,
+    /// The variable that matched, as `MATCHED_VAR_NAME` reports it.
+    pub matched_var: String,
+}
+
+/// Whether a transaction should be audited under `engine`. `RelevantOnly` logs
+/// a transaction that was blocked or matched at least one logged rule.
+pub fn should_audit(engine: AuditEngine, blocked: bool, matched: bool) -> bool {
+    match engine {
+        AuditEngine::Off => false,
+        AuditEngine::On => true,
+        AuditEngine::RelevantOnly => blocked || matched,
+    }
 }
 
 /// An inspection in progress, held between the request and response phases.
@@ -108,6 +137,7 @@ impl WafStage {
             // that would silently stop inspecting bodies it should.
             max_response_body: usize::try_from(manifest.waf.max_response_body)
                 .unwrap_or(usize::MAX),
+            audit: manifest.waf.audit,
         }))
     }
 
@@ -116,6 +146,11 @@ impl WafStage {
     /// streamed one has its body skipped.
     pub fn response_body_cap(&self) -> usize {
         self.max_response_body
+    }
+
+    /// When the stage writes a per-transaction audit record.
+    pub fn audit_engine(&self) -> AuditEngine {
+        self.audit
     }
 
     /// How many rules the stage carries.
@@ -269,6 +304,28 @@ impl WafInspection<'_> {
         self.tx.matched_ids()
     }
 
+    /// The rules that matched and would appear in the audit log, in match
+    /// order. Excludes `nolog` rules, which matched and scored but do not log.
+    pub fn audit_matches(&self) -> Vec<WafAuditMatch> {
+        self.tx
+            .matches()
+            .iter()
+            .filter(|m| m.logged)
+            .map(|m| WafAuditMatch {
+                rule_id: m.id.unwrap_or(0),
+                message: m.message.clone(),
+                data: m.data.clone(),
+                tags: m.tags.clone(),
+                matched_var: m.matched_name.clone(),
+            })
+            .collect()
+    }
+
+    /// The outbound anomaly score the response accumulated, for logging.
+    pub fn outbound_score(&self) -> i64 {
+        self.tx.anomaly_score("blocking_outbound_anomaly_score")
+    }
+
     /// The inbound anomaly score the request accumulated, for logging.
     pub fn inbound_score(&self) -> i64 {
         self.tx.anomaly_score("blocking_inbound_anomaly_score")
@@ -312,6 +369,7 @@ SecRule REMOTE_ADDR "@rx ." "id:5,phase:5,pass,nolog,msg:'phase 5 ran'"
             inbound_threshold: 5,
             outbound_threshold: 4,
             max_response_body: 1_048_576,
+            audit: AuditEngine::RelevantOnly,
         }
     }
 
@@ -406,6 +464,7 @@ SecRule REMOTE_ADDR "@rx ." "id:5,phase:5,pass,nolog,msg:'phase 5 ran'"
             inbound_threshold: 5,
             outbound_threshold: 4,
             max_response_body: 1_048_576,
+            audit: AuditEngine::RelevantOnly,
         }
     }
 
@@ -529,6 +588,62 @@ SecRule REMOTE_ADDR "@rx ." "id:5,phase:5,pass,nolog,msg:'phase 5 ran'"
         assert!(
             inspection.matched_rule_ids().contains(&5),
             "phase 5 must run when the response was not blocked"
+        );
+    }
+
+    #[test]
+    fn should_audit_follows_the_engine_policy() {
+        use AuditEngine::*;
+        // Off never logs.
+        assert!(!should_audit(Off, true, true));
+        assert!(!should_audit(Off, false, false));
+        // On always logs.
+        assert!(should_audit(On, false, false));
+        assert!(should_audit(On, true, true));
+        // RelevantOnly logs a block or a match, nothing else.
+        assert!(should_audit(RelevantOnly, true, false));
+        assert!(should_audit(RelevantOnly, false, true));
+        assert!(!should_audit(RelevantOnly, false, false));
+    }
+
+    #[test]
+    fn audit_matches_report_the_rule_that_matched() {
+        let stage = stage(EngineMode::Blocking);
+        let (_, mut inspection) = inspect(&stage, "/?q=fine");
+        let _ = inspection.inspect_response(200, &[], Some(b"this leaks a secret"));
+        let matches = inspection.audit_matches();
+        let outbound = matches.iter().find(|m| m.rule_id == 2);
+        let outbound = outbound.expect("the phase-4 rule should be in the audit matches");
+        assert_eq!(outbound.message, "outbound leak");
+    }
+
+    #[test]
+    fn audit_matches_exclude_nolog_rules() {
+        let source = r#"
+SecRule ARGS "@rx attack" "id:10,phase:2,pass,msg:'logged'"
+SecRule ARGS "@rx attack" "id:11,phase:2,pass,nolog,msg:'silent'"
+"#;
+        let directives = parapet::parse(source, "test.conf").expect("must parse");
+        let rules = RuleSet::compile(&directives, &parapet::NoDataLoader).expect("must compile");
+        let stage = WafStage {
+            rules,
+            mode: EngineMode::Blocking,
+            paranoia_level: 1,
+            inbound_threshold: 5,
+            outbound_threshold: 4,
+            max_response_body: 1_048_576,
+            audit: AuditEngine::RelevantOnly,
+        };
+        let (_, inspection) = inspect(&stage, "/?q=attack");
+        let ids: Vec<u32> = inspection
+            .audit_matches()
+            .iter()
+            .map(|m| m.rule_id)
+            .collect();
+        assert!(ids.contains(&10), "a logged rule must appear in the audit");
+        assert!(
+            !ids.contains(&11),
+            "a nolog rule must not appear in the audit"
         );
     }
 
