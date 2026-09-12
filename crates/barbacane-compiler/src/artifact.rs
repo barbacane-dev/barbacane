@@ -21,11 +21,14 @@ use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
 ///
-/// v4 adds Ed25519 signing fields and records each plugin's declared capability
-/// `host_functions` in the manifest. Whether those capabilities are enforced on
-/// load is gated by the manifest `capabilities_enforced` flag (WA-1), not by the
-/// version, so older artifacts and capability-less builds load without rejection.
-pub const ARTIFACT_VERSION: u32 = 4;
+/// v5 binds two WAF policy fields into the manifest and `artifact_hash`:
+/// `max_response_body` (the phase-4 body inspection cap) and `audit` (the audit
+/// engine policy). Because the data plane recomputes and verifies `artifact_hash`
+/// on load, a pre-v5 artifact fails the integrity check and must be recompiled.
+///
+/// v4 added Ed25519 signing fields and recorded each plugin's declared
+/// capability `host_functions` in the manifest.
+pub const ARTIFACT_VERSION: u32 = 5;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
