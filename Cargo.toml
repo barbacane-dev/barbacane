@@ -103,7 +103,7 @@ jsonschema = "0.26"
 # WASM runtime
 # SecLang/CRS engine. Pinned by revision while its API settles; moves to a
 # crates.io version when it stabilises (ADR-0031).
-parapet = { git = "https://github.com/barbacane-dev/parapet", rev = "695ee8b46bd73eaa0daffdbdd73df0e45b26c6d3", features = ["serde"] }
+parapet = { package = "barbacane-waf", version = "0.1.0", features = ["serde"] }
 wasmtime = { version = "47", features = ["cranelift", "pooling-allocator"] }
 wasmtime-wasi = { version = "47" }
 
