@@ -1359,7 +1359,7 @@ impl Gateway {
                 let mut request_matched: Vec<u32> = Vec::new();
                 if let Some(stage) = &self.waf {
                     let waf_start = std::time::Instant::now();
-                    let (decision, inspection) = stage.inspect_request(
+                    let (decision, mut inspection) = stage.inspect_request(
                         &method_str,
                         &uri_string,
                         waf_protocol,
@@ -1404,6 +1404,9 @@ impl Gateway {
                             &route_path,
                             "waf_blocked",
                         );
+                        // Run phase 5 so a request-phase block is logged and
+                        // correlated the same as one that reached the response.
+                        inspection.run_logging();
                         self.emit_waf_audit(
                             &inspection,
                             &method_str,

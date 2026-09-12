@@ -274,10 +274,9 @@ impl WafInspection<'_> {
     /// rule could block. CRS phase-4 rules are mostly data-leakage detection:
     /// stack traces, SQL errors, source code and credentials in a response body.
     ///
-    /// Phases run in order and the engine stops phase processing after a
-    /// disruptive verdict, so a phase-3 block skips phases 4 and 5 and a
-    /// phase-4 block skips phase 5. Phase 5 is logging and correlation on the
-    /// non-blocked path.
+    /// A block in phase 3 skips phase 4, but phase 5 (logging and correlation)
+    /// runs on every transaction, including a blocked one, so its correlation
+    /// rules contribute to the audit record.
     pub fn inspect_response(
         &mut self,
         status: u16,
@@ -302,6 +301,14 @@ impl WafInspection<'_> {
     /// rules that only scored, which is what detection-only mode needs.
     pub fn matched_rule_ids(&self) -> Vec<u32> {
         self.tx.matched_ids()
+    }
+
+    /// Run phase 5 (logging and correlation) on a request that blocked before
+    /// reaching response inspection, so a request-phase block is logged the
+    /// same as one that reached the response. The response path runs phase 5
+    /// through `inspect_response`, so this is only for the request-block path.
+    pub fn run_logging(&mut self) {
+        self.tx.process_logging();
     }
 
     /// The rules that matched and would appear in the audit log, in match
@@ -650,7 +657,7 @@ SecRule ARGS "@rx attack" "id:11,phase:2,pass,nolog,msg:'silent'"
     /// The engine stops phase processing after a disruptive verdict, so phases
     /// after the blocking one do not run.
     #[test]
-    fn a_phase_three_block_stops_before_later_phases() {
+    fn a_phase_three_block_skips_phase_four_but_runs_phase_five() {
         let stage = stage(EngineMode::Blocking);
         let (_, mut inspection) = inspect(&stage, "/?q=fine");
         let decision = inspection.inspect_response(
@@ -665,8 +672,8 @@ SecRule ARGS "@rx attack" "id:11,phase:2,pass,nolog,msg:'silent'"
             "phase 4 must not run after a phase-3 block"
         );
         assert!(
-            !matched.contains(&5),
-            "phase 5 must not run after a phase-3 block"
+            matched.contains(&5),
+            "phase 5 runs even after a phase-3 block"
         );
     }
 }
