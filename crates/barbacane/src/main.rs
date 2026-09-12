@@ -793,19 +793,6 @@ impl Gateway {
                 skipped_rules = ?manifest.waf.skipped_rules,
                 "WAF enabled"
             );
-            if response_rules > 0 {
-                // Outbound inspection is implemented but not yet wired into
-                // the response path, which has several exits (streaming,
-                // WebSocket upgrade, middleware short-circuit) and a streamed
-                // response is already on the wire before a phase-4 rule could
-                // act on it. Saying so on every boot beats letting an operator
-                // assume the response rules in their artifact are running.
-                tracing::warn!(
-                    response_phase_rules = response_rules,
-                    "WAF response-phase rules are present in the artifact but not evaluated: \
-                     outbound inspection is not wired yet. Request-phase rules are enforced."
-                );
-            }
             if !manifest.waf.skipped_rules.is_empty() {
                 // Loud on every boot: an operator should not have to read the
                 // manifest to discover the rule set is incomplete.
@@ -1366,6 +1353,10 @@ impl Gateway {
                 // WAF inspection sits between the two models: the spec has
                 // already said what the request may look like, and the rule
                 // set now looks for attack shapes that are schema-valid.
+                let mut waf_inspection: Option<waf::WafInspection> = None;
+                // Rule ids counted in the request phase, so the response phase
+                // counts only the rules it newly matched.
+                let mut request_matched: Vec<u32> = Vec::new();
                 if let Some(stage) = &self.waf {
                     let waf_start = std::time::Instant::now();
                     let (decision, inspection) = stage.inspect_request(
@@ -1387,8 +1378,9 @@ impl Gateway {
                     // blocked. In detection-only mode nothing blocks, so this
                     // is the only signal available for tuning a rule set
                     // before switching it on.
-                    for id in inspection.matched_rule_ids() {
-                        self.metrics.record_waf_match(&method_str, &route_path, id);
+                    request_matched = inspection.matched_rule_ids();
+                    for id in &request_matched {
+                        self.metrics.record_waf_match(&method_str, &route_path, *id);
                     }
                     if let waf::WafDecision::Block {
                         status,
@@ -1427,6 +1419,10 @@ impl Gateway {
                             &trace_id,
                         )));
                     }
+                    // Held across dispatch: response-phase rules continue the
+                    // same transaction so outbound blocking rules read the
+                    // scores the inbound rules accumulated.
+                    waf_inspection = Some(inspection);
                 }
 
                 // Validate request against OpenAPI spec
@@ -1474,6 +1470,20 @@ impl Gateway {
 
                 // Add deprecation headers if the operation is deprecated
                 let response = Self::add_deprecation_headers(response, operation);
+
+                // Response-phase WAF inspection (phases 3, 4 and 5).
+                let response = if let Some(inspection) = waf_inspection {
+                    self.inspect_response_waf(
+                        inspection,
+                        response,
+                        &method_str,
+                        &route_path,
+                        &request_matched,
+                    )
+                    .await
+                } else {
+                    response
+                };
 
                 let response_size = response.body().size_hint().upper().unwrap_or(0);
                 self.record_request_metrics(
@@ -2985,6 +2995,95 @@ impl Gateway {
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")
+    }
+
+    /// Inspect a dispatched response through WAF phases 3, 4 and 5, continuing
+    /// the transaction the request phase started.
+    ///
+    /// A buffered body at or under the configured cap is collected and inspected
+    /// (phase 4); a streamed or oversized body has only its headers inspected
+    /// (phase 3) and the skip counted, because it has already reached the client
+    /// by the time a phase-4 rule could block. A WebSocket upgrade has no
+    /// response phases. Returns the response to send: the upstream response
+    /// (rebuilt when its body was collected), or a block response.
+    async fn inspect_response_waf(
+        &self,
+        mut inspection: waf::WafInspection<'_>,
+        response: Response<AnyBody>,
+        method: &str,
+        path: &str,
+        request_matched: &[u32],
+    ) -> Response<AnyBody> {
+        if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            return response;
+        }
+
+        let status = response.status().as_u16();
+        let headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .map(|(n, v)| {
+                (
+                    n.as_str().to_string(),
+                    String::from_utf8_lossy(v.as_bytes()).into_owned(),
+                )
+            })
+            .collect();
+
+        // A buffered body reports an exact upper size hint; a streamed one
+        // reports none. Only a buffered body within the cap is collected.
+        let cap = self.waf.as_ref().map_or(0, |s| s.response_body_cap());
+        let within_cap = response
+            .body()
+            .size_hint()
+            .upper()
+            .is_some_and(|n| n as usize <= cap);
+
+        let (decision, response) = if within_cap {
+            let (parts, body) = response.into_parts();
+            let bytes = body
+                .collect()
+                .await
+                .expect("AnyBody error type is Infallible")
+                .to_bytes();
+            let decision = inspection.inspect_response(status, &headers, Some(&bytes));
+            let rebuilt = Response::from_parts(parts, BoxBody::new(Full::new(bytes)));
+            (decision, rebuilt)
+        } else {
+            self.metrics.record_waf_response_body_skipped(method, path);
+            let decision = inspection.inspect_response(status, &headers, None);
+            (decision, response)
+        };
+
+        // Count only the rules the response phase newly matched; the request
+        // phase already counted its own.
+        for id in inspection.matched_rule_ids() {
+            if !request_matched.contains(&id) {
+                self.metrics.record_waf_match(method, path, id);
+            }
+        }
+
+        if let waf::WafDecision::Block {
+            status,
+            rule_id,
+            message,
+        } = decision
+        {
+            tracing::warn!(
+                rule_id,
+                status,
+                method = %method,
+                path = %path,
+                message = %message,
+                "WAF blocked response"
+            );
+            self.metrics.record_waf_blocked(method, path, rule_id);
+            self.metrics
+                .record_validation_failure(method, path, "waf_blocked");
+            return box_full(self.waf_blocked_response(status, rule_id, &message));
+        }
+
+        response
     }
 
     /// Build a 413 Payload Too Large response (RFC 9457). Used when the request

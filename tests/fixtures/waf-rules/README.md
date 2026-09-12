@@ -7,11 +7,14 @@ body collection, anomaly-score accumulation and the block response.
 
 It is not CRS and is not a detection benchmark. CRS conformance is measured by
 parapet's go-ftw suite. Rule ids live in the `10011xx`-`10018xx` range so they
-cannot be confused with real CRS rules, and the blocking rule `1009110`
-mirrors the role of CRS `949110`. Scores accumulate in
-`tx.blocking_inbound_anomaly_score`, as they do in CRS 4.
+cannot be confused with real CRS rules. The blocking rule `1009110` mirrors the
+role of CRS `949110` on the request side and `1009120` mirrors `959100` on the
+response side. Inbound scores accumulate in
+`tx.blocking_inbound_anomaly_score`, outbound scores in
+`tx.blocking_outbound_anomaly_score`, as they do in CRS 4.
 
-Scores are tuned to the `inbound: 5` threshold the fixture specs declare:
+Request-phase scores are tuned to the `inbound: 5` threshold the fixture specs
+declare:
 
 | Rule    | Class                    | Score |
 |---------|--------------------------|-------|
@@ -29,3 +32,14 @@ Rule `1001700` denies directly with `status:406` instead of scoring, and
 
 The two 3-point rules are individually below the threshold, so either alone is
 recorded and allowed and both together block.
+
+Response-phase rules score against the `outbound: 4` threshold:
+
+| Rule    | Class                            | Phase | Score |
+|---------|----------------------------------|-------|-------|
+| 1003100 | `X-Leak` response header         | 3     | 4     |
+| 1004100 | `SECRET_TOKEN` in response body  | 4     | 4     |
+
+Either alone reaches the outbound threshold, so `1009120` blocks the response.
+A phase-4 body rule only fires when the body was collected: a response body over
+`max_response_body` is skipped, while its headers are still inspected in phase 3.

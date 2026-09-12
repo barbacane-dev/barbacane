@@ -167,8 +167,13 @@ pub enum UnsupportedRules {
     Skip,
 }
 
+/// Default largest response body phase-4 rules inspect, in bytes (1 MiB).
+pub const fn default_max_response_body() -> u64 {
+    1_048_576
+}
+
 /// WAF configuration extracted from root-level `x-barbacane-waf`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WafConfig {
     /// Whether the WAF runs.
     pub enabled: bool,
@@ -187,6 +192,12 @@ pub struct WafConfig {
     /// Outbound anomaly score at which the rule set blocks.
     #[serde(default)]
     pub outbound_threshold: i64,
+    /// Largest response body, in bytes, that phase-4 rules inspect. A buffered
+    /// response at or under this is collected and inspected; a larger or
+    /// streamed one has its headers inspected (phase 3) and its body skipped,
+    /// with the skip counted.
+    #[serde(default = "default_max_response_body")]
+    pub max_response_body: u64,
     /// Policy for rules the engine cannot compile.
     #[serde(default)]
     pub unsupported_rules: UnsupportedRules,
@@ -201,6 +212,23 @@ pub struct WafConfig {
     /// is not enforcing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped_rules: Vec<u32>,
+}
+
+impl Default for WafConfig {
+    fn default() -> Self {
+        WafConfig {
+            enabled: false,
+            ruleset: None,
+            paranoia_level: 0,
+            mode: WafMode::default(),
+            inbound_threshold: 0,
+            outbound_threshold: 0,
+            max_response_body: default_max_response_body(),
+            unsupported_rules: UnsupportedRules::default(),
+            rules_path: None,
+            skipped_rules: Vec::new(),
+        }
+    }
 }
 
 /// Build provenance metadata embedded in the manifest.
@@ -1139,12 +1167,13 @@ fn compute_artifact_hash(
     // them must change the hash.
     hasher.update(
         format!(
-            "waf:enabled={}\tparanoia={}\tmode={:?}\tinbound={}\toutbound={}\tunsupported={:?}\tskipped={}\n",
+            "waf:enabled={}\tparanoia={}\tmode={:?}\tinbound={}\toutbound={}\tmax_response_body={}\tunsupported={:?}\tskipped={}\n",
             waf.enabled,
             waf.paranoia_level,
             waf.mode,
             waf.inbound_threshold,
             waf.outbound_threshold,
+            waf.max_response_body,
             waf.unsupported_rules,
             waf.skipped_rules
                 .iter()
@@ -1783,6 +1812,10 @@ fn extract_root_waf_config(specs: &[(ApiSpec, String, String)]) -> WafConfig {
             },
             inbound_threshold: threshold("inbound", 5),
             outbound_threshold: threshold("outbound", 4),
+            max_response_body: value
+                .get("max_response_body")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_else(default_max_response_body),
             unsupported_rules: match value.get("unsupported_rules").and_then(|v| v.as_str()) {
                 Some("skip") => UnsupportedRules::Skip,
                 _ => UnsupportedRules::Fail,
@@ -4155,6 +4188,10 @@ mod waf_tests {
         skipped.skipped_rules = vec![942100];
         assert_ne!(baseline, hash_of(&skipped), "skipped rules are not bound");
 
+        let mut cap = base.clone();
+        cap.max_response_body = 42;
+        assert_ne!(baseline, hash_of(&cap), "max_response_body is not bound");
+
         let mut off = base.clone();
         off.enabled = false;
         assert_ne!(baseline, hash_of(&off), "enabled is not bound");
@@ -4170,6 +4207,7 @@ mod waf_tests {
         assert_eq!(cfg.mode, WafMode::Blocking);
         assert_eq!(cfg.inbound_threshold, 5);
         assert_eq!(cfg.outbound_threshold, 4);
+        assert_eq!(cfg.max_response_body, 1_048_576);
         assert_eq!(cfg.unsupported_rules, UnsupportedRules::Fail);
     }
 

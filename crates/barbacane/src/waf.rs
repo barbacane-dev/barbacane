@@ -25,6 +25,8 @@ pub struct WafStage {
     paranoia_level: u8,
     inbound_threshold: i64,
     outbound_threshold: i64,
+    /// Largest response body, in bytes, that phase-4 rules inspect.
+    max_response_body: usize,
 }
 
 /// An inspection in progress, held between the request and response phases.
@@ -101,7 +103,19 @@ impl WafStage {
             paranoia_level: manifest.waf.paranoia_level,
             inbound_threshold: manifest.waf.inbound_threshold,
             outbound_threshold: manifest.waf.outbound_threshold,
+            // Saturate rather than truncate: a cap larger than the address
+            // space means "no effective limit", never a wrapped small value
+            // that would silently stop inspecting bodies it should.
+            max_response_body: usize::try_from(manifest.waf.max_response_body)
+                .unwrap_or(usize::MAX),
         }))
+    }
+
+    /// Largest response body, in bytes, that phase-4 rules inspect. A buffered
+    /// response at or under this is collected and inspected; a larger or
+    /// streamed one has its body skipped.
+    pub fn response_body_cap(&self) -> usize {
+        self.max_response_body
     }
 
     /// How many rules the stage carries.
@@ -110,11 +124,7 @@ impl WafStage {
     }
 
     /// How many rules run on the request side (phases 1 and 2) versus the
-    /// response side (phases 3, 4 and 5).
-    ///
-    /// Reported at startup so an operator can see that response-phase rules
-    /// are present but not yet evaluated, rather than assuming the whole rule
-    /// set is running.
+    /// response side (phases 3, 4 and 5). Reported at startup.
     pub fn rules_by_direction(&self) -> (usize, usize) {
         use parapet::Phase::*;
         let request =
@@ -223,21 +233,16 @@ impl WafStage {
 impl WafInspection<'_> {
     /// Inspect the response through phases 3, 4 and 5.
     ///
-    /// Not yet called from the request pipeline: the response path has several
-    /// exits and a streamed response reaches the client before a phase-4 rule
-    /// could act on it, so wiring it is a separate change. Kept and tested so
-    /// the capability is verified rather than written twice, and the gateway
-    /// warns at startup that these rules are not being evaluated.
-    #[allow(dead_code)]
+    /// The body is inspected only when one is supplied. A streamed or oversized
+    /// response passes `None`: its headers are inspected (phase 3) but its body
+    /// is not, since it has already reached the client by the time a phase-4
+    /// rule could block. CRS phase-4 rules are mostly data-leakage detection:
+    /// stack traces, SQL errors, source code and credentials in a response body.
     ///
-    /// CRS puts 39 rules in phase 3 and 100 in phase 4, mostly data-leakage
-    /// detection: stack traces, SQL errors, source code and credentials in a
-    /// response body. Without running them those rules are dead weight in the
-    /// artifact.
-    ///
-    /// The body is inspected only when one is supplied. A streamed response
-    /// has already reached the client by the time this could block, so callers
-    /// that stream should pass `None` and treat the result as detection only.
+    /// Phases run in order and the engine stops phase processing after a
+    /// disruptive verdict, so a phase-3 block skips phases 4 and 5 and a
+    /// phase-4 block skips phase 5. Phase 5 is logging and correlation on the
+    /// non-blocked path.
     pub fn inspect_response(
         &mut self,
         status: u16,
@@ -248,21 +253,12 @@ impl WafInspection<'_> {
         for (name, value) in headers {
             self.tx.add_response_header(name, value);
         }
-        let verdict = self.tx.process_response_headers();
-        if let decision @ WafDecision::Block { .. } = WafStage::decide(&self.tx, verdict) {
-            return decision;
-        }
-
         if let Some(body) = body {
             self.tx.set_response_body(body);
         }
-        let verdict = self.tx.process_response_body();
-        if let decision @ WafDecision::Block { .. } = WafStage::decide(&self.tx, verdict) {
-            return decision;
-        }
 
-        // Phase 5 is logging: it cannot block, but CRS uses it for
-        // correlation and audit decisions, so it still runs.
+        self.tx.process_response_headers();
+        self.tx.process_response_body();
         let verdict = self.tx.process_logging();
         WafStage::decide(&self.tx, verdict)
     }
@@ -297,12 +293,15 @@ fn authority_of(uri: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
-    /// A rule set with one request-phase and one response-phase rule.
+    /// A rule set with one request-phase rule and response-phase rules in
+    /// phases 3, 4 and 5. Rule 5 matches on every response, so its presence in
+    /// `matched_ids` shows phase 5 ran.
     fn stage(mode: EngineMode) -> WafStage {
         let source = r#"
 SecRule ARGS "@rx attack" "id:1,phase:2,deny,status:403,msg:'inbound'"
 SecRule RESPONSE_BODY "@rx secret" "id:2,phase:4,deny,status:403,msg:'outbound leak'"
 SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debug header'"
+SecRule REMOTE_ADDR "@rx ." "id:5,phase:5,pass,nolog,msg:'phase 5 ran'"
 "#;
         let directives = parapet::parse(source, "test.conf").expect("must parse");
         let rules = RuleSet::compile(&directives, &parapet::NoDataLoader).expect("must compile");
@@ -312,6 +311,7 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
             paranoia_level: 1,
             inbound_threshold: 5,
             outbound_threshold: 4,
+            max_response_body: 1_048_576,
         }
     }
 
@@ -329,11 +329,11 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
 
     #[test]
     fn counts_rules_by_direction() {
-        // What the startup warning reports, so an operator can see that
-        // response-phase rules are present but not evaluated.
+        // Reported at startup: one request-phase rule, three response-phase
+        // rules (phases 3, 4 and 5).
         let (request, response) = stage(EngineMode::Blocking).rules_by_direction();
         assert_eq!(request, 1);
-        assert_eq!(response, 2);
+        assert_eq!(response, 3);
     }
 
     #[test]
@@ -405,6 +405,7 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
             paranoia_level: 1,
             inbound_threshold: 5,
             outbound_threshold: 4,
+            max_response_body: 1_048_576,
         }
     }
 
@@ -515,5 +516,42 @@ SecRule RESPONSE_HEADERS:X-Debug "@rx ." "id:3,phase:3,deny,status:403,msg:'debu
             inspection.inspect_response(200, &[], None),
             WafDecision::Allow
         ));
+    }
+
+    #[test]
+    fn phase_five_runs_on_a_non_blocked_response() {
+        let stage = stage(EngineMode::Blocking);
+        let (_, mut inspection) = inspect(&stage, "/?q=fine");
+        assert!(matches!(
+            inspection.inspect_response(200, &[], Some(b"nothing to see")),
+            WafDecision::Allow
+        ));
+        assert!(
+            inspection.matched_rule_ids().contains(&5),
+            "phase 5 must run when the response was not blocked"
+        );
+    }
+
+    /// The engine stops phase processing after a disruptive verdict, so phases
+    /// after the blocking one do not run.
+    #[test]
+    fn a_phase_three_block_stops_before_later_phases() {
+        let stage = stage(EngineMode::Blocking);
+        let (_, mut inspection) = inspect(&stage, "/?q=fine");
+        let decision = inspection.inspect_response(
+            200,
+            &[("X-Debug".to_string(), "stacktrace".to_string())],
+            Some(b"this leaks a secret"),
+        );
+        assert!(matches!(decision, WafDecision::Block { rule_id: 3, .. }));
+        let matched = inspection.matched_rule_ids();
+        assert!(
+            !matched.contains(&2),
+            "phase 4 must not run after a phase-3 block"
+        );
+        assert!(
+            !matched.contains(&5),
+            "phase 5 must not run after a phase-3 block"
+        );
     }
 }
