@@ -25,6 +25,7 @@ x-barbacane-waf:
     inbound: 5
     outbound: 4
   max_response_body: 1048576   # bytes; phase-4 body inspection cap (default 1 MiB)
+  audit: relevant-only         # off | relevant-only (default) | on
   unsupported_rules: fail      # fail (default) | skip
 ```
 
@@ -32,8 +33,9 @@ x-barbacane-waf:
 crosses it; `thresholds.outbound` does the same for the response, scored by
 phase 3 and 4 rules. `max_response_body` bounds phase-4 body inspection: a
 buffered response body at or under it is inspected, a larger or streamed one is
-not (see [Response-phase inspection](#response-phase-inspection)). All three are
-covered by `artifact_hash`.
+not (see [Response-phase inspection](#response-phase-inspection)). `audit`
+controls per-transaction audit logging (see [Audit logging](#audit-logging)).
+All of these are covered by `artifact_hash`.
 
 `ruleset` is resolved relative to the spec. Point it at a directory containing
 the `.conf` files and, for CRS, the setup file:
@@ -98,6 +100,29 @@ time a phase-4 rule could act on it. Each skip is counted in
 rule set that promises outbound body inspection can be checked against what the
 gateway actually inspects. A WebSocket upgrade has no response phases.
 
+## Audit logging
+
+The WAF writes one structured record per transaction on the `waf.audit` tracing
+target, carrying the request id, client address, method, path, the rules that
+matched (id, message, logdata, tags, matched variable), the inbound and outbound
+anomaly scores, the verdict, and the response status. Route that target to its
+own sink to feed a SIEM.
+
+`audit` controls when a record is written:
+
+| Value | Behaviour |
+|---|---|
+| `off` | Never. |
+| `relevant-only` (default) | Only when the transaction was blocked or matched at least one rule that logs. Near-zero volume on clean traffic; the CRS crs-setup default. |
+| `on` | Every inspected transaction. |
+
+A rule's `nolog` action keeps it out of the record, matching how it keeps a rule
+out of the ModSecurity audit log; the rule still matched and still scored. The
+number of records written is exported as `barbacane_waf_audit_total`.
+
+A transaction the WAF allowed but a later gateway check rejects (schema
+validation, payload size) before dispatch is not audited in this version.
+
 ## Current limitations
 
 Read these before enabling it in production.
@@ -126,7 +151,7 @@ thing, and it is the single most common reason a WAF gets turned off again.
 
 ## Observing it
 
-Five metrics on the admin endpoint:
+Six metrics on the admin endpoint:
 
 | Metric | Meaning |
 |---|---|
@@ -135,6 +160,7 @@ Five metrics on the admin endpoint:
 | `barbacane_waf_allowed_total{method,path}` | Requests inspected and allowed. With the above, the block rate. |
 | `barbacane_waf_duration_seconds{method,path}` | Time spent inspecting, so the WAF's share of latency is visible rather than inferred. |
 | `barbacane_waf_response_body_skipped_total{method,path}` | Responses whose body phase-4 rules did not inspect, because it was streamed or over `max_response_body`. Response headers were still inspected. |
+| `barbacane_waf_audit_total{method,path}` | Per-transaction audit records written, governed by the `audit` policy. |
 
 `barbacane_waf_matched_total` counts every rule that matched, including the
 control-flow rules CRS uses to gate paranoia levels. Those are `pass,nolog`

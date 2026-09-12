@@ -277,6 +277,68 @@ async fn response_headers_are_inspected_even_when_the_body_is_skipped() {
 }
 
 // ---------------------------------------------------------------------------
+// Audit logging
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_blocked_request_writes_an_audit_record() {
+    let gateway = blocking_gateway().await;
+    let resp = gateway
+        .get("/waf/search?q=1'%20or%20'1'%3D'1")
+        .await
+        .unwrap();
+    assert_eq!(assert_blocked(resp, 403).await, ANOMALY_RULE);
+
+    let body = metrics(&gateway).await;
+    assert_eq!(
+        sample(
+            &body,
+            "barbacane_waf_audit_total",
+            &["path=\"/waf/search\""]
+        ),
+        Some(1.0),
+        "a blocked transaction is relevant and must be audited"
+    );
+}
+
+#[tokio::test]
+async fn a_clean_request_writes_no_audit_record_by_default() {
+    let gateway = blocking_gateway().await;
+    let resp = gateway.get("/waf/search?q=hello%20world").await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body = metrics(&gateway).await;
+    assert!(
+        sample(&body, "barbacane_waf_audit_total", &["path="]).is_none(),
+        "relevant-only must not audit a transaction that matched nothing"
+    );
+}
+
+/// A match that only scored, without blocking, is still relevant and audited.
+#[tokio::test]
+async fn a_detected_but_not_blocked_request_is_audited() {
+    let gateway = TestGateway::from_spec(&fixture("waf-detection-only.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway
+        .get("/waf/search?q=1'%20or%20'1'%3D'1")
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body = metrics(&gateway).await;
+    assert_eq!(
+        sample(
+            &body,
+            "barbacane_waf_audit_total",
+            &["path=\"/waf/search\""]
+        ),
+        Some(1.0),
+        "a matched-but-not-blocked transaction is relevant and must be audited"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Header collection
 // ---------------------------------------------------------------------------
 
