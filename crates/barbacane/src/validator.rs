@@ -959,7 +959,7 @@ mod tests {
         assert!(reasons
             .iter()
             .any(|r| r.contains("header too large: 40000 bytes")));
-        assert!(reasons.iter().any(|r| *r == "does not match schema"));
+        assert!(reasons.contains(&"does not match schema"));
         // The header field carries the header name.
         assert!(details
             .iter()
@@ -970,7 +970,7 @@ mod tests {
     fn non_dev_mode_omits_error_details() {
         let errors = vec![ValidationError2::MissingRequiredBody];
         let problem = ProblemDetails::validation_error(&errors, false);
-        assert!(problem.extensions.get("errors").is_none());
+        assert!(!problem.extensions.contains_key("errors"));
         // A single error keeps its own message as the detail.
         assert_eq!(
             problem.detail.as_deref(),
