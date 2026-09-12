@@ -341,10 +341,22 @@ jobs:
 
   # Integration tests (slower, requires gateway binary and plugins)
   integration-tests:
-    name: Integration Tests
+    name: Integration Tests (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: [changes, unit-tests]
     if: needs.changes.outputs.code == 'true'
+    # The suite drives the gateway as a child process on OS-assigned ports, so
+    # within a job concurrency stays at 2 to keep the find-then-bind port race
+    # rare. Wall-clock is cut by sharding the test binaries across parallel jobs
+    # instead of raising concurrency. fail-fast off so one shard's failure does
+    # not cancel the others.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_TOTAL: 4
     steps:
       - uses: actions/checkout@v6
         with:
@@ -379,20 +391,26 @@ jobs:
         run: chmod +x target/debug/barbacane
 
       - name: Run integration tests
-        # Run the full barbacane-test suite: the lib tests plus every
-        # integration binary in tests/*.rs. The `security` target is excluded
-        # here because it needs PostgreSQL and the control-plane binary — it has
-        # its own `security-suite` job below. Targets are discovered rather than
-        # hard-coded so new suites are picked up automatically.
+        # Every integration binary in tests/*.rs, discovered rather than
+        # hard-coded so new suites are picked up automatically. `security` is
+        # excluded here (it needs PostgreSQL and the control-plane binary and
+        # has its own security-suite job). This shard takes a round-robin slice
+        # of the binaries; the lib tests run only on shard 0 to avoid repeating
+        # them across shards.
         run: |
-          targets=$(ls crates/barbacane-test/tests/*.rs \
+          all=$(ls crates/barbacane-test/tests/*.rs \
             | xargs -n1 basename | sed 's/\.rs$//' \
-            | grep -vx security \
+            | grep -vx security | sort)
+          targets=$(echo "$all" \
+            | awk "NR % $SHARD_TOTAL == $SHARD_INDEX" \
             | sed 's/^/--test /' | tr '\n' ' ')
-          echo "Running integration targets: $targets"
-          # --no-fail-fast so a failure in one binary doesn't hide failures in
-          # the binaries that would run after it; we want the full picture.
-          cargo test -p barbacane-test --lib $targets --no-fail-fast -- --test-threads=2
+          lib=""; [ "$SHARD_INDEX" = "0" ] && lib="--lib"
+          if [ -z "$targets" ] && [ -z "$lib" ]; then
+            echo "No targets for shard $SHARD_INDEX"; exit 0
+          fi
+          echo "Shard $SHARD_INDEX/$SHARD_TOTAL targets: $lib $targets"
+          # --no-fail-fast so one binary's failure doesn't hide later ones.
+          cargo test -p barbacane-test $lib $targets --no-fail-fast -- --test-threads=2
 
   # Line coverage over the unit tests plus the integration suite. The
   # integration suite drives the gateway as a child process, and the harness
