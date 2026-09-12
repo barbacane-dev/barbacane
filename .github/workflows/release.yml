@@ -457,12 +457,9 @@ jobs:
           publish_crate "barbacane-plugin-sdk"
           publish_crate "barbacane-telemetry"
           publish_crate "barbacane-wasm"
-
-          # barbacane-compiler, barbacane and barbacane-control depend on
-          # parapet, which is a git dependency (ADR-0031). crates.io rejects git
-          # dependencies, so these cannot be published there yet. They are
-          # distributed as release binaries and container images instead, and
-          # return to this list when parapet moves to a crates.io release.
+          publish_crate "barbacane-compiler"
+          publish_crate "barbacane"
+          publish_crate "barbacane-control"
 
           # Summary
           echo ""
