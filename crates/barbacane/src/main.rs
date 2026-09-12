@@ -1404,6 +1404,15 @@ impl Gateway {
                             &route_path,
                             "waf_blocked",
                         );
+                        self.emit_waf_audit(
+                            &inspection,
+                            &method_str,
+                            &route_path,
+                            &request_id,
+                            client_addr.map(|a| a.ip().to_string()).as_deref(),
+                            status,
+                            Some(rule_id),
+                        );
                         let response = self.waf_blocked_response(status, rule_id, &message);
                         self.record_request_metrics(
                             &method_str,
@@ -1479,6 +1488,8 @@ impl Gateway {
                         &method_str,
                         &route_path,
                         &request_matched,
+                        &request_id,
+                        client_addr.map(|a| a.ip().to_string()).as_deref(),
                     )
                     .await
                 } else {
@@ -3006,6 +3017,7 @@ impl Gateway {
     /// by the time a phase-4 rule could block. A WebSocket upgrade has no
     /// response phases. Returns the response to send: the upstream response
     /// (rebuilt when its body was collected), or a block response.
+    #[allow(clippy::too_many_arguments)]
     async fn inspect_response_waf(
         &self,
         mut inspection: waf::WafInspection<'_>,
@@ -3013,8 +3025,12 @@ impl Gateway {
         method: &str,
         path: &str,
         request_matched: &[u32],
+        request_id: &str,
+        client_ip: Option<&str>,
     ) -> Response<AnyBody> {
         if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            // No response phases; audit the request-phase result.
+            self.emit_waf_audit(&inspection, method, path, request_id, client_ip, 101, None);
             return response;
         }
 
@@ -3063,6 +3079,22 @@ impl Gateway {
             }
         }
 
+        let (audit_status, blocked_rule_id) = match &decision {
+            waf::WafDecision::Block {
+                status, rule_id, ..
+            } => (*status, Some(*rule_id)),
+            waf::WafDecision::Allow => (status, None),
+        };
+        self.emit_waf_audit(
+            &inspection,
+            method,
+            path,
+            request_id,
+            client_ip,
+            audit_status,
+            blocked_rule_id,
+        );
+
         if let waf::WafDecision::Block {
             status,
             rule_id,
@@ -3084,6 +3116,47 @@ impl Gateway {
         }
 
         response
+    }
+
+    /// Write a per-transaction WAF audit record, governed by the audit engine
+    /// policy. The record is a structured line on the `waf.audit` tracing
+    /// target so it can be routed to its own sink.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_waf_audit(
+        &self,
+        inspection: &waf::WafInspection,
+        method: &str,
+        path: &str,
+        request_id: &str,
+        client_ip: Option<&str>,
+        response_status: u16,
+        blocked_rule_id: Option<u32>,
+    ) {
+        let Some(stage) = &self.waf else {
+            return;
+        };
+        let matches = inspection.audit_matches();
+        if !waf::should_audit(
+            stage.audit_engine(),
+            blocked_rule_id.is_some(),
+            !matches.is_empty(),
+        ) {
+            return;
+        }
+        self.metrics.record_waf_audit(method, path);
+        let record = serde_json::json!({
+            "request_id": request_id,
+            "client_ip": client_ip,
+            "method": method,
+            "path": path,
+            "response_status": response_status,
+            "blocked": blocked_rule_id.is_some(),
+            "blocking_rule_id": blocked_rule_id,
+            "inbound_score": inspection.inbound_score(),
+            "outbound_score": inspection.outbound_score(),
+            "matches": matches,
+        });
+        tracing::info!(target: "waf.audit", audit = %record, "WAF audit record");
     }
 
     /// Build a 413 Payload Too Large response (RFC 9457). Used when the request
