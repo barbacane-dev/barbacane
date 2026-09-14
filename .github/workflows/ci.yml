@@ -728,6 +728,10 @@ jobs:
     name: CI
     if: ${{ always() && github.event_name != 'issue_comment' }}
     needs:
+      # `changes` is included so a change-detection failure fails the gate.
+      # Without it, a failed `changes` would skip the code jobs, and the gate
+      # would read those skips as success and pass a PR that never tested.
+      - changes
       - fmt
       - clippy
       - workflows
