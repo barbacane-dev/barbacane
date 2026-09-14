@@ -120,8 +120,10 @@ A rule's `nolog` action keeps it out of the record, matching how it keeps a rule
 out of the ModSecurity audit log; the rule still matched and still scored. The
 number of records written is exported as `barbacane_waf_audit_total`.
 
-A transaction the WAF allowed but a later gateway check rejects (schema
-validation, payload size) before dispatch is not audited in this version.
+A transaction the WAF allowed but spec validation then rejects before dispatch
+is still audited, so a request the WAF inspected is not lost from the log because
+a later stage refused it. A payload-size rejection happens before the WAF runs,
+so there is no inspection to audit.
 
 ## Current limitations
 
