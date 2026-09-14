@@ -108,12 +108,15 @@ jobs:
           -A clippy::panic
 
   # Verify the workspace builds on the declared MSRV (workspace.package.rust-version).
-  # Static analysis of the workflows themselves. Runs on every push: a workflow
-  # change cannot be gated on a paths filter that lives in a workflow file.
+  # Static analysis of the workflows themselves. Runs on push and pull_request: a
+  # workflow change cannot be gated on a paths filter that lives in a workflow
+  # file. Excluded from the issue_comment trigger (which exists only for the
+  # /bench command) so a comment does not spawn a spurious "Workflows" run.
   # .github/zizmor.yml carries the action-pinning policy and the gate is
   # medium and above, so informational findings stay visible without failing.
   workflows:
     name: Workflows
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     permissions:
       contents: read
