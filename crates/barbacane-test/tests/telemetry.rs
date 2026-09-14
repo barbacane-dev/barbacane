@@ -88,14 +88,18 @@ async fn test_metrics_records_validation_failures() {
         .await
         .expect("failed to start gateway");
 
-    // Make a request that will fail validation (missing required field)
-    let _ = gateway.post("/validate", "{}").await.unwrap();
+    // POST /users with an empty body fails request validation (missing required
+    // fields), which records a validation-failure counter sample.
+    let resp = gateway.post("/users", "{}").await.unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "empty body must fail request validation"
+    );
 
-    // Get metrics
     let resp = gateway.admin_get("/metrics").await.unwrap();
     let body = resp.text().await.unwrap();
 
-    // Should have recorded validation failure
     assert!(
         body.contains("barbacane_validation_failures_total"),
         "Metrics should contain validation failure counter"
