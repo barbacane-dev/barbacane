@@ -33,6 +33,12 @@ paths:
           required: false
           schema:
             type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
       x-barbacane-dispatch:
         name: mock
         config:

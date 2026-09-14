@@ -338,6 +338,31 @@ async fn a_detected_but_not_blocked_request_is_audited() {
     );
 }
 
+/// A request the WAF allowed but spec validation rejects before dispatch is
+/// still audited, so a WAF-inspected transaction is not lost from the log just
+/// because a later stage refused it. `debug=1` matches a scoring rule (relevant,
+/// under the threshold, allowed); `limit` over its maximum fails validation.
+#[tokio::test]
+async fn a_request_rejected_by_validation_after_the_waf_allowed_it_is_audited() {
+    let gateway = blocking_gateway().await;
+    let resp = gateway
+        .get("/waf/search?debug=1&limit=99999")
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "validation rejects the over-max limit");
+
+    let body = metrics(&gateway).await;
+    assert_eq!(
+        sample(
+            &body,
+            "barbacane_waf_audit_total",
+            &["path=\"/waf/search\""]
+        ),
+        Some(1.0),
+        "a WAF-relevant request rejected by validation must still be audited"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Header collection
 // ---------------------------------------------------------------------------

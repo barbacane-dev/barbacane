@@ -1452,6 +1452,22 @@ impl Gateway {
                             .record_validation_failure(&method_str, &route_path, &reason);
                     }
                     let response = self.validation_error_response(&errors);
+                    // The WAF allowed this request but spec validation rejected it
+                    // before dispatch. Audit the WAF's verdict here too, so a
+                    // transaction the WAF inspected is not lost from the audit log
+                    // just because a later stage refused it.
+                    if let Some(mut inspection) = waf_inspection.take() {
+                        inspection.run_logging();
+                        self.emit_waf_audit(
+                            &inspection,
+                            &method_str,
+                            &route_path,
+                            &request_id,
+                            client_addr.map(|a| a.ip().to_string()).as_deref(),
+                            response.status().as_u16(),
+                            None,
+                        );
+                    }
                     self.record_request_metrics(
                         &method_str,
                         &route_path,
