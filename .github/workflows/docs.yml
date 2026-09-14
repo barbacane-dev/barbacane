@@ -47,6 +47,25 @@ jobs:
             cp "$schema" "book/rulesets/schemas/${name}.json"
           done
 
+      - name: Generate sitemap.xml and robots.txt
+        run: |
+          BASE="https://docs.barbacane.dev"
+          DATE="$(date -u +%Y-%m-%d)"
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            find book -type f -name '*.html' ! -name 'print.html' ! -name '404.html' \
+              | sort | while read -r f; do
+                rel="${f#book/}"
+                loc="$BASE/$rel"
+                loc="${loc%index.html}"
+                echo "  <url><loc>${loc}</loc><lastmod>${DATE}</lastmod></url>"
+              done
+            echo '</urlset>'
+          } > book/sitemap.xml
+          printf 'User-agent: *\nAllow: /\nSitemap: %s/sitemap.xml\n' "$BASE" > book/robots.txt
+          echo "sitemap: $(grep -c '<url>' book/sitemap.xml) urls"
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 

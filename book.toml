@@ -11,6 +11,7 @@ build-dir = "book"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "navy"
+theme = "docs/theme"
 git-repository-url = "https://github.com/barbacane-dev/barbacane"
 edit-url-template = "https://github.com/barbacane-dev/barbacane/edit/main/{path}"
 site-url = "https://docs.barbacane.dev/"
