@@ -718,3 +718,37 @@ jobs:
           name: playwright-report
           path: ui/playwright-report/
           retention-days: 7
+
+  # Single required status check. Aggregates every gating job into one stable
+  # context, so branch protection needs just "CI" regardless of matrix sharding
+  # or which jobs a given change skips. Passes when every needed job succeeded
+  # or was skipped; fails if any failed or was cancelled. Not run on
+  # issue_comment (which exists only for the /bench command).
+  ci-success:
+    name: CI
+    if: ${{ always() && github.event_name != 'issue_comment' }}
+    needs:
+      - fmt
+      - clippy
+      - workflows
+      - msrv
+      - audit
+      - build
+      - unit-tests
+      - control-plane-tests
+      - plugin-tests
+      - integration-tests
+      - coverage
+      - security-suite
+      - ui-tests
+      - ui-e2e
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any needed job failed or was cancelled
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "A gating job did not pass:"
+          echo '${{ toJSON(needs) }}'
+          exit 1
+      - name: All gating jobs passed or were skipped
+        run: echo "CI gate is green"
