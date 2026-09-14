@@ -30,8 +30,10 @@ mod tests {
         let registry = MetricsRegistry::new();
         let output = render_metrics(&registry);
 
-        // Should contain the metric definitions even if no samples recorded
-        assert!(output.contains("barbacane_requests_total"));
+        // Should contain the metric definitions even if no samples recorded.
+        // The `# TYPE` line uses the base name; the `_total` suffix appears on
+        // sample lines, of which there are none for an empty labeled counter.
+        assert!(output.contains("# TYPE barbacane_requests counter"));
         assert!(output.contains("barbacane_active_connections"));
     }
 

@@ -202,7 +202,7 @@ impl MetricsRegistry {
         // Request metrics
         let requests_total = Family::<RequestLabels, Counter>::default();
         registry.register(
-            "barbacane_requests_total",
+            "barbacane_requests",
             "Total number of HTTP requests processed",
             requests_total.clone(),
         );
@@ -245,7 +245,7 @@ impl MetricsRegistry {
 
         let connections_total = Counter::default();
         registry.register(
-            "barbacane_connections_total",
+            "barbacane_connections",
             "Total number of connections accepted",
             connections_total.clone(),
         );
@@ -253,21 +253,21 @@ impl MetricsRegistry {
         // Validation metrics
         let waf_matched_total = Family::<WafLabels, Counter>::default();
         registry.register(
-            "barbacane_waf_matched_total",
+            "barbacane_waf_matched",
             "Rules matched by the web application firewall, whether or not the request was blocked",
             waf_matched_total.clone(),
         );
 
         let waf_blocked_total = Family::<WafLabels, Counter>::default();
         registry.register(
-            "barbacane_waf_blocked_total",
+            "barbacane_waf_blocked",
             "Requests blocked by the web application firewall",
             waf_blocked_total.clone(),
         );
 
         let waf_allowed_total = Family::<WafInspectionLabels, Counter>::default();
         registry.register(
-            "barbacane_waf_allowed_total",
+            "barbacane_waf_allowed",
             "Requests inspected by the web application firewall and allowed",
             waf_allowed_total.clone(),
         );
@@ -292,21 +292,21 @@ impl MetricsRegistry {
 
         let waf_response_body_skipped_total = Family::<WafInspectionLabels, Counter>::default();
         registry.register(
-            "barbacane_waf_response_body_skipped_total",
+            "barbacane_waf_response_body_skipped",
             "Responses whose body was not inspected by phase-4 rules (streamed or over the size cap)",
             waf_response_body_skipped_total.clone(),
         );
 
         let waf_audit_total = Family::<WafInspectionLabels, Counter>::default();
         registry.register(
-            "barbacane_waf_audit_total",
+            "barbacane_waf_audit",
             "Per-transaction WAF audit records written",
             waf_audit_total.clone(),
         );
 
         let validation_failures_total = Family::<ValidationLabels, Counter>::default();
         registry.register(
-            "barbacane_validation_failures_total",
+            "barbacane_validation_failures",
             "Total number of request validation failures",
             validation_failures_total.clone(),
         );
@@ -324,7 +324,7 @@ impl MetricsRegistry {
 
         let middleware_short_circuits_total = Family::<MiddlewareLabels, Counter>::default();
         registry.register(
-            "barbacane_middleware_short_circuits_total",
+            "barbacane_middleware_short_circuits",
             "Total number of middleware short-circuits",
             middleware_short_circuits_total.clone(),
         );
@@ -342,7 +342,7 @@ impl MetricsRegistry {
 
         let dispatch_errors_total = Family::<DispatchLabels, Counter>::default();
         registry.register(
-            "barbacane_dispatch_errors_total",
+            "barbacane_dispatch_errors",
             "Total number of dispatch errors",
             dispatch_errors_total.clone(),
         );
@@ -360,7 +360,7 @@ impl MetricsRegistry {
 
         let wasm_traps_total = Family::<WasmLabels, Counter>::default();
         registry.register(
-            "barbacane_wasm_traps_total",
+            "barbacane_wasm_traps",
             "Total number of WASM plugin traps (panics/errors)",
             wasm_traps_total.clone(),
         );
@@ -368,7 +368,7 @@ impl MetricsRegistry {
         // Deprecation metrics
         let deprecated_route_requests_total = Family::<RouteLabels, Counter>::default();
         registry.register(
-            "barbacane_deprecated_route_requests_total",
+            "barbacane_deprecated_route_requests",
             "Total requests to deprecated routes",
             deprecated_route_requests_total.clone(),
         );
@@ -393,7 +393,7 @@ impl MetricsRegistry {
 
         let plugin_metrics_dropped_total = Family::<PluginMetricDropLabels, Counter>::default();
         registry.register(
-            "barbacane_plugin_metrics_dropped_total",
+            "barbacane_plugin_metrics_dropped",
             "Plugin metric writes rejected by cardinality/size/finite guards",
             plugin_metrics_dropped_total.clone(),
         );
@@ -842,5 +842,24 @@ mod tests {
         registry.plugin_histogram_observe("p", "h", "{}", f64::NAN);
         registry.plugin_histogram_observe("p", "h", "{}", f64::INFINITY);
         assert_eq!(dropped(&registry, "p", "non_finite"), 2);
+    }
+
+    #[test]
+    fn counter_names_expose_a_single_total_suffix() {
+        // The OpenMetrics encoder appends `_total` to every counter, so counters
+        // are registered without it. Guard against the double `_total_total`.
+        let registry = MetricsRegistry::new();
+        registry.record_waf_audit("GET", "/x");
+        registry.connection_opened();
+        let rendered = crate::prometheus::render_metrics(&registry);
+        assert!(
+            !rendered.contains("_total_total"),
+            "counter names must not double the _total suffix"
+        );
+        assert!(
+            rendered.contains("barbacane_waf_audit_total"),
+            "a counter should expose exactly one _total suffix"
+        );
+        assert!(rendered.contains("barbacane_connections_total"));
     }
 }

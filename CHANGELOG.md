@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **metrics**: counter names no longer carry a doubled `_total` suffix. Every counter was registered with an explicit `_total`, and the OpenMetrics encoder appends `_total` to counters, so they were exported as `barbacane_*_total_total` (for example `barbacane_requests_total_total`, `barbacane_waf_blocked_total_total`). They now export the correct single-suffix names (`barbacane_requests_total`, `barbacane_waf_blocked_total`, and so on).
+
+  > **Upgrade note (dashboards):** any Prometheus query, alert, or dashboard that referenced a `barbacane_*_total_total` series must be updated to the single-`_total` name. This affects all 13 gateway counters (`requests`, `connections`, `waf_matched`, `waf_blocked`, `waf_allowed`, `waf_response_body_skipped`, `waf_audit`, `validation_failures`, `middleware_short_circuits`, `dispatch_errors`, `wasm_traps`, `deprecated_route_requests`, `plugin_metrics_dropped`). Histograms and gauges are unaffected.
+
 ## [0.10.0] - 2026-09-12
 
 Headline: the WAF now inspects responses (CRS phases 3 to 5) and writes a per-transaction audit log, and request transformers can read cookies.
