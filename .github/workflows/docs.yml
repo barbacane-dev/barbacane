@@ -33,9 +33,9 @@ jobs:
           fetch-depth: 0
 
       - name: Setup mdBook
-        # Pinned to the post-v2.0.0 main commit that moved the action to the
-        # node24 runtime (peaceiris/actions-mdbook#539); v2.0.0 still ships node20.
-        uses: peaceiris/actions-mdbook@a6f333f62c4b46ed5190d00cab3b7f9a6996274c
+        # Pinned to v2.0.0. This is the newest release; it runs on the node20
+        # runtime, which GitHub currently forces onto node24 with a warning.
+        uses: peaceiris/actions-mdbook@ee69d230fe19748b7abf22df32acaa93833fad08
         with:
           mdbook-version: '0.5.4'
 
