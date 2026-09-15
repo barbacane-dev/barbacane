@@ -21,13 +21,14 @@
 
 ---
 
-Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it becomes your gateway — routing, validation, authentication, AI traffic, MCP, and all. No proprietary config language, no drift between your spec and your infrastructure.
+Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it enforces it: routing, request and response validation, authentication, rate limiting, a native WAF, and observability, all declared in the spec you already write. No proprietary config language, no drift between your spec and your infrastructure. The same middleware chain also routes LLM traffic and exposes your operations to agents as typed MCP tools.
 
 - **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. The compiler turns it into a sealed `.bca` artifact; no separate gateway DSL to maintain.
+- **A full API gateway** — Routing, schema-based request and response validation, authentication and authorization, rate limiting, caching, and request/response transformation, all driven by the operation definitions and `x-barbacane-*` extensions in your spec.
+- **Native WAF** — A built-in ModSecurity/CRS-compatible web application firewall inspects requests and responses inline, in scoring or blocking mode, with per-operation tuning and audit logging. Configured with one `x-barbacane-waf` block, no sidecar.
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
-- **AI gateway built-in** — `ai-proxy` unifies OpenAI / Anthropic / Ollama behind one OpenAI-compatible surface: Chat Completions, the stateless Responses API (`POST /v1/responses`), and an aggregated model catalog (`GET /v1/models`). Glob-based `routes` pick the upstream from the client's `model`, per-target `allow`/`deny` lists gate the catalog, and provider fallback handles 5xx/timeout. Four dedicated middlewares add prompt guarding, response redaction, token-based rate limiting, and per-call cost tracking ([ADR-0024](adr/0024-ai-gateway-plugin.md), [ADR-0030](adr/0030-ai-gateway-responses-api.md)).
-- **MCP from your spec** — Every operation in your OpenAPI spec is automatically exposed as a Model Context Protocol tool at `POST /__barbacane/mcp`, behind the same auth/rate-limit/validation chain ([ADR-0025](adr/0025-mcp-server.md)).
+- **AI and MCP on the same chain** — `ai-proxy` unifies OpenAI / Anthropic / Ollama behind one OpenAI-compatible surface (Chat Completions, the stateless Responses API, an aggregated `/v1/models`), with glob routing, per-target `allow`/`deny`, and provider fallback. When MCP is enabled (`x-barbacane-mcp`), your operations are exposed as Model Context Protocol tools at `POST /__barbacane/mcp`. Both run behind the same auth, rate-limit, and validation chain as your REST traffic ([ADR-0024](adr/0024-ai-gateway-plugin.md), [ADR-0025](adr/0025-mcp-server.md), [ADR-0030](adr/0030-ai-gateway-responses-api.md)).
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
 - **Extensible** — 33 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
 - **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export. Per-middleware timing comes for free.
@@ -57,57 +58,44 @@ barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 
 ### What configuration looks like
 
-Routing, auth, rate limits, AI policy — all declared inline on the operation:
+The WAF is declared once at the spec root; routing, auth, and rate limits are declared inline on each operation. Request and response bodies are validated against the schemas already in your spec.
 
 ```yaml
+# Native WAF for the whole API, tuned per operation as needed.
+x-barbacane-waf:
+  ruleset: ./waf-rules
+  paranoia_level: 1
+  mode: blocking
+  thresholds: { inbound: 5, outbound: 4 }
+
 paths:
-  /v1/chat/completions:
-    post:
-      operationId: chatCompletions
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            issuer: "https://auth.example/"
-            audience: ai-gateway
-        - name: ai-prompt-guard
+            issuer_url: "https://auth.example/"
+            audience: orders-api
+        - name: rate-limit
           config:
-            default_profile: standard
-            profiles:
-              standard:
-                max_messages: 50
-                blocked_patterns: ["(?i)ignore previous instructions"]
-        - name: ai-token-limit
-          config:
-            default_profile: standard
-            partition_key: "header:x-auth-sub"
-            profiles:
-              standard: { quota: 100000, window: 60 }
-        - name: ai-response-guard
-          config:
-            default_profile: default
-            profiles:
-              default:
-                redact:
-                  - pattern: '\b\d{3}-\d{2}-\d{4}\b'
-                    replacement: '[SSN]'
-        - name: ai-cost-tracker
-          config:
-            prices:
-              openai/gpt-4o:             { prompt: 0.0025, completion: 0.01 }
-              anthropic/claude-opus-4-6: { prompt: 0.015,  completion: 0.075 }
+            quota: 100
+            window: 60
       x-barbacane-dispatch:
-        name: ai-proxy
+        name: http-upstream
         config:
-          # Caller-owned model: the gateway never declares one — clients pick.
-          # Glob routes match the client's `model` field; first match wins.
-          routes:
-            - { pattern: "claude-*", provider: anthropic, api_key: "env://ANTHROPIC_API_KEY" }
-            - { pattern: "gpt-*",    provider: openai,    api_key: "env://OPENAI_API_KEY" }
-          fallback:
-            - { provider: anthropic, api_key: "env://ANTHROPIC_API_KEY" }
+          url: "https://orders.internal.example"
+          timeout: 5.0
 ```
 
 The compiler validates the spec against each plugin's JSON schema (`vacuum:barbacane`) and seals everything into a single `.bca` artifact — including pinned plugin WASM. The data plane runs the artifact; nothing is fetched at request time.
+
+AI traffic uses the same shape: replace the `http-upstream` dispatcher block with `ai-proxy` (configured with providers and routes) and add the AI middlewares (`ai-prompt-guard`, `ai-token-limit`, `ai-response-guard`, `ai-cost-tracker`). See the [AI Gateway guide](https://docs.barbacane.dev/guide/middlewares/ai-gateway.html).
 
 ## Documentation
 
@@ -122,6 +110,7 @@ Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane
   - [AI Gateway](https://docs.barbacane.dev/guide/middlewares/ai-gateway.html) — prompt guarding, token limits, cost tracking, response redaction
 - [MCP Server](https://docs.barbacane.dev/guide/mcp.html) — Expose your spec as a Model Context Protocol server
 - [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) · [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Manage specs, artifacts, and data planes
+- [WAF](https://docs.barbacane.dev/guide/waf.html) — Native ModSecurity/CRS-compatible web application firewall
 - [Secrets](https://docs.barbacane.dev/guide/secrets.html) · [Vacuum linting](https://docs.barbacane.dev/guide/vacuum.html) · [FIPS](https://docs.barbacane.dev/guide/fips.html)
 - [Extensions reference](https://docs.barbacane.dev/reference/extensions.html) · [CLI reference](https://docs.barbacane.dev/reference/cli.html) · [Artifact format](https://docs.barbacane.dev/reference/artifact.html)
 - [Plugin Development](https://docs.barbacane.dev/contributing/plugins.html) — Build custom WASM plugins
