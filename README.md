@@ -28,7 +28,7 @@ Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or 
 - **Native WAF** — A built-in ModSecurity/CRS-compatible web application firewall inspects requests and responses inline, in scoring or blocking mode, with per-operation tuning and audit logging. Configured with one `x-barbacane-waf` block, no sidecar.
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
-- **AI and MCP on the same chain** — `ai-proxy` unifies OpenAI / Anthropic / Ollama behind one OpenAI-compatible surface (Chat Completions, the stateless Responses API, an aggregated `/v1/models`), with glob routing, per-target `allow`/`deny`, and provider fallback. Every operation is also exposed as a Model Context Protocol tool at `POST /__barbacane/mcp`. Both run behind the same auth, rate-limit, and validation chain as your REST traffic ([ADR-0024](adr/0024-ai-gateway-plugin.md), [ADR-0025](adr/0025-mcp-server.md), [ADR-0030](adr/0030-ai-gateway-responses-api.md)).
+- **AI and MCP on the same chain** — `ai-proxy` unifies OpenAI / Anthropic / Ollama behind one OpenAI-compatible surface (Chat Completions, the stateless Responses API, an aggregated `/v1/models`), with glob routing, per-target `allow`/`deny`, and provider fallback. When MCP is enabled (`x-barbacane-mcp`), your operations are exposed as Model Context Protocol tools at `POST /__barbacane/mcp`. Both run behind the same auth, rate-limit, and validation chain as your REST traffic ([ADR-0024](adr/0024-ai-gateway-plugin.md), [ADR-0025](adr/0025-mcp-server.md), [ADR-0030](adr/0030-ai-gateway-responses-api.md)).
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
 - **Extensible** — 33 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
 - **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export. Per-middleware timing comes for free.
@@ -72,10 +72,15 @@ paths:
   /orders/{id}:
     get:
       operationId: getOrder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            issuer: "https://auth.example/"
+            issuer_url: "https://auth.example/"
             audience: orders-api
         - name: rate-limit
           config:
@@ -90,7 +95,7 @@ paths:
 
 The compiler validates the spec against each plugin's JSON schema (`vacuum:barbacane`) and seals everything into a single `.bca` artifact — including pinned plugin WASM. The data plane runs the artifact; nothing is fetched at request time.
 
-AI traffic uses the same shape: swap the dispatcher for `ai-proxy` and add the AI middlewares (`ai-prompt-guard`, `ai-token-limit`, `ai-response-guard`, `ai-cost-tracker`). See the [AI Gateway guide](https://docs.barbacane.dev/guide/middlewares/ai-gateway.html).
+AI traffic uses the same shape: replace the `http-upstream` dispatcher block with `ai-proxy` (configured with providers and routes) and add the AI middlewares (`ai-prompt-guard`, `ai-token-limit`, `ai-response-guard`, `ai-cost-tracker`). See the [AI Gateway guide](https://docs.barbacane.dev/guide/middlewares/ai-gateway.html).
 
 ## Documentation
 
