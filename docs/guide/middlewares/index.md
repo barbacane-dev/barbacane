@@ -115,7 +115,7 @@ All authentication middlewares set two standard headers on successful authentica
 | `x-auth-consumer` | Canonical consumer identifier | `"alice"`, `"user-123"` |
 | `x-auth-consumer-groups` | Comma-separated group/role memberships | `"admin,editor"`, `"read"` |
 
-These standard headers enable downstream middlewares (like [`acl`](authorization.md#acl)) to enforce authorization without coupling to a specific auth plugin.
+These standard headers enable downstream middlewares (like [`acl`](authorization.md#acl)) to enforce authorization without coupling to a specific auth plugin. The gateway drops every `x-auth-*` header a client sends before the middleware chain runs, so these headers can only originate from an auth plugin.
 
 | Plugin | `x-auth-consumer` source | `x-auth-consumer-groups` source |
 |--------|--------------------------|----------------------------------|

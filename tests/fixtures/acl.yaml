@@ -29,6 +29,9 @@ x-barbacane-middlewares:
           roles:
             - viewer
             - banned
+        # No roles: basic-auth sets no groups header for this user.
+        - username: guest
+          password: "guest123"
 
 paths:
   /admin-only:
@@ -52,6 +55,8 @@ paths:
               - username: banned_user
                 password: "banned123"
                 roles: [viewer, banned]
+              - username: guest
+                password: "guest123"
         - name: acl
           config:
             allow:
@@ -89,6 +94,8 @@ paths:
               - username: banned_user
                 password: "banned123"
                 roles: [viewer, banned]
+              - username: guest
+                password: "guest123"
         - name: acl
           config:
             allow:
@@ -127,6 +134,8 @@ paths:
               - username: banned_user
                 password: "banned123"
                 roles: [viewer, banned]
+              - username: guest
+                password: "guest123"
         - name: acl
           config:
             deny:

@@ -1648,8 +1648,13 @@ impl Gateway {
 
         // Build the Request object for plugins (using BTreeMap for WASM compatibility)
         let path_params: std::collections::BTreeMap<String, String> = params.into_iter().collect();
+        // `x-auth-*` headers are the identity contract written by auth plugins
+        // and read by acl and upstreams; a client-supplied value must never
+        // reach the chain, or a caller could forge groups an auth plugin
+        // leaves unset.
         let headers_btree: std::collections::BTreeMap<String, String> = headers
             .iter()
+            .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("x-auth-"))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         // Extract body separately — it travels via side-channel, not in JSON.
@@ -2924,8 +2929,13 @@ impl Gateway {
         trace_id: &str,
     ) -> Response<Full<Bytes>> {
         // Build a minimal request for the CORS middleware
+        // `x-auth-*` headers are the identity contract written by auth plugins
+        // and read by acl and upstreams; a client-supplied value must never
+        // reach the chain, or a caller could forge groups an auth plugin
+        // leaves unset.
         let headers_btree: std::collections::BTreeMap<String, String> = headers
             .iter()
+            .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("x-auth-"))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
