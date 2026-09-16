@@ -65,6 +65,34 @@ fn resolve_schema_refs(
     }
 }
 
+/// Resolve a parameter list entry that may be a `$ref` into the object it names.
+///
+/// A reference chain is followed to its end; `visited` detects a cycle. Returns
+/// `None` for an entry that is not an object.
+fn resolve_parameter_ref<'a>(
+    item: &'a Value,
+    root: &'a Value,
+    visited: &mut HashSet<String>,
+) -> Result<Option<&'a Value>, ParseError> {
+    let mut current = item;
+    loop {
+        let Some(obj) = current.as_object() else {
+            return Ok(None);
+        };
+        let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) else {
+            return Ok(Some(current));
+        };
+        if !visited.insert(ref_str.to_string()) {
+            return Err(ParseError::SchemaError(format!(
+                "circular $ref detected: {}",
+                ref_str
+            )));
+        }
+        current = resolve_ref(root, ref_str)
+            .ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
+    }
+}
+
 /// HTTP methods we recognize in OpenAPI paths.
 /// Includes `query` from OpenAPI 3.2 (RFC 9110 extension).
 const HTTP_METHODS: &[&str] = &[
@@ -373,7 +401,13 @@ fn parse_parameters(
 
     let mut params = Vec::with_capacity(arr.len());
     for item in arr {
-        let Some(param_obj) = item.as_object() else {
+        // An entry may be a `$ref` to `#/components/parameters/...`, which carries
+        // `in` and `name` on the target rather than on the entry itself.
+        let mut visited = HashSet::new();
+        let Some(resolved) = resolve_parameter_ref(item, spec_root, &mut visited)? else {
+            continue;
+        };
+        let Some(param_obj) = resolved.as_object() else {
             continue;
         };
         let Some(location) = param_obj.get("in").and_then(|v| v.as_str()) else {
@@ -1639,6 +1673,138 @@ paths:
         assert!(schema.get("$ref").is_none());
         assert_eq!(schema.get("type").unwrap(), "integer");
         assert_eq!(schema.get("format").unwrap(), "int64");
+    }
+
+    #[test]
+    fn resolve_ref_to_components_parameters() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-Id
+      in: header
+      required: true
+      schema:
+        type: string
+    TraceCookie:
+      name: trace
+      in: cookie
+      schema:
+        type: string
+paths:
+  /orders:
+    parameters:
+      - $ref: "#/components/parameters/TraceCookie"
+    get:
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let params = &spec.operations[0].parameters;
+        assert_eq!(params.len(), 3, "path-item and operation refs both resolve");
+
+        let cookie = params.iter().find(|p| p.name == "trace").expect("cookie");
+        assert_eq!(cookie.location, "cookie");
+
+        let tenant = params
+            .iter()
+            .find(|p| p.name == "X-Tenant-Id")
+            .expect("header parameter resolved from components");
+        assert_eq!(tenant.location, "header");
+        assert!(tenant.required);
+        assert_eq!(
+            tenant.schema.as_ref().unwrap().get("type").unwrap(),
+            "string"
+        );
+    }
+
+    #[test]
+    fn resolve_chained_ref_to_components_parameters() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  parameters:
+    Canonical:
+      name: X-Tenant-Id
+      in: header
+      schema:
+        type: string
+    Alias:
+      $ref: "#/components/parameters/Canonical"
+paths:
+  /orders:
+    get:
+      parameters:
+        - $ref: "#/components/parameters/Alias"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let params = &spec.operations[0].parameters;
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "X-Tenant-Id");
+        assert_eq!(params[0].location, "header");
+    }
+
+    #[test]
+    fn unresolvable_parameter_ref_is_an_error() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /orders:
+    get:
+      parameters:
+        - $ref: "#/components/parameters/Missing"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let err = parse_spec(yaml).expect_err("a dangling parameter ref must not be ignored");
+        assert!(
+            matches!(err, ParseError::UnresolvedRef(ref r) if r.contains("Missing")),
+            "expected UnresolvedRef, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn circular_parameter_ref_is_an_error() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  parameters:
+    Loop:
+      $ref: "#/components/parameters/Loop"
+paths:
+  /orders:
+    get:
+      parameters:
+        - $ref: "#/components/parameters/Loop"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let err = parse_spec(yaml).expect_err("a circular parameter ref must not hang");
+        assert!(
+            matches!(err, ParseError::SchemaError(ref m) if m.contains("circular")),
+            "expected a circular-ref error, got: {err:?}"
+        );
     }
 
     #[test]

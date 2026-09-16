@@ -84,7 +84,8 @@ pub struct ResponseContent {
 pub struct Parameter {
     /// Parameter name.
     pub name: String,
-    /// Location: "path", "query", "header".
+    /// Location: the raw OpenAPI `in` value, one of "path", "query", "header",
+    /// "cookie", or "querystring" (OpenAPI 3.2).
     pub location: String,
     /// Whether this parameter is required.
     pub required: bool,
