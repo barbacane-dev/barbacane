@@ -528,6 +528,26 @@ enum Commands {
         /// Debounce delay in milliseconds before recompiling after a file change.
         #[arg(long, default_value = "300")]
         debounce_ms: u64,
+
+        /// Log format (json or pretty).
+        #[arg(long, default_value = "pretty")]
+        log_format: String,
+
+        /// Maximum request body size in bytes (default: 1048576 = 1MB).
+        #[arg(long, default_value = "1048576")]
+        max_body_size: usize,
+
+        /// Maximum number of request headers (default: 100).
+        #[arg(long, default_value = "100")]
+        max_headers: usize,
+
+        /// Maximum size of a single header in bytes (default: 8192 = 8KB).
+        #[arg(long, default_value = "8192")]
+        max_header_size: usize,
+
+        /// Maximum URI length in bytes (default: 8192 = 8KB).
+        #[arg(long, default_value = "8192")]
+        max_uri_length: usize,
     },
 
     /// Run the gateway server.
@@ -574,7 +594,7 @@ enum Commands {
         #[arg(long, default_value = "8192")]
         max_header_size: usize,
 
-        /// Maximum URI length in characters (default: 8192 = 8KB).
+        /// Maximum URI length in bytes (default: 8192 = 8KB).
         #[arg(long, default_value = "8192")]
         max_uri_length: usize,
 
@@ -4123,6 +4143,7 @@ fn run_compile(
 }
 
 /// Run the dev server: compile, serve, watch, and hot-reload on changes.
+#[allow(clippy::too_many_arguments)]
 async fn run_dev(
     manifest_file: &str,
     spec_overrides: &[String],
@@ -4130,6 +4151,7 @@ async fn run_dev(
     metrics: Arc<MetricsRegistry>,
     admin_bind: &str,
     debounce_ms: u64,
+    limits: RequestLimits,
 ) -> ExitCode {
     use barbacane_lib::dev::DevWatcher;
 
@@ -4216,7 +4238,6 @@ async fn run_dev(
     let compile_ms = compile_start.elapsed().as_millis();
 
     // Load gateway.
-    let limits = RequestLimits::default();
     let gateway: SharedGateway =
         match Gateway::load(&temp_path, true, limits.clone(), true, metrics.clone()) {
             Ok(g) => {
@@ -5204,8 +5225,14 @@ async fn main() -> ExitCode {
             log_level,
             admin_bind,
             debounce_ms,
+            log_format,
+            max_body_size,
+            max_headers,
+            max_header_size,
+            max_uri_length,
         } => {
-            let log_fmt = barbacane_telemetry::LogFormat::Pretty;
+            let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
+                .unwrap_or(barbacane_telemetry::LogFormat::Pretty);
             let telemetry_config = barbacane_telemetry::TelemetryConfig::new()
                 .with_log_level(&log_level)
                 .with_log_format(log_fmt);
@@ -5218,6 +5245,13 @@ async fn main() -> ExitCode {
                 }
             };
 
+            let limits = RequestLimits {
+                max_body_size,
+                max_headers,
+                max_header_size,
+                max_uri_length,
+            };
+
             run_dev(
                 &manifest,
                 &spec,
@@ -5225,6 +5259,7 @@ async fn main() -> ExitCode {
                 telemetry.metrics_clone(),
                 &admin_bind,
                 debounce_ms,
+                limits,
             )
             .await
         }
