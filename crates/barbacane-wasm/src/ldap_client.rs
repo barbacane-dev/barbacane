@@ -214,9 +214,14 @@ impl LdapClient {
         // handle is evicted so it is replaced below.
         {
             let mut conns = self.connections.lock();
-            match conns.get(key) {
-                Some(ldap) if !ldap.is_closed() => return Ok(ldap.clone()),
-                Some(_) => {
+            // `is_closed` needs `&mut Ldap`; take the answer and a clone in one
+            // step so no borrow of the map outlives this expression.
+            let cached = conns
+                .get_mut(key)
+                .map(|ldap| (ldap.is_closed(), ldap.clone()));
+            match cached {
+                Some((false, ldap)) => return Ok(ldap),
+                Some((true, _)) => {
                     conns.remove(key);
                 }
                 None => {}
