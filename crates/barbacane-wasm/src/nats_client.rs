@@ -131,18 +131,12 @@ impl NatsPublisher {
             }
         };
 
-        // A plaintext connection goes to the vetted addresses. A `tls://` server
-        // keeps the URL: async_nats derives the TLS server name from the address
-        // it is given, and rustls sends no SNI for an IP literal, which breaks a
-        // broker that selects its certificate by SNI. Pinning a `tls://` server
-        // needs an async_nats API that takes the dial address and the TLS server
-        // name separately.
-        let servers = if is_tls_url(url) {
+        let servers = if address_may_be_pinned(url)? {
+            pinned_server_addrs(&addrs)?
+        } else {
             vec![url
                 .parse::<async_nats::ServerAddr>()
                 .map_err(|e| BrokerError::ConnectionFailed(format!("invalid NATS URL: {e}")))?]
-        } else {
-            pinned_server_addrs(&addrs)?
         };
         // Servers advertised in INFO.connect_urls never pass the SSRF guard, so
         // they are refused and the pool keeps only the servers configured here.
@@ -169,9 +163,31 @@ impl NatsPublisher {
     }
 }
 
-/// `true` for a `tls://` server URL.
-fn is_tls_url(url: &str) -> bool {
-    url.trim_start().starts_with("tls://")
+/// Whether a vetted address may stand in for the URL.
+///
+/// Only plain NATS over TCP may: a vetted address is rendered as `nats://ip:port`,
+/// which carries neither the TLS server name a `tls://` or `wss://` handshake
+/// needs for SNI nor the path a websocket URL carries. Schemes are compared
+/// case-insensitively, so `TLS://` cannot fall through to the plaintext branch
+/// and downgrade the connection. A scheme `async_nats` does not accept is an
+/// error rather than a silent plaintext connection.
+fn address_may_be_pinned(url: &str) -> Result<bool, BrokerError> {
+    let Some((scheme, _)) = url.trim_start().split_once("://") else {
+        // A bare `host:port` is plain NATS over TCP.
+        return Ok(true);
+    };
+    if scheme.eq_ignore_ascii_case("nats") {
+        Ok(true)
+    } else if ["tls", "ws", "wss"]
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s))
+    {
+        Ok(false)
+    } else {
+        Err(BrokerError::ConnectionFailed(format!(
+            "unsupported NATS URL scheme '{scheme}'"
+        )))
+    }
 }
 
 /// Plaintext server list, one entry per vetted address. The hostname is left
@@ -225,6 +241,50 @@ mod tests {
         let addr: async_nats::ServerAddr = "tls://broker.example.com:4222".parse().expect("addr");
         assert!(addr.tls_required());
         assert_eq!(addr.host(), "broker.example.com");
+    }
+
+    /// Only plain NATS over TCP is replaced by a vetted address. A scheme
+    /// carrying TLS or a websocket path keeps its URL, whatever its case, so a
+    /// TLS server can never fall through to the plaintext branch.
+    #[test]
+    fn only_plain_nats_is_pinned_and_scheme_case_does_not_downgrade() {
+        for url in [
+            "nats://broker.example.com:4222",
+            "NATS://broker.example.com:4222",
+            "broker.example.com:4222",
+        ] {
+            assert!(
+                address_may_be_pinned(url).expect("supported scheme"),
+                "{url} is plain NATS and may be pinned"
+            );
+        }
+
+        for url in [
+            "tls://broker.example.com:4222",
+            "TLS://broker.example.com:4222",
+            "Tls://broker.example.com:4222",
+            "ws://broker.example.com:8080/nats",
+            "wss://broker.example.com:443/nats",
+            "WSS://broker.example.com:443/nats",
+        ] {
+            assert!(
+                !address_may_be_pinned(url).expect("supported scheme"),
+                "{url} must keep its URL rather than become a plaintext address"
+            );
+        }
+    }
+
+    /// A scheme async_nats does not accept fails instead of quietly becoming a
+    /// plaintext NATS connection, so a typo cannot downgrade the transport.
+    #[test]
+    fn unsupported_scheme_is_refused() {
+        for url in ["tsl://broker.example.com:4222", "http://broker.example.com"] {
+            let err = address_may_be_pinned(url).expect_err("unsupported scheme must fail");
+            assert!(
+                matches!(err, BrokerError::ConnectionFailed(ref m) if m.contains("unsupported")),
+                "{url}: {err}"
+            );
+        }
     }
 
     #[test]
