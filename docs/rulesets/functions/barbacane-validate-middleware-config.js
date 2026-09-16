@@ -187,6 +187,7 @@ const schemas = {
       bind_dn: { type: "string" },
       bind_password: { type: "string", writeOnly: true },
       starttls: { type: "boolean" },
+      allow_plaintext: { type: "boolean" },
       user_base_dn: { type: "string" },
       user_filter: { type: "string" },
       user_attr: { type: "string" },

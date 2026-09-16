@@ -23,6 +23,8 @@ x-barbacane-middlewares:
       realm: "test-api"
       timeout: 3
       cache_ttl_seconds: 0
+      # glauth's default listener is plaintext LDAP.
+      allow_plaintext: true
 
 paths:
   /protected:
@@ -64,6 +66,7 @@ paths:
             realm: "test-api"
             timeout: 3
             cache_ttl_seconds: 0
+            allow_plaintext: true
         - name: acl
           config:
             allow:
