@@ -259,7 +259,7 @@ Returns `401 Unauthorized` with `WWW-Authenticate: Basic realm="<realm>"` and Pr
 
 ## ldap-auth
 
-Authenticates `Authorization: Basic` credentials (RFC 7617) against an LDAP or Active Directory server. The user entry is located with a search as a service account, the password is verified with a bind as that entry, and groups come from the entry's membership attribute (`memberOf` by default) or from a group search. Verified and rejected credentials are cached for `cache_ttl_seconds`, so a burst of requests or a credential-stuffing run does not turn into directory load.
+Authenticates `Authorization: Basic` credentials (RFC 7617) against an LDAP or Active Directory server. The user entry is located with a search as a service account, the password is verified with a bind as that entry, and groups come from the entry's membership attribute (`memberOf` by default) or from a group search. Verified and rejected credentials are cached for `cache_ttl_seconds`, so repeated requests with the same credentials do not reach the directory again until the entry expires. Attempts with different passwords each reach the directory; put `rate-limit` in front of `ldap-auth` to bound them.
 
 ```yaml
 x-barbacane-middlewares:

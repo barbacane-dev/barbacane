@@ -55,7 +55,7 @@ A middleware plugin declaring `host_functions = ["ldap", "log", "clock_now"]`:
 3. Binds as the resolved DN with the submitted password on a fresh connection.
 4. Resolves groups from a configured attribute on the user entry (`memberOf` by default) or from a group search, and reduces group DNs to their RDN value unless configured otherwise.
 5. On success sets `x-auth-consumer`, `x-auth-consumer-groups`, `x-auth-user` and `x-auth-dn`, and strips `Authorization` unless configured otherwise. On failure returns an RFC 9457 problem with status 401 and a `WWW-Authenticate: Basic realm=...` challenge; an unknown user and a wrong password produce the same response.
-6. Caches successful and failed results for a configurable TTL, so a credential-stuffing run does not become a load generator against the directory.
+6. Caches successful and failed results for a configurable TTL, keyed by username and a hash of the password, so repeated identical attempts do not reach the directory again. Attempts with varying passwords do; bounding them is the job of `rate-limit` in front of the plugin.
 
 Configuration follows the conventions of the existing auth plugins: `realm` and `strip_credentials` from `basic-auth`; `timeout` in seconds and `*_seconds` TTLs from `oidc-auth`; the service-account password is the single `writeOnly` field and is expected as an `env://` or `file://` reference.
 

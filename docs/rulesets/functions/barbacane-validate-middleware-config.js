@@ -192,6 +192,7 @@ const schemas = {
       user_filter: { type: "string" },
       user_attr: { type: "string" },
       group_attr: { type: "string" },
+      group_name_attr: { type: "string" },
       group_base_dn: { type: "string" },
       group_filter: { type: "string" },
       group_name_from_dn: { type: "boolean" },

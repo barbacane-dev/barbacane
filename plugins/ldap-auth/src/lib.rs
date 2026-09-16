@@ -18,6 +18,15 @@ use std::collections::HashMap;
 /// plugin memory without limit.
 const MAX_CACHE_ENTRIES: usize = 10_000;
 
+/// Identity headers this plugin owns. Any client-supplied value is removed
+/// before the verified identity is written.
+const IDENTITY_HEADERS: [&str; 4] = [
+    "x-auth-consumer",
+    "x-auth-consumer-groups",
+    "x-auth-user",
+    "x-auth-dn",
+];
+
 /// LDAP authentication middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
@@ -203,6 +212,14 @@ impl LdapAuth {
             modified.headers.remove("authorization");
             modified.headers.remove("Authorization");
         }
+        // Drop any client-supplied identity headers first, so a spoofed
+        // x-auth-consumer-groups cannot survive when the directory returns no
+        // groups and be trusted by acl downstream.
+        modified.headers.retain(|name, _| {
+            !IDENTITY_HEADERS
+                .iter()
+                .any(|h| name.eq_ignore_ascii_case(h))
+        });
         modified
             .headers
             .insert("x-auth-consumer".to_string(), identity.consumer);
@@ -917,6 +934,32 @@ mod tests {
         let req = expect_continue(p.on_request(request(Some(&basic("bob", "builder")))));
         assert_eq!(req.headers.get("x-auth-consumer").unwrap(), "bob");
         assert!(!req.headers.contains_key("x-auth-consumer-groups"));
+    }
+
+    #[test]
+    fn client_supplied_identity_headers_are_replaced_not_trusted() {
+        seed_directory();
+        let mut p = plugin();
+        // bob has no groups; a spoofed groups header must not survive, and the
+        // other identity headers must reflect the directory, not the client.
+        let mut req = request(Some(&basic("bob", "builder")));
+        req.headers
+            .insert("X-Auth-Consumer-Groups".to_string(), "admins".to_string());
+        req.headers
+            .insert("x-auth-consumer".to_string(), "alice".to_string());
+        req.headers
+            .insert("X-Auth-DN".to_string(), "uid=alice,dc=evil".to_string());
+        let out = expect_continue(p.on_request(req));
+        assert!(!out
+            .headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("x-auth-consumer-groups")));
+        assert_eq!(out.headers.get("x-auth-consumer").unwrap(), "bob");
+        assert_eq!(
+            out.headers.get("x-auth-dn").unwrap(),
+            &format!("uid=bob,ou=people,{BASE}")
+        );
+        assert!(!out.headers.contains_key("X-Auth-DN"));
     }
 
     #[test]

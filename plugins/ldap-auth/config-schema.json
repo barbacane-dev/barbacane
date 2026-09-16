@@ -47,8 +47,13 @@
     },
     "group_attr": {
       "type": "string",
-      "description": "Attribute holding group membership: on the user entry when group_base_dn is unset (e.g. memberOf), or the group-name attribute of each group entry when a group search is configured.",
+      "description": "Attribute of the user entry holding group DNs (e.g. memberOf). Used when group_base_dn is unset.",
       "default": "memberOf"
+    },
+    "group_name_attr": {
+      "type": "string",
+      "description": "Attribute naming each group entry in group-search mode. Falls back to the first RDN of the group DN when the entry lacks it.",
+      "default": "cn"
     },
     "group_base_dn": {
       "type": "string",
