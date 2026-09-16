@@ -158,6 +158,12 @@ pub struct PluginState {
     /// Result buffer for host_kafka_publish / host_nats_publish.
     pub last_broker_result: Option<Vec<u8>>,
 
+    /// LDAP client for host_ldap_bind / host_ldap_search (shared).
+    pub ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
+
+    /// Result buffer for host_ldap_read_result.
+    pub last_ldap_result: Option<Vec<u8>>,
+
     /// Result buffer for host_uuid_read_result.
     pub last_uuid_result: Option<Vec<u8>>,
 
@@ -220,6 +226,8 @@ impl PluginState {
             kafka_publisher: None,
             nats_publisher: None,
             last_broker_result: None,
+            ldap_client: None,
+            last_ldap_result: None,
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
@@ -254,6 +262,8 @@ impl PluginState {
             kafka_publisher: None,
             nats_publisher: None,
             last_broker_result: None,
+            ldap_client: None,
+            last_ldap_result: None,
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
@@ -289,6 +299,8 @@ impl PluginState {
             kafka_publisher: None,
             nats_publisher: None,
             last_broker_result: None,
+            ldap_client: None,
+            last_ldap_result: None,
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
@@ -310,6 +322,7 @@ impl PluginState {
         response_cache: Option<crate::cache::ResponseCache>,
         nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
         kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
+        ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
     ) -> Self {
         Self {
             plugin_name,
@@ -329,6 +342,8 @@ impl PluginState {
             kafka_publisher,
             nats_publisher,
             last_broker_result: None,
+            ldap_client,
+            last_ldap_result: None,
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
@@ -350,6 +365,7 @@ impl PluginState {
         response_cache: Option<crate::cache::ResponseCache>,
         nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
         kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
+        ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
         metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
     ) -> Self {
         Self {
@@ -370,6 +386,8 @@ impl PluginState {
             kafka_publisher,
             nats_publisher,
             last_broker_result: None,
+            ldap_client,
+            last_ldap_result: None,
             last_uuid_result: None,
             stream_sender: None,
             ws_upgrade_request: None,
@@ -491,6 +509,7 @@ impl PluginInstance {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -506,6 +525,7 @@ impl PluginInstance {
         response_cache: Option<crate::cache::ResponseCache>,
         nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
         kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
+        ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
     ) -> Result<Self, WasmError> {
         let state = PluginState::with_all_options(
             module.name.clone(),
@@ -516,6 +536,7 @@ impl PluginInstance {
             response_cache,
             nats_publisher,
             kafka_publisher,
+            ldap_client,
         );
         let mut store = Store::new(engine, state);
 
@@ -823,6 +844,95 @@ fn add_read_result_fn(
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add {}: {}", name, e)))?;
     Ok(())
+}
+
+/// Run an LDAP host call: parse the request from plugin memory, execute it on
+/// the client's own runtime from outside the tokio context, refresh the epoch
+/// deadline, and stash the JSON result for `host_ldap_read_result`.
+///
+/// Returns the result length, or -1 on an ABI error (bad pointer, unparseable
+/// request, no client configured).
+fn ldap_host_call<R>(
+    mut caller: Caller<'_, PluginState>,
+    req_ptr: i32,
+    req_len: i32,
+    op_name: &str,
+    op: impl FnOnce(
+            &crate::ldap_client::LdapClient,
+            &R,
+        ) -> Result<crate::ldap::LdapResult, crate::ldap::LdapError>
+        + Send,
+) -> i32
+where
+    R: serde::de::DeserializeOwned + Send + Sync,
+{
+    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+        Some(m) => m,
+        None => return -1,
+    };
+
+    let start = req_ptr as usize;
+    let end = start.saturating_add(req_len as usize);
+    let data = memory.data(&caller);
+
+    if end > data.len() {
+        return -1;
+    }
+
+    let request: R = match serde_json::from_slice(&data[start..end]) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("failed to parse {op_name} request: {e}");
+            return -1;
+        }
+    };
+
+    let client = match caller.data().ldap_client.clone() {
+        Some(c) => c,
+        None => {
+            tracing::error!("LDAP client not available");
+            return -1;
+        }
+    };
+
+    // Use thread::scope to escape the main tokio runtime context, then run the
+    // operation on the client's own runtime.
+    let result = std::thread::scope(|s| {
+        let handle = s.spawn(|| op(&client, &request));
+
+        match handle.join() {
+            Ok(result) => Some(result),
+            Err(e) => {
+                tracing::error!("{op_name} thread panicked: {e:?}");
+                None
+            }
+        }
+    });
+
+    // Refresh the execution deadline after blocking directory I/O — see the
+    // host_kafka_publish handler for the rationale.
+    let deadline = caller.data().max_execution_ms.max(1);
+    caller.as_context_mut().set_epoch_deadline(deadline);
+
+    let result_json = match result {
+        Some(Ok(r)) => serde_json::to_vec(&r),
+        Some(Err(e)) => serde_json::to_vec(&crate::ldap::LdapResult::failure(&e)),
+        None => serde_json::to_vec(&crate::ldap::LdapResult::failure(
+            &crate::ldap::LdapError::ConnectionFailed(format!("{op_name} failed")),
+        )),
+    };
+
+    match result_json {
+        Ok(json) => {
+            let len = json.len() as i32;
+            caller.data_mut().last_ldap_result = Some(json);
+            len
+        }
+        Err(e) => {
+            tracing::error!("failed to serialize {op_name} result: {e}");
+            -1
+        }
+    }
 }
 
 /// Add host functions to the linker.
@@ -2210,6 +2320,47 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         state.last_broker_result.take()
     })?;
 
+    // === LDAP Host Functions ===
+
+    // host_ldap_bind - verify credentials with a simple bind on a fresh connection
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_ldap_bind",
+            |caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
+                ldap_host_call::<crate::ldap::LdapBindRequest>(
+                    caller,
+                    req_ptr,
+                    req_len,
+                    "LDAP bind",
+                    |client, req| client.bind_blocking(req),
+                )
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_ldap_bind: {}", e)))?;
+
+    // host_ldap_search - search on a cached service-account connection
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_ldap_search",
+            |caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
+                ldap_host_call::<crate::ldap::LdapSearchRequest>(
+                    caller,
+                    req_ptr,
+                    req_len,
+                    "LDAP search",
+                    |client, req| client.search_blocking(req),
+                )
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_ldap_search: {}", e)))?;
+
+    // host_ldap_read_result - read the bind/search result into plugin memory
+    add_read_result_fn(linker, "host_ldap_read_result", |state| {
+        state.last_ldap_result.take()
+    })?;
+
     // ── Minimal WASI stubs ──────────────────────────────────────────────
     // Some plugins (e.g. cel) compile with wasm32-wasip1 and import WASI
     // functions even though Barbacane provides its own host ABI. We add
@@ -2547,8 +2698,10 @@ mod tests {
             None,
             Some(nats),
             Some(kafka),
+            None,
         );
         assert!(state.nats_publisher.is_some());
         assert!(state.kafka_publisher.is_some());
+        assert!(state.ldap_client.is_none());
     }
 }

@@ -302,6 +302,25 @@ Secrets are resolved at gateway startup from `env://` / `file://` references, so
 `get_secret` returns the resolved value (never a plaintext literal baked into the
 artifact).
 
+### LDAP (host imports)
+
+```toml
+[capabilities]
+host_functions = ["ldap"]
+```
+
+`host_ldap_bind(req_ptr, req_len) -> i32` verifies a DN and password with a
+simple bind on a fresh connection; `host_ldap_search(req_ptr, req_len) -> i32`
+runs a search on a pooled connection bound as the service account named in the
+request. Both take a JSON request carrying `url`, `bind_dn`, `password`,
+`starttls` and `timeout_ms` (search adds `base_dn`, `scope`, `filter`,
+`attributes`, `size_limit`), return the result length, and the plugin reads the
+JSON result with `host_ldap_read_result(buf_ptr, buf_len)`. The result's `code`
+field (`invalid_credentials`, `connection_failed`, `timeout`, ...) tells a
+rejected credential apart from a directory failure. Escape any user-supplied
+value per RFC 4515 before placing it in a filter. See
+[ADR-0032](../../adr/0032-native-ldap-host-functions.md) for the design.
+
 ## Using Plugins in Specs
 
 ### Declare in barbacane.yaml

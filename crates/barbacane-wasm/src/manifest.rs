@@ -150,6 +150,7 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "http_call",
     "kafka_publish",
     "nats_publish",
+    "ldap",
     "telemetry",
     "generate_uuid",
     "verify_signature",
@@ -184,6 +185,11 @@ pub fn capability_to_imports(capability: &str) -> &'static [&'static str] {
         // Broker dispatchers read async results via the shared broker channel.
         "kafka_publish" => &["host_kafka_publish", "host_broker_read_result"],
         "nats_publish" => &["host_nats_publish", "host_broker_read_result"],
+        "ldap" => &[
+            "host_ldap_bind",
+            "host_ldap_search",
+            "host_ldap_read_result",
+        ],
         "cache" => &["host_cache_get", "host_cache_set", "host_cache_read_result"],
         "rate_limit" => &["host_rate_limit_check", "host_rate_limit_read_result"],
         "telemetry" => &[

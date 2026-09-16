@@ -216,6 +216,14 @@ mod tests {
     }
 
     #[test]
+    fn capability_to_imports_ldap() {
+        let imports = capability_to_imports("ldap");
+        assert!(imports.contains(&"host_ldap_bind"));
+        assert!(imports.contains(&"host_ldap_search"));
+        assert!(imports.contains(&"host_ldap_read_result"));
+    }
+
+    #[test]
     fn unknown_capability_returns_empty() {
         let imports = capability_to_imports("unknown");
         assert!(imports.is_empty());
@@ -240,6 +248,14 @@ mod tests {
         let declared = vec!["log".to_string()];
         let err = validate_imports(&module, &declared).unwrap_err();
         assert!(matches!(err, WasmError::UndeclaredImport(name) if name == "host_http_call"));
+    }
+
+    #[test]
+    fn validate_imports_gates_ldap_behind_its_capability() {
+        let module = module_with_import("host_ldap_search");
+        let err = validate_imports(&module, &["log".to_string()]).unwrap_err();
+        assert!(matches!(err, WasmError::UndeclaredImport(name) if name == "host_ldap_search"));
+        assert!(validate_imports(&module, &["ldap".to_string()]).is_ok());
     }
 
     #[test]

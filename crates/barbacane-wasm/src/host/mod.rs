@@ -203,6 +203,49 @@ pub mod nats {
     pub const READ_RESULT_FUNCTION: &str = "host_broker_read_result";
 }
 
+/// Host functions for LDAP directory access.
+///
+/// ```text
+/// host_ldap_bind(req_ptr: i32, req_len: i32) -> i32
+/// host_ldap_search(req_ptr: i32, req_len: i32) -> i32
+/// host_ldap_read_result(buf_ptr: i32, buf_len: i32) -> i32
+/// ```
+///
+/// Both requests share the connection fields:
+/// ```json
+/// {
+///   "url": "ldaps://ldap.example:636",
+///   "bind_dn": "cn=svc,dc=example,dc=org",
+///   "password": "…",
+///   "starttls": false,
+///   "timeout_ms": 5000
+/// }
+/// ```
+///
+/// `host_ldap_bind` verifies `bind_dn`/`password` on a fresh connection.
+/// `host_ldap_search` adds `base_dn`, `scope` (`base` | `one` | `sub`),
+/// `filter`, `attributes` and `size_limit`, and runs on a cached connection
+/// bound as `bind_dn`. Filter values taken from user input must be escaped
+/// (RFC 4515) before they reach the host.
+///
+/// Returns the length of the result JSON, or -1 on error.
+/// Result format: `{ success: bool, error?: string, code?: string, entries?: [{ dn, attrs }] }`
+/// where `code` is one of `connection_failed`, `invalid_credentials`,
+/// `bind_failed`, `search_failed`, `invalid_request`, `timeout`, `blocked`.
+pub mod ldap {
+    /// The capability name.
+    pub const CAPABILITY: &str = "ldap";
+
+    /// The bind function name.
+    pub const BIND_FUNCTION: &str = "host_ldap_bind";
+
+    /// The search function name.
+    pub const SEARCH_FUNCTION: &str = "host_ldap_search";
+
+    /// The read result function name.
+    pub const READ_RESULT_FUNCTION: &str = "host_ldap_read_result";
+}
+
 /// Host functions for telemetry.
 ///
 /// ```text

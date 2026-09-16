@@ -253,6 +253,22 @@ Metrics are auto-prefixed: `barbacane_plugin_<plugin_name>_<metric_name>`. Label
 
 **Capability name:** `telemetry`
 
+### 4.9 LDAP
+
+```
+host_ldap_bind(req_ptr: i32, req_len: i32) -> i32
+host_ldap_search(req_ptr: i32, req_len: i32) -> i32
+host_ldap_read_result(buf_ptr: i32, buf_len: i32) -> i32
+```
+
+Both requests are JSON and carry the connection: `url` (`ldap://` or `ldaps://`), `bind_dn`, `password`, `starttls`, `timeout_ms`. `host_ldap_bind` verifies `bind_dn`/`password` with a simple bind on a fresh connection. `host_ldap_search` adds `base_dn`, `scope` (`base`, `one`, `sub`), `filter`, `attributes`, `size_limit` and runs on a pooled connection bound as `bind_dn`. Each returns the length of the JSON result, read with `host_ldap_read_result`, or -1 on an ABI error.
+
+Result: `{ "success": bool, "error"?: string, "code"?: string, "entries"?: [{ "dn": string, "attrs": { name: [values] } }] }`. `code` is one of `connection_failed`, `invalid_credentials`, `bind_failed`, `search_failed`, `invalid_request`, `timeout`, `blocked`.
+
+Directory egress is subject to the plugin SSRF guard (SPEC-004). Filter values derived from user input must be escaped per RFC 4515 before the call.
+
+**Capability name:** `ldap`
+
 ---
 
 ## 5. Data Formats

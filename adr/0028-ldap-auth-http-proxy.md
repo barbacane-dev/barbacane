@@ -1,6 +1,6 @@
 # ADR-0028: LDAP Auth via HTTP Proxy Instead of Native Host Functions
 
-**Status:** Rejected
+**Status:** Superseded by [ADR-0032](0032-native-ldap-host-functions.md). The rejection of the HTTP-bridge option stands; the "do not implement" decision and the `ldap3` dependency claims below do not hold for `ldap3` 0.12 (the Kerberos FFI is behind an optional feature and TLS is feature-selected).
 **Date:** 2026-03-10
 
 ## Context

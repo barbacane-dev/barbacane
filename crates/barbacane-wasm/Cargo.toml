@@ -47,6 +47,8 @@ tokio-tungstenite.workspace = true
 
 # NATS client (for host_nats_publish)
 async-nats.workspace = true
+# LDAP client (for host_ldap_bind / host_ldap_search)
+ldap3.workspace = true
 bytes.workspace = true
 
 # Kafka client (for host_kafka_publish)

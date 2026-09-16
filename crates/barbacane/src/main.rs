@@ -924,7 +924,12 @@ impl Gateway {
         let kafka_publisher = barbacane_wasm::KafkaPublisher::new(allow_internal_egress)
             .map_err(|e| format!("failed to create Kafka publisher: {}", e))?;
 
-        // Create pool with all options: HTTP client, secrets, rate limiter, cache, NATS, and Kafka
+        // Create LDAP client for host_ldap_bind / host_ldap_search calls; directory
+        // egress honors the same internal-egress policy as plugin HTTP calls.
+        let ldap_client = barbacane_wasm::LdapClient::new(allow_internal_egress)
+            .map_err(|e| format!("failed to create LDAP client: {}", e))?;
+
+        // Create pool with all options: HTTP client, secrets, rate limiter, cache, NATS, Kafka, and LDAP
         let plugin_pool = InstancePool::with_all_options(
             wasm_engine.clone(),
             plugin_limits.clone(),
@@ -934,6 +939,7 @@ impl Gateway {
             Some(response_cache),
             Some(Arc::new(nats_publisher)),
             Some(Arc::new(kafka_publisher)),
+            Some(Arc::new(ldap_client)),
         )
         .with_secret_scopes(secret_refs_by_plugin);
 

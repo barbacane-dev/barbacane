@@ -87,6 +87,7 @@ async-nats = "0.47"
 
 # Kafka client
 rskafka = "0.6"
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
 
 # TLS
 rustls = { version = "0.23", features = ["aws-lc-rs"] }

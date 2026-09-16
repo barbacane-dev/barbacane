@@ -92,6 +92,9 @@ pub struct InstancePool {
     /// Kafka publisher (shared across all instances).
     kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
 
+    /// LDAP client (shared across all instances).
+    ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
+
     /// Cache of compiled modules by plugin name.
     modules: DashMap<String, CompiledModule>,
 
@@ -121,6 +124,7 @@ impl InstancePool {
             response_cache: None,
             nats_publisher: None,
             kafka_publisher: None,
+            ldap_client: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -143,6 +147,7 @@ impl InstancePool {
             response_cache: None,
             nats_publisher: None,
             kafka_publisher: None,
+            ldap_client: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -166,6 +171,7 @@ impl InstancePool {
             response_cache: None,
             nats_publisher: None,
             kafka_publisher: None,
+            ldap_client: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -184,6 +190,7 @@ impl InstancePool {
         response_cache: Option<ResponseCache>,
         nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
         kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
+        ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
     ) -> Self {
         Self {
             engine,
@@ -194,6 +201,7 @@ impl InstancePool {
             response_cache,
             nats_publisher,
             kafka_publisher,
+            ldap_client,
             modules: DashMap::new(),
             instances: DashMap::new(),
             configs: DashMap::new(),
@@ -254,6 +262,7 @@ impl InstancePool {
             self.response_cache.clone(),
             self.nats_publisher.clone(),
             self.kafka_publisher.clone(),
+            self.ldap_client.clone(),
         )?;
 
         // Initialize with config
