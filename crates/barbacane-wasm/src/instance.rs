@@ -859,6 +859,7 @@ fn ldap_host_call<R>(
     op_name: &str,
     op: impl FnOnce(
             &crate::ldap_client::LdapClient,
+            &str,
             &R,
         ) -> Result<crate::ldap::LdapResult, crate::ldap::LdapError>
         + Send,
@@ -894,11 +895,13 @@ where
             return -1;
         }
     };
+    // The plugin name partitions the client's connection cache.
+    let plugin = caller.data().plugin_name.clone();
 
     // Use thread::scope to escape the main tokio runtime context, then run the
     // operation on the client's own runtime.
     let result = std::thread::scope(|s| {
-        let handle = s.spawn(|| op(&client, &request));
+        let handle = s.spawn(|| op(&client, &plugin, &request));
 
         match handle.join() {
             Ok(result) => Some(result),
@@ -2333,7 +2336,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     req_ptr,
                     req_len,
                     "LDAP bind",
-                    |client, req| client.bind_blocking(req),
+                    |client, _plugin, req| client.bind_blocking(req),
                 )
             },
         )
@@ -2350,7 +2353,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     req_ptr,
                     req_len,
                     "LDAP search",
-                    |client, req| client.search_blocking(req),
+                    |client, plugin, req| client.search_blocking(plugin, req),
                 )
             },
         )

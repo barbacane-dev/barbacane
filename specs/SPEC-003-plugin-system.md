@@ -261,9 +261,13 @@ host_ldap_search(req_ptr: i32, req_len: i32) -> i32
 host_ldap_read_result(buf_ptr: i32, buf_len: i32) -> i32
 ```
 
-Both requests are JSON and carry the connection: `url` (`ldap://` or `ldaps://`), `bind_dn`, `password`, `starttls`, `timeout_ms`. `host_ldap_bind` verifies `bind_dn`/`password` with a simple bind on a fresh connection. `host_ldap_search` adds `base_dn`, `scope` (`base`, `one`, `sub`), `filter`, `attributes`, `size_limit` and runs on a pooled connection bound as `bind_dn`. Each returns the length of the JSON result, read with `host_ldap_read_result`, or -1 on an ABI error.
+Both requests are JSON and carry the connection: `url` (`ldap://` or `ldaps://`), `bind_dn`, `password`, `starttls`, `allow_plaintext`, `timeout_ms`. `host_ldap_bind` verifies `bind_dn`/`password` with a simple bind on a fresh connection. `host_ldap_search` adds `base_dn`, `scope` (`base`, `one`, `sub`), `filter`, `attributes`, `size_limit` and runs on a connection bound as `bind_dn`, cached per plugin, URL and bind identity (at most 32 per plugin and 256 in total, least-recently-used eviction). Each returns the length of the JSON result, read with `host_ldap_read_result`, or -1 on an ABI error (bad pointer, unparseable request, no client); the plugin must check for -1 before reading.
 
-Result: `{ "success": bool, "error"?: string, "code"?: string, "entries"?: [{ "dn": string, "attrs": { name: [values] } }] }`. `code` is one of `connection_failed`, `invalid_credentials`, `bind_failed`, `search_failed`, `invalid_request`, `timeout`, `blocked`.
+A password is sent over a plaintext `ldap://` connection without StartTLS only when `allow_plaintext` is true; otherwise the call fails with `plaintext_refused` before any connection is made.
+
+`size_limit` is clamped to 1000 entries and the entry data to 1 MiB. Both caps are enforced while entries stream in: a server that delivers more fails the call with `search_failed` and its connection is discarded. A server that reports `sizeLimitExceeded` after honouring the limit yields a successful result containing the entries received. Binary attribute values are omitted.
+
+Result: `{ "success": bool, "error"?: string, "code"?: string, "entries"?: [{ "dn": string, "attrs": { name: [values] } }] }`. `code` is one of `connection_failed`, `invalid_credentials`, `bind_failed`, `search_failed`, `invalid_request`, `timeout`, `blocked`, `plaintext_refused`.
 
 Directory egress is subject to the plugin SSRF guard (SPEC-004). Filter values derived from user input must be escaped per RFC 4515 before the call.
 

@@ -1,10 +1,12 @@
 //! LDAP client for the Barbacane gateway.
 //!
 //! Backs the `host_ldap_bind` and `host_ldap_search` host functions. Search
-//! connections, bound as a service account, are cached by URL and bind
-//! identity. Credential-verification binds use a fresh connection each time,
-//! so a user's bind never shares a connection with another identity. A
-//! dedicated tokio runtime drives the connections between calls.
+//! connections, bound as a service account, are cached per plugin, URL and bind
+//! identity with least-recently-used eviction. Credential-verification binds
+//! use a fresh connection each time, so a user's bind never shares a connection
+//! with another identity. A password is sent over a plaintext `ldap://`
+//! connection without StartTLS only when the request opts in. A dedicated
+//! tokio runtime drives the connections between calls.
 
 use crate::ldap::{
     LdapBindRequest, LdapConnection, LdapEntry, LdapError, LdapResult, LdapScope, LdapSearchRequest,
@@ -13,7 +15,7 @@ use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, SearchOptions};
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Default port for `ldap://` URLs.
 const DEFAULT_LDAP_PORT: u16 = 389;
@@ -21,9 +23,12 @@ const DEFAULT_LDAP_PORT: u16 = 389;
 /// Default port for `ldaps://` URLs.
 const DEFAULT_LDAPS_PORT: u16 = 636;
 
-/// Upper bound on cached search connections, so a plugin can't force unbounded
-/// connection growth through distinct URL or bind-identity strings.
+/// Upper bound on cached search connections across all plugins.
 const MAX_LDAP_CONNECTIONS: usize = 256;
+
+/// Upper bound on cached search connections held by one plugin, so a single
+/// plugin cannot crowd the others out of the cache.
+const MAX_CONNECTIONS_PER_PLUGIN: usize = 32;
 
 /// Timeout for establishing a connection (TCP, TLS, StartTLS).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,7 +43,7 @@ const MAX_OP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_SEARCH_ENTRIES: u32 = 1000;
 
 /// Upper bound on the serialized size of the entries returned by a search.
-const MAX_RESULT_BYTES: usize = 1024 * 1024;
+pub const MAX_RESULT_BYTES: usize = 1024 * 1024;
 
 /// LDAP result code for invalidCredentials (RFC 4511 Appendix A).
 const RC_INVALID_CREDENTIALS: u32 = 49;
@@ -51,17 +56,19 @@ const RC_SIZE_LIMIT_EXCEEDED: u32 = 4;
 /// fingerprint so the key never holds it in clear.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConnKey {
+    plugin: String,
     url: String,
     bind_dn: String,
     password_fingerprint: u64,
 }
 
 impl ConnKey {
-    fn from_connection(conn: &LdapConnection) -> Self {
+    fn new(plugin: &str, conn: &LdapConnection) -> Self {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         conn.password.hash(&mut hasher);
         conn.starttls.hash(&mut hasher);
         Self {
+            plugin: plugin.to_string(),
             url: conn.url.clone(),
             bind_dn: conn.bind_dn.clone(),
             password_fingerprint: hasher.finish(),
@@ -69,14 +76,21 @@ impl ConnKey {
     }
 }
 
-/// LDAP client with a bounded cache of service-account connections.
+/// A pooled connection with its last use, for least-recently-used eviction.
+struct CachedConn {
+    ldap: ldap3::Ldap,
+    last_used: Instant,
+}
+
+/// LDAP client with a bounded, per-plugin partitioned cache of service-account
+/// connections.
 ///
 /// Owns a dedicated tokio runtime so that `ldap3` connection drivers stay alive
 /// between calls. Search connections are created lazily and reused while they
 /// stay open; a closed connection is evicted and re-established on next use.
 pub struct LdapClient {
     runtime: tokio::runtime::Runtime,
-    connections: Mutex<HashMap<ConnKey, ldap3::Ldap>>,
+    connections: Mutex<HashMap<ConnKey, CachedConn>>,
     /// When false, directory addresses resolving to internal/metadata ranges are
     /// rejected (SSRF guard). Operators opt in for trusted internal directories.
     allow_internal_egress: bool,
@@ -106,12 +120,17 @@ impl LdapClient {
         self.runtime.block_on(self.bind(req))
     }
 
-    /// Blocking search for use from sync WASM host functions.
+    /// Blocking search for use from sync WASM host functions. `plugin` names the
+    /// calling plugin and partitions the connection cache.
     ///
     /// Must be called from a thread that is NOT inside a tokio runtime context
     /// (e.g. from within `std::thread::scope`).
-    pub fn search_blocking(&self, req: &LdapSearchRequest) -> Result<LdapResult, LdapError> {
-        self.runtime.block_on(self.search(req))
+    pub fn search_blocking(
+        &self,
+        plugin: &str,
+        req: &LdapSearchRequest,
+    ) -> Result<LdapResult, LdapError> {
+        self.runtime.block_on(self.search(plugin, req))
     }
 
     /// Verify credentials with a simple bind on a fresh connection.
@@ -119,26 +138,34 @@ impl LdapClient {
         if req.conn.bind_dn.is_empty() {
             return Err(LdapError::InvalidRequest("bind_dn is required".into()));
         }
+        let is_tls = scheme_is_tls(&req.conn.url)?;
+        check_transport(&req.conn, is_tls)?;
+
         let timeout = op_timeout(req.conn.timeout_ms);
-        let mut ldap = self.connect(&req.conn).await?;
+        let mut ldap = self.connect(&req.conn, is_tls).await?;
         let outcome = simple_bind(&mut ldap, &req.conn, timeout).await;
         // The connection carried a user identity; never keep it around.
         let _ = ldap.unbind().await;
         outcome.map(|()| LdapResult::bound())
     }
 
-    /// Search on a pooled service-account connection.
-    async fn search(&self, req: &LdapSearchRequest) -> Result<LdapResult, LdapError> {
+    /// Search on a pooled service-account connection, enforcing the entry and
+    /// byte caps while entries arrive.
+    async fn search(&self, plugin: &str, req: &LdapSearchRequest) -> Result<LdapResult, LdapError> {
         if req.base_dn.is_empty() {
             return Err(LdapError::InvalidRequest("base_dn is required".into()));
         }
         if req.filter.is_empty() {
             return Err(LdapError::InvalidRequest("filter is required".into()));
         }
+        let is_tls = scheme_is_tls(&req.conn.url)?;
+        check_transport(&req.conn, is_tls)?;
 
         let timeout = op_timeout(req.conn.timeout_ms);
-        let key = ConnKey::from_connection(&req.conn);
-        let mut ldap = self.get_or_connect(&key, &req.conn).await?;
+        let key = ConnKey::new(plugin, &req.conn);
+        let mut ldap = self
+            .get_or_connect(&key, &req.conn, is_tls, timeout)
+            .await?;
 
         let scope = match req.scope {
             LdapScope::Base => Scope::Base,
@@ -158,46 +185,62 @@ impl LdapClient {
             .sizelimit(size_limit as i32)
             .timelimit(timeout.as_secs().max(1) as i32);
 
-        let outcome = ldap
+        let mut stream = match ldap
             .with_timeout(timeout)
             .with_search_options(options)
-            .search(&req.base_dn, scope, &req.filter, attrs)
-            .await;
-
-        let ldap3::SearchResult(raw_entries, result) = match outcome {
-            Ok(r) => r,
+            .streaming_search(&req.base_dn, scope, &req.filter, attrs)
+            .await
+        {
+            Ok(stream) => stream,
             Err(e) => {
                 // The connection may be dead; drop it so the next call reconnects.
                 self.evict(&key);
                 return Err(map_search_error(e));
             }
         };
+
+        // Consume entries one at a time so a server that ignores the requested
+        // size limit, or pads entries, cannot grow host memory past the caps.
+        let mut entries = Vec::new();
+        let mut bytes = 0usize;
+        loop {
+            match stream.next().await {
+                Ok(Some(raw)) => {
+                    let entry = SearchEntry::construct(raw);
+                    let attrs: BTreeMap<String, Vec<String>> = entry.attrs.into_iter().collect();
+                    bytes += entry.dn.len()
+                        + attrs
+                            .iter()
+                            .map(|(k, v)| k.len() + v.iter().map(String::len).sum::<usize>())
+                            .sum::<usize>();
+                    if entries.len() >= size_limit as usize || bytes > MAX_RESULT_BYTES {
+                        // Unread messages remain on this connection; discard it.
+                        drop(stream);
+                        self.evict(&key);
+                        return Err(LdapError::SearchFailed(format!(
+                            "result exceeds {size_limit} entries or {MAX_RESULT_BYTES} bytes"
+                        )));
+                    }
+                    entries.push(LdapEntry {
+                        dn: entry.dn,
+                        attrs,
+                    });
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    drop(stream);
+                    self.evict(&key);
+                    return Err(map_search_error(e));
+                }
+            }
+        }
+
+        let result = stream.finish().await;
         if result.rc != 0 && result.rc != RC_SIZE_LIMIT_EXCEEDED {
             return Err(LdapError::SearchFailed(format!(
                 "rc={} {}",
                 result.rc, result.text
             )));
-        }
-
-        let mut entries = Vec::with_capacity(raw_entries.len());
-        let mut bytes = 0usize;
-        for raw in raw_entries {
-            let entry = SearchEntry::construct(raw);
-            let attrs: BTreeMap<String, Vec<String>> = entry.attrs.into_iter().collect();
-            bytes += entry.dn.len()
-                + attrs
-                    .iter()
-                    .map(|(k, v)| k.len() + v.iter().map(String::len).sum::<usize>())
-                    .sum::<usize>();
-            if bytes > MAX_RESULT_BYTES {
-                return Err(LdapError::SearchFailed(format!(
-                    "result exceeds {MAX_RESULT_BYTES} bytes"
-                )));
-            }
-            entries.push(LdapEntry {
-                dn: entry.dn,
-                attrs,
-            });
         }
 
         Ok(LdapResult::entries(entries))
@@ -209,6 +252,8 @@ impl LdapClient {
         &self,
         key: &ConnKey,
         conn: &LdapConnection,
+        is_tls: bool,
+        timeout: Duration,
     ) -> Result<ldap3::Ldap, LdapError> {
         // Check cache (lock is held briefly, no await while locked). A closed
         // handle is evicted so it is replaced below.
@@ -216,9 +261,10 @@ impl LdapClient {
             let mut conns = self.connections.lock();
             // `is_closed` needs `&mut Ldap`; take the answer and a clone in one
             // step so no borrow of the map outlives this expression.
-            let cached = conns
-                .get_mut(key)
-                .map(|ldap| (ldap.is_closed(), ldap.clone()));
+            let cached = conns.get_mut(key).map(|c| {
+                c.last_used = Instant::now();
+                (c.ldap.is_closed(), c.ldap.clone())
+            });
             match cached {
                 Some((false, ldap)) => return Ok(ldap),
                 Some((true, _)) => {
@@ -228,20 +274,23 @@ impl LdapClient {
             }
         }
 
-        let mut ldap = self.connect(conn).await?;
+        let mut ldap = self.connect(conn, is_tls).await?;
         if !conn.bind_dn.is_empty() {
-            simple_bind(&mut ldap, conn, DEFAULT_OP_TIMEOUT).await?;
+            simple_bind(&mut ldap, conn, timeout).await?;
         }
 
-        // Cache the new connection, bounding the cache size.
+        // Cache the new connection, evicting closed and least-recently-used
+        // entries to stay within the per-plugin and global bounds.
         {
             let mut conns = self.connections.lock();
-            if conns.len() >= MAX_LDAP_CONNECTIONS && !conns.contains_key(key) {
-                return Err(LdapError::ConnectionFailed(
-                    "LDAP connection cache is full".to_string(),
-                ));
-            }
-            conns.insert(key.clone(), ldap.clone());
+            make_room(&mut conns, key);
+            conns.insert(
+                key.clone(),
+                CachedConn {
+                    ldap: ldap.clone(),
+                    last_used: Instant::now(),
+                },
+            );
         }
 
         Ok(ldap)
@@ -252,17 +301,8 @@ impl LdapClient {
     }
 
     /// Open a connection (TCP, then TLS or StartTLS as requested) without binding.
-    async fn connect(&self, conn: &LdapConnection) -> Result<ldap3::Ldap, LdapError> {
+    async fn connect(&self, conn: &LdapConnection, is_tls: bool) -> Result<ldap3::Ldap, LdapError> {
         let url = conn.url.trim();
-        let is_tls = if url.starts_with("ldaps://") {
-            true
-        } else if url.starts_with("ldap://") {
-            false
-        } else {
-            return Err(LdapError::InvalidRequest(format!(
-                "url must start with ldap:// or ldaps://, got '{url}'"
-            )));
-        };
         let default_port = if is_tls {
             DEFAULT_LDAPS_PORT
         } else {
@@ -292,7 +332,8 @@ impl LdapClient {
         // Pin plaintext `ldap://` connections to the vetted IP. For `ldaps://`
         // and StartTLS the hostname is kept so TLS SNI and certificate
         // validation work; the pre-connect resolution above already blocked
-        // internal targets.
+        // internal targets, leaving only a narrow rebinding window for a TLS
+        // directory (the same trade-off as the NATS `tls://` path).
         let connect_url = if is_tls || conn.starttls {
             url.to_string()
         } else {
@@ -317,6 +358,81 @@ impl LdapClient {
         tracing::info!(url = %url, "established LDAP connection");
         Ok(ldap)
     }
+}
+
+/// `true` for `ldaps://`, `false` for `ldap://`, error for anything else.
+fn scheme_is_tls(url: &str) -> Result<bool, LdapError> {
+    let url = url.trim();
+    if url.starts_with("ldaps://") {
+        Ok(true)
+    } else if url.starts_with("ldap://") {
+        Ok(false)
+    } else {
+        Err(LdapError::InvalidRequest(format!(
+            "url must start with ldap:// or ldaps://, got '{url}'"
+        )))
+    }
+}
+
+/// Refuse to send a password over a connection that is neither `ldaps://` nor
+/// StartTLS unless the request sets `allow_plaintext`.
+fn check_transport(conn: &LdapConnection, is_tls: bool) -> Result<(), LdapError> {
+    if conn.password.is_empty() || is_tls || conn.starttls || conn.allow_plaintext {
+        Ok(())
+    } else {
+        Err(LdapError::PlaintextRefused)
+    }
+}
+
+/// Drop closed connections, then evict least-recently-used entries until `key`
+/// fits within the per-plugin and global bounds.
+fn make_room(conns: &mut HashMap<ConnKey, CachedConn>, key: &ConnKey) {
+    if conns.contains_key(key) {
+        return;
+    }
+    conns.retain(|_, c| !c.ldap.is_closed());
+    loop {
+        let victim = eviction_victim(conns.iter().map(|(k, c)| (k, c.last_used)), &key.plugin);
+        match victim {
+            Some(v) => {
+                conns.remove(&v);
+            }
+            None => break,
+        }
+    }
+}
+
+/// Which entry to evict so that `plugin` can insert one more connection, or
+/// `None` when there is room. The plugin's own least-recently-used entry goes
+/// first when the plugin is at its cap; otherwise the global least-recently-used
+/// entry when the cache is full.
+fn eviction_victim<'a>(
+    entries: impl Iterator<Item = (&'a ConnKey, Instant)>,
+    plugin: &str,
+) -> Option<ConnKey> {
+    let mut total = 0usize;
+    let mut plugin_count = 0usize;
+    let mut oldest_global: Option<(&ConnKey, Instant)> = None;
+    let mut oldest_plugin: Option<(&ConnKey, Instant)> = None;
+    for (key, last_used) in entries {
+        total += 1;
+        if oldest_global.is_none_or(|(_, t)| last_used < t) {
+            oldest_global = Some((key, last_used));
+        }
+        if key.plugin == plugin {
+            plugin_count += 1;
+            if oldest_plugin.is_none_or(|(_, t)| last_used < t) {
+                oldest_plugin = Some((key, last_used));
+            }
+        }
+    }
+    if plugin_count >= MAX_CONNECTIONS_PER_PLUGIN {
+        return oldest_plugin.map(|(k, _)| k.clone());
+    }
+    if total >= MAX_LDAP_CONNECTIONS {
+        return oldest_global.map(|(k, _)| k.clone());
+    }
+    None
 }
 
 /// Clamp a request-supplied timeout into `[1ms, MAX_OP_TIMEOUT]`, defaulting
@@ -376,12 +492,15 @@ fn map_search_error(e: ldap3::LdapError) -> LdapError {
 mod tests {
     use super::*;
 
+    const PLUGIN: &str = "ldap-auth";
+
     fn conn(url: &str) -> LdapConnection {
         LdapConnection {
             url: url.to_string(),
             bind_dn: "cn=svc,dc=example,dc=org".to_string(),
             password: "secret".to_string(),
             starttls: false,
+            allow_plaintext: true,
             timeout_ms: Some(1000),
         }
     }
@@ -424,7 +543,7 @@ mod tests {
     #[test]
     fn search_connection_refused_leaves_cache_empty() {
         let client = LdapClient::new(true).expect("ldap client");
-        let result = client.search_blocking(&search("ldap://127.0.0.1:13389"));
+        let result = client.search_blocking(PLUGIN, &search("ldap://127.0.0.1:13389"));
         assert!(matches!(result, Err(LdapError::ConnectionFailed(_))));
         assert!(client.connections.lock().is_empty());
     }
@@ -450,15 +569,70 @@ mod tests {
         let mut no_filter = search("ldap://127.0.0.1:13389");
         no_filter.filter.clear();
         assert!(matches!(
-            client.search_blocking(&no_filter),
+            client.search_blocking(PLUGIN, &no_filter),
             Err(LdapError::InvalidRequest(_))
         ));
 
         let mut no_base = search("ldap://127.0.0.1:13389");
         no_base.base_dn.clear();
         assert!(matches!(
-            client.search_blocking(&no_base),
+            client.search_blocking(PLUGIN, &no_base),
             Err(LdapError::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn plaintext_credentials_refused_without_opt_in() {
+        let client = LdapClient::new(true).expect("ldap client");
+
+        let mut req = bind("ldap://127.0.0.1:13389");
+        req.conn.allow_plaintext = false;
+        assert!(matches!(
+            client.bind_blocking(&req),
+            Err(LdapError::PlaintextRefused)
+        ));
+
+        let mut req = search("ldap://127.0.0.1:13389");
+        req.conn.allow_plaintext = false;
+        assert!(matches!(
+            client.search_blocking(PLUGIN, &req),
+            Err(LdapError::PlaintextRefused)
+        ));
+    }
+
+    #[test]
+    fn transport_policy_admits_tls_starttls_anonymous_and_opt_in() {
+        let mut plain = conn("ldap://127.0.0.1:13389");
+        plain.allow_plaintext = false;
+        assert!(matches!(
+            check_transport(&plain, false),
+            Err(LdapError::PlaintextRefused)
+        ));
+
+        let mut anonymous = plain.clone();
+        anonymous.password.clear();
+        assert!(check_transport(&anonymous, false).is_ok());
+
+        let mut starttls = plain.clone();
+        starttls.starttls = true;
+        assert!(check_transport(&starttls, false).is_ok());
+
+        assert!(check_transport(&plain, true).is_ok());
+
+        let mut opted_in = plain.clone();
+        opted_in.allow_plaintext = true;
+        assert!(check_transport(&opted_in, false).is_ok());
+    }
+
+    #[test]
+    fn ldaps_url_reaches_the_connection_attempt() {
+        let client = LdapClient::new(true).expect("ldap client");
+        let mut req = bind("ldaps://127.0.0.1:13636");
+        req.conn.allow_plaintext = false;
+        let result = client.bind_blocking(&req);
+        assert!(matches!(
+            result,
+            Err(LdapError::ConnectionFailed(_)) | Err(LdapError::Timeout)
         ));
     }
 
@@ -482,15 +656,67 @@ mod tests {
     }
 
     #[test]
-    fn conn_key_separates_identities_and_hides_password() {
-        let a = ConnKey::from_connection(&conn("ldap://h:389"));
+    fn conn_key_separates_plugins_and_identities_and_hides_password() {
+        let a = ConnKey::new(PLUGIN, &conn("ldap://h:389"));
         let mut other_pw = conn("ldap://h:389");
         other_pw.password = "different".to_string();
-        let b = ConnKey::from_connection(&other_pw);
+        let b = ConnKey::new(PLUGIN, &other_pw);
         assert_ne!(a, b);
         assert_eq!(a.url, b.url);
         assert_eq!(a.bind_dn, b.bind_dn);
+        let c = ConnKey::new("other-plugin", &conn("ldap://h:389"));
+        assert_ne!(a, c);
         let debug = format!("{a:?}");
         assert!(!debug.contains("secret"));
+    }
+
+    fn key(plugin: &str, n: usize) -> ConnKey {
+        ConnKey {
+            plugin: plugin.to_string(),
+            url: format!("ldap://d{n}:389"),
+            bind_dn: "cn=svc".to_string(),
+            password_fingerprint: n as u64,
+        }
+    }
+
+    #[test]
+    fn eviction_victim_is_none_while_there_is_room() {
+        let now = Instant::now();
+        let keys: Vec<ConnKey> = (0..3).map(|n| key("a", n)).collect();
+        let victim = eviction_victim(keys.iter().map(|k| (k, now)), "a");
+        assert_eq!(victim, None);
+    }
+
+    #[test]
+    fn eviction_victim_is_the_plugins_oldest_when_the_plugin_is_at_cap() {
+        let now = Instant::now();
+        let keys: Vec<ConnKey> = (0..MAX_CONNECTIONS_PER_PLUGIN)
+            .map(|n| key("a", n))
+            .collect();
+        let other = key("b", 999);
+        let entries = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k, now + Duration::from_secs(i as u64 + 1)))
+            .chain(std::iter::once((&other, now)));
+        // "b" holds the globally oldest entry, but "a" is the plugin at its cap,
+        // so "a"'s own oldest entry (index 0) is evicted.
+        let victim = eviction_victim(entries, "a");
+        assert_eq!(victim, Some(keys[0].clone()));
+    }
+
+    #[test]
+    fn eviction_victim_is_the_global_oldest_when_the_cache_is_full() {
+        let now = Instant::now();
+        // 8 plugins with 32 connections each = 256, none over its own cap.
+        let keys: Vec<ConnKey> = (0..MAX_LDAP_CONNECTIONS)
+            .map(|n| key(&format!("p{}", n / MAX_CONNECTIONS_PER_PLUGIN), n))
+            .collect();
+        let entries = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k, now + Duration::from_secs(i as u64)));
+        let victim = eviction_victim(entries, "newcomer");
+        assert_eq!(victim, Some(keys[0].clone()));
     }
 }

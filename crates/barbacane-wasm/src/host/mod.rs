@@ -218,20 +218,33 @@ pub mod nats {
 ///   "bind_dn": "cn=svc,dc=example,dc=org",
 ///   "password": "…",
 ///   "starttls": false,
+///   "allow_plaintext": false,
 ///   "timeout_ms": 5000
 /// }
 /// ```
 ///
 /// `host_ldap_bind` verifies `bind_dn`/`password` on a fresh connection.
 /// `host_ldap_search` adds `base_dn`, `scope` (`base` | `one` | `sub`),
-/// `filter`, `attributes` and `size_limit`, and runs on a cached connection
-/// bound as `bind_dn`. Filter values taken from user input must be escaped
-/// (RFC 4515) before they reach the host.
+/// `filter`, `attributes` and `size_limit`, and runs on a connection bound as
+/// `bind_dn` that is cached per plugin, URL and bind identity. Filter values
+/// taken from user input must be escaped (RFC 4515) before they reach the host.
 ///
-/// Returns the length of the result JSON, or -1 on error.
+/// A password is sent over a plaintext `ldap://` connection without StartTLS
+/// only when `allow_plaintext` is true; otherwise the call fails with code
+/// `plaintext_refused` before any connection is made.
+///
+/// `size_limit` is clamped to 1000 entries. A search that delivers more than
+/// the limit, or more than 1 MiB of entry data, fails with `search_failed`
+/// while streaming. A server that reports `sizeLimitExceeded` after honouring
+/// the limit yields a successful result with the entries received.
+///
+/// Returns the length of the result JSON, or -1 on an ABI error (bad pointer,
+/// unparseable request, no client); the plugin must check for -1 before
+/// calling `host_ldap_read_result`.
 /// Result format: `{ success: bool, error?: string, code?: string, entries?: [{ dn, attrs }] }`
 /// where `code` is one of `connection_failed`, `invalid_credentials`,
-/// `bind_failed`, `search_failed`, `invalid_request`, `timeout`, `blocked`.
+/// `bind_failed`, `search_failed`, `invalid_request`, `timeout`, `blocked`,
+/// `plaintext_refused`.
 pub mod ldap {
     /// The capability name.
     pub const CAPABILITY: &str = "ldap";

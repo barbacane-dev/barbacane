@@ -30,6 +30,9 @@ pub enum LdapError {
 
     #[error("LDAP target blocked by SSRF policy: {0}")]
     Blocked(String),
+
+    #[error("credentials over plaintext ldap:// require ldaps://, starttls, or allow_plaintext")]
+    PlaintextRefused,
 }
 
 impl LdapError {
@@ -44,6 +47,7 @@ impl LdapError {
             Self::InvalidRequest(_) => "invalid_request",
             Self::Timeout => "timeout",
             Self::Blocked(_) => "blocked",
+            Self::PlaintextRefused => "plaintext_refused",
         }
     }
 }
@@ -66,6 +70,11 @@ pub struct LdapConnection {
     /// The connection fails closed when the server refuses the upgrade.
     #[serde(default)]
     pub starttls: bool,
+
+    /// Send a password over a plaintext `ldap://` connection without StartTLS.
+    /// Refused unless set. Intended for test directories.
+    #[serde(default)]
+    pub allow_plaintext: bool,
 
     /// Per-operation timeout in milliseconds. Clamped by the host.
     #[serde(default)]
@@ -185,6 +194,7 @@ mod tests {
         .expect("bind request");
         assert_eq!(req.conn.url, "ldap://ldap.example:389");
         assert!(!req.conn.starttls);
+        assert!(!req.conn.allow_plaintext);
         assert_eq!(req.conn.timeout_ms, None);
     }
 
@@ -251,6 +261,7 @@ mod tests {
             LdapError::InvalidRequest("x".into()),
             LdapError::Timeout,
             LdapError::Blocked("x".into()),
+            LdapError::PlaintextRefused,
         ];
         let mut codes: Vec<&str> = errors.iter().map(LdapError::code).collect();
         codes.sort_unstable();
