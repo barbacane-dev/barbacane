@@ -74,7 +74,7 @@ mod native {
 
     thread_local! {
         pub(super) static CONTEXT: RefCell<BTreeMap<String, String>> =
-            RefCell::new(BTreeMap::new());
+            const { RefCell::new(BTreeMap::new()) };
     }
 }
 
