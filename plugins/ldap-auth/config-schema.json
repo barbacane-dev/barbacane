@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:barbacane:plugin:ldap-auth:config",
+  "title": "LDAP Authentication Middleware Config",
+  "description": "Configuration for the LDAP / Active Directory authentication middleware plugin. Credentials arrive as HTTP Basic, the user entry is located with a search, and the password is verified with a bind as that entry.",
+  "type": "object",
+  "required": ["url", "user_base_dn"],
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Directory URL: ldap://host[:port] or ldaps://host[:port]. Use ldaps:// or starttls so passwords are not sent in the clear."
+    },
+    "bind_dn": {
+      "type": "string",
+      "description": "Service-account DN used for the user and group searches. Omit for an anonymous search.",
+      "default": ""
+    },
+    "bind_password": {
+      "type": "string",
+      "writeOnly": true,
+      "description": "Service-account password. Supports secret references (e.g. env://LDAP_BIND_PASSWORD).",
+      "default": ""
+    },
+    "starttls": {
+      "type": "boolean",
+      "description": "Upgrade a plaintext ldap:// connection with StartTLS before binding. Fails closed if the server refuses.",
+      "default": false
+    },
+    "allow_plaintext": {
+      "type": "boolean",
+      "description": "Send passwords over a plaintext ldap:// connection without StartTLS. Refused by the gateway unless set; intended for test directories only.",
+      "default": false
+    },
+    "user_base_dn": {
+      "type": "string",
+      "description": "Base DN of the user search, e.g. ou=people,dc=example,dc=com"
+    },
+    "user_filter": {
+      "type": "string",
+      "description": "User search filter. {username} is replaced with the escaped Basic-auth username (RFC 4515).",
+      "default": "(uid={username})"
+    },
+    "user_attr": {
+      "type": "string",
+      "description": "Attribute of the user entry used as the consumer id in x-auth-consumer. Falls back to the submitted username when the entry lacks it.",
+      "default": "uid"
+    },
+    "group_attr": {
+      "type": "string",
+      "description": "Attribute of the user entry holding group DNs (e.g. memberOf). Used when group_base_dn is unset.",
+      "default": "memberOf"
+    },
+    "group_name_attr": {
+      "type": "string",
+      "description": "Attribute naming each group entry in group-search mode. Falls back to the first RDN of the group DN when the entry lacks it.",
+      "default": "cn"
+    },
+    "group_base_dn": {
+      "type": "string",
+      "description": "Base DN of a group search. When set, groups come from entries matching group_filter instead of group_attr on the user entry.",
+      "default": ""
+    },
+    "group_filter": {
+      "type": "string",
+      "description": "Group search filter. {dn} and {username} are replaced with the escaped user DN and username.",
+      "default": "(member={dn})"
+    },
+    "group_name_from_dn": {
+      "type": "boolean",
+      "description": "Emit the first RDN value of each group DN (e.g. admins from cn=admins,ou=groups,dc=example,dc=com) instead of the full DN in x-auth-consumer-groups.",
+      "default": true
+    },
+    "required_groups": {
+      "type": "array",
+      "description": "Groups the user must belong to (any of). Empty means no group requirement; use the acl middleware for richer policy.",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "timeout": {
+      "type": "number",
+      "description": "Per-operation timeout in seconds for directory searches and binds.",
+      "default": 5,
+      "minimum": 0
+    },
+    "cache_ttl_seconds": {
+      "type": "integer",
+      "description": "How long a verified credential (and its groups) or a rejected credential is remembered before the directory is consulted again. 0 disables caching.",
+      "default": 60,
+      "minimum": 0
+    },
+    "realm": {
+      "type": "string",
+      "description": "Authentication realm shown in the WWW-Authenticate challenge.",
+      "default": "api"
+    },
+    "strip_credentials": {
+      "type": "boolean",
+      "description": "Remove the Authorization header before forwarding to upstream.",
+      "default": true
+    }
+  },
+  "additionalProperties": false
+}

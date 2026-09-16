@@ -10,6 +10,7 @@ const AUTH_PLUGINS = new Set([
   "basic-auth",
   "oauth2-auth",
   "oidc-auth",
+  "ldap-auth",
 ]);
 
 const HTTP_METHODS = new Set([

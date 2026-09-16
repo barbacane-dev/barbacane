@@ -31,6 +31,7 @@ pub mod body;
 pub mod errors;
 pub mod http;
 pub mod jwt;
+pub mod ldap;
 pub mod log;
 pub mod types;
 
@@ -42,6 +43,7 @@ pub mod prelude {
     pub use crate::errors::ProblemDetails;
     pub use crate::types::*;
     pub use crate::{barbacane_dispatcher, barbacane_middleware};
-    // `http`, `jwt`, and `log` are used via their module path (e.g. `log::warn`,
-    // `jwt::Audience`, `http::call`) to keep the prelude unambiguous.
+    // `http`, `jwt`, `ldap`, and `log` are used via their module path (e.g.
+    // `log::warn`, `jwt::Audience`, `http::call`, `ldap::search`) to keep the
+    // prelude unambiguous.
 }
