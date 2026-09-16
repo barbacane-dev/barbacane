@@ -84,8 +84,7 @@ description = "What it does"
 wasm = "my-plugin.wasm"
 
 [capabilities]
-log = true
-context_get = true
+host_functions = ["log", "context_get"]
 ```
 
 ### Available Capabilities
@@ -98,8 +97,9 @@ context_get = true
 | `clock_now` | `host_clock_now` |
 | `get_secret` | `host_get_secret`, `host_secret_read_result` |
 | `http_call` | `host_http_call`, `host_http_read_result` |
-| `kafka_publish` | `host_kafka_publish` |
-| `nats_publish` | `host_nats_publish` |
+| `kafka_publish` | `host_kafka_publish`, `host_broker_read_result` |
+| `nats_publish` | `host_nats_publish`, `host_broker_read_result` |
+| `ldap` | `host_ldap_bind`, `host_ldap_search`, `host_ldap_read_result` |
 | `telemetry` | `host_metric_counter_inc`, `host_metric_histogram_observe`, `host_span_*` |
 | `generate_uuid` | `host_uuid_generate`, `host_uuid_read_result` |
 | `verify_signature` | `host_verify_signature` |

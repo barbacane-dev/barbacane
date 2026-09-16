@@ -75,6 +75,7 @@ Committed but not yet scheduled. Grouped by concern.
 | Plugin | Type | Priority | Notes |
 |---|---|---|---|
 | `idempotency` | Middleware | P1 | `Idempotency-Key` header via cache capability |
+| `ldap-auth` | Middleware | P1 | Basic credentials verified by LDAP bind, groups from `memberOf` or a group search, via the native `ldap` host functions (ADR-0032). In progress |
 | `hmac-auth` | Middleware | P2 | Signature-based auth (AWS SigV4 style) |
 | `grpc-web` | Middleware | P2 | gRPC-Web ↔ gRPC translation |
 | `mtls-auth` | Middleware | P3 | Client certificate authentication |
@@ -158,9 +159,7 @@ Ideas worth tracking but not committed. Items flagged **`[competitive]`** are on
 
 ## Blocked
 
-Waiting on external unblockers:
-
-- **`ldap-auth` plugin** — blocked pending a pure-Rust, FFI-free LDAP client. HTTP bridge approach rejected (ADR-0028) as it reduces to existing auth plugins.
+Waiting on external unblockers: none at the moment.
 
 ---
 
@@ -224,7 +223,7 @@ What competitors ship that we might copy. Barbacane is primarily an API gateway;
 | API keys | Kong, Tyk, Zuplo | ✅ `apikey-auth` |
 | mTLS client auth | Kong (enterprise), Envoy | ➜ Later/P3 (`mtls-auth`) |
 | HMAC / SigV4-style auth | Kong, AWS API Gateway | ➜ Later/P2 (`hmac-auth`) |
-| LDAP | Kong (CE), Tyk | ⛔ Blocked — see Blocked section |
+| LDAP | Kong (CE), Tyk | 🚧 In progress — `ldap-auth` on native host functions (ADR-0032) |
 | CEL / inline policy | Kong (lua), Envoy (CEL), Barbacane | ✅ `cel` with routing mode |
 | OPA integration | Kong, Envoy (ext-authz), Istio | ✅ `opa-authz` |
 | IP restriction / bot detection | Kong, Cloudflare, AWS WAF | ✅ `ip-restriction`, `bot-detection` |

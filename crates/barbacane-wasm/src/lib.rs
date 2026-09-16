@@ -15,6 +15,8 @@ mod host;
 mod http_client;
 mod instance;
 pub mod kafka_client;
+pub mod ldap;
+pub mod ldap_client;
 mod limits;
 mod manifest;
 pub mod nats_client;
@@ -70,6 +72,12 @@ pub use kafka_client::KafkaPublisher;
 
 // NATS publisher for host_nats_publish
 pub use nats_client::NatsPublisher;
+
+// LDAP client and types for host_ldap_bind / host_ldap_search
+pub use ldap::{
+    LdapBindRequest, LdapConnection, LdapEntry, LdapError, LdapResult, LdapScope, LdapSearchRequest,
+};
+pub use ldap_client::LdapClient;
 
 // WebSocket client for host_ws_upgrade
 pub use ws_client::UpstreamWsStream;

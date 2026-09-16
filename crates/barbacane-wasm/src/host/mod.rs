@@ -203,6 +203,62 @@ pub mod nats {
     pub const READ_RESULT_FUNCTION: &str = "host_broker_read_result";
 }
 
+/// Host functions for LDAP directory access.
+///
+/// ```text
+/// host_ldap_bind(req_ptr: i32, req_len: i32) -> i32
+/// host_ldap_search(req_ptr: i32, req_len: i32) -> i32
+/// host_ldap_read_result(buf_ptr: i32, buf_len: i32) -> i32
+/// ```
+///
+/// Both requests share the connection fields:
+/// ```json
+/// {
+///   "url": "ldaps://ldap.example:636",
+///   "bind_dn": "cn=svc,dc=example,dc=org",
+///   "password": "…",
+///   "starttls": false,
+///   "allow_plaintext": false,
+///   "timeout_ms": 5000
+/// }
+/// ```
+///
+/// `host_ldap_bind` verifies `bind_dn`/`password` on a fresh connection.
+/// `host_ldap_search` adds `base_dn`, `scope` (`base` | `one` | `sub`),
+/// `filter`, `attributes` and `size_limit`, and runs on a connection bound as
+/// `bind_dn` that is cached per plugin, URL and bind identity. Filter values
+/// taken from user input must be escaped (RFC 4515) before they reach the host.
+///
+/// A password is sent over a plaintext `ldap://` connection without StartTLS
+/// only when `allow_plaintext` is true; otherwise the call fails with code
+/// `plaintext_refused` before any connection is made.
+///
+/// `size_limit` is clamped to 1000 entries. A search that delivers more than
+/// the limit, or more than 1 MiB of entry data, fails with `search_failed`
+/// while streaming. A server that reports `sizeLimitExceeded` after honouring
+/// the limit yields a successful result with the entries received.
+///
+/// Returns the length of the result JSON, or -1 on an ABI error (bad pointer,
+/// unparseable request, no client); the plugin must check for -1 before
+/// calling `host_ldap_read_result`.
+/// Result format: `{ success: bool, error?: string, code?: string, entries?: [{ dn, attrs }] }`
+/// where `code` is one of `connection_failed`, `invalid_credentials`,
+/// `bind_failed`, `search_failed`, `invalid_request`, `timeout`, `blocked`,
+/// `plaintext_refused`.
+pub mod ldap {
+    /// The capability name.
+    pub const CAPABILITY: &str = "ldap";
+
+    /// The bind function name.
+    pub const BIND_FUNCTION: &str = "host_ldap_bind";
+
+    /// The search function name.
+    pub const SEARCH_FUNCTION: &str = "host_ldap_search";
+
+    /// The read result function name.
+    pub const READ_RESULT_FUNCTION: &str = "host_ldap_read_result";
+}
+
 /// Host functions for telemetry.
 ///
 /// ```text
