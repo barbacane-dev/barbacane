@@ -3,6 +3,7 @@
 //! Validates credentials from the `Authorization: Basic` header (RFC 7617)
 //! and rejects unauthenticated requests with 401 Unauthorized.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::prelude::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
@@ -105,13 +106,16 @@ impl BasicAuth {
                         .insert("x-auth-roles".to_string(), roles_csv.clone());
                     modified_req
                         .headers
-                        .insert("x-auth-consumer-groups".to_string(), roles_csv);
+                        .insert("x-auth-consumer-groups".to_string(), roles_csv.clone());
+                    context::set(context::AUTH_GROUPS, &roles_csv);
                 }
 
-                // Standard consumer header for ACL and downstream middlewares
+                // Standard consumer header for ACL and downstream middlewares,
+                // and the same identity in the request context.
                 modified_req
                     .headers
-                    .insert("x-auth-consumer".to_string(), username);
+                    .insert("x-auth-consumer".to_string(), username.clone());
+                context::set(context::AUTH_SUB, &username);
 
                 Action::Continue(modified_req)
             }
@@ -427,6 +431,11 @@ mod tests {
                 assert_eq!(
                     modified.headers.get("x-auth-consumer-groups").unwrap(),
                     "admin,editor"
+                );
+                assert_eq!(context::get(context::AUTH_SUB).as_deref(), Some("admin"));
+                assert_eq!(
+                    context::get(context::AUTH_GROUPS).as_deref(),
+                    Some("admin,editor")
                 );
             }
             Action::ShortCircuit(_) => panic!("expected Continue"),

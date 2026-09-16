@@ -171,7 +171,7 @@ x-barbacane-middlewares:
       policy: policies/api-access.rego
       input_mapping:
         user: context:auth.sub
-        roles: context:auth.roles
+        roles: context:auth.groups
         path: request:path
         method: request:method
 ```

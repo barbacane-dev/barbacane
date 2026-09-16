@@ -215,9 +215,29 @@ pub enum Action {
 Plugins can call host functions to access gateway capabilities. Declare required capabilities in `plugin.toml`:
 
 The SDK wraps the most common host functions so you don't hand-roll the FFI:
-`barbacane_plugin_sdk::log`, `::http`, `::errors::ProblemDetails`, and `::jwt`.
-Each has a native (non-wasm) stub so your plugin still compiles and unit-tests
-off-target. You still declare the underlying capability in `plugin.toml`.
+`barbacane_plugin_sdk::log`, `::http`, `::context`, `::ldap`,
+`::errors::ProblemDetails`, and `::jwt`. Each has a native (non-wasm) stub so
+your plugin still compiles and unit-tests off-target (`context` keeps a
+thread-local map natively, so tests can set and read values). You still
+declare the underlying capability in `plugin.toml`.
+
+### Request context
+
+```toml
+[capabilities]
+host_functions = ["context_get", "context_set"]
+```
+
+```rust
+use barbacane_plugin_sdk::context;
+
+// An auth plugin publishes the verified identity for the rest of the chain.
+context::set(context::AUTH_SUB, "alice");
+context::set(context::AUTH_GROUPS, "admin,editor");
+
+// A later middleware reads it; unlike a header, a client cannot supply it.
+let consumer = context::get(context::AUTH_SUB);
+```
 
 ### Logging
 
@@ -287,15 +307,15 @@ if let Some(token) = jwt::bearer_token(auth_header) {
 }
 ```
 
-### Context, clock, secrets (host imports)
+### Clock, secrets (host imports)
 
-These host functions do not (yet) have SDK wrappers — declare the capability and
-import the function directly. See any official plugin (e.g. `correlation-id` for
-context, `oidc-auth` for secrets) for the exact `extern "C"` binding pattern.
+These host functions do not have SDK wrappers — declare the capability and
+import the function directly. See any official plugin (e.g. `oidc-auth` for
+secrets, `ldap-auth` for the clock) for the exact `extern "C"` binding pattern.
 
 ```toml
 [capabilities]
-host_functions = ["context_get", "context_set", "clock_now", "get_secret"]
+host_functions = ["clock_now", "get_secret"]
 ```
 
 Secrets are resolved at gateway startup from `env://` / `file://` references, so

@@ -3,6 +3,7 @@
 //! Validates Bearer tokens via RFC 7662 token introspection and rejects
 //! unauthenticated requests with 401 Unauthorized or 403 Forbidden.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -174,7 +175,8 @@ impl OAuth2Auth {
                     if !groups.is_empty() {
                         modified_req
                             .headers
-                            .insert("x-auth-consumer-groups".to_string(), groups);
+                            .insert("x-auth-consumer-groups".to_string(), groups.clone());
+                        context::set(context::AUTH_GROUPS, &groups);
                     }
                 }
 
@@ -199,6 +201,7 @@ impl OAuth2Auth {
                     modified_req
                         .headers
                         .insert("x-auth-consumer".to_string(), consumer_id.clone());
+                    context::set(context::AUTH_SUB, consumer_id);
                 }
 
                 // Serialize full introspection response for downstream

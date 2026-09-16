@@ -3,6 +3,7 @@
 //! Implements rate limiting with IETF draft-ietf-httpapi-ratelimit-headers support.
 //! Uses the host's sliding window rate limiter via host_rate_limit_check.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
@@ -131,9 +132,10 @@ impl RateLimit {
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string())
         } else if let Some(context_key) = self.partition_key.strip_prefix("context:") {
-            // Use context value (would call host_context_get in full implementation)
-            // For now, fall back to the context key as a static value
-            context_key.to_string()
+            // Value written by an earlier middleware (e.g. `auth.sub` by an auth
+            // plugin). Requests without it share one bucket, like a missing
+            // header does above.
+            context::get(context_key).unwrap_or_else(|| "unknown".to_string())
         } else {
             // Use partition_key as a static key (same limit for all requests)
             self.partition_key.clone()
@@ -494,12 +496,21 @@ mod tests {
             quota: 10,
             window: 60,
             policy_name: "default".to_string(),
-            partition_key: "context:user_id".to_string(),
+            partition_key: "context:auth.sub".to_string(),
             trusted_proxies: vec![],
             fail_open: false,
         };
 
-        assert_eq!(rate_limit.extract_partition_key(&req), "user_id");
+        // Nothing set upstream: every such request lands in one bucket.
+        context::clear();
+        assert_eq!(rate_limit.extract_partition_key(&req), "unknown");
+
+        // An auth plugin wrote the consumer id: the bucket follows it.
+        context::set(context::AUTH_SUB, "alice");
+        assert_eq!(rate_limit.extract_partition_key(&req), "alice");
+        context::set(context::AUTH_SUB, "bob");
+        assert_eq!(rate_limit.extract_partition_key(&req), "bob");
+        context::clear();
     }
 
     #[test]

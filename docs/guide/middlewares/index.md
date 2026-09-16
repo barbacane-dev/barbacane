@@ -143,6 +143,8 @@ x-barbacane-middlewares:
       partition_key: "context:auth.sub"
 ```
 
+Every auth plugin (`basic-auth`, `apikey-auth`, `jwt-auth`, `oauth2-auth`, `oidc-auth`, `ldap-auth`) writes the same two identity keys after a successful authentication, alongside the `x-auth-*` headers: `auth.sub` (the consumer id, the value of `x-auth-consumer`) and `auth.groups` (the comma-separated groups, only when the identity has groups). `rate-limit`'s `partition_key: "context:auth.sub"` and `request-transformer`'s `context:` sources read them; unlike headers, context values cannot be supplied by the client.
+
 The dispatcher may also write context keys (e.g. `ai-proxy` writes `ai.prompt_tokens` after calling the LLM) that flow into the on_response chain — see [AI Gateway](ai-gateway.md) for the full map.
 
 ---

@@ -129,3 +129,66 @@ async fn test_rate_limit_unlimited_endpoint() {
         assert_eq!(resp.status(), 200);
     }
 }
+
+// ==================== context:auth.sub partitioning ====================
+
+fn basic(user: &str, pass: &str) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    format!("Basic {}", STANDARD.encode(format!("{user}:{pass}")))
+}
+
+/// `partition_key: "context:auth.sub"` buckets by the identity the auth plugin
+/// wrote into the request context: one consumer exhausting the quota does not
+/// affect another.
+#[tokio::test]
+async fn test_rate_limit_partitions_by_auth_context() {
+    let gateway = TestGateway::from_spec(&fixture("rate-limit.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    for i in 0..2 {
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/per-user")
+            .header("Authorization", basic("alice", "alice123"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "alice request {} within quota", i + 1);
+    }
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/per-user")
+        .header("Authorization", basic("alice", "alice123"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429, "alice over quota");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/per-user")
+        .header("Authorization", basic("bob", "bob123"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "bob has his own bucket");
+}
+
+/// A client cannot pick its bucket: `x-auth-consumer` sent by the client is
+/// dropped at ingress and the context comes only from the auth plugin.
+#[tokio::test]
+async fn test_rate_limit_auth_context_ignores_client_headers() {
+    let gateway = TestGateway::from_spec(&fixture("rate-limit.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    for i in 0..3 {
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/per-user")
+            .header("Authorization", basic("alice", "alice123"))
+            .header("x-auth-consumer", format!("someone-else-{i}"))
+            .send()
+            .await
+            .unwrap();
+        let expected = if i < 2 { 200 } else { 429 };
+        assert_eq!(resp.status(), expected, "request {}", i + 1);
+    }
+}

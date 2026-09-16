@@ -6,4 +6,4 @@ description = "API key authentication middleware for validating API keys from he
 wasm = "apikey-auth.wasm"
 
 [capabilities]
-host_functions = []
+host_functions = ["context_set"]
