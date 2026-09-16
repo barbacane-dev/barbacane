@@ -26,6 +26,7 @@ use crate::{
     error_response, host, host_http_stream, http_call, AiProxy, HttpRequest, Provider, Response,
     TargetConfig,
 };
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::prelude::*;
 use std::collections::BTreeMap;
 
@@ -104,7 +105,7 @@ pub(crate) fn handle(
             let body: serde_json::Value = serde_json::from_slice(raw)
                 .map_err(|e| format!("invalid Responses request body: {}", e))?;
 
-            let store_downgrade = host::context_get(CTX_STORE_DOWNGRADE)
+            let store_downgrade = context::get(CTX_STORE_DOWNGRADE)
                 .map(|v| v == "true")
                 .unwrap_or(true);
 

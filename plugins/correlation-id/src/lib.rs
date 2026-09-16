@@ -4,6 +4,7 @@
 //! The correlation ID is passed to upstream services and optionally included
 //! in the response.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
@@ -87,7 +88,7 @@ impl CorrelationId {
             .insert(header_name_lower.clone(), correlation_id.clone());
 
         // Store for response handling using context storage
-        context_set("correlation-id", &correlation_id);
+        context::set("correlation-id", &correlation_id);
 
         Action::Continue(modified_req)
     }
@@ -100,7 +101,7 @@ impl CorrelationId {
 
         // Retrieve the correlation ID from context storage
         let mut modified_resp = resp;
-        if let Some(correlation_id) = context_get("correlation-id") {
+        if let Some(correlation_id) = context::get("correlation-id") {
             let header_name_lower = self.header_name.to_lowercase();
             modified_resp
                 .headers
@@ -114,20 +115,8 @@ impl CorrelationId {
 // Native mock implementations for testing
 #[cfg(not(target_arch = "wasm32"))]
 mod mock_host {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-
     thread_local! {
-        static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
         static UUID_COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
-    }
-
-    pub fn context_set(key: &str, value: &str) {
-        CONTEXT.with(|c| c.borrow_mut().insert(key.to_string(), value.to_string()));
-    }
-
-    pub fn context_get(key: &str) -> Option<String> {
-        CONTEXT.with(|c| c.borrow().get(key).cloned())
     }
 
     pub fn generate_uuid() -> Option<String> {
@@ -140,7 +129,7 @@ mod mock_host {
 
     #[cfg(test)]
     pub fn reset() {
-        CONTEXT.with(|c| c.borrow_mut().clear());
+        super::context::clear();
         UUID_COUNTER.with(|c| c.set(1));
     }
 }
@@ -173,58 +162,6 @@ fn generate_uuid() -> Option<String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn generate_uuid() -> Option<String> {
     mock_host::generate_uuid()
-}
-
-/// Store a value in the request context.
-#[cfg(target_arch = "wasm32")]
-fn context_set(key: &str, value: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
-    }
-    unsafe {
-        host_context_set(
-            key.as_ptr() as i32,
-            key.len() as i32,
-            value.as_ptr() as i32,
-            value.len() as i32,
-        );
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_set(key: &str, value: &str) {
-    mock_host::context_set(key, value)
-}
-
-/// Get a value from the request context.
-#[cfg(target_arch = "wasm32")]
-fn context_get(key: &str) -> Option<String> {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-
-    unsafe {
-        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-        if len <= 0 {
-            return None;
-        }
-
-        let mut buf = vec![0u8; len as usize];
-        let read_len = host_context_read_result(buf.as_mut_ptr() as i32, len);
-        if read_len != len {
-            return None;
-        }
-
-        String::from_utf8(buf).ok()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_get(key: &str) -> Option<String> {
-    mock_host::context_get(key)
 }
 
 #[cfg(test)]
@@ -306,7 +243,7 @@ mod tests {
                 Some(&"existing-id-123".to_string())
             );
             assert_eq!(
-                context_get("correlation-id"),
+                context::get("correlation-id"),
                 Some("existing-id-123".to_string())
             );
         } else {
@@ -336,7 +273,7 @@ mod tests {
                 "00000000-0000-7000-8000-000000000001"
             );
             assert_eq!(
-                context_get("correlation-id"),
+                context::get("correlation-id"),
                 Some("00000000-0000-7000-8000-000000000001".to_string())
             );
         } else {
@@ -366,7 +303,7 @@ mod tests {
             assert_ne!(correlation_id, "untrusted-id");
             assert_eq!(correlation_id, "00000000-0000-7000-8000-000000000001");
             assert_eq!(
-                context_get("correlation-id"),
+                context::get("correlation-id"),
                 Some("00000000-0000-7000-8000-000000000001".to_string())
             );
         } else {
@@ -390,7 +327,7 @@ mod tests {
 
         if let Action::Continue(modified_req) = result {
             assert!(!modified_req.headers.contains_key("x-correlation-id"));
-            assert!(context_get("correlation-id").is_none());
+            assert!(context::get("correlation-id").is_none());
         } else {
             panic!("Expected Action::Continue");
         }
@@ -400,7 +337,7 @@ mod tests {
     fn test_on_response_includes_correlation_id() {
         mock_host::reset();
 
-        context_set("correlation-id", "test-id-456");
+        context::set("correlation-id", "test-id-456");
 
         let mut middleware = CorrelationId {
             header_name: "x-correlation-id".to_string(),
@@ -422,7 +359,7 @@ mod tests {
     fn test_on_response_include_in_response_false() {
         mock_host::reset();
 
-        context_set("correlation-id", "test-id-789");
+        context::set("correlation-id", "test-id-789");
 
         let mut middleware = CorrelationId {
             header_name: "x-correlation-id".to_string(),

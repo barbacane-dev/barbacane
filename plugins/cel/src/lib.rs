@@ -4,6 +4,7 @@
 //! for access control decisions. No external service needed — expressions are
 //! compiled once and evaluated in-process per request.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::prelude::*;
 use cel_interpreter as cel;
 use serde::Deserialize;
@@ -107,7 +108,7 @@ impl CelPolicy {
                         return Action::ShortCircuit(self.deny_action_response(deny));
                     }
                     for (key, value) in &on_match.set_context {
-                        host::context_set(key, value);
+                        context::set(key, value);
                     }
                 }
                 Action::Continue(req)
@@ -396,39 +397,16 @@ fn value_type_name(value: &cel::Value) -> &'static str {
 
 #[cfg(target_arch = "wasm32")]
 mod host {
-    pub fn context_set(key: &str, value: &str) {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
-        }
-        unsafe {
-            host_context_set(
-                key.as_ptr() as i32,
-                key.len() as i32,
-                value.as_ptr() as i32,
-                value.len() as i32,
-            );
-        }
-    }
-
-    // Preserves the original level (2 = INFO) that the local `log_warn` emitted.
+    // `log_warn` emits at INFO level (2).
     pub use barbacane_plugin_sdk::log::info as log_warn;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
 
     thread_local! {
-        static CONTEXT: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
         static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    }
-
-    pub fn context_set(key: &str, value: &str) {
-        CONTEXT.with(|ctx| {
-            ctx.borrow_mut().insert(key.to_string(), value.to_string());
-        });
     }
 
     pub fn log_warn(msg: &str) {
@@ -436,13 +414,13 @@ mod host {
     }
 
     #[cfg(test)]
-    pub fn get_context() -> BTreeMap<String, String> {
-        CONTEXT.with(|ctx| ctx.borrow().clone())
+    pub fn context_value(key: &str) -> Option<String> {
+        super::context::get(key)
     }
 
     #[cfg(test)]
     pub fn reset_context() {
-        CONTEXT.with(|ctx| ctx.borrow_mut().clear());
+        super::context::clear();
     }
 
     #[cfg(test)]
@@ -944,11 +922,11 @@ mod tests {
             Action::Continue(_) => panic!("expected deny"),
             Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
         }
-        let ctx = host::get_context();
+        let policy = host::context_value("ai.policy");
         assert!(
-            !ctx.contains_key("ai.policy"),
+            policy.is_none(),
             "deny should not write context, found {:?}",
-            ctx
+            policy
         );
     }
 
@@ -1295,11 +1273,7 @@ mod tests {
             Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
         }
 
-        let context = host::get_context();
-        assert_eq!(
-            context.get("ai.target").map(|s| s.as_str()),
-            Some("premium")
-        );
+        assert_eq!(host::context_value("ai.target").as_deref(), Some("premium"));
     }
 
     #[test]
@@ -1318,8 +1292,7 @@ mod tests {
         }
 
         // Context was NOT set (expression was false)
-        let context = host::get_context();
-        assert!(!context.contains_key("ai.target"));
+        assert!(host::context_value("ai.target").is_none());
     }
 
     #[test]
@@ -1333,12 +1306,8 @@ mod tests {
 
         let _ = config.on_request(req);
 
-        let context = host::get_context();
-        assert_eq!(
-            context.get("ai.target").map(|s| s.as_str()),
-            Some("premium")
-        );
-        assert_eq!(context.get("ai.priority").map(|s| s.as_str()), Some("high"));
+        assert_eq!(host::context_value("ai.target").as_deref(), Some("premium"));
+        assert_eq!(host::context_value("ai.priority").as_deref(), Some("high"));
     }
 
     #[test]
