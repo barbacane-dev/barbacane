@@ -545,7 +545,7 @@ enum Commands {
         #[arg(long, default_value = "8192")]
         max_header_size: usize,
 
-        /// Maximum URI length in characters (default: 8192 = 8KB).
+        /// Maximum URI length in bytes (default: 8192 = 8KB).
         #[arg(long, default_value = "8192")]
         max_uri_length: usize,
     },
@@ -594,7 +594,7 @@ enum Commands {
         #[arg(long, default_value = "8192")]
         max_header_size: usize,
 
-        /// Maximum URI length in characters (default: 8192 = 8KB).
+        /// Maximum URI length in bytes (default: 8192 = 8KB).
         #[arg(long, default_value = "8192")]
         max_uri_length: usize,
 

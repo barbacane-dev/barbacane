@@ -132,7 +132,7 @@ barbacane dev [OPTIONS]
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes |
 | `--max-headers` | No | `100` | Maximum number of request headers |
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes |
-| `--max-uri-length` | No | `8192` | Maximum URI length in characters |
+| `--max-uri-length` | No | `8192` | Maximum URI length in bytes |
 
 Dev mode is always enabled (verbose errors, plaintext HTTP upstreams allowed).
 
@@ -354,7 +354,7 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes (1MB) |
 | `--max-headers` | No | `100` | Maximum number of request headers |
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
-| `--max-uri-length` | No | `8192` | Maximum URI length in characters (8KB) |
+| `--max-uri-length` | No | `8192` | Maximum URI length in bytes (8KB) |
 | `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
 | `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
 | `--tls-key` | No | - | Path to TLS private key file (PEM format) |
