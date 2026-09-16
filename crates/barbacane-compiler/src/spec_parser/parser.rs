@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::error::ParseError;
 use super::model::{
     ApiSpec, ContentSchema, DispatchConfig, Message, MiddlewareConfig, Operation, Parameter,
-    RequestBody, ResponseContent, SpecFormat,
+    RequestBody, ResponseContent, SecurityRequirement, SecurityScheme, SpecFormat,
 };
 
 /// Resolve a JSON Reference like `#/components/schemas/User` from the spec root.
@@ -65,11 +65,11 @@ fn resolve_schema_refs(
     }
 }
 
-/// Resolve a parameter list entry that may be a `$ref` into the object it names.
+/// Resolve a component entry that may be a `$ref` into the object it names.
 ///
 /// A reference chain is followed to its end; `visited` detects a cycle. Returns
 /// `None` for an entry that is not an object.
-fn resolve_parameter_ref<'a>(
+fn resolve_component_ref<'a>(
     item: &'a Value,
     root: &'a Value,
     visited: &mut HashSet<String>,
@@ -91,6 +91,106 @@ fn resolve_parameter_ref<'a>(
         current = resolve_ref(root, ref_str)
             .ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
     }
+}
+
+/// Parse `components.securitySchemes`, resolving `$ref` entries.
+///
+/// A scheme with an unknown `type`, or missing the fields its type requires, is
+/// an error: the scheme decides which credential header an operation accepts.
+fn parse_security_schemes(root: &Value) -> Result<BTreeMap<String, SecurityScheme>, ParseError> {
+    let Some(schemes) = root
+        .get("components")
+        .and_then(|c| c.get("securitySchemes"))
+        .and_then(|s| s.as_object())
+    else {
+        return Ok(BTreeMap::new());
+    };
+
+    let mut out = BTreeMap::new();
+    for (name, value) in schemes {
+        let mut visited = HashSet::new();
+        let Some(resolved) = resolve_component_ref(value, root, &mut visited)? else {
+            continue;
+        };
+        let Some(obj) = resolved.as_object() else {
+            continue;
+        };
+        let Some(kind) = obj.get("type").and_then(|v| v.as_str()) else {
+            return Err(ParseError::SchemaError(format!(
+                "security scheme '{}' has no 'type'",
+                name
+            )));
+        };
+
+        let scheme = match kind {
+            "apiKey" => {
+                let key_name = obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "security scheme '{}' of type apiKey has no 'name'",
+                        name
+                    ))
+                })?;
+                let location = obj.get("in").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "security scheme '{}' of type apiKey has no 'in'",
+                        name
+                    ))
+                })?;
+                SecurityScheme::ApiKey {
+                    name: key_name.to_string(),
+                    location: location.to_ascii_lowercase(),
+                }
+            }
+            "http" => {
+                let http_scheme = obj.get("scheme").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "security scheme '{}' of type http has no 'scheme'",
+                        name
+                    ))
+                })?;
+                SecurityScheme::Http {
+                    scheme: http_scheme.to_ascii_lowercase(),
+                }
+            }
+            "oauth2" => SecurityScheme::OAuth2,
+            "openIdConnect" => SecurityScheme::OpenIdConnect,
+            "mutualTLS" => SecurityScheme::MutualTls,
+            other => {
+                return Err(ParseError::SchemaError(format!(
+                    "security scheme '{}' has unknown type '{}'",
+                    name, other
+                )));
+            }
+        };
+        out.insert(name.clone(), scheme);
+    }
+    Ok(out)
+}
+
+/// Parse a `security` list. `None` when the key is absent, so an operation can
+/// be told apart from one declaring `security: []` to opt out of the root.
+fn parse_security(obj: &serde_json::Map<String, Value>) -> Option<Vec<SecurityRequirement>> {
+    let arr = obj.get("security")?.as_array()?;
+    let mut out = Vec::with_capacity(arr.len());
+    for entry in arr {
+        let Some(map) = entry.as_object() else {
+            continue;
+        };
+        let mut requirement = SecurityRequirement::new();
+        for (scheme, scopes) in map {
+            let scopes = scopes
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            requirement.insert(scheme.clone(), scopes);
+        }
+        out.push(requirement);
+    }
+    Some(out)
 }
 
 /// HTTP methods we recognize in OpenAPI paths.
@@ -136,6 +236,10 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     // Extract global middlewares
     let global_middlewares = extract_middlewares(root_obj);
 
+    // Security schemes and the root-level requirement they are referenced by
+    let security_schemes = parse_security_schemes(&root)?;
+    let security = parse_security(root_obj);
+
     // Parse operations based on format
     let operations = match format {
         SpecFormat::OpenApi => parse_openapi_paths(root_obj, &root)?,
@@ -151,6 +255,8 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
         operations,
         global_middlewares,
         extensions,
+        security_schemes,
+        security,
     })
 }
 
@@ -306,6 +412,7 @@ fn parse_openapi_paths(
                     messages: Vec::new(), // OpenAPI doesn't use AsyncAPI messages
                     bindings: BTreeMap::new(), // OpenAPI doesn't use protocol bindings
                     responses,
+                    security: parse_security(op_obj),
                 });
             }
         }
@@ -379,6 +486,7 @@ fn parse_openapi_paths(
                     messages: Vec::new(),
                     bindings: BTreeMap::new(),
                     responses,
+                    security: parse_security(op_obj),
                 });
             }
         }
@@ -404,7 +512,7 @@ fn parse_parameters(
         // An entry may be a `$ref` to `#/components/parameters/...`, which carries
         // `in` and `name` on the target rather than on the entry itself.
         let mut visited = HashSet::new();
-        let Some(resolved) = resolve_parameter_ref(item, spec_root, &mut visited)? else {
+        let Some(resolved) = resolve_component_ref(item, spec_root, &mut visited)? else {
             continue;
         };
         let Some(param_obj) = resolved.as_object() else {
@@ -649,6 +757,8 @@ fn parse_asyncapi_channels(
             messages,
             bindings,
             responses: BTreeMap::new(),
+            // AsyncAPI carries no OpenAPI security requirement.
+            security: None,
         });
     }
 
@@ -1805,6 +1915,202 @@ paths:
             matches!(err, ParseError::SchemaError(ref m) if m.contains("circular")),
             "expected a circular-ref error, got: {err:?}"
         );
+    }
+
+    #[test]
+    fn parses_every_security_scheme_type() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  securitySchemes:
+    KeyHeader:
+      type: apiKey
+      name: X-API-Key
+      in: header
+    KeyCookie:
+      type: apiKey
+      name: session
+      in: cookie
+    Basic:
+      type: http
+      scheme: Basic
+    Bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    Oidc:
+      type: openIdConnect
+      openIdConnectUrl: https://idp.example.com/.well-known/openid-configuration
+    Flows:
+      type: oauth2
+      flows: {}
+    Mtls:
+      type: mutualTLS
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let s = &spec.security_schemes;
+        assert_eq!(s.len(), 7);
+        assert_eq!(
+            s["KeyHeader"],
+            SecurityScheme::ApiKey {
+                name: "X-API-Key".to_string(),
+                location: "header".to_string(),
+            }
+        );
+        assert_eq!(
+            s["KeyCookie"],
+            SecurityScheme::ApiKey {
+                name: "session".to_string(),
+                location: "cookie".to_string(),
+            }
+        );
+        // `scheme` is matched case-insensitively, so it is stored lowercased.
+        assert_eq!(
+            s["Basic"],
+            SecurityScheme::Http {
+                scheme: "basic".to_string()
+            }
+        );
+        assert_eq!(
+            s["Bearer"],
+            SecurityScheme::Http {
+                scheme: "bearer".to_string()
+            }
+        );
+        assert_eq!(s["Oidc"], SecurityScheme::OpenIdConnect);
+        assert_eq!(s["Flows"], SecurityScheme::OAuth2);
+        assert_eq!(s["Mtls"], SecurityScheme::MutualTls);
+    }
+
+    #[test]
+    fn security_scheme_ref_resolves() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  securitySchemes:
+    Alias:
+      $ref: "#/components/securitySchemes/Canonical"
+    Canonical:
+      type: apiKey
+      name: X-API-Key
+      in: header
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        assert_eq!(
+            spec.security_schemes["Alias"],
+            spec.security_schemes["Canonical"]
+        );
+    }
+
+    #[test]
+    fn malformed_security_schemes_are_errors() {
+        let head = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  securitySchemes:
+"##;
+        let tail = r##"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        // apiKey without `name`, apiKey without `in`, http without `scheme`,
+        // and a type OpenAPI does not define.
+        for (scheme, needle) in [
+            (
+                "    Bad:\n      type: apiKey\n      in: header\n",
+                "no 'name'",
+            ),
+            (
+                "    Bad:\n      type: apiKey\n      name: X-Key\n",
+                "no 'in'",
+            ),
+            ("    Bad:\n      type: http\n", "no 'scheme'"),
+            ("    Bad:\n      type: magic\n", "unknown type"),
+            ("    Bad:\n      name: X-Key\n", "no 'type'"),
+        ] {
+            let err = parse_spec(&format!("{head}{scheme}{tail}"))
+                .expect_err("malformed security scheme must not be accepted");
+            assert!(
+                err.to_string().contains(needle),
+                "expected {needle:?} in: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn security_requirements_distinguish_absent_from_empty() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+security:
+  - Bearer: []
+components:
+  securitySchemes:
+    Bearer:
+      type: http
+      scheme: bearer
+paths:
+  /inherits:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+  /anonymous:
+    get:
+      security: []
+      x-barbacane-dispatch:
+        name: mock
+  /scoped:
+    get:
+      security:
+        - Bearer: [read, write]
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let root = spec.security.as_ref().expect("root security");
+        assert_eq!(root.len(), 1);
+        assert_eq!(root[0]["Bearer"], Vec::<String>::new());
+
+        let op = |path: &str| {
+            spec.operations
+                .iter()
+                .find(|o| o.path == path)
+                .unwrap_or_else(|| panic!("{path} missing"))
+                .security
+                .clone()
+        };
+
+        // Absent stays None so the root requirement applies.
+        assert!(op("/inherits").is_none());
+        // `security: []` is present and empty: the operation is anonymous.
+        assert_eq!(op("/anonymous"), Some(vec![]));
+        // Scopes are kept.
+        let scoped = op("/scoped").expect("operation security");
+        assert_eq!(scoped[0]["Bearer"], vec!["read", "write"]);
     }
 
     #[test]
