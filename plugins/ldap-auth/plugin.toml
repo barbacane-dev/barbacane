@@ -1,0 +1,9 @@
+[plugin]
+name = "ldap-auth"
+version = "0.1.0"
+type = "middleware"
+description = "LDAP / Active Directory authentication: Basic credentials verified by directory bind, groups from memberOf or a group search"
+wasm = "ldap-auth.wasm"
+
+[capabilities]
+host_functions = ["ldap", "log", "clock_now"]

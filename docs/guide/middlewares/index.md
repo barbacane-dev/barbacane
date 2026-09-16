@@ -4,7 +4,7 @@ Middlewares process requests before they reach dispatchers and can modify respon
 
 This guide splits middlewares by concern:
 
-- [Authentication](authentication.md) — `jwt-auth`, `apikey-auth`, `oauth2-auth`, `oidc-auth`, `basic-auth`
+- [Authentication](authentication.md) — `jwt-auth`, `apikey-auth`, `oauth2-auth`, `oidc-auth`, `basic-auth`, `ldap-auth`
 - [Authorization](authorization.md) — `acl`, `opa-authz`, `cel`
 - [Traffic Control](traffic-control.md) — `rate-limit`, `cors`, `ip-restriction`, `bot-detection`, `request-size-limit`
 - [Observability](observability.md) — `correlation-id`, `http-log`
@@ -124,6 +124,7 @@ These standard headers enable downstream middlewares (like [`acl`](authorization
 | `oidc-auth` | `sub` claim | `scope` claim (space→comma) |
 | `oauth2-auth` | `sub` claim (fallback: `username`) | `scope` claim (space→comma) |
 | `apikey-auth` | `id` field | `scopes` array |
+| `ldap-auth` | `user_attr` of the directory entry (default `uid`) | `memberOf` group names, or a group search |
 
 ---
 

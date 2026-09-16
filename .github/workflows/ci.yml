@@ -360,6 +360,17 @@ jobs:
     env:
       SHARD_INDEX: ${{ matrix.shard }}
       SHARD_TOTAL: 4
+      # Directory for the ldap-auth integration tests (tests/ldap.rs); the
+      # tests skip when nothing listens here.
+      BARBACANE_TEST_LDAP_URL: ldap://127.0.0.1:3893
+    services:
+      # glauth with its built-in default directory (dc=glauth,dc=com, plain
+      # LDAP on 3893, johndoe/dogood in superheros, serviceuser/mysecret in
+      # svcaccts). No configuration needed.
+      ldap:
+        image: ghcr.io/glauth/glauth:v2.5.4
+        ports:
+          - 3893:3893
     steps:
       - uses: actions/checkout@v6
         with:

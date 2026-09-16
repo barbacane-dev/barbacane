@@ -1,0 +1,105 @@
+openapi: "3.0.3"
+info:
+  title: LDAP Auth Test API
+  version: "1.0.0"
+  description: >-
+    API for testing the ldap-auth middleware against a glauth directory
+    (default glauth configuration: dc=glauth,dc=com, users johndoe/dogood in
+    group superheros and serviceuser/mysecret in group svcaccts).
+
+# Global middleware - every operation requires directory credentials.
+# The directory URL comes from the environment so the same fixture can point at
+# the CI service, a local glauth, or a dead port for the unavailable path.
+x-barbacane-middlewares:
+  - name: ldap-auth
+    config:
+      url: "env://BARBACANE_TEST_LDAP_URL"
+      bind_dn: "cn=serviceuser,ou=svcaccts,dc=glauth,dc=com"
+      bind_password: "env://BARBACANE_TEST_LDAP_BIND_PASSWORD"
+      user_base_dn: "dc=glauth,dc=com"
+      user_filter: "(cn={username})"
+      user_attr: "cn"
+      group_attr: "memberOf"
+      realm: "test-api"
+      timeout: 3
+      cache_ttl_seconds: 0
+
+paths:
+  /protected:
+    get:
+      summary: Protected endpoint requiring directory credentials
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "401":
+          description: Unauthorized
+
+  /admin:
+    get:
+      summary: Endpoint restricted to the superheros group via acl
+      operationId: getAdmin
+      x-barbacane-middlewares:
+        - name: ldap-auth
+          config:
+            url: "env://BARBACANE_TEST_LDAP_URL"
+            bind_dn: "cn=serviceuser,ou=svcaccts,dc=glauth,dc=com"
+            bind_password: "env://BARBACANE_TEST_LDAP_BIND_PASSWORD"
+            user_base_dn: "dc=glauth,dc=com"
+            user_filter: "(cn={username})"
+            user_attr: "cn"
+            realm: "test-api"
+            timeout: 3
+            cache_ttl_seconds: 0
+        - name: acl
+          config:
+            allow:
+              - superheros
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Admin access"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+
+  /public:
+    get:
+      summary: Public endpoint (overrides global middleware)
+      operationId: getPublic
+      x-barbacane-middlewares: []
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Public access"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
