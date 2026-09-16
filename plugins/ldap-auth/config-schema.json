@@ -26,6 +26,11 @@
       "description": "Upgrade a plaintext ldap:// connection with StartTLS before binding. Fails closed if the server refuses.",
       "default": false
     },
+    "allow_plaintext": {
+      "type": "boolean",
+      "description": "Send passwords over a plaintext ldap:// connection without StartTLS. Refused by the gateway unless set; intended for test directories only.",
+      "default": false
+    },
     "user_base_dn": {
       "type": "string",
       "description": "Base DN of the user search, e.g. ou=people,dc=example,dc=com"

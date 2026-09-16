@@ -289,6 +289,7 @@ Active Directory uses different attribute names:
 | `bind_dn` | string | `""` | Service-account DN for the user and group searches; empty for an anonymous search |
 | `bind_password` | string | `""` | Service-account password (secret reference such as `env://LDAP_BIND_PASSWORD`) |
 | `starttls` | boolean | `false` | Upgrade a plaintext `ldap://` connection with StartTLS; the connection fails if the server refuses |
+| `allow_plaintext` | boolean | `false` | Send passwords over a plaintext `ldap://` connection without StartTLS. The gateway refuses such binds (503, `plaintext_refused` in the log) unless set; for test directories only |
 | `user_base_dn` | string | **required** | Base DN of the user search |
 | `user_filter` | string | `(uid={username})` | User search filter; `{username}` is replaced with the escaped username (RFC 4515) |
 | `user_attr` | string | `uid` | Attribute of the user entry used as `x-auth-consumer`; falls back to the submitted username |
@@ -332,4 +333,4 @@ Sets headers for downstream:
 
 ### Directory connectivity
 
-The gateway opens directory connections through the plugin SSRF guard, which blocks loopback, private-network and link-local addresses by default. A directory on the same host or network requires `BARBACANE_ALLOW_INTERNAL_EGRESS=true` on the gateway process. Use `ldaps://` or `starttls` so passwords do not cross the network in the clear.
+The gateway opens directory connections through the plugin SSRF guard, which blocks loopback, private-network and link-local addresses by default. A directory on the same host or network requires `BARBACANE_ALLOW_INTERNAL_EGRESS=true` on the gateway process. Use `ldaps://` or `starttls` so passwords do not cross the network in the clear: with a plain `ldap://` URL and no StartTLS, the gateway refuses to send passwords unless `allow_plaintext: true` is set.

@@ -24,6 +24,9 @@ pub struct Connection {
     pub password: String,
     /// Upgrade a plaintext connection with StartTLS before binding.
     pub starttls: bool,
+    /// Send a password over a plaintext `ldap://` connection without StartTLS.
+    /// The host refuses such binds unless this is set.
+    pub allow_plaintext: bool,
     /// Per-operation timeout in milliseconds (clamped by the host).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
@@ -41,6 +44,7 @@ impl Connection {
             bind_dn: bind_dn.into(),
             password: password.into(),
             starttls: false,
+            allow_plaintext: false,
             timeout_ms: None,
         }
     }
@@ -48,6 +52,12 @@ impl Connection {
     /// Request StartTLS on a plaintext connection.
     pub fn starttls(mut self, on: bool) -> Self {
         self.starttls = on;
+        self
+    }
+
+    /// Allow a password to cross a plaintext `ldap://` connection.
+    pub fn allow_plaintext(mut self, on: bool) -> Self {
+        self.allow_plaintext = on;
         self
     }
 
@@ -345,6 +355,7 @@ mod tests {
         assert_eq!(v["bind_dn"], "cn=svc,dc=x");
         assert_eq!(v["password"], "pw");
         assert_eq!(v["starttls"], false);
+        assert_eq!(v["allow_plaintext"], false);
         assert_eq!(v["timeout_ms"], 2500);
         assert_eq!(v["base_dn"], "ou=people,dc=x");
         assert_eq!(v["scope"], "sub");

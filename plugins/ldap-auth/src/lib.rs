@@ -37,6 +37,11 @@ pub struct LdapAuth {
     #[serde(default)]
     starttls: bool,
 
+    /// Send passwords over a plaintext `ldap://` connection without StartTLS.
+    /// The host refuses such binds unless this is set.
+    #[serde(default)]
+    allow_plaintext: bool,
+
     /// Base DN of the user search.
     user_base_dn: String,
 
@@ -346,7 +351,9 @@ impl LdapAuth {
     }
 
     fn connection(&self, bind_dn: &str, password: &str) -> Connection {
-        let mut conn = Connection::new(&self.url, bind_dn, password).starttls(self.starttls);
+        let mut conn = Connection::new(&self.url, bind_dn, password)
+            .starttls(self.starttls)
+            .allow_plaintext(self.allow_plaintext);
         let timeout_ms = (self.timeout * 1000.0).max(0.0) as u64;
         if timeout_ms > 0 {
             conn = conn.timeout_ms(timeout_ms);
@@ -818,6 +825,7 @@ mod tests {
         assert_eq!(p.realm, "api");
         assert!(p.strip_credentials);
         assert!(!p.starttls);
+        assert!(!p.allow_plaintext);
         assert!(p.bind_dn.is_empty());
     }
 
