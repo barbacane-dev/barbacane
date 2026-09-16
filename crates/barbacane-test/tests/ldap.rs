@@ -228,12 +228,19 @@ async fn test_ldap_auth_filter_injection_is_inert() {
     };
 
     // Unescaped, this username would turn the filter into (cn=*)(cn=*) and
-    // match the whole directory; escaped, it matches nothing.
+    // match the whole directory, so the bind with johndoe's password would
+    // succeed. Escaped, a compliant server matches nothing (401); glauth
+    // rejects the escaped filter outright, which the plugin reports as 503.
+    // Either way the request must never be authenticated.
     let resp = gateway
         .request_builder(reqwest::Method::GET, "/protected")
         .header("Authorization", basic("*)(cn=*", "dogood"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401);
+    let status = resp.status().as_u16();
+    assert!(
+        status == 401 || status == 503,
+        "expected 401 or 503, got {status}"
+    );
 }
