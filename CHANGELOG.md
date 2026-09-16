@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **wasm**: NATS `tls://` and LDAP `ldaps://`/StartTLS connections are opened to the address vetted by the SSRF guard, closing the DNS-rebinding window between resolution and connect that plaintext connections already had closed. LDAP hands the socket to `ldap3` with the URL hostname, so SNI and certificate validation are unchanged. NATS validates the server certificate against the URL hostname through a pinned verifier; the ClientHello for a `tls://` server carries no SNI.
+- **wasm**: NATS `tls://` and LDAP `ldaps://`/StartTLS connections are opened to the address vetted by the SSRF guard, closing the DNS-rebinding window between resolution and connect that plaintext connections already had closed. LDAP hands the socket to `ldap3` with the URL hostname, so SNI and certificate validation are unchanged. NATS validates the server certificate against the URL hostname through a pinned verifier; the ClientHello for a `tls://` server carries no SNI. NATS also refuses the servers a broker advertises in `INFO.connect_urls`, which entered the reconnect pool without passing the SSRF guard.
 - **data plane**: client-supplied `x-auth-*` request headers are dropped before the middleware chain runs. Auth plugins set `x-auth-consumer-groups` only when the identity has groups, so a caller authenticated as a user without groups could previously send `x-auth-consumer-groups: admin` and satisfy `acl`. The `x-auth-*` namespace now belongs to auth plugins only.
 
 ## [0.10.0] - 2026-09-12

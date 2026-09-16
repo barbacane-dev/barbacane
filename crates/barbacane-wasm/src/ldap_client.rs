@@ -329,30 +329,38 @@ impl LdapClient {
             }
         };
 
-        // Open the socket to a vetted address and hand it to ldap3 with the
-        // original URL: the hostname drives SNI and certificate validation for
-        // `ldaps://` and StartTLS, while the bytes flow to the checked address.
-        let (driver, ldap) = tokio::time::timeout(CONNECT_TIMEOUT, async {
-            let tcp = crate::http_client::connect_pinned_tcp(&addrs)
+        let (driver, ldap) =
+            tokio::time::timeout(CONNECT_TIMEOUT, connect_pinned(&addrs, url, conn.starttls))
                 .await
-                .map_err(LdapError::ConnectionFailed)?;
-            let tcp = tcp
-                .into_std()
-                .map_err(|e| LdapError::ConnectionFailed(e.to_string()))?;
-            let settings = LdapConnSettings::new()
-                .set_starttls(conn.starttls)
-                .set_std_stream(StdStream::Tcp(tcp));
-            LdapConnAsync::with_settings(settings, url)
-                .await
-                .map_err(|e| LdapError::ConnectionFailed(e.to_string()))
-        })
-        .await
-        .map_err(|_| LdapError::Timeout)??;
+                .map_err(|_| LdapError::Timeout)??;
         ldap3::drive!(driver);
 
         tracing::info!(url = %url, "established LDAP connection");
         Ok(ldap)
     }
+}
+
+/// Open the socket to one of `addrs` and hand it to `ldap3` with the original
+/// `url`: the hostname drives SNI and certificate validation for `ldaps://` and
+/// StartTLS, while the bytes flow to the address the SSRF guard vetted. `ldap3`
+/// never resolves the hostname itself.
+async fn connect_pinned(
+    addrs: &[std::net::SocketAddr],
+    url: &str,
+    starttls: bool,
+) -> Result<(LdapConnAsync, ldap3::Ldap), LdapError> {
+    let tcp = crate::http_client::connect_pinned_tcp(addrs)
+        .await
+        .map_err(LdapError::ConnectionFailed)?;
+    let tcp = tcp
+        .into_std()
+        .map_err(|e| LdapError::ConnectionFailed(e.to_string()))?;
+    let settings = LdapConnSettings::new()
+        .set_starttls(starttls)
+        .set_std_stream(StdStream::Tcp(tcp));
+    LdapConnAsync::with_settings(settings, url)
+        .await
+        .map_err(|e| LdapError::ConnectionFailed(e.to_string()))
 }
 
 /// `true` for `ldaps://`, `false` for `ldap://`, error for anything else.
@@ -519,6 +527,27 @@ mod tests {
     fn client_starts_empty() {
         let client = LdapClient::new(true).expect("ldap client");
         assert!(client.connections.lock().is_empty());
+    }
+
+    /// The socket goes to the vetted address, not to a resolution of the URL
+    /// host: the URL names a host that cannot resolve, so reaching the listener
+    /// is only possible through the vetted address.
+    #[tokio::test]
+    async fn connect_pinned_uses_the_vetted_address_not_the_url_host() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let vetted = listener.local_addr().expect("local addr");
+        let accepted = tokio::spawn(async move { listener.accept().await.map(|(_, peer)| peer) });
+
+        let (_driver, _ldap) = connect_pinned(&[vetted], "ldap://directory.invalid:389", false)
+            .await
+            .expect("connection opened to the vetted address");
+
+        assert!(
+            accepted.await.expect("accept task").is_ok(),
+            "the listener on the vetted address must receive the connection"
+        );
     }
 
     #[test]
