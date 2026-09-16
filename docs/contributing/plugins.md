@@ -442,6 +442,7 @@ Barbacane includes these official plugins in the `plugins/` directory:
 | `jwt-auth` | Middleware | JWT token validation |
 | `apikey-auth` | Middleware | API key authentication |
 | `oauth2-auth` | Middleware | OAuth2 token introspection |
+| `ldap-auth` | Middleware | LDAP / Active Directory authentication (directory bind, group lookup) |
 | `rate-limit` | Middleware | Sliding window rate limiting |
 | `cache` | Middleware | Response caching |
 | `cors` | Middleware | CORS header management |

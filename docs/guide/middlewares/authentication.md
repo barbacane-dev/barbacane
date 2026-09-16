@@ -254,3 +254,82 @@ Returns `401 Unauthorized` with `WWW-Authenticate: Basic realm="<realm>"` and Pr
   "detail": "Invalid username or password"
 }
 ```
+
+---
+
+## ldap-auth
+
+Authenticates `Authorization: Basic` credentials (RFC 7617) against an LDAP or Active Directory server. The user entry is located with a search as a service account, the password is verified with a bind as that entry, and groups come from the entry's membership attribute (`memberOf` by default) or from a group search. Verified and rejected credentials are cached for `cache_ttl_seconds`, so a burst of requests or a credential-stuffing run does not turn into directory load.
+
+```yaml
+x-barbacane-middlewares:
+  - name: ldap-auth
+    config:
+      url: "ldaps://directory.example.com:636"
+      bind_dn: "cn=gateway,ou=services,dc=example,dc=com"
+      bind_password: "env://LDAP_BIND_PASSWORD"
+      user_base_dn: "ou=people,dc=example,dc=com"
+      user_filter: "(uid={username})"
+      required_groups: ["api-users"]
+```
+
+Active Directory uses different attribute names:
+
+```yaml
+      user_filter: "(sAMAccountName={username})"
+      user_attr: "sAMAccountName"
+      group_attr: "memberOf"
+```
+
+### Configuration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `url` | string | **required** | `ldap://host[:port]` or `ldaps://host[:port]` |
+| `bind_dn` | string | `""` | Service-account DN for the user and group searches; empty for an anonymous search |
+| `bind_password` | string | `""` | Service-account password (secret reference such as `env://LDAP_BIND_PASSWORD`) |
+| `starttls` | boolean | `false` | Upgrade a plaintext `ldap://` connection with StartTLS; the connection fails if the server refuses |
+| `user_base_dn` | string | **required** | Base DN of the user search |
+| `user_filter` | string | `(uid={username})` | User search filter; `{username}` is replaced with the escaped username (RFC 4515) |
+| `user_attr` | string | `uid` | Attribute of the user entry used as `x-auth-consumer`; falls back to the submitted username |
+| `group_attr` | string | `memberOf` | Attribute of the user entry holding group DNs |
+| `group_base_dn` | string | `""` | When set, groups come from a search under this base with `group_filter` instead of `group_attr` |
+| `group_filter` | string | `(member={dn})` | Group search filter; `{dn}` and `{username}` are replaced with escaped values |
+| `group_name_attr` | string | `cn` | Attribute naming a group entry in group-search mode |
+| `group_name_from_dn` | boolean | `true` | Emit the first RDN value of each group DN (`admins` for `cn=admins,ou=groups,dc=example,dc=com`) instead of the full DN |
+| `required_groups` | array | `[]` | Groups the user must belong to (any of); otherwise `403`. Use `acl` for richer policy |
+| `timeout` | number | `5` | Per-operation timeout in seconds |
+| `cache_ttl_seconds` | integer | `60` | Cache lifetime for verified and rejected credentials; `0` disables caching |
+| `realm` | string | `api` | Realm shown in the `WWW-Authenticate` challenge |
+| `strip_credentials` | boolean | `true` | Remove `Authorization` before forwarding to upstream |
+
+Usernames are escaped before they reach the filter, so a value such as `*)(uid=*` matches nothing. An empty password is rejected without contacting the directory, because an LDAP bind with an empty password is an anonymous bind and would succeed for any DN.
+
+### Context headers
+
+Sets headers for downstream:
+- `x-auth-consumer`: consumer identifier (`user_attr` of the entry, or the username)
+- `x-auth-consumer-groups`: comma-separated group names (only set when the user has groups)
+- `x-auth-user`: the submitted username
+- `x-auth-dn`: the user entry's DN
+
+### Error responses
+
+`401 Unauthorized` with `WWW-Authenticate: Basic realm="<realm>"` and Problem JSON when credentials are missing, malformed or rejected. An unknown user and a wrong password produce the same response.
+
+```json
+{
+  "type": "urn:barbacane:error:authentication-failed",
+  "title": "Authentication failed",
+  "status": 401,
+  "detail": "Invalid username or password"
+}
+```
+
+`403 Forbidden` (`urn:barbacane:error:forbidden`) when `required_groups` is set and the user is in none of them.
+
+`503 Service Unavailable` (`urn:barbacane:error:ldap-unavailable`) when the directory cannot be reached or a search or bind fails for a reason other than the credentials. Directory failures are never cached.
+
+### Directory connectivity
+
+The gateway opens directory connections through the plugin SSRF guard, which blocks loopback, private-network and link-local addresses by default. A directory on the same host or network requires `BARBACANE_ALLOW_INTERNAL_EGRESS=true` on the gateway process. Use `ldaps://` or `starttls` so passwords do not cross the network in the clear.

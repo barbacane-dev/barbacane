@@ -180,6 +180,29 @@ const schemas = {
     additionalProperties: false,
   },
 
+  "ldap-auth": {
+    required: ["url","user_base_dn"],
+    properties: {
+      url: { type: "string" },
+      bind_dn: { type: "string" },
+      bind_password: { type: "string", writeOnly: true },
+      starttls: { type: "boolean" },
+      user_base_dn: { type: "string" },
+      user_filter: { type: "string" },
+      user_attr: { type: "string" },
+      group_attr: { type: "string" },
+      group_base_dn: { type: "string" },
+      group_filter: { type: "string" },
+      group_name_from_dn: { type: "boolean" },
+      required_groups: { type: "array" },
+      timeout: { type: "number", minimum: 0 },
+      cache_ttl_seconds: { type: "integer", minimum: 0 },
+      realm: { type: "string" },
+      strip_credentials: { type: "boolean" },
+    },
+    additionalProperties: false,
+  },
+
   "oauth2-auth": {
     required: ["introspection_endpoint","client_id","client_secret"],
     properties: {

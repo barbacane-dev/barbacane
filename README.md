@@ -29,7 +29,7 @@ Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or 
 - **AI gateway built-in** — `ai-proxy` unifies OpenAI / Anthropic / Ollama behind one OpenAI-compatible surface: Chat Completions, the stateless Responses API (`POST /v1/responses`), and an aggregated model catalog (`GET /v1/models`). Glob-based `routes` pick the upstream from the client's `model`, per-target `allow`/`deny` lists gate the catalog, and provider fallback handles 5xx/timeout. Four dedicated middlewares add prompt guarding, response redaction, token-based rate limiting, and per-call cost tracking ([ADR-0024](adr/0024-ai-gateway-plugin.md), [ADR-0030](adr/0030-ai-gateway-responses-api.md)).
 - **MCP from your spec** — Every operation in your OpenAPI spec is automatically exposed as a Model Context Protocol tool at `POST /__barbacane/mcp`, behind the same auth/rate-limit/validation chain ([ADR-0025](adr/0025-mcp-server.md)).
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
-- **Extensible** — 33 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
+- **Extensible** — 34 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
 - **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export. Per-middleware timing comes for free.
 
 ## Quick Start
@@ -145,7 +145,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 
 ## Official Plugins
 
-33 production-ready plugins ship with Barbacane. They're built as WASM modules and run in a sandbox.
+34 production-ready plugins ship with Barbacane. They're built as WASM modules and run in a sandbox.
 
 ### Dispatchers — where the request goes
 
@@ -165,7 +165,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 
 | Concern | Plugins |
 |---------|---------|
-| **Authentication** | `jwt-auth`, `apikey-auth`, `basic-auth`, `oauth2-auth`, `oidc-auth` |
+| **Authentication** | `jwt-auth`, `apikey-auth`, `basic-auth`, `oauth2-auth`, `oidc-auth`, `ldap-auth` |
 | **Authorization** | `acl`, `opa-authz`, `cel` (CEL policy + policy-driven routing) |
 | **Traffic control** | `rate-limit` (sliding window), `request-size-limit`, `ip-restriction`, `bot-detection`, `redirect` |
 | **Caching** | `cache` (response caching) |

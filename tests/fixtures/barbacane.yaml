@@ -32,6 +32,8 @@ plugins:
     path: ../../plugins/kafka/kafka.wasm
   basic-auth:
     path: ../../plugins/basic-auth/basic-auth.wasm
+  ldap-auth:
+    path: ../../plugins/ldap-auth/ldap-auth.wasm
   http-log:
     path: ../../plugins/http-log/http-log.wasm
   oidc-auth:
