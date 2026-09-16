@@ -53,6 +53,53 @@ async fn test_acl_editor_denied_admin_only() {
     assert_eq!(resp.status(), 403);
 }
 
+/// `x-auth-*` request headers are dropped at ingress: a client cannot forge
+/// groups for a user the auth plugin gives none.
+#[tokio::test]
+async fn test_acl_client_supplied_identity_headers_are_dropped() {
+    let gateway = TestGateway::from_spec(&fixture("acl.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/admin-only")
+        .header("Authorization", acl_basic_auth("guest", "guest123"))
+        .header("X-Auth-Consumer-Groups", "admin")
+        .header("x-auth-consumer", "admin")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_acl_guest_without_groups_denied_admin_only() {
+    let gateway = TestGateway::from_spec(&fixture("acl.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/admin-only")
+        .header("Authorization", acl_basic_auth("guest", "guest123"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_acl_admin_with_spoofed_headers_still_allowed() {
+    let gateway = TestGateway::from_spec(&fixture("acl.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/admin-only")
+        .header("Authorization", acl_basic_auth("admin", "admin123"))
+        .header("x-auth-consumer-groups", "nobody")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
 #[tokio::test]
 async fn test_acl_editor_allowed_editors_endpoint() {
     let gateway = TestGateway::from_spec(&fixture("acl.yaml"))
