@@ -113,8 +113,7 @@ impl NatsPublisher {
         }
 
         // SSRF guard: resolve once and refuse internal/metadata targets unless the
-        // operator has opted into internal egress. The connection is opened to
-        // the vetted addresses, not to a fresh resolution by async_nats.
+        // operator has opted into internal egress.
         let (host, port) = crate::broker::split_host_port(url, DEFAULT_NATS_PORT);
         let addrs = match crate::http_client::resolve_permitted_addrs(
             &host,
@@ -132,21 +131,23 @@ impl NatsPublisher {
             }
         };
 
-        // Connect to the vetted addresses with the URL scheme kept. For `tls://`
-        // the server certificate is validated against the URL hostname whatever
-        // address the socket was opened to; the ClientHello carries no SNI.
-        let is_tls = is_tls_url(url);
-        let pinned = pinned_server_addrs(url, &addrs)?;
+        // A plaintext connection goes to the vetted addresses. A `tls://` server
+        // keeps the URL: async_nats derives the TLS server name from the address
+        // it is given, and rustls sends no SNI for an IP literal, which breaks a
+        // broker that selects its certificate by SNI. Pinning a `tls://` server
+        // needs an async_nats API that takes the dial address and the TLS server
+        // name separately.
+        let servers = if is_tls_url(url) {
+            vec![url
+                .parse::<async_nats::ServerAddr>()
+                .map_err(|e| BrokerError::ConnectionFailed(format!("invalid NATS URL: {e}")))?]
+        } else {
+            pinned_server_addrs(&addrs)?
+        };
         // Servers advertised in INFO.connect_urls never pass the SSRF guard, so
-        // they are refused: the pool keeps only the vetted addresses, which are
-        // IP literals and so survive the re-resolution a reconnect performs.
-        let mut options = async_nats::ConnectOptions::new().ignore_discovered_servers();
-        if is_tls {
-            let tls_config = crate::tls_pin::pinned_client_config(&host)
-                .map_err(|e| BrokerError::ConnectionFailed(format!("TLS configuration: {e}")))?;
-            options = options.tls_client_config(tls_config);
-        }
-        let client = tokio::time::timeout(CONNECT_TIMEOUT, options.connect(pinned))
+        // they are refused and the pool keeps only the servers configured here.
+        let options = async_nats::ConnectOptions::new().ignore_discovered_servers();
+        let client = tokio::time::timeout(CONNECT_TIMEOUT, options.connect(servers))
             .await
             .map_err(|_| BrokerError::Timeout)?
             .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
@@ -173,17 +174,14 @@ fn is_tls_url(url: &str) -> bool {
     url.trim_start().starts_with("tls://")
 }
 
-/// Server list for the connection, one entry per vetted address, keeping the
-/// scheme of `url` so a `tls://` server is still reached over TLS. The hostname
-/// is left out on purpose: it would let the client resolve it again.
+/// Plaintext server list, one entry per vetted address. The hostname is left
+/// out on purpose: it would let the client resolve it again.
 fn pinned_server_addrs(
-    url: &str,
     addrs: &[std::net::SocketAddr],
 ) -> Result<Vec<async_nats::ServerAddr>, BrokerError> {
-    let scheme = if is_tls_url(url) { "tls" } else { "nats" };
     addrs
         .iter()
-        .map(|a| format!("{scheme}://{a}").parse())
+        .map(|a| format!("nats://{a}").parse())
         .collect::<Result<_, _>>()
         .map_err(|e| BrokerError::ConnectionFailed(format!("invalid pinned NATS address: {e}")))
 }
@@ -199,8 +197,8 @@ mod tests {
         assert!(conns.is_empty());
     }
 
-    /// The server list carries the vetted addresses, never the hostname the
-    /// client could resolve again, and keeps the scheme so TLS stays TLS.
+    /// A plaintext server list carries the vetted addresses, never the hostname
+    /// the client could resolve again.
     #[test]
     fn pinned_server_addrs_use_vetted_addresses_not_the_hostname() {
         let vetted: Vec<std::net::SocketAddr> = vec![
@@ -208,20 +206,25 @@ mod tests {
             "203.0.113.8:4222".parse().expect("addr"),
         ];
 
-        let plain = pinned_server_addrs("nats://broker.example.com:4222", &vetted).expect("addrs");
+        let plain = pinned_server_addrs(&vetted).expect("addrs");
         let rendered: Vec<String> = plain
             .iter()
             .map(|a| format!("{}:{}", a.host(), a.port()))
             .collect();
         assert_eq!(rendered, vec!["203.0.113.7:4222", "203.0.113.8:4222"]);
         assert!(plain.iter().all(|a| !a.tls_required()));
-
-        let tls = pinned_server_addrs("tls://broker.example.com:4222", &vetted).expect("addrs");
-        assert!(tls.iter().all(|a| a.tls_required()));
         assert!(
-            tls.iter().all(|a| a.host() != "broker.example.com"),
+            plain.iter().all(|a| a.host() != "broker.example.com"),
             "the hostname must not reach the connect list"
         );
+    }
+
+    /// A `tls://` server keeps its hostname so the ClientHello carries SNI.
+    #[test]
+    fn tls_url_keeps_the_hostname_for_sni() {
+        let addr: async_nats::ServerAddr = "tls://broker.example.com:4222".parse().expect("addr");
+        assert!(addr.tls_required());
+        assert_eq!(addr.host(), "broker.example.com");
     }
 
     #[test]
