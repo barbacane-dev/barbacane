@@ -20,6 +20,46 @@ pub struct ApiSpec {
     pub global_middlewares: Vec<MiddlewareConfig>,
     /// Raw `x-barbacane-*` extensions at root level.
     pub extensions: BTreeMap<String, serde_json::Value>,
+    /// `components.securitySchemes`, keyed by scheme name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub security_schemes: BTreeMap<String, SecurityScheme>,
+    /// Root-level `security`. `None` when the key is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<Vec<SecurityRequirement>>,
+}
+
+/// One entry of a `security` list: scheme name to the scopes it requires.
+///
+/// An entry holding several schemes requires all of them.
+pub type SecurityRequirement = BTreeMap<String, Vec<String>>;
+
+/// A security scheme declared in `components.securitySchemes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum SecurityScheme {
+    /// The credential travels in a named header, query parameter or cookie.
+    #[serde(rename = "apiKey")]
+    ApiKey {
+        /// Name of the header, query parameter or cookie carrying the key.
+        name: String,
+        /// The `in` value: "header", "query" or "cookie".
+        location: String,
+    },
+    /// RFC 7235 authentication, carried in `Authorization`.
+    #[serde(rename = "http")]
+    Http {
+        /// The `scheme` value, lowercased ("basic", "bearer", ...).
+        scheme: String,
+    },
+    /// OAuth 2, carried in `Authorization`.
+    #[serde(rename = "oauth2")]
+    OAuth2,
+    /// OpenID Connect Discovery, carried in `Authorization`.
+    #[serde(rename = "openIdConnect")]
+    OpenIdConnect,
+    /// Client certificate authentication, which carries no request header.
+    #[serde(rename = "mutualTLS")]
+    MutualTls,
 }
 
 /// Detected spec format.
@@ -70,6 +110,11 @@ pub struct Operation {
     /// Response definitions keyed by status code (e.g., "200", "201").
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub responses: BTreeMap<String, ResponseContent>,
+    /// Operation-level `security`. `None` when the key is absent, in which case
+    /// the root-level requirement applies. `Some([])` makes the operation
+    /// anonymous whatever the root declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<Vec<SecurityRequirement>>,
 }
 
 /// Response content for a specific status code.

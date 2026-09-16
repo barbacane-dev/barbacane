@@ -875,6 +875,7 @@ plugins:
                     messages: vec![],
                     bindings: BTreeMap::new(),
                     responses: BTreeMap::new(),
+                    security: None,
                 },
                 Operation {
                     path: "/api".to_string(),
@@ -898,8 +899,11 @@ plugins:
                     messages: vec![],
                     bindings: BTreeMap::new(),
                     responses: BTreeMap::new(),
+                    security: None,
                 },
             ],
+            security_schemes: BTreeMap::new(),
+            security: None,
         };
 
         let plugins = extract_plugin_names(&[spec]);
@@ -945,7 +949,10 @@ plugins:
                 messages: vec![],
                 bindings: BTreeMap::new(),
                 responses: BTreeMap::new(),
+                security: None,
             }],
+            security_schemes: BTreeMap::new(),
+            security: None,
         };
 
         let content = r#"
@@ -991,7 +998,10 @@ plugins:
                 messages: vec![],
                 bindings: BTreeMap::new(),
                 responses: BTreeMap::new(),
+                security: None,
             }],
+            security_schemes: BTreeMap::new(),
+            security: None,
         };
 
         // Manifest declares "mock" but spec uses "http-upstream"
@@ -1040,7 +1050,10 @@ plugins:
                 messages: vec![],
                 bindings: BTreeMap::new(),
                 responses: BTreeMap::new(),
+                security: None,
             }],
+            security_schemes: BTreeMap::new(),
+            security: None,
         }
     }
 
