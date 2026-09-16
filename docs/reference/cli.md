@@ -128,6 +128,11 @@ barbacane dev [OPTIONS]
 | `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
 | `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address. Set to `off` to disable |
 | `--debounce-ms` | No | `300` | Debounce delay in milliseconds before recompiling after a file change |
+| `--log-format` | No | `pretty` | Log format (`json` or `pretty`) |
+| `--max-body-size` | No | `1048576` | Maximum request body size in bytes |
+| `--max-headers` | No | `100` | Maximum number of request headers |
+| `--max-header-size` | No | `8192` | Maximum size of a single header in bytes |
+| `--max-uri-length` | No | `8192` | Maximum URI length in characters |
 
 Dev mode is always enabled (verbose errors, plaintext HTTP upstreams allowed).
 
