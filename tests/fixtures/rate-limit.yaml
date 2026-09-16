@@ -38,3 +38,35 @@ paths:
       responses:
         "200":
           description: Success
+
+  /per-user:
+    get:
+      operationId: perUserEndpoint
+      summary: Rate limited per authenticated consumer (2 req/60s) via context:auth.sub
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "rl-test"
+            credentials:
+              - username: alice
+                password: "alice123"
+              - username: bob
+                password: "bob123"
+        - name: rate-limit
+          config:
+            quota: 2
+            window: 60
+            policy_name: "per-user"
+            partition_key: "context:auth.sub"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized
+        "429":
+          description: Rate limit exceeded

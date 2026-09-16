@@ -3,6 +3,7 @@
 //! Validates API keys from headers or query parameters and rejects
 //! unauthenticated requests with 401 Unauthorized.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -106,13 +107,16 @@ impl ApiKeyAuth {
                         .insert("x-auth-key-scopes".to_string(), scopes_csv.clone());
                     modified_req
                         .headers
-                        .insert("x-auth-consumer-groups".to_string(), scopes_csv);
+                        .insert("x-auth-consumer-groups".to_string(), scopes_csv.clone());
+                    context::set(context::AUTH_GROUPS, &scopes_csv);
                 }
 
-                // Standard consumer header for ACL and downstream middlewares
+                // Standard consumer header for ACL and downstream middlewares,
+                // and the same identity in the request context.
                 modified_req
                     .headers
                     .insert("x-auth-consumer".to_string(), key_entry.id.clone());
+                context::set(context::AUTH_SUB, &key_entry.id);
 
                 Action::Continue(modified_req)
             }

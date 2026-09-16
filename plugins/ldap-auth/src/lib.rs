@@ -6,6 +6,7 @@
 //! group search. Rejected requests get 401 with a `WWW-Authenticate` challenge;
 //! a directory failure gets 503 and is never cached.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::ldap::{self, Connection, Entry, LdapError, SearchRequest};
 use barbacane_plugin_sdk::log;
 use barbacane_plugin_sdk::prelude::*;
@@ -220,6 +221,9 @@ impl LdapAuth {
                 .iter()
                 .any(|h| name.eq_ignore_ascii_case(h))
         });
+        // Identity headers for acl and upstreams, and the same identity in the
+        // request context for plugins that read `context:auth.*`.
+        context::set(context::AUTH_SUB, &identity.consumer);
         modified
             .headers
             .insert("x-auth-consumer".to_string(), identity.consumer);
@@ -228,10 +232,11 @@ impl LdapAuth {
             .headers
             .insert("x-auth-dn".to_string(), identity.dn);
         if !identity.groups.is_empty() {
-            modified.headers.insert(
-                "x-auth-consumer-groups".to_string(),
-                identity.groups.join(","),
-            );
+            let groups = identity.groups.join(",");
+            context::set(context::AUTH_GROUPS, &groups);
+            modified
+                .headers
+                .insert("x-auth-consumer-groups".to_string(), groups);
         }
         Action::Continue(modified)
     }
@@ -766,6 +771,7 @@ mod tests {
             ];
         });
         clock::NOW_MS.with(|n| n.set(1_000_000));
+        context::clear();
     }
 
     fn calls() -> (u32, u32) {
@@ -923,6 +929,11 @@ mod tests {
         assert_eq!(
             req.headers.get("x-auth-consumer-groups").unwrap(),
             "admins,dev"
+        );
+        assert_eq!(context::get(context::AUTH_SUB).as_deref(), Some("alice"));
+        assert_eq!(
+            context::get(context::AUTH_GROUPS).as_deref(),
+            Some("admins,dev")
         );
         assert_eq!(calls(), (1, 1));
     }

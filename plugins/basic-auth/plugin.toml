@@ -6,4 +6,4 @@ description = "HTTP Basic authentication middleware (RFC 7617)"
 wasm = "basic-auth.wasm"
 
 [capabilities]
-host_functions = []
+host_functions = ["context_set"]

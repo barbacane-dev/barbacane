@@ -6,4 +6,4 @@ description = "LDAP / Active Directory authentication: Basic credentials verifie
 wasm = "ldap-auth.wasm"
 
 [capabilities]
-host_functions = ["ldap", "log", "clock_now"]
+host_functions = ["ldap", "log", "clock_now", "context_set"]

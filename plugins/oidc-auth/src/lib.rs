@@ -4,6 +4,7 @@
 //! JWKS key rotation, and cryptographic signature verification via the
 //! `host_verify_signature` host function.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
 use barbacane_plugin_sdk::jwt::{self, Audience};
 use barbacane_plugin_sdk::prelude::*;
@@ -320,10 +321,12 @@ impl OidcAuth {
                     modified_req
                         .headers
                         .insert("x-auth-sub".to_string(), sub.clone());
-                    // Standard consumer header for ACL and downstream middlewares
+                    // Standard consumer header for ACL and downstream middlewares,
+                    // and the same identity in the request context.
                     modified_req
                         .headers
                         .insert("x-auth-consumer".to_string(), sub.clone());
+                    context::set(context::AUTH_SUB, sub);
                 }
 
                 if let Some(scope) = &claims.scope {
@@ -337,7 +340,8 @@ impl OidcAuth {
                         if let Some(groups) = self.extract_groups_from_claim(&claims_value) {
                             modified_req
                                 .headers
-                                .insert("x-auth-consumer-groups".to_string(), groups);
+                                .insert("x-auth-consumer-groups".to_string(), groups.clone());
+                            context::set(context::AUTH_GROUPS, &groups);
                         }
                     }
                 } else if let Some(scope) = &claims.scope {
@@ -345,7 +349,8 @@ impl OidcAuth {
                     if !groups.is_empty() {
                         modified_req
                             .headers
-                            .insert("x-auth-consumer-groups".to_string(), groups);
+                            .insert("x-auth-consumer-groups".to_string(), groups.clone());
+                        context::set(context::AUTH_GROUPS, &groups);
                     }
                 }
 
@@ -1662,7 +1667,8 @@ mod tests {
             headers.insert("x-auth-scope".to_string(), scope.clone());
             let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
             if !groups.is_empty() {
-                headers.insert("x-auth-consumer-groups".to_string(), groups);
+                headers.insert("x-auth-consumer-groups".to_string(), groups.clone());
+                context::set(context::AUTH_GROUPS, &groups);
             }
         }
 
@@ -1764,7 +1770,8 @@ mod tests {
         if config.groups_claim.is_some() {
             if let Ok(claims_value) = serde_json::to_value(&claims) {
                 if let Some(groups) = config.extract_groups_from_claim(&claims_value) {
-                    headers.insert("x-auth-consumer-groups".to_string(), groups);
+                    headers.insert("x-auth-consumer-groups".to_string(), groups.clone());
+                    context::set(context::AUTH_GROUPS, &groups);
                 }
             }
         }
@@ -1809,13 +1816,15 @@ mod tests {
         if config.groups_claim.is_some() {
             if let Ok(claims_value) = serde_json::to_value(&claims) {
                 if let Some(groups) = config.extract_groups_from_claim(&claims_value) {
-                    headers.insert("x-auth-consumer-groups".to_string(), groups);
+                    headers.insert("x-auth-consumer-groups".to_string(), groups.clone());
+                    context::set(context::AUTH_GROUPS, &groups);
                 }
             }
         } else if let Some(scope) = &claims.scope {
             let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
             if !groups.is_empty() {
-                headers.insert("x-auth-consumer-groups".to_string(), groups);
+                headers.insert("x-auth-consumer-groups".to_string(), groups.clone());
+                context::set(context::AUTH_GROUPS, &groups);
             }
         }
 

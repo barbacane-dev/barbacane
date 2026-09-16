@@ -3,6 +3,7 @@
 //! Validates Bearer tokens in the Authorization header and rejects
 //! unauthenticated requests with 401 Unauthorized.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::jwt::{self, Audience};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -205,10 +206,12 @@ impl JwtAuth {
                     modified_req
                         .headers
                         .insert("x-auth-sub".to_string(), sub.clone());
-                    // Standard consumer header for ACL and downstream middlewares
+                    // Standard consumer header for ACL and downstream middlewares,
+                    // and the same identity in the request context.
                     modified_req
                         .headers
                         .insert("x-auth-consumer".to_string(), sub.clone());
+                    context::set(context::AUTH_SUB, sub);
                 }
                 if let Ok(claims_json) = serde_json::to_string(&claims) {
                     modified_req
@@ -238,7 +241,8 @@ impl JwtAuth {
                         if !groups_csv.is_empty() {
                             modified_req
                                 .headers
-                                .insert("x-auth-consumer-groups".to_string(), groups_csv);
+                                .insert("x-auth-consumer-groups".to_string(), groups_csv.clone());
+                            context::set(context::AUTH_GROUPS, &groups_csv);
                         }
                     }
                 }
