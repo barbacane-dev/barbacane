@@ -113,9 +113,8 @@ impl NatsPublisher {
         }
 
         // SSRF guard: resolve once and refuse internal/metadata targets unless the
-        // operator has opted into internal egress. We keep the vetted addresses so
-        // the connection can be pinned to them (closing the DNS-rebinding window
-        // async_nats would otherwise reopen by resolving again at connect time).
+        // operator has opted into internal egress. The connection is opened to
+        // the vetted addresses, not to a fresh resolution by async_nats.
         let (host, port) = crate::broker::split_host_port(url, DEFAULT_NATS_PORT);
         let addrs = match crate::http_client::resolve_permitted_addrs(
             &host,
@@ -133,26 +132,28 @@ impl NatsPublisher {
             }
         };
 
-        // Pin plaintext (`nats://`) connections to the vetted IPs. For `tls://`
-        // we keep the hostname so TLS SNI/cert validation still works; the
-        // pre-connect resolution above already blocked internal targets, leaving
-        // only a narrow rebinding window for a TLS broker (which would need a
-        // valid cert on the rebound internal target to be usable).
+        // Connect to the vetted addresses with the URL scheme kept. For `tls://`
+        // the server certificate is validated against the URL hostname whatever
+        // address the socket was opened to; the ClientHello carries no SNI.
         let is_tls = url.trim_start().starts_with("tls://");
-        let client = if is_tls {
-            tokio::time::timeout(CONNECT_TIMEOUT, async_nats::connect(url.to_string())).await
-        } else {
-            let pinned: Vec<async_nats::ServerAddr> = addrs
-                .iter()
-                .map(|a| format!("nats://{a}").parse())
-                .collect::<Result<_, _>>()
-                .map_err(|e| {
-                    BrokerError::ConnectionFailed(format!("invalid pinned NATS address: {e}"))
-                })?;
-            tokio::time::timeout(CONNECT_TIMEOUT, async_nats::connect(pinned)).await
+        let scheme = if is_tls { "tls" } else { "nats" };
+        let pinned: Vec<async_nats::ServerAddr> = addrs
+            .iter()
+            .map(|a| format!("{scheme}://{a}").parse())
+            .collect::<Result<_, _>>()
+            .map_err(|e| {
+                BrokerError::ConnectionFailed(format!("invalid pinned NATS address: {e}"))
+            })?;
+        let mut options = async_nats::ConnectOptions::new();
+        if is_tls {
+            let tls_config = crate::tls_pin::pinned_client_config(&host)
+                .map_err(|e| BrokerError::ConnectionFailed(format!("TLS configuration: {e}")))?;
+            options = options.tls_client_config(tls_config);
         }
-        .map_err(|_| BrokerError::Timeout)?
-        .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+        let client = tokio::time::timeout(CONNECT_TIMEOUT, options.connect(pinned))
+            .await
+            .map_err(|_| BrokerError::Timeout)?
+            .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
 
         tracing::info!(url = %url, "established NATS connection");
 

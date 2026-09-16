@@ -26,6 +26,7 @@ mod schema;
 pub mod secrets;
 #[cfg(test)]
 mod serde_compat;
+mod tls_pin;
 mod trap;
 mod validate;
 pub mod version;

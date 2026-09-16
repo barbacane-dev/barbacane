@@ -11,7 +11,7 @@
 use crate::ldap::{
     LdapBindRequest, LdapConnection, LdapEntry, LdapError, LdapResult, LdapScope, LdapSearchRequest,
 };
-use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, SearchOptions};
+use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, SearchOptions, StdStream};
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -310,8 +310,8 @@ impl LdapClient {
         };
 
         // SSRF guard: resolve once and refuse internal/metadata targets unless the
-        // operator has opted into internal egress. The vetted addresses are kept
-        // so a plaintext connection can be pinned to them.
+        // operator has opted into internal egress. The connection is opened to
+        // one of the vetted addresses.
         let (host, port) = crate::broker::split_host_port(url, default_port);
         let addrs = match crate::http_client::resolve_permitted_addrs(
             &host,
@@ -329,30 +329,25 @@ impl LdapClient {
             }
         };
 
-        // Pin plaintext `ldap://` connections to the vetted IP. For `ldaps://`
-        // and StartTLS the hostname is kept so TLS SNI and certificate
-        // validation work; the pre-connect resolution above already blocked
-        // internal targets, leaving only a narrow rebinding window for a TLS
-        // directory (the same trade-off as the NATS `tls://` path).
-        let connect_url = if is_tls || conn.starttls {
-            url.to_string()
-        } else {
-            let addr = addrs.first().ok_or_else(|| {
-                LdapError::ConnectionFailed(format!("no address resolved for {host}"))
-            })?;
-            format!("ldap://{addr}")
-        };
-
-        let settings = LdapConnSettings::new()
-            .set_conn_timeout(CONNECT_TIMEOUT)
-            .set_starttls(conn.starttls);
-        let (driver, ldap) = tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            LdapConnAsync::with_settings(settings, &connect_url),
-        )
+        // Open the socket to a vetted address and hand it to ldap3 with the
+        // original URL: the hostname drives SNI and certificate validation for
+        // `ldaps://` and StartTLS, while the bytes flow to the checked address.
+        let (driver, ldap) = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            let tcp = crate::http_client::connect_pinned_tcp(&addrs)
+                .await
+                .map_err(LdapError::ConnectionFailed)?;
+            let tcp = tcp
+                .into_std()
+                .map_err(|e| LdapError::ConnectionFailed(e.to_string()))?;
+            let settings = LdapConnSettings::new()
+                .set_starttls(conn.starttls)
+                .set_std_stream(StdStream::Tcp(tcp));
+            LdapConnAsync::with_settings(settings, url)
+                .await
+                .map_err(|e| LdapError::ConnectionFailed(e.to_string()))
+        })
         .await
-        .map_err(|_| LdapError::Timeout)?
-        .map_err(|e| LdapError::ConnectionFailed(e.to_string()))?;
+        .map_err(|_| LdapError::Timeout)??;
         ldap3::drive!(driver);
 
         tracing::info!(url = %url, "established LDAP connection");

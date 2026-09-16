@@ -91,6 +91,7 @@ ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-aw
 
 # TLS
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
+rustls-native-certs = "0.8"
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 rcgen = "0.13"

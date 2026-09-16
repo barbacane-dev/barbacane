@@ -51,6 +51,10 @@ async-nats.workspace = true
 ldap3.workspace = true
 bytes.workspace = true
 
+# TLS egress validated against the URL hostname on a pinned address
+rustls.workspace = true
+rustls-native-certs.workspace = true
+
 # Kafka client (for host_kafka_publish)
 rskafka.workspace = true
 chrono.workspace = true
@@ -86,6 +90,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = "3"
 criterion = { workspace = true }
 wat = { workspace = true }
+rcgen = { workspace = true }
+tokio-rustls = { workspace = true }
 
 [[bench]]
 name = "wasm"
