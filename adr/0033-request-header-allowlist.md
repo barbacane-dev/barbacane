@@ -37,11 +37,11 @@ Before the middleware chain runs, the data plane keeps only request headers that
 
 ### Migration
 
-Migration knobs are data-plane settings, in the family of `--allow-plaintext-upstream`, not spec content:
+There is no passthrough switch. A header the upstream or a plugin needs is declared in the spec; that is the only way to let it through. Upgrading is supported by observability instead:
 
-- `barbacane serve --allow-undeclared-headers` (and `BARBACANE_ALLOW_UNDECLARED_HEADERS=1`) restores passthrough for the whole data plane.
-- Dropped headers increment `barbacane_request_headers_dropped_total` (no name label, to bound cardinality) and are logged at debug level with their names, so an operator upgrading can run with the flag, read the counter and logs, declare what is legitimately used, then remove the flag.
-- The release notes carry an upgrade note.
+- Dropped headers increment `barbacane_request_headers_dropped_total` (no name label, to bound cardinality).
+- In `--dev` mode the data plane logs each dropped header name at warn level on the request that carried it, so a developer sees what to declare on the first call. In production the same information is logged at debug level.
+- The release notes carry an upgrade note listing the baseline and the three declaration mechanisms.
 
 ### Scope
 
@@ -54,7 +54,7 @@ The compiler computes each operation's allowlist (sets 2 to 4) and stores it on 
 ## Consequences
 
 - The spec becomes the contract for what an upstream receives, not only for what a client may send, using only OpenAPI vocabulary: parameters, security schemes, and the middleware configuration the spec already carries.
-- Deployments that rely on undeclared headers reaching the upstream must declare them as parameters (operation, path item, or `components/parameters`) or run with `--allow-undeclared-headers` while they do. This is a behaviour change and ships with an upgrade note and the observability described above.
+- Deployments that rely on undeclared headers reaching the upstream must declare them as parameters (operation, path item, or `components/parameters`). This is a behaviour change with no opt-out, in line with the secure-by-default changes of 0.8.0; it ships with an upgrade note and the observability described above.
 - Plugins gain a `format: "header-name"` annotation on the fields that name request headers, which also documents, in one place per plugin, which headers it reads.
 - The `x-auth-*` bypass class is closed structurally, and the identity headers are guaranteed to originate from auth plugins.
-- Compiler: allowlist computation, security-scheme resolution, cookie parameter validation, `ARTIFACT_VERSION` bump, new compile error for reserved names. Data plane: one filter at the request-conversion sites (already unified in `plugin_request_headers`) and the MCP path, the new flag, the counter. Vacuum ruleset: a rule flagging reserved `x-auth-*` declarations. Docs: spec-configuration guide, middleware guide, `http-upstream` and MCP pages, CLI reference.
+- Compiler: allowlist computation, security-scheme resolution, cookie parameter validation, `ARTIFACT_VERSION` bump, new compile error for reserved names. Data plane: one filter at the request-conversion sites (already unified in `plugin_request_headers`) and the MCP path, the counter, the dev-mode log. Vacuum ruleset: a rule flagging reserved `x-auth-*` declarations. Docs: spec-configuration guide, middleware guide, `http-upstream` and MCP pages, CLI reference.
