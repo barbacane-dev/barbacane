@@ -1648,15 +1648,7 @@ impl Gateway {
 
         // Build the Request object for plugins (using BTreeMap for WASM compatibility)
         let path_params: std::collections::BTreeMap<String, String> = params.into_iter().collect();
-        // `x-auth-*` headers are the identity contract written by auth plugins
-        // and read by acl and upstreams; a client-supplied value must never
-        // reach the chain, or a caller could forge groups an auth plugin
-        // leaves unset.
-        let headers_btree: std::collections::BTreeMap<String, String> = headers
-            .iter()
-            .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("x-auth-"))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let headers_btree = plugin_request_headers(headers);
         // Extract body separately — it travels via side-channel, not in JSON.
         let raw_body = if request_body.is_empty() {
             None
@@ -2929,15 +2921,7 @@ impl Gateway {
         trace_id: &str,
     ) -> Response<Full<Bytes>> {
         // Build a minimal request for the CORS middleware
-        // `x-auth-*` headers are the identity contract written by auth plugins
-        // and read by acl and upstreams; a client-supplied value must never
-        // reach the chain, or a caller could forge groups an auth plugin
-        // leaves unset.
-        let headers_btree: std::collections::BTreeMap<String, String> = headers
-            .iter()
-            .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("x-auth-"))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let headers_btree = plugin_request_headers(headers);
 
         let plugin_request = barbacane_wasm::Request {
             method: "OPTIONS".to_string(),
@@ -5404,6 +5388,65 @@ fn extract_path_param(template: &str, resolved: &str, param_name: &str) -> Optio
         }
     }
     None
+}
+
+/// Request headers as handed to plugins. `x-auth-*` is the identity contract
+/// written by auth plugins and read by acl and upstreams, so any client-supplied
+/// value is dropped here; otherwise a caller could forge groups an auth plugin
+/// leaves unset. Used by every path that builds a plugin request (dispatch and
+/// CORS preflight).
+fn plugin_request_headers(
+    headers: &HashMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("x-auth-"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod plugin_request_headers_tests {
+    use super::plugin_request_headers;
+    use std::collections::HashMap;
+
+    fn headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn drops_client_supplied_identity_headers_case_insensitively() {
+        let kept = plugin_request_headers(&headers(&[
+            ("x-auth-consumer", "admin"),
+            ("X-Auth-Consumer-Groups", "admin"),
+            ("x-auth-claims", "{}"),
+            ("X-AUTH-DN", "cn=admin"),
+            ("authorization", "Basic abc"),
+            ("content-type", "application/json"),
+            ("x-request-id", "r1"),
+        ]));
+        assert!(kept
+            .keys()
+            .all(|k| !k.to_ascii_lowercase().starts_with("x-auth-")));
+        assert_eq!(kept.len(), 3);
+        assert_eq!(
+            kept.get("authorization").map(String::as_str),
+            Some("Basic abc")
+        );
+    }
+
+    #[test]
+    fn only_the_x_auth_dash_prefix_is_reserved() {
+        let kept = plugin_request_headers(&headers(&[
+            ("x-authorization", "custom"),
+            ("x-auth", "bare"),
+            ("x-authz-mode", "strict"),
+        ]));
+        assert_eq!(kept.len(), 3);
+    }
 }
 
 #[cfg(test)]
