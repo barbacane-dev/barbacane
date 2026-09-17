@@ -664,6 +664,7 @@ paths:
       summary: Public endpoint (no auth)
       operationId: getPublic
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:
@@ -679,6 +680,10 @@ components:
   securitySchemes:
     OAuth2:
       type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes: {{}}
 "#,
         introspection_url, introspection_url
     );
@@ -914,6 +919,10 @@ components:
   securitySchemes:
     OAuth2:
       type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes: {{}}
 "#,
         introspection_url, client_secret
     );

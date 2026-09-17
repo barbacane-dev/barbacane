@@ -50,6 +50,7 @@ paths:
       summary: Public endpoint (overrides global middleware)
       operationId: getPublic
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:

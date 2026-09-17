@@ -224,6 +224,7 @@ paths:
       summary: Public endpoint (no auth or ACL)
       operationId: getPublic
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:

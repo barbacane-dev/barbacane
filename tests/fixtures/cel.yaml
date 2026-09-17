@@ -80,6 +80,7 @@ paths:
       summary: Public endpoint (no middleware)
       operationId: getPublic
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:

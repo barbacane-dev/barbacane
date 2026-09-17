@@ -380,7 +380,7 @@ x-barbacane-middlewares:
 
 Each entry is evaluated in order. On a `true` match, the context keys are written (the last match wins when keys collide); on `false`, the entry is a no-op. No request is ever denied by a routing-mode cel — it's pure data-plane policy, not access control.
 
-> **Declare the headers your expression reads.** An operation carries only the headers it admits, and an expression is arbitrary code the compiler does not read, so a header named inside one is not admitted by writing it there. Declare it as an `in: header` parameter on the operation, or the expression sees nothing and evaluates as though the header were absent:
+> **A computed header name needs declaring.** An operation carries only the headers it admits. The compiler reads a literal subscript such as `request.headers['x-ai-model-tier']` and admits that header, so an ordinary condition works as written. A name the expression builds at evaluation time is invisible to it, and so is anything an `opa-authz` policy reads, since that policy lives in OPA. Declare those as an `in: header` parameter on the operation, or the expression sees nothing and evaluates as though the header were absent:
 >
 > ```yaml
 >     parameters:
@@ -390,8 +390,7 @@ Each entry is evaluated in order. On a `true` match, the context keys are writte
 >         schema:
 >           type: string
 > ```
->
-> The same applies to `opa-authz`, whose input carries the headers the operation admits.
+
 
 See [ADR-0024 §Policy-Driven Model Routing](../../../adr/0024-ai-gateway-plugin.md) for the full design.
 

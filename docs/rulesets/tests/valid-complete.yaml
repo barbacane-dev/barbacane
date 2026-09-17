@@ -32,6 +32,7 @@ paths:
       description: Returns API health status.
       tags: [health]
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:
@@ -64,6 +65,7 @@ paths:
       description: Proxies WebSocket connections to upstream.
       tags: [websocket]
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: ws-upstream
         config:
@@ -81,6 +83,7 @@ paths:
       description: Proxies chat completion requests to LLM providers.
       tags: [ai]
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: ai-proxy
         config:
