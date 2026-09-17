@@ -495,6 +495,8 @@ mod tests {
             operations: vec![],
             global_middlewares: vec![],
             extensions: BTreeMap::new(),
+            security_schemes: BTreeMap::new(),
+            security: None,
         }
     }
 
@@ -515,6 +517,7 @@ mod tests {
             messages: vec![],
             bindings: BTreeMap::new(),
             responses: BTreeMap::new(),
+            security: None,
         }
     }
 
