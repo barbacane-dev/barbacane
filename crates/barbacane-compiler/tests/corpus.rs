@@ -358,21 +358,31 @@ fn configured_header_names_reach_the_allowlist() {
         return;
     };
 
+    // The fixture's plugins must be built for it to compile. Skip only when they
+    // are absent, as in a clean tree, so a real compilation failure still fails.
+    let repo_plugins = repo_root.join("plugins");
+    for plugin in ["rate-limit", "basic-auth"] {
+        if !repo_plugins
+            .join(plugin)
+            .join(format!("{plugin}.wasm"))
+            .exists()
+        {
+            eprintln!("skipping: {plugin}.wasm is not built");
+            return;
+        }
+    }
+
     let spec = fixtures.join("rate-limit.yaml");
     let out = std::env::temp_dir().join("barbacane-corpus-allowlist.bca");
-    let result = compile_with_manifest(
+    // Plugin paths in the manifest are relative to the directory holding it.
+    compile_with_manifest(
         &[spec.as_path()],
         &manifest,
-        &manifest_path,
+        &fixtures,
         &out,
         &CompileOptions::default(),
-    );
-    if let Err(e) = result {
-        // The plugins must be built for this to compile; skip rather than fail
-        // when they are not, as a plain `cargo test` in a clean tree.
-        eprintln!("skipping: fixture did not compile ({e})");
-        return;
-    }
+    )
+    .expect("the fixture must compile once its plugins are built");
 
     let routes = barbacane_compiler::load_routes(&out).expect("read routes back");
     let limited = routes

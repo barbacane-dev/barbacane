@@ -930,16 +930,18 @@ fn compile_inner(
             // is not in the spec's vocabulary and nothing else would admit.
             let allowed_request_headers = {
                 let mut allow = operation_header_allowlist(op, spec)?;
-                let mut collect = |name: &str, config: &serde_json::Value| {
-                    let key = crate::manifest::normalize_plugin_name(name);
-                    if let Some(schema) = plugin_schemas.get(key.as_str()) {
-                        collect_configured_header_names(schema, config, &mut allow);
-                    }
-                };
+                let mut collect =
+                    |name: &str, config: &serde_json::Value| -> Result<(), CompileError> {
+                        let key = crate::manifest::normalize_plugin_name(name);
+                        if let Some(schema) = plugin_schemas.get(key.as_str()) {
+                            collect_configured_header_names(schema, config, &mut allow)?;
+                        }
+                        Ok(())
+                    };
                 for middleware in &middlewares {
-                    collect(&middleware.name, &middleware.config);
+                    collect(&middleware.name, &middleware.config)?;
                 }
-                collect(&dispatch.name, &dispatch.config);
+                collect(&dispatch.name, &dispatch.config)?;
                 allow.into_iter().collect::<Vec<String>>()
             };
 
@@ -1747,23 +1749,17 @@ fn collect_configured_header_names(
     schema: &serde_json::Value,
     config: &serde_json::Value,
     out: &mut BTreeSet<String>,
-) {
+) -> Result<(), CompileError> {
     match schema.get("format").and_then(|f| f.as_str()) {
-        Some("header-name") => {
-            extract_header_names(config, out);
-            return;
-        }
-        Some("header-ref") => {
-            extract_referenced_header_names(config, out);
-            return;
-        }
+        Some("header-name") => return extract_header_names(config, out),
+        Some("header-ref") => return extract_referenced_header_names(config, out),
         Some("header-name-map") => {
             if let Some(map) = config.as_object() {
                 for key in map.keys() {
-                    push_header_name(key, out);
+                    push_header_name(key, out)?;
                 }
             }
-            return;
+            return Ok(());
         }
         _ => {}
     }
@@ -1774,7 +1770,7 @@ fn collect_configured_header_names(
     ) {
         for (field, subschema) in props {
             if let Some(value) = values.get(field) {
-                collect_configured_header_names(subschema, value, out);
+                collect_configured_header_names(subschema, value, out)?;
             }
         }
     }
@@ -1787,30 +1783,35 @@ fn collect_configured_header_names(
         match config {
             serde_json::Value::Array(entries) => {
                 for entry in entries {
-                    collect_configured_header_names(subschema, entry, out);
+                    collect_configured_header_names(subschema, entry, out)?;
                 }
             }
             serde_json::Value::Object(entries) => {
                 for entry in entries.values() {
-                    collect_configured_header_names(subschema, entry, out);
+                    collect_configured_header_names(subschema, entry, out)?;
                 }
             }
             _ => {}
         }
     }
+    Ok(())
 }
 
 /// Read a value that is a header name, or a list of them.
-fn extract_header_names(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+fn extract_header_names(
+    value: &serde_json::Value,
+    out: &mut BTreeSet<String>,
+) -> Result<(), CompileError> {
     match value {
-        serde_json::Value::String(text) => push_header_name(text, out),
+        serde_json::Value::String(text) => push_header_name(text, out)?,
         serde_json::Value::Array(entries) => {
             for entry in entries {
-                extract_header_names(entry, out);
+                extract_header_names(entry, out)?;
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Read a value that may reference a header among other things.
@@ -1818,37 +1819,45 @@ fn extract_header_names(value: &serde_json::Value, out: &mut BTreeSet<String>) {
 /// `header:<name>` selects one, and `$request.header.<name>` names one inside a
 /// longer expression. Anything else selects something that is not a header,
 /// such as `client_ip`, and contributes nothing.
-fn extract_referenced_header_names(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+fn extract_referenced_header_names(
+    value: &serde_json::Value,
+    out: &mut BTreeSet<String>,
+) -> Result<(), CompileError> {
     match value {
         serde_json::Value::String(text) => {
             if let Some(name) = text.strip_prefix("header:") {
-                push_header_name(name, out);
-                return;
+                return push_header_name(name, out);
             }
             if let Some(rest) = text.split("$request.header.").nth(1) {
                 let name: String = rest
                     .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
                     .collect();
-                push_header_name(&name, out);
+                push_header_name(&name, out)?;
             }
         }
         serde_json::Value::Array(entries) => {
             for entry in entries {
-                extract_referenced_header_names(entry, out);
+                extract_referenced_header_names(entry, out)?;
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Record a header name, lowercased, ignoring anything that is not one.
-fn push_header_name(name: &str, out: &mut BTreeSet<String>) {
-    let name = name.trim().to_ascii_lowercase();
-    if name.is_empty() || name.contains(' ') {
-        return;
+///
+/// A reserved name is refused rather than recorded. The caller turns that into
+/// E1056, so a configuration cannot admit an identity header the way a declared
+/// parameter cannot.
+fn push_header_name(name: &str, out: &mut BTreeSet<String>) -> Result<(), CompileError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.contains(' ') {
+        return Ok(());
     }
-    out.insert(name);
+    out.insert(reserved_checked(trimmed, "plugin configuration")?);
+    Ok(())
 }
 
 /// Request headers an operation accepts beyond the data plane's baseline.
@@ -2418,7 +2427,7 @@ mod tests {
 
         fn names(config: serde_json::Value) -> BTreeSet<String> {
             let mut out = BTreeSet::new();
-            collect_configured_header_names(&schema(), &config, &mut out);
+            collect_configured_header_names(&schema(), &config, &mut out).expect("collect");
             out
         }
 
@@ -2477,6 +2486,29 @@ mod tests {
                 "an unmarked field is not a header"
             );
             assert!(!found.contains("default"), "nor is a policy name");
+        }
+
+        /// The `x-auth-*` headers carry the identity the auth plugins establish.
+        /// A configuration that named one would admit a client-sent value, so it
+        /// is refused wherever a name can enter the allowlist (E1056).
+        #[test]
+        fn reserved_identity_headers_are_refused() {
+            for config in [
+                serde_json::json!({"header_name": "X-Auth-Consumer"}),
+                serde_json::json!({"vary": ["Accept", "x-auth-scopes"]}),
+                serde_json::json!({"partition_key": "header:X-Auth-Consumer"}),
+                serde_json::json!({"key": "$request.header.x-auth-consumer"}),
+                serde_json::json!({"headers": {"rename": {"X-Auth-Consumer": "X-Who"}}}),
+                serde_json::json!({"headers": {"remove": ["X-Auth-Scopes"]}}),
+            ] {
+                let mut out = BTreeSet::new();
+                let err = collect_configured_header_names(&schema(), &config, &mut out)
+                    .expect_err(&format!("{config} must be refused"));
+                assert!(
+                    matches!(err, CompileError::ReservedHeaderName(_)),
+                    "{config}: {err:?}"
+                );
+            }
         }
     }
 
