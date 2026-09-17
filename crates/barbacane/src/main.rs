@@ -5502,6 +5502,13 @@ fn filter_request_headers(
         // could never contain.
         if lowered.starts_with("x-auth-") {
             dropped += 1;
+            let reason = "request header dropped: the x-auth-* namespace carries the identity \
+                          the auth plugins establish and is never accepted from a client";
+            if dev_mode {
+                tracing::warn!(header = %lowered, "{reason}");
+            } else {
+                tracing::debug!(header = %lowered, "{reason}");
+            }
             continue;
         }
         if is_baseline_request_header(&lowered) || allowed.iter().any(|a| a == &lowered) {
@@ -5576,8 +5583,9 @@ const BASELINE_REQUEST_HEADERS: &[&str] = &[
 
 /// `true` when the baseline admits this header.
 fn is_baseline_request_header(name: &str) -> bool {
-    let lowered = name.to_ascii_lowercase();
-    BASELINE_REQUEST_HEADERS.contains(&lowered.as_str())
+    BASELINE_REQUEST_HEADERS
+        .iter()
+        .any(|h| h.eq_ignore_ascii_case(name))
 }
 
 #[cfg(test)]
