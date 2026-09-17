@@ -93,6 +93,32 @@ fn resolve_parameter_ref<'a>(
     }
 }
 
+/// Merge a path item's parameters with an operation's own.
+///
+/// A parameter is unique by name and location, and the operation's definition
+/// replaces the path item's rather than joining it. Keeping both would validate
+/// a value twice, so a stale inherited schema could reject what the operation
+/// accepts. Header names are compared case-insensitively, as HTTP treats them.
+fn merge_parameters(path_params: &[Parameter], op_params: Vec<Parameter>) -> Vec<Parameter> {
+    let overridden = |p: &Parameter| {
+        op_params.iter().any(|o| {
+            o.location == p.location
+                && if o.location == "header" {
+                    o.name.eq_ignore_ascii_case(&p.name)
+                } else {
+                    o.name == p.name
+                }
+        })
+    };
+    let mut merged: Vec<Parameter> = path_params
+        .iter()
+        .filter(|p| !overridden(p))
+        .cloned()
+        .collect();
+    merged.extend(op_params);
+    merged
+}
+
 /// HTTP methods we recognize in OpenAPI paths.
 /// Includes `query` from OpenAPI 3.2 (RFC 9110 extension).
 const HTTP_METHODS: &[&str] = &[
@@ -246,9 +272,7 @@ fn parse_openapi_paths(
                     ))
                 })?;
 
-                // Merge path-level and operation-level parameters
-                let mut params = path_params.clone();
-                params.extend(parse_parameters(op_obj, spec_root)?);
+                let params = merge_parameters(&path_params, parse_parameters(op_obj, spec_root)?);
 
                 let operation_id = op_obj
                     .get("operationId")
@@ -323,8 +347,7 @@ fn parse_openapi_paths(
                     ))
                 })?;
 
-                let mut params = path_params.clone();
-                params.extend(parse_parameters(op_obj, spec_root)?);
+                let params = merge_parameters(&path_params, parse_parameters(op_obj, spec_root)?);
 
                 let operation_id = op_obj
                     .get("operationId")
@@ -1757,6 +1780,83 @@ paths:
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name, "X-Tenant-Id");
         assert_eq!(params[0].location, "header");
+    }
+
+    #[test]
+    fn operation_parameter_overrides_the_path_item_one() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: X-Tenant-Id
+        in: header
+        schema:
+          type: string
+          maxLength: 3
+    get:
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: x-tenant-id
+          in: header
+          schema:
+            type: string
+            maxLength: 64
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let params = &spec.operations[0].parameters;
+
+        // One entry per (name, location): the path item's `limit` is replaced,
+        // not kept alongside the operation's.
+        let limits: Vec<_> = params.iter().filter(|p| p.name == "limit").collect();
+        assert_eq!(limits.len(), 1, "operation parameter must replace, not add");
+        assert!(!limits[0].required, "the operation definition wins");
+        assert_eq!(
+            limits[0].schema.as_ref().unwrap().get("type").unwrap(),
+            "integer"
+        );
+
+        // Header names are case-insensitive, so this is the same parameter.
+        let tenants: Vec<_> = params
+            .iter()
+            .filter(|p| p.name.eq_ignore_ascii_case("x-tenant-id"))
+            .collect();
+        assert_eq!(tenants.len(), 1, "header override is case-insensitive");
+        assert_eq!(
+            tenants[0]
+                .schema
+                .as_ref()
+                .unwrap()
+                .get("maxLength")
+                .unwrap(),
+            64
+        );
+
+        // A path-item parameter the operation does not redefine is inherited.
+        let ids: Vec<_> = params.iter().filter(|p| p.name == "id").collect();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].location, "path");
+
+        assert_eq!(params.len(), 3);
     }
 
     #[test]
