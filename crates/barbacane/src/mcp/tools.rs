@@ -341,6 +341,7 @@ mod tests {
             responses: BTreeMap::new(),
             mcp_enabled,
             mcp_description: None,
+            allowed_request_headers: Vec::new(),
         }
     }
 

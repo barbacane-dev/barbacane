@@ -26,7 +26,7 @@ Metadata about the artifact.
 
 ```json
 {
-  "barbacane_artifact_version": 4,
+  "barbacane_artifact_version": 6,
   "compiled_at": "2026-07-10T10:30:00Z",
   "compiler_version": "0.8.0",
   "source_specs": [
@@ -70,7 +70,7 @@ Metadata about the artifact.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `barbacane_artifact_version` | integer | Format version (currently `4`) |
+| `barbacane_artifact_version` | integer | Format version (currently `6`). The data plane refuses an artifact whose version it does not read. |
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
 | `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
