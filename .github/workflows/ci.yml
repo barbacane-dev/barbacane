@@ -67,6 +67,49 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  # Copy-paste detection. Guards against duplication growing, rather than
+  # demanding a cleanup: the threshold sits just above the current figure, so a
+  # new clone fails the build and a reduction can be locked in by lowering it.
+  #
+  # crates/barbacane-test is excluded: repeated setup across integration tests is
+  # expected and says nothing about the shipped code. Unit tests inside `#[cfg(test)]`
+  # modules are still counted, since they cannot be separated by path.
+  duplication:
+    name: Duplication
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    env:
+      # Pinned by digest: this binary runs against the checked-out tree, so the
+      # release it comes from is not trusted on the strength of its tag alone.
+      JSCPD_VERSION: v5.2.1
+      JSCPD_SHA256: 1030dfff5e4b0525f4804c12e49cdce40a8140935f9453b312fdb9da45eac743
+      # Raise only with a reason. Current figure is 3.87%.
+      JSCPD_THRESHOLD: "4"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install jscpd
+        run: |
+          set -euo pipefail
+          url="https://github.com/kucherenko/jscpd/releases/download/${JSCPD_VERSION}/jscpd-linux-x64-gnu.tar.gz"
+          curl -fsSL --retry 3 -o jscpd.tar.gz "$url"
+          echo "${JSCPD_SHA256}  jscpd.tar.gz" | sha256sum -c -
+          tar xzf jscpd.tar.gz jscpd
+          chmod +x jscpd
+
+      - name: Check duplication
+        run: |
+          ./jscpd crates plugins \
+            --format rust \
+            --ignore "**/target/**,crates/barbacane-test/**" \
+            --min-lines 10 \
+            --min-tokens 70 \
+            --threshold "${JSCPD_THRESHOLD}" \
+            --reporters console
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -744,6 +787,7 @@ jobs:
       # would read those skips as success and pass a PR that never tested.
       - changes
       - fmt
+      - duplication
       - clippy
       - workflows
       - msrv
