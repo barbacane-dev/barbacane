@@ -2540,3 +2540,161 @@ paths:
         assert!(op.responses.is_empty());
     }
 }
+
+/// Conformance checks against constructs that real-world specs rely on.
+///
+/// These mirror an assessment run over published documents (GitHub, Box, Asana,
+/// Stripe, Petstore), keeping the cases that a spec is likely to contain and
+/// that a gateway has to get right, in a form that needs no network.
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    /// A schema that refers to itself is ordinary JSON Schema: anything with a
+    /// tree shape has one. Stripe's published document contains 38 such schemas
+    /// among its first 400, so rejecting them rejects the whole spec.
+    ///
+    /// Ignored until #195: `resolve_schema_refs` inlines every reference, and a
+    /// recursive one cannot be inlined, so the parser reports a cycle.
+    #[test]
+    #[ignore = "recursive schemas are rejected, see #195"]
+    fn recursive_schema_is_accepted() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Comment:
+      type: object
+      properties:
+        body:
+          type: string
+        replies:
+          type: array
+          items:
+            $ref: "#/components/schemas/Comment"
+paths:
+  /comments:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Comment"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("a self-referential schema is valid JSON Schema");
+        assert_eq!(spec.operations.len(), 1);
+        assert!(spec.operations[0].request_body.is_some());
+    }
+
+    /// Two schemas that refer to each other are the same problem one step out,
+    /// and are what Stripe actually trips on (`file` -> `file_link` -> `file`).
+    #[test]
+    #[ignore = "recursive schemas are rejected, see #195"]
+    fn mutually_recursive_schemas_are_accepted() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    File:
+      type: object
+      properties:
+        link:
+          $ref: "#/components/schemas/FileLink"
+    FileLink:
+      type: object
+      properties:
+        file:
+          $ref: "#/components/schemas/File"
+paths:
+  /files:
+    get:
+      parameters:
+        - name: filter
+          in: query
+          schema:
+            $ref: "#/components/schemas/File"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("mutually recursive schemas are valid");
+        assert_eq!(spec.operations.len(), 1);
+    }
+
+    /// Every operation is extracted once, with its parameters attributed to the
+    /// right location. Drift here means routes go missing or a value stops
+    /// being validated, which is what the corpus run checks at scale.
+    #[test]
+    fn extraction_is_exact_across_methods_and_levels() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: X-Trace
+        in: header
+        schema:
+          type: string
+    get:
+      parameters:
+        - name: expand
+          in: query
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+    delete:
+      x-barbacane-dispatch:
+        name: mock
+  /orders:
+    post:
+      parameters:
+        - name: session
+          in: cookie
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        assert_eq!(spec.operations.len(), 3, "one entry per path and method");
+
+        let by = |path: &str, method: &str| {
+            spec.operations
+                .iter()
+                .find(|o| o.path == path && o.method == method)
+                .unwrap_or_else(|| panic!("{method} {path} missing"))
+        };
+
+        // Path-item parameters reach every operation under that path.
+        let get = by("/orders/{id}", "GET");
+        let loc = |o: &Operation, l: &str| o.parameters.iter().filter(|p| p.location == l).count();
+        assert_eq!(loc(get, "path"), 1);
+        assert_eq!(loc(get, "header"), 1);
+        assert_eq!(loc(get, "query"), 1);
+
+        // Including one that declares none of its own.
+        let del = by("/orders/{id}", "DELETE");
+        assert_eq!(del.parameters.len(), 2);
+
+        // A cookie parameter is kept with its location intact, which the
+        // header allowlist depends on.
+        let post = by("/orders", "POST");
+        assert_eq!(loc(post, "cookie"), 1);
+    }
+}
