@@ -88,3 +88,17 @@ paths:
                     type: string
         "403":
           description: Forbidden - insufficient scopes
+
+# The operations run an authentication middleware, so the document names the
+# scheme carrying the credential. That is what admits the header (ADR-0033).
+security:
+  - OAuth2: []
+
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes: {}

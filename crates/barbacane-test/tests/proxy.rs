@@ -532,6 +532,14 @@ paths:
           description: Created
         "401":
           description: Unauthorized
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );
@@ -641,6 +649,14 @@ paths:
       responses:
         "200":
           description: OK
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );
@@ -897,6 +913,14 @@ paths:
           description: Created
         "401":
           description: Unauthorized
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );
@@ -998,6 +1022,14 @@ paths:
       responses:
         "200":
           description: OK
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );
@@ -1104,6 +1136,14 @@ paths:
       responses:
         "200":
           description: OK
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );
@@ -1224,6 +1264,14 @@ paths:
       responses:
         "200":
           description: OK
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );
@@ -1416,6 +1464,14 @@ paths:
           description: OK
         "401":
           description: Unauthorized
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );

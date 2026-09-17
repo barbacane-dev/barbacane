@@ -27,6 +27,8 @@ struct PluginMeta {
     version: String,
     #[serde(rename = "type")]
     plugin_type: String,
+    #[serde(default)]
+    category: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -41,6 +43,10 @@ struct PluginTomlCapabilities {
 struct PluginMetadata {
     version: String,
     plugin_type: String,
+    /// The plugin's family, as its manifest states it. `authentication` is the
+    /// one the compiler acts on: such a plugin verifies a credential, so the
+    /// operation must name the security scheme that carries it.
+    category: Option<String>,
     body_access: bool,
     host_functions: Vec<String>,
 }
@@ -51,6 +57,7 @@ fn parse_plugin_metadata(content: &str) -> Option<PluginMetadata> {
     Some(PluginMetadata {
         version: parsed.plugin.version,
         plugin_type: parsed.plugin.plugin_type,
+        category: parsed.plugin.category,
         body_access: parsed.capabilities.body_access,
         host_functions: parsed.capabilities.host_functions,
     })
@@ -223,6 +230,7 @@ fn resolve_plugin(
         wasm_bytes,
         version: metadata.as_ref().map(|m| m.version.clone()),
         plugin_type: metadata.as_ref().map(|m| m.plugin_type.clone()),
+        category: metadata.as_ref().and_then(|m| m.category.clone()),
         body_access: metadata.as_ref().is_some_and(|m| m.body_access),
         host_functions: metadata
             .as_ref()
@@ -349,6 +357,8 @@ pub struct ResolvedPlugin {
     pub version: Option<String>,
     /// Plugin type: "middleware" or "dispatcher" (from plugin.toml if available).
     pub plugin_type: Option<String>,
+    /// The plugin's family from plugin.toml, such as `authentication`.
+    pub category: Option<String>,
     /// Whether this plugin needs the request body in `on_request`.
     pub body_access: bool,
     /// Declared capability host-function names from plugin.toml.

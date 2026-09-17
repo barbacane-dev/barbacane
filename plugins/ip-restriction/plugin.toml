@@ -2,6 +2,7 @@
 name = "ip-restriction"
 version = "0.1.0"
 type = "middleware"
+category = "traffic-control"
 description = "Allows or denies requests based on client IP address or CIDR ranges"
 wasm = "ip-restriction.wasm"
 

@@ -446,6 +446,7 @@ pub fn compile_with_manifest(
             name: p.name,
             version: p.version.unwrap_or_else(|| "0.1.0".to_string()),
             plugin_type: p.plugin_type.unwrap_or_else(|| "plugin".to_string()),
+            category: p.category,
             wasm_bytes: p.wasm_bytes,
             body_access: p.body_access,
             host_functions: p.host_functions,
@@ -645,6 +646,10 @@ pub struct PluginBundle {
     pub version: String,
     /// Plugin type ("middleware" or "dispatcher").
     pub plugin_type: String,
+    /// The plugin's family, as its manifest states it. `authentication` is the
+    /// one the compiler acts on: such a plugin verifies a credential, so an
+    /// operation using it must name the security scheme that carries it.
+    pub category: Option<String>,
     /// WASM binary content.
     pub wasm_bytes: Vec<u8>,
     /// Whether this plugin needs the request body.
@@ -724,6 +729,15 @@ fn compile_inner(
     let plugin_schemas: HashMap<&str, &serde_json::Value> = plugins
         .iter()
         .filter_map(|p| p.config_schema.as_ref().map(|s| (p.name.as_str(), s)))
+        .collect();
+
+    // Plugins whose manifest puts them in the `authentication` family. Each
+    // verifies a credential the client sends, and the security scheme is what
+    // says which header carries it.
+    let authentication_plugins: HashSet<&str> = plugins
+        .iter()
+        .filter(|p| p.category.as_deref() == Some(AUTHENTICATION_CATEGORY))
+        .map(|p| p.name.as_str())
         .collect();
 
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
@@ -922,6 +936,15 @@ fn compile_inner(
                                 .to_string(),
                         location: Some(location.clone()),
                     });
+                }
+            }
+
+            // An operation running an authentication plugin must say which
+            // scheme carries the credential (E1057).
+            for middleware in &middlewares {
+                let key = crate::manifest::normalize_plugin_name(&middleware.name);
+                if authentication_plugins.contains(key.as_str()) {
+                    require_security_requirement(op, spec, &middleware.name, &location)?;
                 }
             }
 
@@ -1750,14 +1773,6 @@ fn collect_configured_header_names(
     config: &serde_json::Value,
     out: &mut BTreeSet<String>,
 ) -> Result<(), CompileError> {
-    // Headers the plugin reads whatever it is configured to do, such as the
-    // `authorization` an auth middleware always looks for. They are named by
-    // the plugin rather than by a value in the spec, so nothing else admits
-    // them, and dropping them would leave the middleware with nothing to read.
-    if let Some(always) = schema.get("x-barbacane-reads-headers") {
-        extract_header_names(always, out)?;
-    }
-
     match schema.get("format").and_then(|f| f.as_str()) {
         Some("header-name") => return extract_header_names(config, out),
         Some("header-ref") => return extract_referenced_header_names(config, out),
@@ -1910,6 +1925,51 @@ fn push_header_name(name: &str, out: &mut BTreeSet<String>) -> Result<(), Compil
 ///   requirement applies, which is the only reason `authorization` is forwarded.
 ///
 /// Names are lowercased, as HTTP matches them case-insensitively.
+/// The plugin family whose members verify a client credential.
+const AUTHENTICATION_CATEGORY: &str = "authentication";
+
+/// Require that an operation running an authentication plugin names the scheme
+/// carrying the credential (E1057).
+///
+/// The plugin verifies a credential; the security scheme is what says which
+/// header carries it, and so what the operation admits. Without a requirement
+/// the operation reads as anonymous, no credential header is admitted, and the
+/// plugin would reject every request for want of one.
+fn require_security_requirement(
+    op: &crate::spec_parser::Operation,
+    spec: &ApiSpec,
+    plugin: &str,
+    location: &str,
+) -> Result<(), CompileError> {
+    // An operation's own requirement replaces the root's; `security: []` is
+    // present and empty, which declares the operation anonymous.
+    let requirements = op.security.as_ref().or(spec.security.as_ref());
+    let names: Vec<&String> = requirements
+        .map(|reqs| reqs.iter().flat_map(|r| r.keys()).collect())
+        .unwrap_or_default();
+
+    if names.is_empty() {
+        return Err(CompileError::MissingSecurityRequirement(format!(
+            "{location}: '{plugin}' authenticates the caller, so the operation must declare \
+             the security scheme carrying the credential. Add a `security` requirement on the \
+             operation or at the root, and define the scheme under \
+             `components.securitySchemes`"
+        )));
+    }
+
+    if let Some(unknown) = names
+        .iter()
+        .find(|name| !spec.security_schemes.contains_key(**name))
+    {
+        return Err(CompileError::MissingSecurityRequirement(format!(
+            "{location}: security requirement names '{unknown}', which is not defined under \
+             `components.securitySchemes`"
+        )));
+    }
+
+    Ok(())
+}
+
 fn operation_header_allowlist(
     op: &crate::spec_parser::Operation,
     spec: &ApiSpec,
@@ -2476,23 +2536,6 @@ mod tests {
             out
         }
 
-        /// A plugin may read a header whatever it is configured to do, as an
-        /// auth middleware reads `authorization`. Nothing in the spec names it,
-        /// so without this the credential would be dropped and the middleware
-        /// would find nothing to check.
-        #[test]
-        fn headers_a_plugin_always_reads_are_admitted() {
-            let schema = serde_json::json!({
-                "x-barbacane-reads-headers": ["authorization"],
-                "type": "object",
-                "properties": {"realm": {"type": "string"}}
-            });
-            let mut found = BTreeSet::new();
-            collect_configured_header_names(&schema, &serde_json::json!({}), &mut found)
-                .expect("collect");
-            assert!(found.contains("authorization"));
-        }
-
         /// A field left out of the configuration still applies through its
         /// default, which is the header the plugin will actually read.
         #[test]
@@ -2806,6 +2849,54 @@ mod tests {
                 !a.contains("authorization"),
                 "an anonymous operation takes no credential"
             );
+        }
+
+        /// A plugin that verifies a credential needs the spec to say which
+        /// scheme carries it, or the operation reads as anonymous, no credential
+        /// header is admitted, and the plugin rejects every request.
+        #[test]
+        fn an_authentication_plugin_requires_a_security_requirement() {
+            let bare = spec(&[]);
+            let err = require_security_requirement(&op(&[]), &bare, "basic-auth", "GET /x")
+                .expect_err("no requirement at all");
+            assert!(
+                matches!(err, CompileError::MissingSecurityRequirement(_)),
+                "{err:?}"
+            );
+
+            // `security: []` is a deliberate declaration of anonymity, which
+            // contradicts running an authentication plugin.
+            let mut anonymous = op(&[]);
+            anonymous.security = Some(vec![]);
+            assert!(matches!(
+                require_security_requirement(&anonymous, &bare, "basic-auth", "GET /x"),
+                Err(CompileError::MissingSecurityRequirement(_))
+            ));
+
+            // Naming a scheme the document does not define is no better: nothing
+            // resolves, so nothing admits the header.
+            let mut dangling = op(&[]);
+            let mut req = BTreeMap::new();
+            req.insert("Nowhere".to_string(), vec![]);
+            dangling.security = Some(vec![req]);
+            assert!(matches!(
+                require_security_requirement(&dangling, &bare, "basic-auth", "GET /x"),
+                Err(CompileError::MissingSecurityRequirement(_))
+            ));
+
+            // A defined scheme satisfies it, whether named on the operation or
+            // inherited from the root.
+            let mut defined = spec(&[(
+                "BasicAuth",
+                SecurityScheme::Http {
+                    scheme: "basic".into(),
+                },
+            )]);
+            let mut root = BTreeMap::new();
+            root.insert("BasicAuth".to_string(), vec![]);
+            defined.security = Some(vec![root]);
+            require_security_requirement(&op(&[]), &defined, "basic-auth", "GET /x")
+                .expect("an inherited requirement is enough");
         }
 
         /// The identity headers are the auth plugins' output. A spec that could
@@ -3231,6 +3322,7 @@ paths:
             name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
             plugin_type: "middleware".to_string(),
+            category: None,
             wasm_bytes: fake_wasm.clone(),
             body_access: false,
             host_functions: vec![],

@@ -2,6 +2,7 @@
 name = "cel"
 version = "0.1.0"
 type = "middleware"
+category = "authorization"
 description = "CEL policy evaluation middleware — inline expression-based access control"
 wasm = "cel.wasm"
 

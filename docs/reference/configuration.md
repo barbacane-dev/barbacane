@@ -60,10 +60,14 @@ An operation admits:
 | Baseline, on every operation | framing and negotiation (`host`, `content-type`, `content-length`, `content-encoding`, `transfer-encoding`, `accept`, `accept-encoding`, `accept-language`, `accept-charset`, `user-agent`, `range`, the `if-*` conditionals, `cache-control`, `pragma`, `expect`), CORS (`origin`, `access-control-request-method`, `access-control-request-headers`), tracing (`traceparent`, `tracestate`, `x-request-id`), the WebSocket handshake (`upgrade`, `connection`, `sec-websocket-*`), and the proxy chain (`x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host`, `x-real-ip`, `forwarded`) |
 | Declared parameters | every `in: header` parameter, and `cookie` when the operation declares an `in: cookie` parameter |
 | Security schemes | the credential header the operation's `security` requirement names: an `apiKey` scheme's own name, or `authorization` for `http`, `oauth2` and `openIdConnect` |
-| Plugins in the chain | the headers a plugin reads, whether fixed (an auth middleware reads `authorization`) or configured (`apikey-auth`'s `header_name`, a `rate-limit` `header:` partition, `cache`'s `vary` list) |
+| Plugins in the chain | the headers a plugin's own configuration names, such as `apikey-auth`'s `header_name`, a `rate-limit` `header:` partition, or `cache`'s `vary` list |
 
 `authorization` is deliberately not in the baseline. It travels because the
-operation says it is authenticated, and for no other reason.
+operation says it is authenticated, and for no other reason. An operation that
+runs an authentication middleware must therefore declare a `security`
+requirement naming a scheme defined under `components.securitySchemes`.
+Compiling one that does not is an error (`E1057`), since the credential would
+be dropped and the middleware would reject every request.
 
 The `x-auth-*` namespace is never accepted from a client. It carries what an
 auth plugin tells `acl` and the upstream about the caller, and declaring one in

@@ -2,6 +2,7 @@
 name = "ws-upstream"
 version = "0.1.0"
 type = "dispatcher"
+category = "proxy"
 description = "Transparent WebSocket proxy"
 wasm = "ws-upstream.wasm"
 

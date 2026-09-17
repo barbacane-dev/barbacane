@@ -183,6 +183,14 @@ paths:
           description: Echo
         "401":
           description: Unauthorized
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#;
     let spec_path = temp_dir.path().join("test.yaml");
     std::fs::write(&spec_path, spec).unwrap();
@@ -236,6 +244,12 @@ paths:
               - key: test-key-123
                 id: key-1
                 name: testuser
+      parameters:
+        - name: x-custom-header
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         content:
           application/octet-stream:
@@ -253,6 +267,14 @@ paths:
           description: Echo
         "401":
           description: Unauthorized
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#;
     let spec_path = temp_dir.path().join("test.yaml");
     std::fs::write(&spec_path, spec).unwrap();
@@ -707,6 +729,14 @@ paths:
       responses:
         "200":
           description: OK
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );
@@ -820,6 +850,14 @@ paths:
       responses:
         "200":
           description: Large file download
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = mock_server.uri(),
     );

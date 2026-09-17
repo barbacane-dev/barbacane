@@ -267,6 +267,10 @@ async fn resolve_project_plugins(
             name: plugin_with_binary.name.clone(),
             version: plugin_with_binary.version.clone(),
             plugin_type: plugin_with_binary.plugin_type.clone(),
+            // The registry does not persist the plugin's category, so the
+            // compiler cannot tell an authentication plugin from any other here
+            // and does not require a security requirement for one (WA-1).
+            category: None,
             wasm_bytes: plugin_with_binary.wasm_binary,
             // TODO: read body_access + host_functions from the registry once the
             // plugins table persists capabilities. Until then the control plane

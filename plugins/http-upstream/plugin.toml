@@ -2,6 +2,7 @@
 name = "http-upstream"
 version = "0.1.0"
 type = "dispatcher"
+category = "proxy"
 wasm = "http-upstream.wasm"
 
 [capabilities]

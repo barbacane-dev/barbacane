@@ -2,6 +2,7 @@
 name = "correlation-id"
 version = "0.1.0"
 type = "middleware"
+category = "observability"
 description = "Propagates or generates correlation IDs for distributed tracing"
 wasm = "correlation-id.wasm"
 

@@ -108,12 +108,20 @@ impl MyDispatcher {
 name = "my-plugin"
 version = "0.1.0"
 type = "middleware"  # or "dispatcher"
+category = "traffic-control"
 description = "My custom plugin"
 wasm = "my_plugin.wasm"
 
 [capabilities]
 host_functions = ["log"]
 ```
+
+`category` is the plugin's family. It groups the plugin in the middleware guide,
+and `authentication` additionally tells the compiler that the plugin verifies a
+client credential. Current values: `authentication`, `authorization`, `caching`,
+`observability`, `traffic-control`, `transformation`, `ai-gateway` for
+middleware; `proxy`, `messaging`, `cloud`, `testing`, `ai-gateway` for
+dispatchers.
 
 ### 5. Create config-schema.json
 
@@ -159,19 +167,8 @@ A request carries only the headers its operation admits, and everything else is
 dropped before `on_request` runs. **If your plugin reads a header and does not
 say so here, it will find nothing.**
 
-For a header the plugin reads whatever it is configured to do, list it at the
-root of the schema:
-
-```json
-{
-  "type": "object",
-  "x-barbacane-reads-headers": ["authorization"],
-  "properties": { }
-}
-```
-
-For a header named by a configuration value, mark the field with the `format`
-that matches how the value is written:
+Mark the field whose value names a header with the `format` that matches how
+the value is written:
 
 | `format` | The field holds | Example |
 |---|---|---|
@@ -193,6 +190,11 @@ configuration leaves the field out.
 
 Names are matched case-insensitively. The `x-auth-*` namespace belongs to the
 auth plugins' output, so naming one is a compile error (**E1056**).
+
+A plugin that verifies a client credential reads its header from the spec
+instead. Set `category = "authentication"` in `plugin.toml`, and the compiler
+then requires every operation using the plugin to name the security scheme
+carrying the credential (**E1057**), which is what admits the header.
 
 After changing `config-schema.json`, regenerate the vacuum ruleset validators
 (`node docs/rulesets/generate.mjs`) and run `docs/rulesets/tests/run-tests.sh`.

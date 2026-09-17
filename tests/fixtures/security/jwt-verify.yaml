@@ -36,3 +36,15 @@ paths:
           description: Success
         "401":
           description: Unauthorized
+
+# The operations run an authentication middleware, so the document names the
+# scheme carrying the credential. That is what admits the header (ADR-0033).
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

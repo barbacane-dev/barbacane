@@ -35,7 +35,15 @@ Before the middleware chain runs, the data plane keeps only request headers that
    - `"format": "header-ref"` on a selector that names a header among other things, as a `rate-limit` partition key does with `header:<name>` and a message key with `$request.header.<name>`. Any other value selects something that is not a header and names nothing.
    - `"format": "header-name-map"` on an object whose *keys* are header names, as a rename table is.
 
-   Two further rules keep a working chain working. A field left out of a configuration still applies through its schema `default`, which is the header the plugin will actually read, so the default is collected in its place. And a plugin that reads a header whatever it is configured to do, as an auth middleware reads `authorization`, lists those names in `x-barbacane-reads-headers` at the root of its schema. Nothing in the spec's vocabulary names them: an operation may carry an auth middleware through `x-barbacane-middlewares` without declaring a `security` requirement, and set 3 would then admit no credential.
+   A field left out of a configuration still applies through its schema `default`, which is the header the plugin will actually read, so the default is collected in its place.
+
+### Authentication requires a security requirement
+
+An operation may run an auth middleware through `x-barbacane-middlewares` and declare no `security` block. Set 3 then admits no credential, the header is dropped, and the middleware rejects every request for want of one. The spec also describes itself as anonymous while requiring a credential, so generated documentation and clients are wrong about it.
+
+Such an operation is a compile error (`E1057`) rather than a silently broken one. A plugin's `plugin.toml` states its family in `category`, and `authentication` is the one the compiler acts on: an operation running such a plugin must name a requirement, on itself or at the root, resolving to a scheme defined under `components.securitySchemes`. The credential header then comes from set 3 like any other, and a third-party auth plugin works the same way without the compiler knowing its name.
+
+`category` also carries the grouping the middleware guide documents, so the pages and the compiler read one source rather than two.
 
 ### Reserved namespace
 

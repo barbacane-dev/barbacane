@@ -114,6 +114,14 @@ paths:
           description: SSE stream
         "401":
           description: Unauthorized
+security:
+  - ApiKeyAuth: []
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = upstream_url,
     );
