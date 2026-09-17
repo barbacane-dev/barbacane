@@ -7,6 +7,7 @@
 //! Note: The outbound HTTP call is synchronous. For high-throughput
 //! production use, prefer Kafka or NATS dispatchers for log shipping.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::http;
 #[cfg(target_arch = "wasm32")]
 use barbacane_plugin_sdk::log::log as log_message;
@@ -113,26 +114,26 @@ impl HttpLog {
     pub fn on_request(&mut self, req: Request) -> Action<Request> {
         // Record start time
         let start_ms = host_time_now_ms();
-        context_set("http_log_start_ms", &start_ms.to_string());
+        context::set("http_log_start_ms", &start_ms.to_string());
 
         // Store request metadata in context
-        context_set("http_log_method", &req.method);
-        context_set("http_log_path", &req.path);
-        context_set("http_log_client_ip", &req.client_ip);
+        context::set("http_log_method", &req.method);
+        context::set("http_log_path", &req.path);
+        context::set("http_log_client_ip", &req.client_ip);
 
         if let Some(query) = &req.query {
-            context_set("http_log_query", query);
+            context::set("http_log_query", query);
         }
 
         if self.include_headers {
             if let Ok(headers_json) = serde_json::to_string(&req.headers) {
-                context_set("http_log_req_headers", &headers_json);
+                context::set("http_log_req_headers", &headers_json);
             }
         }
 
         if self.include_body {
             if let Some(body) = &req.body {
-                context_set("http_log_req_body_size", &body.len().to_string());
+                context::set("http_log_req_body_size", &body.len().to_string());
             }
         }
 
@@ -142,24 +143,24 @@ impl HttpLog {
     /// Build and send the log entry.
     pub fn on_response(&mut self, resp: Response) -> Response {
         // Calculate duration
-        let start_ms = context_get("http_log_start_ms")
+        let start_ms = context::get("http_log_start_ms")
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
         let end_ms = host_time_now_ms();
         let duration_ms = end_ms.saturating_sub(start_ms);
 
         // Retrieve correlation ID if available (set by correlation-id middleware)
-        let correlation_id = context_get("correlation-id");
+        let correlation_id = context::get("correlation-id");
 
         // Build request portion from context
         let request_headers = if self.include_headers {
-            context_get("http_log_req_headers").and_then(|h| serde_json::from_str(&h).ok())
+            context::get("http_log_req_headers").and_then(|h| serde_json::from_str(&h).ok())
         } else {
             None
         };
 
         let req_body_size = if self.include_body {
-            context_get("http_log_req_body_size").and_then(|s| s.parse::<usize>().ok())
+            context::get("http_log_req_body_size").and_then(|s| s.parse::<usize>().ok())
         } else {
             None
         };
@@ -169,10 +170,10 @@ impl HttpLog {
             duration_ms,
             correlation_id,
             request: RequestLog {
-                method: context_get("http_log_method").unwrap_or_default(),
-                path: context_get("http_log_path").unwrap_or_default(),
-                query: context_get("http_log_query"),
-                client_ip: context_get("http_log_client_ip").unwrap_or_default(),
+                method: context::get("http_log_method").unwrap_or_default(),
+                path: context::get("http_log_path").unwrap_or_default(),
+                query: context::get("http_log_query"),
+                client_ip: context::get("http_log_client_ip").unwrap_or_default(),
                 headers: request_headers,
                 body_size: req_body_size,
             },
@@ -236,46 +237,6 @@ mod host {
         unsafe { host_time_now() as u64 }
     }
 
-    /// Store a value in the request context.
-    pub fn context_set(key: &str, value: &str) {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
-        }
-        unsafe {
-            host_context_set(
-                key.as_ptr() as i32,
-                key.len() as i32,
-                value.as_ptr() as i32,
-                value.len() as i32,
-            );
-        }
-    }
-
-    /// Get a value from the request context.
-    pub fn context_get(key: &str) -> Option<String> {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-            fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-        }
-
-        unsafe {
-            let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-            if len <= 0 {
-                return None;
-            }
-
-            let mut buf = vec![0u8; len as usize];
-            let read_len = host_context_read_result(buf.as_mut_ptr() as i32, len);
-            if read_len != len {
-                return None;
-            }
-
-            String::from_utf8(buf).ok()
-        }
-    }
-
     /// Send the log entry through the shared SDK HTTP helper. The response is
     /// discarded (best-effort logging); any transport error maps to `Err(())`.
     pub fn http_call(
@@ -291,10 +252,8 @@ mod host {
 #[cfg(not(target_arch = "wasm32"))]
 mod host {
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
 
     thread_local! {
-        static CONTEXT: RefCell<BTreeMap<String, String>> = RefCell::new(BTreeMap::new());
         static TIME_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
         static HTTP_CALLS: RefCell<Vec<Vec<u8>>> = RefCell::new(Vec::new());
         static LOG_MESSAGES: RefCell<Vec<(i32, String)>> = RefCell::new(Vec::new());
@@ -308,12 +267,9 @@ mod host {
         LOG_MESSAGES.with(|logs| logs.borrow_mut().push((level, msg.to_string())));
     }
 
-    pub fn context_set(key: &str, value: &str) {
-        CONTEXT.with(|ctx| ctx.borrow_mut().insert(key.to_string(), value.to_string()));
-    }
-
+    #[cfg(test)]
     pub fn context_get(key: &str) -> Option<String> {
-        CONTEXT.with(|ctx| ctx.borrow().get(key).cloned())
+        super::context::get(key)
     }
 
     /// Mock HTTP call: serializes and records the request, returns Ok. Mirrors
@@ -337,7 +293,7 @@ mod host {
 
     #[cfg(test)]
     pub fn reset_mock_state() {
-        CONTEXT.with(|ctx| ctx.borrow_mut().clear());
+        super::context::clear();
         TIME_MS.with(|t| t.set(0));
         HTTP_CALLS.with(|calls| calls.borrow_mut().clear());
         LOG_MESSAGES.with(|logs| logs.borrow_mut().clear());
@@ -362,12 +318,6 @@ fn host_time_now_ms() -> u64 {
 #[cfg(not(target_arch = "wasm32"))]
 fn log_message(level: i32, msg: &str) {
     host::log_message(level, msg);
-}
-fn context_set(key: &str, value: &str) {
-    host::context_set(key, value);
-}
-fn context_get(key: &str) -> Option<String> {
-    host::context_get(key)
 }
 
 #[cfg(test)]

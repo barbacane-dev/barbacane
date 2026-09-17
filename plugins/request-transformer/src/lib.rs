@@ -11,6 +11,7 @@
 //! wherever they appear, so they can be embedded in a larger value (e.g.
 //! `Bearer $cookie.sso_token`).
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use form_urlencoded::{parse as parse_urlencoded, Serializer};
@@ -180,7 +181,7 @@ impl RequestTransformer {
 fn interpolate_value(template: &str, req: &Request) -> String {
     // context:<key> has no delimiter, so it is resolved only as a whole value.
     if let Some(context_key) = template.strip_prefix("context:") {
-        return context_get(context_key).unwrap_or_default();
+        return context::get(context_key).unwrap_or_default();
     }
 
     if !template.contains('$') {
@@ -580,61 +581,17 @@ fn to_json_value(s: &str) -> Value {
     serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.to_string()))
 }
 
-// ---------------------------------------------------------------------------
-// Host function bindings
-// ---------------------------------------------------------------------------
-
-#[cfg(target_arch = "wasm32")]
-fn context_get(key: &str) -> Option<String> {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-
-    unsafe {
-        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-        if len <= 0 {
-            return None;
-        }
-
-        let mut buf = vec![0u8; len as usize];
-        let read_len = host_context_read_result(buf.as_mut_ptr() as i32, len);
-        if read_len != len {
-            return None;
-        }
-
-        String::from_utf8(buf).ok()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_get(key: &str) -> Option<String> {
-    mock_host::context_get(key)
-}
-
 // Native mock implementations for testing
 #[cfg(not(target_arch = "wasm32"))]
 mod mock_host {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-
-    thread_local! {
-        static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
-    }
-
-    pub fn context_get(key: &str) -> Option<String> {
-        CONTEXT.with(|c| c.borrow().get(key).cloned())
-    }
-
     #[cfg(test)]
     pub fn context_set(key: &str, value: &str) {
-        CONTEXT.with(|c| c.borrow_mut().insert(key.to_string(), value.to_string()));
+        super::context::set(key, value);
     }
 
     #[cfg(test)]
     pub fn reset() {
-        CONTEXT.with(|c| c.borrow_mut().clear());
+        super::context::clear();
     }
 }
 

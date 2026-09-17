@@ -25,6 +25,7 @@
 //!   response that already left the gateway cannot be interrupted
 //!   retroactively — the overshoot is absorbed and the *next* request 429s.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
@@ -133,7 +134,7 @@ impl AiTokenLimit {
         // Persist the resolved partition so on_response charges the same
         // bucket — on_response has no Request in scope and header/IP sources
         // would otherwise degrade to the shared "unknown" bucket.
-        host_context_set(&self.partition_context_key(), &partition);
+        context::set(&self.partition_context_key(), &partition);
 
         let key = self.bucket_key(&profile_name, &partition);
 
@@ -182,7 +183,7 @@ impl AiTokenLimit {
         // context-derivable sources only if the key is missing (e.g. when
         // this instance is invoked on_response without a matching on_request,
         // which shouldn't happen in normal flows).
-        let partition = context_get(&self.partition_context_key())
+        let partition = context::get(&self.partition_context_key())
             .unwrap_or_else(|| partition_from_context_only(&self.partition_key));
         let key = self.bucket_key(&profile_name, &partition);
 
@@ -214,7 +215,7 @@ impl AiTokenLimit {
     }
 
     fn resolve_profile_name(&self) -> String {
-        if let Some(name) = context_get(&self.context_key) {
+        if let Some(name) = context::get(&self.context_key) {
             if self.profiles.contains_key(&name) {
                 return name;
             }
@@ -333,7 +334,7 @@ fn misconfig_response(default_profile: &str) -> Response {
 /// as 0 (so it can't crash budgeting) but is logged, since silently dropping a
 /// real count would under-charge the budget.
 fn parse_token_count(key: &str) -> u32 {
-    match context_get(key) {
+    match context::get(key) {
         Some(raw) => raw.parse::<u32>().unwrap_or_else(|_| {
             log_message(
                 1,
@@ -371,7 +372,7 @@ fn extract_partition(req: &Request, source: &str, trusted_proxies: &[String]) ->
     }
 
     if let Some(key) = source.strip_prefix("context:") {
-        return context_get(key).unwrap_or_else(|| "unknown".to_string());
+        return context::get(key).unwrap_or_else(|| "unknown".to_string());
     }
 
     source.to_string()
@@ -382,7 +383,7 @@ fn extract_partition(req: &Request, source: &str, trusted_proxies: &[String]) ->
 /// shared `"unknown"` bucket — acceptable under the advisory-only model.
 fn partition_from_context_only(source: &str) -> String {
     if let Some(key) = source.strip_prefix("context:") {
-        return context_get(key).unwrap_or_else(|| "unknown".to_string());
+        return context::get(key).unwrap_or_else(|| "unknown".to_string());
     }
     if source.starts_with("header:") || source == "client_ip" {
         return "unknown".to_string();
@@ -425,43 +426,6 @@ fn call_rate_limit_read_result(buf: &mut [u8]) -> i32 {
     unsafe { host_rate_limit_read_result(buf.as_mut_ptr() as i32, buf.len() as i32) }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn context_get(key: &str) -> Option<String> {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-    unsafe {
-        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u8; len as usize];
-        let read = host_context_read_result(buf.as_mut_ptr() as i32, len);
-        if read != len {
-            return None;
-        }
-        String::from_utf8(buf).ok()
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn host_context_set(key: &str, value: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
-    }
-    unsafe {
-        host_context_set(
-            key.as_ptr() as i32,
-            key.len() as i32,
-            value.as_ptr() as i32,
-            value.len() as i32,
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Native stubs (tests)
 // ---------------------------------------------------------------------------
@@ -473,20 +437,19 @@ mod mock_host {
 
     thread_local! {
         pub(crate) static BUDGETS: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
-        pub(crate) static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
         pub(crate) static UNAVAILABLE: RefCell<bool> = const { RefCell::new(false) };
     }
 
     #[cfg(test)]
     pub fn reset() {
         BUDGETS.with(|m| m.borrow_mut().clear());
-        CONTEXT.with(|m| m.borrow_mut().clear());
+        super::context::clear();
         UNAVAILABLE.with(|u| *u.borrow_mut() = false);
     }
 
     #[cfg(test)]
     pub fn set_context(key: &str, value: &str) {
-        CONTEXT.with(|m| m.borrow_mut().insert(key.into(), value.into()));
+        super::context::set(key, value);
     }
 
     #[cfg(test)]
@@ -549,16 +512,6 @@ fn call_rate_limit_read_result(buf: &mut [u8]) -> i32 {
 #[cfg(not(target_arch = "wasm32"))]
 thread_local! {
     static LAST_RESULT: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_get(key: &str) -> Option<String> {
-    mock_host::CONTEXT.with(|m| m.borrow().get(key).cloned())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn host_context_set(key: &str, value: &str) {
-    mock_host::CONTEXT.with(|m| m.borrow_mut().insert(key.into(), value.into()));
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@
 //! unchanged. Operators who need strict redaction with streaming must
 //! disable `"stream": true` on those routes.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use regex::Regex;
@@ -184,7 +185,7 @@ impl AiResponseGuard {
     }
 
     fn resolve_profile_name(&self) -> String {
-        if let Some(name) = context_get(&self.context_key) {
+        if let Some(name) = context::get(&self.context_key) {
             if self.profiles.contains_key(&name) {
                 return name;
             }
@@ -320,27 +321,6 @@ fn blocked_response() -> Response {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]
-fn context_get(key: &str) -> Option<String> {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-    unsafe {
-        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u8; len as usize];
-        let read = host_context_read_result(buf.as_mut_ptr() as i32, len);
-        if read != len {
-            return None;
-        }
-        String::from_utf8(buf).ok()
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
 fn metric_counter_inc(name: &str, labels_json: &str, value: u64) {
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
@@ -370,33 +350,26 @@ fn metric_counter_inc(name: &str, labels_json: &str, value: u64) {
 #[cfg(not(target_arch = "wasm32"))]
 mod mock_host {
     use std::cell::RefCell;
-    use std::collections::HashMap;
 
     thread_local! {
-        pub(crate) static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
         pub(crate) static COUNTERS: RefCell<Vec<(String, String, u64)>> = const { RefCell::new(Vec::new()) };
     }
 
     #[cfg(test)]
     pub fn reset() {
-        CONTEXT.with(|m| m.borrow_mut().clear());
+        super::context::clear();
         COUNTERS.with(|m| m.borrow_mut().clear());
     }
 
     #[cfg(test)]
     pub fn set_context(k: &str, v: &str) {
-        CONTEXT.with(|m| m.borrow_mut().insert(k.into(), v.into()));
+        super::context::set(k, v);
     }
 
     #[cfg(test)]
     pub fn counters() -> Vec<(String, String, u64)> {
         COUNTERS.with(|m| m.borrow().clone())
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_get(key: &str) -> Option<String> {
-    mock_host::CONTEXT.with(|m| m.borrow().get(key).cloned())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

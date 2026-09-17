@@ -5,6 +5,7 @@
 //! - Detailed request/response logging
 //! - Custom latency histogram per operation
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 
@@ -12,10 +13,8 @@ use serde::Deserialize;
 mod mock_host {
     #![allow(dead_code)]
     use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
     thread_local! {
         static TIME_MS: Cell<u64> = const { Cell::new(0) };
-        static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
         static COUNTERS: RefCell<Vec<(String, String, u64)>> = const { RefCell::new(Vec::new()) };
         static HISTOGRAMS: RefCell<Vec<(String, String, f64)>> = const { RefCell::new(Vec::new()) };
         static LOG_MESSAGES: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
@@ -27,10 +26,10 @@ mod mock_host {
         TIME_MS.with(|t| t.get())
     }
     pub fn context_set(key: &str, value: &str) {
-        CONTEXT.with(|c| c.borrow_mut().insert(key.to_string(), value.to_string()));
+        super::context::set(key, value);
     }
     pub fn context_get(key: &str) -> Option<String> {
-        CONTEXT.with(|c| c.borrow().get(key).cloned())
+        super::context::get(key)
     }
     pub fn counter_inc(name: &str, labels: &str, value: u64) {
         COUNTERS.with(|c| {
@@ -58,7 +57,7 @@ mod mock_host {
     }
     pub fn reset() {
         TIME_MS.with(|t| t.set(0));
-        CONTEXT.with(|c| c.borrow_mut().clear());
+        super::context::clear();
         COUNTERS.with(|c| c.borrow_mut().clear());
         HISTOGRAMS.with(|h| h.borrow_mut().clear());
         LOG_MESSAGES.with(|l| l.borrow_mut().clear());
@@ -92,7 +91,7 @@ impl Observability {
     pub fn on_request(&mut self, req: Request) -> Action<Request> {
         // Record request start time
         let start_time = host_time_now_ms();
-        context_set("observability_start_ms", &start_time.to_string());
+        context::set("observability_start_ms", &start_time.to_string());
 
         // Log detailed request info if enabled
         if self.detailed_request_logs {
@@ -113,7 +112,7 @@ impl Observability {
     /// Handle response - check SLO, emit metrics, and optionally log details.
     pub fn on_response(&mut self, resp: Response) -> Response {
         // Get request start time from context
-        let start_ms = context_get("observability_start_ms")
+        let start_ms = context::get("observability_start_ms")
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
 
@@ -182,58 +181,6 @@ use barbacane_plugin_sdk::log::log as log_message;
 #[cfg(not(target_arch = "wasm32"))]
 fn log_message(level: i32, msg: &str) {
     mock_host::log(level, msg);
-}
-
-/// Store a value in the request context.
-#[cfg(target_arch = "wasm32")]
-fn context_set(key: &str, value: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
-    }
-    unsafe {
-        host_context_set(
-            key.as_ptr() as i32,
-            key.len() as i32,
-            value.as_ptr() as i32,
-            value.len() as i32,
-        );
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_set(key: &str, value: &str) {
-    mock_host::context_set(key, value);
-}
-
-/// Get a value from the request context.
-#[cfg(target_arch = "wasm32")]
-fn context_get(key: &str) -> Option<String> {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-
-    unsafe {
-        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-        if len <= 0 {
-            return None;
-        }
-
-        let mut buf = vec![0u8; len as usize];
-        let read_len = host_context_read_result(buf.as_mut_ptr() as i32, len);
-        if read_len != len {
-            return None;
-        }
-
-        String::from_utf8(buf).ok()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_get(key: &str) -> Option<String> {
-    mock_host::context_get(key)
 }
 
 /// Increment a counter metric.

@@ -30,6 +30,7 @@
 //! The plugin reads `ai.policy` (overridable via `context_key`). When the key
 //! is absent or names an unknown profile, `default_profile` applies.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use regex::Regex;
@@ -263,7 +264,7 @@ impl AiPromptGuard {
     }
 
     fn resolve_profile_name(&self) -> String {
-        if let Some(name) = context_get(&self.context_key) {
+        if let Some(name) = context::get(&self.context_key) {
             if self.profiles.contains_key(&name) {
                 return name;
             }
@@ -413,57 +414,20 @@ fn render_template(template: &str, vars: &BTreeMap<String, String>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Host bindings
-// ---------------------------------------------------------------------------
-
-#[cfg(target_arch = "wasm32")]
-fn context_get(key: &str) -> Option<String> {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-    unsafe {
-        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u8; len as usize];
-        let read = host_context_read_result(buf.as_mut_ptr() as i32, len);
-        if read != len {
-            return None;
-        }
-        String::from_utf8(buf).ok()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Native stubs
 // ---------------------------------------------------------------------------
 
 #[cfg(not(target_arch = "wasm32"))]
 mod mock_host {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-
-    thread_local! {
-        pub(crate) static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
-    }
-
     #[cfg(test)]
     pub fn reset() {
-        CONTEXT.with(|m| m.borrow_mut().clear());
+        super::context::clear();
     }
 
     #[cfg(test)]
     pub fn set_context(k: &str, v: &str) {
-        CONTEXT.with(|m| m.borrow_mut().insert(k.into(), v.into()));
+        super::context::set(k, v);
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_get(key: &str) -> Option<String> {
-    mock_host::CONTEXT.with(|m| m.borrow().get(key).cloned())
 }
 
 // ---------------------------------------------------------------------------

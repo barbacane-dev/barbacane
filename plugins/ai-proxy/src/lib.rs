@@ -25,6 +25,7 @@
 //! - This file — orchestration: target resolution, fallback chain, metrics,
 //!   context propagation. Path-based dispatch picks the protocol handler.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -330,7 +331,7 @@ impl AiProxy {
             Ok(p) => p,
             Err(resp) => return resp,
         };
-        host::context_set(
+        context::set(
             protocols::responses::CTX_STORE_DOWNGRADE,
             if preflight.store_downgrade {
                 "true"
@@ -491,7 +492,7 @@ impl AiProxy {
     /// Returns `NotConfigured` when nothing is configured at all — 500.
     pub(crate) fn resolve_target(&self, client_model: &str) -> ResolveOutcome {
         // 1. Context-set target name (ai.target written by upstream cel)
-        if let Some(name) = host::context_get("ai.target") {
+        if let Some(name) = context::get("ai.target") {
             if let Some(t) = self.targets.get(&name) {
                 return ResolveOutcome::Resolved(t.clone(), ResolutionKind::Context);
             }
@@ -612,8 +613,8 @@ impl ResolutionKind {
 /// body (ADR-0030 §0 — caller-owned model); the gateway never substitutes
 /// its own. For streamed responses (status=0), token counts are unavailable.
 pub(crate) fn propagate_context(target: &TargetConfig, client_model: &str, resp: &Response) {
-    host::context_set("ai.provider", target.provider.name());
-    host::context_set("ai.model", client_model);
+    context::set("ai.provider", target.provider.name());
+    context::set("ai.model", client_model);
 
     // status=0 means streamed — token counts not available
     if resp.status == 0 {
@@ -628,8 +629,8 @@ pub(crate) fn propagate_context(target: &TargetConfig, client_model: &str, resp:
         let prompt = tokens.0.to_string();
         let completion = tokens.1.to_string();
 
-        host::context_set("ai.prompt_tokens", &prompt);
-        host::context_set("ai.completion_tokens", &completion);
+        context::set("ai.prompt_tokens", &prompt);
+        context::set("ai.completion_tokens", &completion);
 
         host::metric_counter_inc(
             "tokens_total",
@@ -880,41 +881,6 @@ pub(crate) unsafe fn host_http_stream(_req_ptr: i32, _req_len: i32) -> i32 {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod host {
-    pub fn context_get(key: &str) -> Option<String> {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-            fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-        }
-        unsafe {
-            let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-            if len <= 0 {
-                return None;
-            }
-            let mut buf = vec![0u8; len as usize];
-            let read = host_context_read_result(buf.as_mut_ptr() as i32, len);
-            if read != len {
-                return None;
-            }
-            String::from_utf8(buf).ok()
-        }
-    }
-
-    pub fn context_set(key: &str, value: &str) {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
-        }
-        unsafe {
-            host_context_set(
-                key.as_ptr() as i32,
-                key.len() as i32,
-                value.as_ptr() as i32,
-                value.len() as i32,
-            );
-        }
-    }
-
     pub fn metric_counter_inc(name: &str, labels_json: &str, value: u64) {
         #[link(wasm_import_module = "barbacane")]
         extern "C" {
@@ -974,24 +940,12 @@ pub(crate) mod host {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod host {
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
 
     thread_local! {
-        static CONTEXT: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
         static COUNTERS: RefCell<Vec<(String, String, u64)>> = const { RefCell::new(Vec::new()) };
         static HISTOGRAMS: RefCell<Vec<(String, String, f64)>> = const { RefCell::new(Vec::new()) };
         static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static TIME_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(1_000_000) };
-    }
-
-    pub fn context_get(key: &str) -> Option<String> {
-        CONTEXT.with(|ctx| ctx.borrow().get(key).cloned())
-    }
-
-    pub fn context_set(key: &str, value: &str) {
-        CONTEXT.with(|ctx| {
-            ctx.borrow_mut().insert(key.to_string(), value.to_string());
-        });
     }
 
     pub fn metric_counter_inc(name: &str, labels_json: &str, value: u64) {
@@ -1018,14 +972,12 @@ pub(crate) mod host {
 
     #[cfg(test)]
     pub fn set_context(key: &str, value: &str) {
-        CONTEXT.with(|ctx| {
-            ctx.borrow_mut().insert(key.to_string(), value.to_string());
-        });
+        super::context::set(key, value);
     }
 
     #[cfg(test)]
-    pub fn get_context() -> BTreeMap<String, String> {
-        CONTEXT.with(|ctx| ctx.borrow().clone())
+    pub fn context_value(key: &str) -> Option<String> {
+        super::context::get(key)
     }
 
     #[cfg(test)]
@@ -1040,7 +992,7 @@ pub(crate) mod host {
 
     #[cfg(test)]
     pub fn reset() {
-        CONTEXT.with(|c| c.borrow_mut().clear());
+        super::context::clear();
         COUNTERS.with(|c| c.borrow_mut().clear());
         HISTOGRAMS.with(|h| h.borrow_mut().clear());
         WARNINGS.with(|w| w.borrow_mut().clear());
@@ -1996,13 +1948,18 @@ mod tests {
         };
         propagate_context(&target, "gpt-4o", &resp);
 
-        let ctx = host::get_context();
-        assert_eq!(ctx.get("ai.provider").map(|s| s.as_str()), Some("openai"));
-        // ai.model is the client-supplied model (ADR-0030 §0), not target-derived.
-        assert_eq!(ctx.get("ai.model").map(|s| s.as_str()), Some("gpt-4o"));
-        assert_eq!(ctx.get("ai.prompt_tokens").map(|s| s.as_str()), Some("10"));
         assert_eq!(
-            ctx.get("ai.completion_tokens").map(|s| s.as_str()),
+            host::context_value("ai.provider").as_deref(),
+            Some("openai")
+        );
+        // ai.model is the client-supplied model (ADR-0030 §0), not target-derived.
+        assert_eq!(host::context_value("ai.model").as_deref(), Some("gpt-4o"));
+        assert_eq!(
+            host::context_value("ai.prompt_tokens").as_deref(),
+            Some("10")
+        );
+        assert_eq!(
+            host::context_value("ai.completion_tokens").as_deref(),
             Some("20")
         );
     }
@@ -2014,11 +1971,13 @@ mod tests {
         let resp = streamed_response(); // status = 0
         propagate_context(&target, "mistral", &resp);
 
-        let ctx = host::get_context();
-        assert_eq!(ctx.get("ai.provider").map(|s| s.as_str()), Some("ollama"));
-        assert_eq!(ctx.get("ai.model").map(|s| s.as_str()), Some("mistral"));
-        assert!(!ctx.contains_key("ai.prompt_tokens"));
-        assert!(!ctx.contains_key("ai.completion_tokens"));
+        assert_eq!(
+            host::context_value("ai.provider").as_deref(),
+            Some("ollama")
+        );
+        assert_eq!(host::context_value("ai.model").as_deref(), Some("mistral"));
+        assert!(host::context_value("ai.prompt_tokens").is_none());
+        assert!(host::context_value("ai.completion_tokens").is_none());
     }
 
     #[test]
@@ -2099,8 +2058,14 @@ mod tests {
 
     #[test]
     fn auth_deserializes_unit_and_map_forms() {
-        assert_eq!(serde_json::from_str::<Auth>(r#""bearer""#).unwrap(), Auth::Bearer);
-        assert_eq!(serde_json::from_str::<Auth>(r#""api_key""#).unwrap(), Auth::ApiKey);
+        assert_eq!(
+            serde_json::from_str::<Auth>(r#""bearer""#).unwrap(),
+            Auth::Bearer
+        );
+        assert_eq!(
+            serde_json::from_str::<Auth>(r#""api_key""#).unwrap(),
+            Auth::ApiKey
+        );
         assert_eq!(
             serde_json::from_str::<Auth>(r#"{"header":"X-Subscription-Token"}"#).unwrap(),
             Auth::Header("X-Subscription-Token".to_string())
@@ -2115,7 +2080,10 @@ mod tests {
     fn effective_auth_defaults_to_provider_convention() {
         assert_eq!(target_with(Provider::OpenAI).effective_auth(), Auth::Bearer);
         assert_eq!(target_with(Provider::Ollama).effective_auth(), Auth::Bearer);
-        assert_eq!(target_with(Provider::Anthropic).effective_auth(), Auth::ApiKey);
+        assert_eq!(
+            target_with(Provider::Anthropic).effective_auth(),
+            Auth::ApiKey
+        );
     }
 
     #[test]

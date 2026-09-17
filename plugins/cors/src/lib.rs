@@ -3,6 +3,7 @@
 //! Implements Cross-Origin Resource Sharing (CORS) per the Fetch specification.
 //! Handles preflight OPTIONS requests and adds appropriate CORS headers to responses.
 
+use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
@@ -92,7 +93,7 @@ impl Cors {
 
         // Regular CORS request: stash the validated origin in request context so
         // on_response can reflect it (the response itself carries no Origin).
-        context_set("cors.origin", &origin);
+        context::set("cors.origin", &origin);
         Action::Continue(req)
     }
 
@@ -102,7 +103,7 @@ impl Cors {
             // Non-credentialed wildcard: a constant `*` works without the origin.
             resp.headers
                 .insert("access-control-allow-origin".to_string(), "*".to_string());
-        } else if let Some(origin) = context_get("cors.origin") {
+        } else if let Some(origin) = context::get("cors.origin") {
             // Reflect the specific origin validated in on_request, and Vary on it
             // so caches don't serve one origin's response to another.
             resp.headers.insert(
@@ -321,76 +322,12 @@ fn is_simple_header(header: &str) -> bool {
     )
 }
 
-/// Store a value in the request context (WASM).
-#[cfg(target_arch = "wasm32")]
-fn context_set(key: &str, value: &str) {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
-    }
-    unsafe {
-        host_context_set(
-            key.as_ptr() as i32,
-            key.len() as i32,
-            value.as_ptr() as i32,
-            value.len() as i32,
-        );
-    }
-}
-
-/// Get a value from the request context (WASM).
-#[cfg(target_arch = "wasm32")]
-fn context_get(key: &str) -> Option<String> {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
-        fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
-    }
-    unsafe {
-        let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u8; len as usize];
-        let read_len = host_context_read_result(buf.as_mut_ptr() as i32, len);
-        if read_len != len {
-            return None;
-        }
-        String::from_utf8(buf).ok()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_set(key: &str, value: &str) {
-    mock_host::context_set(key, value)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn context_get(key: &str) -> Option<String> {
-    mock_host::context_get(key)
-}
-
 /// Native mock context for tests.
 #[cfg(not(target_arch = "wasm32"))]
 mod mock_host {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-
-    thread_local! {
-        static CONTEXT: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
-    }
-
-    pub fn context_set(key: &str, value: &str) {
-        CONTEXT.with(|c| c.borrow_mut().insert(key.to_string(), value.to_string()));
-    }
-
-    pub fn context_get(key: &str) -> Option<String> {
-        CONTEXT.with(|c| c.borrow().get(key).cloned())
-    }
-
     #[cfg(test)]
     pub fn reset() {
-        CONTEXT.with(|c| c.borrow_mut().clear());
+        super::context::clear();
     }
 }
 
@@ -610,7 +547,7 @@ mod tests {
                 assert_eq!(returned_req.method, "GET");
                 // The validated origin is stashed in context for on_response.
                 assert_eq!(
-                    context_get("cors.origin"),
+                    context::get("cors.origin"),
                     Some("https://example.com".to_string())
                 );
             }
