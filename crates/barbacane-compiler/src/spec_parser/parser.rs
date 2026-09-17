@@ -87,14 +87,10 @@ fn resolve_schema(value: &Value, root: &Value) -> Result<Value, ParseError> {
                 map.insert(name, body);
             }
         }
+        // A non-object schema carries no reference, so it needs no definitions.
         if !map.is_empty() {
-            match &mut resolved {
-                Value::Object(obj) => {
-                    obj.insert("$defs".to_string(), Value::Object(map));
-                }
-                // A non-object schema cannot carry definitions, and cannot
-                // contain a reference either, so there is nothing to attach.
-                _ => {}
+            if let Value::Object(obj) = &mut resolved {
+                obj.insert("$defs".to_string(), Value::Object(map));
             }
         }
     }
