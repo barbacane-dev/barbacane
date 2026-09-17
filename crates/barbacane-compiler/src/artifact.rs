@@ -740,6 +740,26 @@ fn compile_inner(
         .map(|p| p.name.as_str())
         .collect();
 
+    // A bundle can arrive without the files those two read, as it does from the
+    // control plane, whose registry stores neither. Neither check then applies
+    // to it, which changes what an artifact admits, so say so rather than
+    // letting the difference show up as a dropped header at runtime (E1071).
+    for plugin in plugins {
+        if plugin.config_schema.is_none() || plugin.category.is_none() {
+            warnings.push(CompileWarning {
+                code: "E1071".to_string(),
+                message: format!(
+                    "plugin '{}' was bundled without its manifest or config schema, so headers \
+                     its configuration names are not admitted and it is not checked for a \
+                     security requirement. Compile from a `barbacane.yaml` that resolves the \
+                     plugin by path to get both",
+                    plugin.name
+                ),
+                location: None,
+            });
+        }
+    }
+
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
     let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
     let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
@@ -1842,6 +1862,14 @@ fn extract_header_names(
     Ok(())
 }
 
+/// Characters a header name may hold where one is embedded in a longer value.
+///
+/// A dot is included because the plugins reading these expressions accept one,
+/// so a name stopping short of it would admit a header the plugin never reads.
+fn is_header_name_char(c: &char) -> bool {
+    c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.'
+}
+
 /// Markers that introduce a header name inside a configuration value.
 ///
 /// `$request.header.` is the message-key form of `kafka` and `nats`, `$header.`
@@ -1849,12 +1877,40 @@ fn extract_header_names(
 /// first so it is not read as the shorter one preceded by text.
 const HEADER_REFERENCE_MARKERS: &[&str] = &["$request.header.", "$header."];
 
+/// Record every header a `headers['<name>']` subscript names.
+///
+/// The form an expression language uses, as a `cel` condition does with
+/// `request.headers['x-tier']`. Only a literal name is read. An expression is
+/// code, not a declaration, so a computed name is invisible here and the header
+/// it reads has to be declared in the spec like any other.
+fn extract_subscripted_header_names(
+    text: &str,
+    out: &mut BTreeSet<String>,
+) -> Result<(), CompileError> {
+    let mut rest = text;
+    while let Some(at) = rest.find("headers[") {
+        let after = &rest[at + "headers[".len()..];
+        let mut chars = after.chars();
+        let Some(quote @ ('\'' | '"')) = chars.next() else {
+            rest = after;
+            continue;
+        };
+        let body = &after[quote.len_utf8()..];
+        let Some(end) = body.find(quote) else {
+            break;
+        };
+        push_header_name(&body[..end], out)?;
+        rest = &body[end + quote.len_utf8()..];
+    }
+    Ok(())
+}
+
 /// Read a value that may reference a header among other things.
 ///
 /// `header:<name>` selects one. Otherwise every marker occurrence in the string
-/// names one, so a value built from several headers contributes all of them.
-/// Anything else selects something that is not a header, such as `client_ip`,
-/// and contributes nothing.
+/// names one, as does every `headers['<name>']` subscript, so a value built from
+/// several headers contributes all of them. Anything else selects something that
+/// is not a header, such as `client_ip`, and contributes nothing.
 fn extract_referenced_header_names(
     value: &serde_json::Value,
     out: &mut BTreeSet<String>,
@@ -1876,13 +1932,11 @@ fn extract_referenced_header_names(
                     break;
                 };
                 let after = &rest[at + marker.len()..];
-                let name: String = after
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-                    .collect();
+                let name: String = after.chars().take_while(is_header_name_char).collect();
                 push_header_name(&name, out)?;
                 rest = &after[name.len()..];
             }
+            extract_subscripted_header_names(text, out)?;
         }
         serde_json::Value::Array(entries) => {
             for entry in entries {
@@ -1913,20 +1967,23 @@ fn push_header_name(name: &str, out: &mut BTreeSet<String>) -> Result<(), Compil
     Ok(())
 }
 
-/// Request headers an operation accepts beyond the data plane's baseline.
-///
-/// Derived from the spec's own vocabulary, so the document stays the contract
-/// for what an upstream receives:
-///
-/// - every `in: header` parameter the operation declares,
-/// - `cookie` when it declares any `in: cookie` parameter, since cookies travel
-///   in that one header,
-/// - the credential header named by each security scheme the operation's
-///   requirement applies, which is the only reason `authorization` is forwarded.
-///
-/// Names are lowercased, as HTTP matches them case-insensitively.
 /// The plugin family whose members verify a client credential.
 const AUTHENTICATION_CATEGORY: &str = "authentication";
+
+/// Whether a scheme names a request header the client sends the credential in.
+///
+/// A key in the query string travels outside the headers, and a client
+/// certificate is not a header at all, so neither admits one.
+fn scheme_carries_a_header(scheme: &crate::spec_parser::SecurityScheme) -> bool {
+    use crate::spec_parser::SecurityScheme;
+    match scheme {
+        SecurityScheme::ApiKey { location, .. } => matches!(location.as_str(), "header" | "cookie"),
+        SecurityScheme::Http { .. } | SecurityScheme::OAuth2 | SecurityScheme::OpenIdConnect => {
+            true
+        }
+        SecurityScheme::MutualTls => false,
+    }
+}
 
 /// Require that an operation running an authentication plugin names the scheme
 /// carrying the credential (E1057).
@@ -1967,9 +2024,35 @@ fn require_security_requirement(
         )));
     }
 
+    // A requirement that resolves only to schemes carrying no request header
+    // admits no credential, so the plugin would still find nothing to verify.
+    if !names
+        .iter()
+        .filter_map(|name| spec.security_schemes.get(*name))
+        .any(scheme_carries_a_header)
+    {
+        return Err(CompileError::MissingSecurityRequirement(format!(
+            "{location}: '{plugin}' reads the credential from a request header, but no scheme \
+             the requirement names carries one. An `apiKey` in the query string and `mutualTLS` \
+             travel outside the headers. Name a scheme the client sends in a header"
+        )));
+    }
+
     Ok(())
 }
 
+/// Request headers an operation accepts beyond the data plane's baseline.
+///
+/// Derived from the spec's own vocabulary, so the document stays the contract
+/// for what an upstream receives:
+///
+/// - every `in: header` parameter the operation declares,
+/// - `cookie` when it declares any `in: cookie` parameter, since cookies travel
+///   in that one header,
+/// - the credential header named by each security scheme the operation's
+///   requirement applies, which is the only reason `authorization` is forwarded.
+///
+/// Names are lowercased, as HTTP matches them case-insensitively.
 fn operation_header_allowlist(
     op: &crate::spec_parser::Operation,
     spec: &ApiSpec,
@@ -2609,6 +2692,26 @@ mod tests {
 
             // A marker with nothing after it names nothing and still terminates.
             assert!(names(serde_json::json!({"key": "prefix $header. suffix"})).is_empty());
+        }
+
+        /// An expression language subscripts the header map by name. Only a
+        /// literal name is visible, which the documentation says plainly, but it
+        /// covers the way a condition is ordinarily written.
+        #[test]
+        fn a_subscripted_header_is_read() {
+            let found = names(serde_json::json!({
+                "key": "request.headers['x-tier'] == 'premium' && request.headers[\"x-region\"] != ''"
+            }));
+            assert!(found.contains("x-tier"), "{found:?}");
+            assert!(found.contains("x-region"), "{found:?}");
+            assert!(
+                !found.contains("premium"),
+                "a compared value is not a header"
+            );
+
+            // A computed name has none to read, and must not derail the scan.
+            let computed = names(serde_json::json!({"key": "request.headers[someVar]"}));
+            assert!(computed.is_empty(), "{computed:?}");
         }
 
         /// A template may name a header inside a longer expression.

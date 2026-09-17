@@ -20,7 +20,6 @@
         },
         "remove": {
           "type": "array",
-          "format": "header-name",
           "items": { "type": "string" },
           "description": "Remove headers by name (case-insensitive)"
         },

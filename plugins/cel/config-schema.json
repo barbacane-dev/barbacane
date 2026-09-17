@@ -9,6 +9,7 @@
   "properties": {
     "expression": {
       "type": "string",
+      "format": "header-ref",
       "description": "CEL expression that must evaluate to a boolean. Has access to a `request` object with fields: `method`, `path`, `query`, `headers`, `body`, `client_ip`, `path_params`, `consumer`, `claims`."
     },
     "deny_message": {
