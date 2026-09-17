@@ -3717,6 +3717,8 @@ paths:
                     "server_name": "Custom Name"
                 }),
             )]),
+            security_schemes: BTreeMap::new(),
+            security: None,
         };
         let specs = vec![(spec, String::new(), String::new())];
         let cfg = extract_root_mcp_config(&specs);
@@ -3736,6 +3738,8 @@ paths:
             operations: vec![],
             global_middlewares: vec![],
             extensions: BTreeMap::new(),
+            security_schemes: BTreeMap::new(),
+            security: None,
         };
         let specs = vec![(spec, String::new(), String::new())];
         let cfg = extract_root_mcp_config(&specs);
@@ -3997,6 +4001,8 @@ mod waf_tests {
             extensions: [("x-barbacane-waf".to_string(), value)]
                 .into_iter()
                 .collect(),
+            security_schemes: BTreeMap::new(),
+            security: None,
         };
         (spec, "api.yaml".to_string(), String::new())
     }
