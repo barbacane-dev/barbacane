@@ -85,6 +85,102 @@ impl SchemaDefs {
     }
 }
 
+/// Rewrite the draft-4 exclusive bounds OpenAPI 3.0 uses.
+///
+/// 3.0 carries `exclusiveMinimum` and `exclusiveMaximum` as booleans that
+/// qualify `minimum` and `maximum`. JSON Schema 2020-12, which the validator
+/// compiles against, carries the bound itself as the value. An unconverted
+/// boolean makes the schema fail to build, and a schema that fails to build is
+/// simply not validated, so the constraint disappears without a word.
+///
+/// Only schema-valued positions are visited. `enum`, `const`, `default` and the
+/// example keywords hold instance data, which may happen to look like a schema,
+/// and rewriting it would change the value a request is compared against.
+fn convert_draft4_exclusive_bounds(value: &mut Value) {
+    let Value::Object(obj) = value else {
+        return;
+    };
+
+    for (exclusive, bound) in [
+        ("exclusiveMinimum", "minimum"),
+        ("exclusiveMaximum", "maximum"),
+    ] {
+        match obj.get(exclusive).and_then(Value::as_bool) {
+            // `true` moves the bound onto the exclusive keyword.
+            Some(true) => {
+                if let Some(limit) = obj.get(bound).cloned() {
+                    obj.insert(exclusive.to_string(), limit);
+                    obj.remove(bound);
+                } else {
+                    // Nothing to be exclusive about.
+                    obj.remove(exclusive);
+                }
+            }
+            // `false` is the default, and the bound stays inclusive.
+            Some(false) => {
+                obj.remove(exclusive);
+            }
+            None => {}
+        }
+    }
+
+    // A map of schemas keyed by name.
+    for keyword in [
+        "properties",
+        "patternProperties",
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+    ] {
+        if let Some(Value::Object(map)) = obj.get_mut(keyword) {
+            for schema in map.values_mut() {
+                convert_draft4_exclusive_bounds(schema);
+            }
+        }
+    }
+
+    // A list of schemas.
+    for keyword in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        if let Some(Value::Array(list)) = obj.get_mut(keyword) {
+            for schema in list {
+                convert_draft4_exclusive_bounds(schema);
+            }
+        }
+    }
+
+    // One schema, except `items`, which 3.0 also allows as a list.
+    for keyword in [
+        "items",
+        "additionalItems",
+        "additionalProperties",
+        "not",
+        "if",
+        "then",
+        "else",
+        "contains",
+        "propertyNames",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    ] {
+        match obj.get_mut(keyword) {
+            Some(Value::Array(list)) => {
+                for schema in list {
+                    convert_draft4_exclusive_bounds(schema);
+                }
+            }
+            Some(schema @ Value::Object(_)) => convert_draft4_exclusive_bounds(schema),
+            _ => {}
+        }
+    }
+}
+
+/// `true` when the document is OpenAPI 3.0, whose schemas use draft-4 spellings.
+fn is_openapi_30(root: &Value) -> bool {
+    root.get("openapi")
+        .and_then(Value::as_str)
+        .is_some_and(|v| v.starts_with("3.0"))
+}
+
 /// Resolve a schema's `$ref` pointers into a self-contained schema.
 ///
 /// Every referenced definition is carried in `$defs` and pointed at, so the
@@ -106,6 +202,12 @@ fn resolve_schema(value: &Value, root: &Value) -> Result<Value, ParseError> {
                 obj.insert("$defs".to_string(), Value::Object(map));
             }
         }
+    }
+
+    // After the definitions are in place, so the schemas they hold are
+    // converted too.
+    if is_openapi_30(root) {
+        convert_draft4_exclusive_bounds(&mut resolved);
     }
     Ok(resolved)
 }
@@ -518,6 +620,14 @@ fn parse_openapi_paths(
     };
 
     for (path, path_item) in paths {
+        // A path item may be a reference, which is how a spec reuses one across
+        // paths. Reading it without resolving finds no methods, so every
+        // operation it holds would be dropped without a word.
+        let mut visited = HashSet::new();
+        let path_item =
+            resolve_component_ref(path_item, spec_root, &mut visited)?.ok_or_else(|| {
+                ParseError::SchemaError(format!("path item for '{}' must be an object", path))
+            })?;
         let path_obj = path_item.as_object().ok_or_else(|| {
             ParseError::SchemaError(format!("path item for '{}' must be an object", path))
         })?;
@@ -3132,6 +3242,219 @@ paths:
             defs[&decoded]["type"], "integer",
             "the escaped name must resolve to its definition"
         );
+    }
+
+    /// A path item may be a reference, which is how a spec reuses one. Reading
+    /// it without resolving finds no methods, so every operation it holds would
+    /// be dropped, and the route would simply not exist.
+    #[test]
+    fn operations_behind_a_path_item_ref_are_kept() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  pathItems:
+    BookingResource:
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+      get:
+        x-barbacane-dispatch:
+          name: mock
+      delete:
+        x-barbacane-dispatch:
+          name: mock
+paths:
+  /bookings/{bookingId}:
+    $ref: "#/components/pathItems/BookingResource"
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        assert_eq!(
+            spec.operations.len(),
+            3,
+            "both referenced operations survive"
+        );
+
+        let mut methods: Vec<&str> = spec
+            .operations
+            .iter()
+            .filter(|o| o.path == "/bookings/{bookingId}")
+            .map(|o| o.method.as_str())
+            .collect();
+        methods.sort_unstable();
+        assert_eq!(methods, vec!["DELETE", "GET"]);
+
+        // The parameters the referenced item declares reach its operations.
+        let get = spec
+            .operations
+            .iter()
+            .find(|o| o.path == "/bookings/{bookingId}" && o.method == "GET")
+            .expect("GET");
+        assert_eq!(get.parameters.len(), 1);
+        assert_eq!(get.parameters[0].name, "bookingId");
+        assert_eq!(get.parameters[0].location, "path");
+    }
+
+    /// OpenAPI 3.0 spells an exclusive bound as a boolean qualifying `minimum`.
+    /// Left alone it makes the schema fail to build, and a schema that fails to
+    /// build is not validated at all, so the constraint would vanish silently.
+    #[test]
+    fn draft4_exclusive_bounds_become_the_2020_form() {
+        let yaml = r##"
+openapi: "3.0.3"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /prices:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                  minimum: 0
+                  exclusiveMinimum: true
+                discount:
+                  type: number
+                  maximum: 100
+                  exclusiveMaximum: false
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        let props = &schema["properties"];
+
+        // `true` moves the bound onto the exclusive keyword.
+        assert_eq!(props["amount"]["exclusiveMinimum"], 0);
+        assert!(
+            props["amount"].get("minimum").is_none(),
+            "the inclusive bound it qualified is gone"
+        );
+        // `false` is the default, so the bound stays inclusive.
+        assert_eq!(props["discount"]["maximum"], 100);
+        assert!(props["discount"].get("exclusiveMaximum").is_none());
+
+        // And the result is something the validator can build and enforce.
+        let validator = jsonschema::options().build(schema).expect("compiles");
+        assert!(
+            !validator.is_valid(&serde_json::json!({"amount": 0})),
+            "0 is excluded"
+        );
+        assert!(validator.is_valid(&serde_json::json!({"amount": 0.5})));
+        assert!(
+            validator.is_valid(&serde_json::json!({"discount": 100})),
+            "100 is included"
+        );
+    }
+
+    /// `enum`, `const`, `default` and the example keywords hold instance data,
+    /// not schemas. Rewriting a value there would change what a request is
+    /// compared against, so the conversion must not reach into them.
+    #[test]
+    fn draft4_conversion_leaves_instance_data_alone() {
+        let yaml = r##"
+openapi: "3.0.3"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /rules:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rule:
+                  type: object
+                  default:
+                    minimum: 0
+                    exclusiveMinimum: true
+                  enum:
+                    - minimum: 0
+                      exclusiveMinimum: true
+                nested:
+                  type: object
+                  properties:
+                    depth:
+                      type: integer
+                      minimum: 1
+                      exclusiveMinimum: true
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        let rule = &schema["properties"]["rule"];
+
+        // The default is a value a request may carry, not a constraint.
+        assert_eq!(
+            rule["default"]["exclusiveMinimum"], true,
+            "instance data under `default` must be untouched"
+        );
+        assert_eq!(rule["default"]["minimum"], 0);
+
+        // The same for an enum entry: it is the value compared against.
+        assert_eq!(rule["enum"][0]["exclusiveMinimum"], true);
+        assert_eq!(rule["enum"][0]["minimum"], 0);
+
+        // A real schema nested below is still converted.
+        let depth = &schema["properties"]["nested"]["properties"]["depth"];
+        assert_eq!(depth["exclusiveMinimum"], 1);
+        assert!(depth.get("minimum").is_none());
+    }
+
+    /// A 3.1 document already carries the numeric form, which must be left as it
+    /// is: a number there is the bound, not a flag.
+    #[test]
+    fn numeric_exclusive_bounds_are_untouched() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /prices:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                  exclusiveMinimum: 5
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        assert_eq!(schema["properties"]["amount"]["exclusiveMinimum"], 5);
     }
 
     /// A schema is self-contained: every reference points at a definition it

@@ -37,6 +37,8 @@ serde_json = { workspace = true }
 # Proves a parsed schema is usable by the data plane's validator, which builds
 # a jsonschema::Validator from it.
 jsonschema = { workspace = true }
+# The corpus test reads specs and computes what it expects from them itself.
+serde_yaml = { workspace = true }
 
 [[bench]]
 name = "compilation"
