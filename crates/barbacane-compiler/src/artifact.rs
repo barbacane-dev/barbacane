@@ -2456,7 +2456,8 @@ mod tests {
                 "properties": {"realm": {"type": "string"}}
             });
             let mut found = BTreeSet::new();
-            collect_configured_header_names(&schema, &serde_json::json!({}), &mut found);
+            collect_configured_header_names(&schema, &serde_json::json!({}), &mut found)
+                .expect("collect");
             assert!(found.contains("authorization"));
         }
 
@@ -2475,7 +2476,8 @@ mod tests {
                 }
             });
             let mut found = BTreeSet::new();
-            collect_configured_header_names(&schema, &serde_json::json!({}), &mut found);
+            collect_configured_header_names(&schema, &serde_json::json!({}), &mut found)
+                .expect("collect");
             assert!(
                 found.contains("x-api-key"),
                 "an unset field still reads its default"
@@ -2487,7 +2489,8 @@ mod tests {
                 &schema,
                 &serde_json::json!({"header_name": "X-Key"}),
                 &mut found,
-            );
+            )
+            .expect("collect");
             assert!(found.contains("x-key"));
             assert!(
                 !found.contains("x-api-key"),
