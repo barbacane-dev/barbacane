@@ -523,7 +523,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Record a response whose body phase-4 rules did not inspect.
     /// Count headers a request carried that the operation does not admit.
     pub fn record_request_headers_dropped(&self, count: u64) {
         if count > 0 {
@@ -531,6 +530,7 @@ impl MetricsRegistry {
         }
     }
 
+    /// Record a response whose body phase-4 rules did not inspect.
     pub fn record_waf_response_body_skipped(&self, method: &str, path: &str) {
         self.waf_response_body_skipped_total
             .get_or_create(&WafInspectionLabels {
