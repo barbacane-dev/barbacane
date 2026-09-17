@@ -1827,11 +1827,19 @@ fn extract_header_names(
     Ok(())
 }
 
+/// Markers that introduce a header name inside a configuration value.
+///
+/// `$request.header.` is the message-key form of `kafka` and `nats`, `$header.`
+/// the interpolation form of `request-transformer`. The longer marker is tried
+/// first so it is not read as the shorter one preceded by text.
+const HEADER_REFERENCE_MARKERS: &[&str] = &["$request.header.", "$header."];
+
 /// Read a value that may reference a header among other things.
 ///
-/// `header:<name>` selects one, and `$request.header.<name>` names one inside a
-/// longer expression. Anything else selects something that is not a header,
-/// such as `client_ip`, and contributes nothing.
+/// `header:<name>` selects one. Otherwise every marker occurrence in the string
+/// names one, so a value built from several headers contributes all of them.
+/// Anything else selects something that is not a header, such as `client_ip`,
+/// and contributes nothing.
 fn extract_referenced_header_names(
     value: &serde_json::Value,
     out: &mut BTreeSet<String>,
@@ -1841,16 +1849,33 @@ fn extract_referenced_header_names(
             if let Some(name) = text.strip_prefix("header:") {
                 return push_header_name(name, out);
             }
-            if let Some(rest) = text.split("$request.header.").nth(1) {
-                let name: String = rest
+            let mut rest = text.as_str();
+            while !rest.is_empty() {
+                // The earliest marker, so a `$header.` inside a longer string is
+                // not skipped by a later `$request.header.`.
+                let Some((at, marker)) = HEADER_REFERENCE_MARKERS
+                    .iter()
+                    .filter_map(|m| rest.find(m).map(|i| (i, *m)))
+                    .min_by_key(|(i, m)| (*i, std::cmp::Reverse(m.len())))
+                else {
+                    break;
+                };
+                let after = &rest[at + marker.len()..];
+                let name: String = after
                     .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
                     .collect();
                 push_header_name(&name, out)?;
+                rest = &after[name.len()..];
             }
         }
         serde_json::Value::Array(entries) => {
             for entry in entries {
+                extract_referenced_header_names(entry, out)?;
+            }
+        }
+        serde_json::Value::Object(entries) => {
+            for entry in entries.values() {
                 extract_referenced_header_names(entry, out)?;
             }
         }
@@ -2431,6 +2456,13 @@ mod tests {
                         "properties": {
                             "remove": {"type": "array", "format": "header-name"},
                             "rename": {"type": "object", "format": "header-name-map"},
+                            "add": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "string",
+                                    "format": "header-ref"
+                                }
+                            },
                             "set": {"type": "object"}
                         }
                     }
@@ -2519,6 +2551,21 @@ mod tests {
                     .contains("x-client-id")
             );
             assert!(names(serde_json::json!({"partition_key": "client_ip"})).is_empty());
+        }
+
+        /// Every reference in a value is read, not only the first, and both
+        /// interpolation forms count. A value built from two headers needs both
+        /// admitted or it renders with one of them empty.
+        #[test]
+        fn every_reference_in_a_value_is_read() {
+            let found = names(serde_json::json!({
+                "headers": {"add": {"x-trace": "$header.x-first/$request.header.x-second"}}
+            }));
+            assert!(found.contains("x-first"), "{found:?}");
+            assert!(found.contains("x-second"), "{found:?}");
+
+            // A marker with nothing after it names nothing and still terminates.
+            assert!(names(serde_json::json!({"key": "prefix $header. suffix"})).is_empty());
         }
 
         /// A template may name a header inside a longer expression.
