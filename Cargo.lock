@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "arc-swap",
  "barbacane-compiler",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-compiler"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "barbacane-waf",
  "chrono",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-control"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "barbacane-plugin-macros",
  "base64",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-sigv4"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "hex",
  "hmac",
@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-telemetry"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-test"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "assert_cmd",
  "barbacane-compiler",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-wasm"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-nats",

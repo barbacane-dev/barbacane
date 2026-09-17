@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-17
+
+Headline: a request now carries only the headers its operation admits, so the document describes what an upstream receives and not only what a client may send. Specs that could not be compiled at all now can, including any with a recursive schema.
+
+> **Upgrade note (breaking):** **all pre-0.11 `.bca` artifacts must be recompiled.** Each operation records the request headers it accepts and the data plane forwards only those, so `routes.json` changes shape and its checksum is bound into `artifact_hash`, which the data plane verifies on load. The artifact format version is now **6**, and the data plane compares it, so a stale artifact is refused by version with a message naming the recompile rather than failing the integrity check. Recompile every artifact with 0.11.0 (`barbacane compile`); re-sign signed artifacts (`BARBACANE_SIGNING_KEY`).
+>
+> Two changes need a look at your specs before you upgrade: a header the document does not describe no longer reaches your upstream, and an operation running an authentication middleware must declare the security scheme carrying its credential. Both carry their own upgrade note below.
+
 ### Added
 
 - **wasm**: `ldap` capability with three host functions, `host_ldap_bind`, `host_ldap_search` and `host_ldap_read_result`, backed by a native LDAP client (`ldap3` with rustls on aws-lc-rs, no new TLS stack). Credential binds run on a fresh connection each time; service-account search connections are pooled per plugin, URL and bind identity (32 per plugin, 256 in total, least-recently-used eviction, liveness-checked). A password crosses a plaintext `ldap://` connection only when the request sets `allow_plaintext` (`plaintext_refused` otherwise). Directory egress goes through the plugin SSRF guard (`BARBACANE_ALLOW_INTERNAL_EGRESS`), plaintext connections are pinned to the vetted address, StartTLS fails closed, and searches are capped at 1000 entries / 1 MiB while entries stream in. Results carry a stable `code` (`invalid_credentials`, `connection_failed`, `timeout`, ...) so an auth plugin can map rejected credentials to 401 and directory failures to 502. Decision record: ADR-0032, which supersedes ADR-0028.
