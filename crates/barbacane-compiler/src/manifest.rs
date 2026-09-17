@@ -27,6 +27,8 @@ struct PluginMeta {
     version: String,
     #[serde(rename = "type")]
     plugin_type: String,
+    #[serde(default)]
+    category: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -41,6 +43,10 @@ struct PluginTomlCapabilities {
 struct PluginMetadata {
     version: String,
     plugin_type: String,
+    /// The plugin's family, as its manifest states it. `authentication` is the
+    /// one the compiler acts on: such a plugin verifies a credential, so the
+    /// operation must name the security scheme that carries it.
+    category: Option<String>,
     body_access: bool,
     host_functions: Vec<String>,
 }
@@ -51,6 +57,7 @@ fn parse_plugin_metadata(content: &str) -> Option<PluginMetadata> {
     Some(PluginMetadata {
         version: parsed.plugin.version,
         plugin_type: parsed.plugin.plugin_type,
+        category: parsed.plugin.category,
         body_access: parsed.capabilities.body_access,
         host_functions: parsed.capabilities.host_functions,
     })
@@ -66,6 +73,10 @@ fn read_plugin_metadata(wasm_path: &Path) -> Option<PluginMetadata> {
 /// Name of the custom WASM section into which the plugin macros embed the
 /// plugin's `plugin.toml`. Keep in sync with `barbacane-plugin-macros`.
 const MANIFEST_SECTION: &str = "barbacane_manifest";
+
+/// Name of the custom WASM section into which the plugin macros embed the
+/// plugin's `config-schema.json`. Keep in sync with `barbacane-plugin-macros`.
+const CONFIG_SCHEMA_SECTION: &str = "barbacane_config_schema";
 
 /// Read a LEB128-encoded unsigned integer, returning the value and the number
 /// of bytes consumed. Bounded to `u32` (WASM section sizes and name lengths fit).
@@ -93,6 +104,11 @@ fn read_uleb128(bytes: &[u8]) -> Option<(u32, usize)> {
 /// for plugins built before this convention (the caller then falls back to a
 /// sibling `plugin.toml`).
 fn read_embedded_manifest(wasm: &[u8]) -> Option<String> {
+    read_custom_section(wasm, MANIFEST_SECTION)
+}
+
+/// Extract a named custom section's payload as text.
+fn read_custom_section(wasm: &[u8], want: &str) -> Option<String> {
     // Skip the 8-byte module header (magic + version); validated by the caller.
     let mut pos = 8usize;
     while pos < wasm.len() {
@@ -107,7 +123,7 @@ fn read_embedded_manifest(wasm: &[u8]) -> Option<String> {
             let (name_len, n) = read_uleb128(section)?;
             let name_end = n.checked_add(name_len as usize)?;
             let name = section.get(n..name_end)?;
-            if name == MANIFEST_SECTION.as_bytes() {
+            if name == want.as_bytes() {
                 return String::from_utf8(section.get(name_end..)?.to_vec()).ok();
             }
         }
@@ -125,6 +141,31 @@ fn read_config_schema(wasm_path: &Path) -> Option<serde_json::Value> {
     let dir = wasm_path.parent()?;
     let content = std::fs::read_to_string(dir.join("config-schema.json")).ok()?;
     serde_json::from_str::<serde_json::Value>(&content).ok()
+}
+
+/// Read the config schema a plugin carries inside its WASM binary.
+///
+/// For a caller that holds the bytes and not a path, as the control plane does
+/// when it loads a plugin from its registry.
+pub fn embedded_config_schema(wasm: &[u8]) -> Option<serde_json::Value> {
+    read_embedded_config_schema(wasm)
+}
+
+/// Read the family a plugin declares in the manifest inside its WASM binary.
+pub fn embedded_category(wasm: &[u8]) -> Option<String> {
+    read_embedded_manifest(wasm)
+        .as_deref()
+        .and_then(parse_plugin_metadata)
+        .and_then(|m| m.category)
+}
+
+/// The plugin's `config-schema.json` as embedded in the WASM binary.
+///
+/// Preferred over a sibling file, so the annotations saying which headers a
+/// plugin reads reach the compiler wherever the `.wasm` travels: a container
+/// image holding only the binary, a release download, or a URL.
+fn read_embedded_config_schema(wasm: &[u8]) -> Option<serde_json::Value> {
+    serde_json::from_str(&read_custom_section(wasm, CONFIG_SCHEMA_SECTION)?).ok()
 }
 
 /// Resolve a WASM path from a plugin source, relative to a base path.
@@ -200,14 +241,16 @@ fn resolve_plugin(
         );
     }
 
-    // Secret (writeOnly) config fields from config-schema.json (path plugins
-    // only; URL plugins do not fetch the schema).
-    let config_schema = match source {
+    // The config schema carries the secret (writeOnly) fields and the
+    // annotations naming the request headers the plugin reads. Prefer the copy
+    // embedded in the WASM, so it reaches the compiler wherever the binary
+    // travels; fall back to a sibling file for plugins built before that.
+    let config_schema = read_embedded_config_schema(&wasm_bytes).or_else(|| match source {
         PluginSource::Path(path_source) => {
             read_config_schema(&resolve_wasm_path(path_source, base_path))
         }
         PluginSource::Url(_) => None,
-    };
+    });
     let secret_fields = config_schema
         .as_ref()
         .map(|schema| {
@@ -223,6 +266,7 @@ fn resolve_plugin(
         wasm_bytes,
         version: metadata.as_ref().map(|m| m.version.clone()),
         plugin_type: metadata.as_ref().map(|m| m.plugin_type.clone()),
+        category: metadata.as_ref().and_then(|m| m.category.clone()),
         body_access: metadata.as_ref().is_some_and(|m| m.body_access),
         host_functions: metadata
             .as_ref()
@@ -349,6 +393,8 @@ pub struct ResolvedPlugin {
     pub version: Option<String>,
     /// Plugin type: "middleware" or "dispatcher" (from plugin.toml if available).
     pub plugin_type: Option<String>,
+    /// The plugin's family from plugin.toml, such as `authentication`.
+    pub category: Option<String>,
     /// Whether this plugin needs the request body in `on_request`.
     pub body_access: bool,
     /// Declared capability host-function names from plugin.toml.

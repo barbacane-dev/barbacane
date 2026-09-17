@@ -139,6 +139,10 @@ pub struct MetricsRegistry {
     // Connection metrics
     pub active_connections: Gauge,
     pub connections_total: Counter,
+    /// Request headers dropped at ingress because the spec does not admit them.
+    /// Unlabelled on purpose: a header name is attacker-controlled and would
+    /// let a caller grow the series set without bound.
+    pub request_headers_dropped_total: Counter,
 
     // Validation metrics
     pub validation_failures_total: Family<ValidationLabels, Counter>,
@@ -248,6 +252,13 @@ impl MetricsRegistry {
             "barbacane_connections",
             "Total number of connections accepted",
             connections_total.clone(),
+        );
+
+        let request_headers_dropped_total = Counter::default();
+        registry.register(
+            "barbacane_request_headers_dropped",
+            "Request headers dropped at ingress because the spec does not admit them",
+            request_headers_dropped_total.clone(),
         );
 
         // Validation metrics
@@ -406,6 +417,7 @@ impl MetricsRegistry {
             response_size_bytes,
             active_connections,
             connections_total,
+            request_headers_dropped_total,
             validation_failures_total,
             waf_blocked_total,
             waf_matched_total,
@@ -508,6 +520,13 @@ impl MetricsRegistry {
             .observe(duration_secs);
         if allowed {
             self.waf_allowed_total.get_or_create(&labels).inc();
+        }
+    }
+
+    /// Count headers a request carried that the operation does not admit.
+    pub fn record_request_headers_dropped(&self, count: u64) {
+        if count > 0 {
+            self.request_headers_dropped_total.inc_by(count);
         }
     }
 

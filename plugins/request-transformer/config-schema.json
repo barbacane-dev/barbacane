@@ -10,17 +10,16 @@
       "properties": {
         "add": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": { "type": "string", "format": "header-ref" },
           "description": "Add or overwrite headers. Supports variable interpolation."
         },
         "set": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": { "type": "string", "format": "header-ref" },
           "description": "Add headers only if not already present. Supports variable interpolation."
         },
         "remove": {
           "type": "array",
-          "format": "header-name",
           "items": { "type": "string" },
           "description": "Remove headers by name (case-insensitive)"
         },
@@ -38,7 +37,7 @@
       "properties": {
         "add": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": { "type": "string", "format": "header-ref" },
           "description": "Add or overwrite query parameters. Supports variable interpolation."
         },
         "remove": {
@@ -88,7 +87,7 @@
       "properties": {
         "add": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": { "type": "string", "format": "header-ref" },
           "description": "Add or overwrite JSON fields using JSON Pointer paths (e.g., /metadata/gateway). Supports variable interpolation. Only works on JSON bodies."
         },
         "remove": {

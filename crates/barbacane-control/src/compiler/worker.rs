@@ -263,10 +263,17 @@ async fn resolve_project_plugins(
                 )
             })?;
 
+        // The plugin's family and config schema travel inside the WASM, so both
+        // are read from the binary the registry stores, before it is moved.
+        let category = barbacane_compiler::embedded_category(&plugin_with_binary.wasm_binary);
+        let config_schema =
+            barbacane_compiler::embedded_config_schema(&plugin_with_binary.wasm_binary);
+
         bundles.push(barbacane_compiler::PluginBundle {
             name: plugin_with_binary.name.clone(),
             version: plugin_with_binary.version.clone(),
             plugin_type: plugin_with_binary.plugin_type.clone(),
+            category,
             wasm_bytes: plugin_with_binary.wasm_binary,
             // TODO: read body_access + host_functions from the registry once the
             // plugins table persists capabilities. Until then the control plane
@@ -274,14 +281,11 @@ async fn resolve_project_plugins(
             // plane loads them without capability enforcement (WA-1).
             body_access: false,
             host_functions: vec![],
-            // The registry doesn't persist config-schema.json, so no secret
-            // (writeOnly) fields are known here; the plaintext-secret warning
-            // (E1070) is a no-op for control-plane compiles. Same limitation as
-            // host_functions above (WA-1). For the same reason the schema is
-            // absent, so header names a plugin's configuration tells it to read
-            // are not collected here and must be declared in the spec.
+            // `secret_fields` is computed during path resolution, which this
+            // path does not use, so the plaintext-secret warning (E1070) stays a
+            // no-op for control-plane compiles (WA-1).
             secret_fields: vec![],
-            config_schema: None,
+            config_schema,
         });
     }
 

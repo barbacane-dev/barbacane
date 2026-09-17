@@ -108,12 +108,20 @@ impl MyDispatcher {
 name = "my-plugin"
 version = "0.1.0"
 type = "middleware"  # or "dispatcher"
+category = "traffic-control"
 description = "My custom plugin"
 wasm = "my_plugin.wasm"
 
 [capabilities]
 host_functions = ["log"]
 ```
+
+`category` is the plugin's family. It groups the plugin in the middleware guide,
+and `authentication` additionally tells the compiler that the plugin verifies a
+client credential. Current values: `authentication`, `authorization`, `caching`,
+`observability`, `traffic-control`, `transformation`, `ai-gateway` for
+middleware; `proxy`, `messaging`, `cloud`, `testing`, `ai-gateway` for
+dispatchers.
 
 ### 5. Create config-schema.json
 
@@ -152,6 +160,47 @@ such a field is set to a plaintext literal instead of an `env://` / `file://`
 reference, so credentials are never baked into the compiled artifact. The
 detection is nested-aware (arrays and maps of objects). Do **not** mark
 non-secret fields (e.g. a message-key expression) `writeOnly`.
+
+#### Declaring the request headers your plugin reads
+
+A request carries only the headers its operation admits, and everything else is
+dropped before `on_request` runs. **If your plugin reads a header and does not
+say so here, it will find nothing.**
+
+Mark the field whose value names a header with the `format` that matches how
+the value is written:
+
+| `format` | The field holds | Example |
+|---|---|---|
+| `header-name` | a header name, or a list of them | `apikey-auth.header_name`, `cache.vary` |
+| `header-ref` | a selector that may name a header among other things | `rate-limit.partition_key` (`header:x-tenant`), `kafka.key` (`$request.header.x-order-id`) |
+| `header-name-map` | an object whose **keys** are header names | `request-transformer.headers.rename` |
+
+```json
+"header_name": {
+  "type": "string",
+  "format": "header-name",
+  "default": "X-API-Key",
+  "description": "Header to read the key from"
+}
+```
+
+A `default` is collected too, since it is the header the plugin reads when the
+configuration leaves the field out.
+
+Names are matched case-insensitively. The `x-auth-*` namespace belongs to the
+auth plugins' output, so naming one is a compile error (**E1056**).
+
+A plugin that verifies a client credential reads its header from the spec
+instead. Set `category = "authentication"` in `plugin.toml`, and the compiler
+then requires every operation using the plugin to name the security scheme
+carrying the credential (**E1057**), which is what admits the header.
+
+The SDK macros embed `config-schema.json` into the `.wasm`, as they already do
+`plugin.toml`, so these annotations reach the compiler wherever the binary
+travels and no sidecar file has to accompany it. **Rebuild the plugin after
+editing either file**, or the compiler reads the copy embedded by the previous
+build.
 
 After changing `config-schema.json`, regenerate the vacuum ruleset validators
 (`node docs/rulesets/generate.mjs`) and run `docs/rulesets/tests/run-tests.sh`.

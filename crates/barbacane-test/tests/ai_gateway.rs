@@ -108,6 +108,12 @@ paths:
   /v1/chat/completions:
     post:
       operationId: chatCompletions
+      parameters:
+        - name: x-tier
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -443,6 +449,12 @@ paths:
   /v1/chat/completions:
     post:
       operationId: chat
+      parameters:
+        - name: x-tier
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:

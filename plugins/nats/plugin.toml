@@ -2,6 +2,7 @@
 name = "nats"
 version = "0.1.0"
 type = "dispatcher"
+category = "messaging"
 description = "Publishes messages to NATS subjects (sync-to-async bridge)"
 wasm = "nats.wasm"
 

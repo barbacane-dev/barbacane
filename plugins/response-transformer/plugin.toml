@@ -2,6 +2,7 @@
 name = "response-transformer"
 version = "0.1.0"
 type = "middleware"
+category = "transformation"
 description = "Transform HTTP responses: status code, headers, and body"
 wasm = "response-transformer.wasm"
 

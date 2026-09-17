@@ -2,6 +2,7 @@
 name = "rate-limit"
 version = "0.1.0"
 type = "middleware"
+category = "traffic-control"
 description = "Rate limiting middleware with IETF draft headers support"
 wasm = "rate-limit.wasm"
 

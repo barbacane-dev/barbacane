@@ -2,6 +2,7 @@
 name = "bot-detection"
 version = "0.1.0"
 type = "middleware"
+category = "traffic-control"
 description = "Block requests from known bots and scrapers by User-Agent pattern matching"
 wasm = "bot-detection.wasm"
 

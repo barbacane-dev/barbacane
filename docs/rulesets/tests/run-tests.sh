@@ -85,6 +85,10 @@ assert_has_violations "$SCRIPT_DIR/invalid-ai-proxy-leftover-model.yaml" "invali
 # A `writeOnly` (secret) config field set to a plaintext literal must be flagged
 # by the generated dispatch validator (mirrors compiler warning E1070).
 assert_has_violations "$SCRIPT_DIR/invalid-plaintext-secret.yaml" "invalid-plaintext-secret" 1
+# ADR-0033: the x-auth-* namespace is the auth plugins' output, so a spec cannot
+# declare one. Three parameters (operation, path item, components) and one
+# apiKey scheme, each mirroring compiler error E1056.
+assert_has_violations "$SCRIPT_DIR/invalid-reserved-headers.yaml" "invalid-reserved-headers" 4
 echo ""
 
 echo "Results: $PASS passed, $FAIL failed"

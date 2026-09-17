@@ -2,6 +2,7 @@
 name = "fire-and-forget"
 version = "0.1.0"
 type = "dispatcher"
+category = "messaging"
 description = "Forwards request to upstream and returns an immediate static response"
 wasm = "fire-and-forget.wasm"
 

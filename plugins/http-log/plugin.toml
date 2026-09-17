@@ -2,6 +2,7 @@
 name = "http-log"
 version = "0.1.0"
 type = "middleware"
+category = "observability"
 description = "HTTP logging middleware that sends request/response logs to an HTTP endpoint"
 wasm = "http-log.wasm"
 

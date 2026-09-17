@@ -86,6 +86,14 @@ paths:
           description: Success
         "401":
           description: Unauthorized
+security:
+  - BearerAuth: []
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
 "#,
         x = x,
         y = y
@@ -656,6 +664,7 @@ paths:
       summary: Public endpoint (no auth)
       operationId: getPublic
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:
@@ -665,6 +674,16 @@ paths:
       responses:
         "200":
           description: Success
+security:
+  - OAuth2: []
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes: {{}}
 "#,
         introspection_url, introspection_url
     );
@@ -894,6 +913,16 @@ paths:
       responses:
         "200":
           description: Success
+security:
+  - OAuth2: []
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes: {{}}
 "#,
         introspection_url, client_secret
     );

@@ -2,6 +2,7 @@
 name = "cache"
 version = "0.1.0"
 type = "middleware"
+category = "caching"
 description = "Response caching middleware with TTL support"
 
 [capabilities]

@@ -2,6 +2,7 @@
 name = "opa-authz"
 version = "0.1.0"
 type = "middleware"
+category = "authorization"
 description = "OPA authorization middleware — policy-based access control via Open Policy Agent"
 wasm = "opa-authz.wasm"
 

@@ -2,6 +2,7 @@
 name = "request-size-limit"
 version = "0.1.0"
 type = "middleware"
+category = "traffic-control"
 description = "Rejects requests that exceed a configurable size limit"
 wasm = "request-size-limit.wasm"
 

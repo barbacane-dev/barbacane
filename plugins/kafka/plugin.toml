@@ -2,6 +2,7 @@
 name = "kafka"
 version = "0.1.0"
 type = "dispatcher"
+category = "messaging"
 description = "Publishes messages to Kafka topics (sync-to-async bridge)"
 wasm = "kafka.wasm"
 

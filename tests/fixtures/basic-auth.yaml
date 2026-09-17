@@ -50,6 +50,7 @@ paths:
       summary: Public endpoint (overrides global middleware)
       operationId: getPublic
       x-barbacane-middlewares: []
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:
@@ -66,3 +67,14 @@ paths:
                 properties:
                   message:
                     type: string
+
+# The operations run an authentication middleware, so the document names the
+# scheme carrying the credential. That is what admits the header (ADR-0033).
+security:
+  - BasicAuth: []
+
+components:
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic

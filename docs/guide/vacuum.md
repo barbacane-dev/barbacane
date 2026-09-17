@@ -100,6 +100,8 @@ The same rules apply to operation-level middlewares (`barbacane-op-middleware-*`
 | Rule | Severity | Description |
 |------|----------|-------------|
 | `barbacane-auth-opt-out-explicit` | info | When global auth is set, operations that override middlewares without auth should use `x-barbacane-middlewares: []` to explicitly opt out |
+| `barbacane-reserved-header-parameter` | error | An `in: header` parameter cannot be named `x-auth-*`; that namespace carries the identity auth plugins establish (mirrors compiler error E1056) |
+| `barbacane-reserved-header-scheme` | error | An `apiKey` security scheme in a header cannot be named `x-auth-*`, for the same reason |
 
 ## Extending the Ruleset
 

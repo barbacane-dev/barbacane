@@ -277,6 +277,31 @@ rules:
   # Auth safety
   # ---------------------------------------------------------------------------
 
+  barbacane-reserved-header-parameter:
+    description: "x-auth-* headers carry the identity auth plugins establish; a spec cannot declare one (E1056)."
+    documentationUrl: https://docs.barbacane.dev/reference/configuration.html#request-headers-reaching-your-upstream
+    severity: error
+    given:
+      - "$.paths[*][*].parameters[?(@.in=='header')]"
+      - "$.paths[*].parameters[?(@.in=='header')]"
+      - "$.components.parameters[?(@.in=='header')]"
+    then:
+      field: name
+      function: pattern
+      functionOptions:
+        notMatch: "^[Xx]-[Aa][Uu][Tt][Hh]-"
+
+  barbacane-reserved-header-scheme:
+    description: "An apiKey security scheme cannot name an x-auth-* header; that namespace is the auth plugins' output (E1056)."
+    documentationUrl: https://docs.barbacane.dev/reference/configuration.html#request-headers-reaching-your-upstream
+    severity: error
+    given: "$.components.securitySchemes[?(@.type=='apiKey' && @.in=='header')]"
+    then:
+      field: name
+      function: pattern
+      functionOptions:
+        notMatch: "^[Xx]-[Aa][Uu][Tt][Hh]-"
+
   barbacane-auth-opt-out-explicit:
     description: "When global auth middleware is set, operations without it should explicitly opt out with x-barbacane-middlewares: []."
     documentationUrl: https://docs.barbacane.dev/guide/middlewares/

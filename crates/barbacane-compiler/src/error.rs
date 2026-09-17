@@ -57,6 +57,12 @@ pub enum CompileError {
     #[error("E1056: reserved header name, x-auth-* belongs to auth plugins: {0}")]
     ReservedHeaderName(String),
 
+    /// E1057: An operation runs an authentication plugin without naming the
+    /// security scheme that carries the credential, so nothing says which header
+    /// the caller sends it in and the operation reads as anonymous.
+    #[error("E1057: authentication plugin without a security requirement: {0}")]
+    MissingSecurityRequirement(String),
+
     /// E1051: Schema exceeds maximum nesting depth.
     #[error("E1051: schema too deep: {0}")]
     SchemaTooDeep(String),

@@ -52,6 +52,7 @@ paths:
       summary: Public endpoint (overrides global middleware)
       operationId: getPublic
       x-barbacane-middlewares: []  # Empty array removes global middleware
+      security: []
       x-barbacane-dispatch:
         name: mock
         config:
@@ -84,6 +85,8 @@ paths:
                 name: Query Key
                 scopes:
                   - read
+      security:
+        - ApiKeyQuery: []
       x-barbacane-dispatch:
         name: mock
         config:
@@ -95,3 +98,19 @@ paths:
           description: Success
         "401":
           description: Unauthorized
+
+# The operations run an authentication middleware, so the document names the
+# scheme carrying the credential. That is what admits the header (ADR-0033).
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    ApiKeyQuery:
+      type: apiKey
+      in: query
+      name: api_key

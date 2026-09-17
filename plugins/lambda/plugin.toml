@@ -2,6 +2,7 @@
 name = "lambda"
 version = "0.1.0"
 type = "dispatcher"
+category = "cloud"
 wasm = "lambda.wasm"
 
 [capabilities]

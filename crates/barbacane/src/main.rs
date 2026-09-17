@@ -1670,7 +1670,9 @@ impl Gateway {
 
         // Build the Request object for plugins (using BTreeMap for WASM compatibility)
         let path_params: std::collections::BTreeMap<String, String> = params.into_iter().collect();
-        let headers_btree = plugin_request_headers(headers);
+        let (headers_btree, dropped_headers) =
+            filter_request_headers(&operation.allowed_request_headers, headers, self.dev_mode);
+        self.metrics.record_request_headers_dropped(dropped_headers);
         // Extract body separately — it travels via side-channel, not in JSON.
         let raw_body = if request_body.is_empty() {
             None
@@ -2942,8 +2944,12 @@ impl Gateway {
         request_id: &str,
         trace_id: &str,
     ) -> Response<Full<Bytes>> {
-        // Build a minimal request for the CORS middleware
-        let headers_btree = plugin_request_headers(headers);
+        // Build a minimal request for the CORS middleware. A preflight is not
+        // bound to one operation, and everything it carries (`origin` and the
+        // `access-control-request-*` pair) is in the baseline, so nothing
+        // operation-specific is admitted here.
+        let (headers_btree, dropped_headers) = filter_request_headers(&[], headers, self.dev_mode);
+        self.metrics.record_request_headers_dropped(dropped_headers);
 
         let plugin_request = barbacane_wasm::Request {
             method: "OPTIONS".to_string(),
@@ -5472,19 +5478,119 @@ mod artifact_version_tests {
     }
 }
 
-fn plugin_request_headers(
+/// Keep only the request headers an operation admits.
+///
+/// The baseline, plus what the spec declares for this operation and what its
+/// middleware configuration tells a plugin to read. Everything else is dropped
+/// before any plugin sees it, so an upstream receives what the document
+/// describes and nothing a caller added on top.
+///
+/// The WAF is deliberately not filtered this way: it inspects what the client
+/// actually sent, which is the whole point of it.
+fn filter_request_headers(
+    allowed: &[String],
     headers: &HashMap<String, String>,
-) -> std::collections::BTreeMap<String, String> {
-    headers
+    dev_mode: bool,
+) -> (std::collections::BTreeMap<String, String>, u64) {
+    let mut kept = std::collections::BTreeMap::new();
+    let mut dropped = 0u64;
+
+    for (name, value) in headers {
+        let lowered = name.to_ascii_lowercase();
+        // The identity namespace belongs to the auth plugins' output. A spec
+        // cannot declare one (E1056), so this only restates what the allowlist
+        // could never contain.
+        if lowered.starts_with("x-auth-") {
+            dropped += 1;
+            let reason = "request header dropped: the x-auth-* namespace carries the identity \
+                          the auth plugins establish and is never accepted from a client";
+            if dev_mode {
+                tracing::warn!(header = %lowered, "{reason}");
+            } else {
+                tracing::debug!(header = %lowered, "{reason}");
+            }
+            continue;
+        }
+        if is_baseline_request_header(&lowered) || allowed.iter().any(|a| a == &lowered) {
+            kept.insert(name.clone(), value.clone());
+            continue;
+        }
+        dropped += 1;
+        if dev_mode {
+            tracing::warn!(
+                header = %lowered,
+                "request header dropped: the operation does not declare it. Declare it as a \
+                 parameter, or as the security scheme that carries it, for it to reach the upstream"
+            );
+        } else {
+            tracing::debug!(header = %lowered, "request header dropped");
+        }
+    }
+
+    (kept, dropped)
+}
+
+/// Request headers every operation accepts, whatever its spec declares.
+///
+/// Message framing and negotiation, CORS, tracing, the WebSocket handshake, and
+/// the proxy chain as it arrives. `authorization` is deliberately absent: it is
+/// forwarded because an operation's security scheme says the operation is
+/// authenticated, and for no other reason.
+const BASELINE_REQUEST_HEADERS: &[&str] = &[
+    // Message framing and content negotiation
+    "host",
+    "content-type",
+    "content-length",
+    "content-encoding",
+    "transfer-encoding",
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "accept-charset",
+    "user-agent",
+    "range",
+    "if-match",
+    "if-none-match",
+    "if-modified-since",
+    "if-unmodified-since",
+    "if-range",
+    "cache-control",
+    "pragma",
+    "expect",
+    // CORS
+    "origin",
+    "access-control-request-method",
+    "access-control-request-headers",
+    // Tracing and correlation
+    "traceparent",
+    "tracestate",
+    "x-request-id",
+    // WebSocket handshake
+    "upgrade",
+    "connection",
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-protocol",
+    "sec-websocket-extensions",
+    // Proxy chain, as received. Whether it can be trusted is a separate
+    // question, settled by trusted-proxy configuration, not by this list.
+    "x-forwarded-for",
+    "x-forwarded-proto",
+    "x-forwarded-host",
+    "x-real-ip",
+    "forwarded",
+];
+
+/// `true` when the baseline admits this header.
+fn is_baseline_request_header(name: &str) -> bool {
+    BASELINE_REQUEST_HEADERS
         .iter()
-        .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("x-auth-"))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+        .any(|h| h.eq_ignore_ascii_case(name))
 }
 
 #[cfg(test)]
-mod plugin_request_headers_tests {
-    use super::plugin_request_headers;
+mod request_header_filter_tests {
+    use super::filter_request_headers;
     use std::collections::HashMap;
 
     fn headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -5494,35 +5600,112 @@ mod plugin_request_headers_tests {
             .collect()
     }
 
+    fn allow(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// The baseline travels on every operation, and a header the operation
+    /// admits travels with it. Anything else does not reach a plugin.
     #[test]
-    fn drops_client_supplied_identity_headers_case_insensitively() {
-        let kept = plugin_request_headers(&headers(&[
-            ("x-auth-consumer", "admin"),
-            ("X-Auth-Consumer-Groups", "admin"),
-            ("x-auth-claims", "{}"),
-            ("X-AUTH-DN", "cn=admin"),
-            ("authorization", "Basic abc"),
-            ("content-type", "application/json"),
-            ("x-request-id", "r1"),
-        ]));
+    fn keeps_the_baseline_and_what_the_operation_admits() {
+        let (kept, dropped) = filter_request_headers(
+            &allow(&["x-tenant-id"]),
+            &headers(&[
+                ("content-type", "application/json"),
+                ("accept", "*/*"),
+                ("x-request-id", "r1"),
+                ("x-tenant-id", "acme"),
+                ("x-debug-mode", "on"),
+                ("x-internal-flag", "1"),
+            ]),
+            false,
+        );
+        assert!(kept.contains_key("content-type"));
+        assert!(kept.contains_key("accept"));
+        assert!(kept.contains_key("x-request-id"));
+        assert!(
+            kept.contains_key("x-tenant-id"),
+            "the operation declares it"
+        );
+        assert!(!kept.contains_key("x-debug-mode"), "undeclared");
+        assert!(!kept.contains_key("x-internal-flag"), "undeclared");
+        assert_eq!(dropped, 2);
+    }
+
+    /// `authorization` is not in the baseline. It reaches the upstream because
+    /// a security scheme put it in the operation's list, and not otherwise.
+    #[test]
+    fn authorization_travels_only_when_the_operation_admits_it() {
+        let sent = headers(&[("authorization", "Bearer t")]);
+
+        let (anonymous, dropped) = filter_request_headers(&[], &sent, false);
+        assert!(
+            !anonymous.contains_key("authorization"),
+            "an operation declaring no security takes no credential"
+        );
+        assert_eq!(dropped, 1);
+
+        let (authenticated, dropped) =
+            filter_request_headers(&allow(&["authorization"]), &sent, false);
+        assert_eq!(
+            authenticated.get("authorization").map(String::as_str),
+            Some("Bearer t")
+        );
+        assert_eq!(dropped, 0);
+    }
+
+    /// The identity namespace is the auth plugins' output. A client may not
+    /// supply it, whatever the case, and no allowlist can admit it.
+    #[test]
+    fn client_supplied_identity_headers_are_always_dropped() {
+        let (kept, dropped) = filter_request_headers(
+            // Even were one to appear in the list, which E1056 prevents.
+            &allow(&["x-auth-consumer"]),
+            &headers(&[
+                ("x-auth-consumer", "admin"),
+                ("X-Auth-Consumer-Groups", "admin"),
+                ("x-auth-claims", "{}"),
+                ("X-AUTH-DN", "cn=admin"),
+                ("content-type", "application/json"),
+            ]),
+            false,
+        );
         assert!(kept
             .keys()
             .all(|k| !k.to_ascii_lowercase().starts_with("x-auth-")));
-        assert_eq!(kept.len(), 3);
-        assert_eq!(
-            kept.get("authorization").map(String::as_str),
-            Some("Basic abc")
-        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(dropped, 4);
     }
 
+    /// Only that exact prefix is reserved; a header that merely starts with
+    /// similar text is an ordinary one, admitted if the operation declares it.
     #[test]
     fn only_the_x_auth_dash_prefix_is_reserved() {
-        let kept = plugin_request_headers(&headers(&[
-            ("x-authorization", "custom"),
-            ("x-auth", "bare"),
-            ("x-authz-mode", "strict"),
-        ]));
+        let (kept, _) = filter_request_headers(
+            &allow(&["x-authorization", "x-auth", "x-authz-mode"]),
+            &headers(&[
+                ("x-authorization", "custom"),
+                ("x-auth", "bare"),
+                ("x-authz-mode", "strict"),
+            ]),
+            false,
+        );
         assert_eq!(kept.len(), 3);
+    }
+
+    /// HTTP matches header names without regard to case, so the list must too,
+    /// or a caller could evade it by changing the spelling.
+    #[test]
+    fn matching_ignores_case_in_both_directions() {
+        let (kept, dropped) = filter_request_headers(
+            &allow(&["x-tenant-id"]),
+            &headers(&[("X-Tenant-Id", "acme"), ("Content-Type", "text/plain")]),
+            false,
+        );
+        assert_eq!(kept.len(), 2, "kept: {:?}", kept.keys().collect::<Vec<_>>());
+        assert_eq!(dropped, 0);
+        // The value travels under the name the client used.
+        assert_eq!(kept.get("X-Tenant-Id").map(String::as_str), Some("acme"));
     }
 }
 

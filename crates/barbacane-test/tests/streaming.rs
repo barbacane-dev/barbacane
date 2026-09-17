@@ -105,6 +105,8 @@ paths:
               - key: secret-key
                 id: key-1
                 name: test
+      security:
+        - ApiKeyAuth: []
       x-barbacane-dispatch:
         name: streaming-echo
         config:
@@ -114,6 +116,12 @@ paths:
           description: SSE stream
         "401":
           description: Unauthorized
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
 "#,
         upstream = upstream_url,
     );
