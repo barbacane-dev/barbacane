@@ -153,6 +153,47 @@ reference, so credentials are never baked into the compiled artifact. The
 detection is nested-aware (arrays and maps of objects). Do **not** mark
 non-secret fields (e.g. a message-key expression) `writeOnly`.
 
+#### Declaring the request headers your plugin reads
+
+A request carries only the headers its operation admits, and everything else is
+dropped before `on_request` runs. **If your plugin reads a header and does not
+say so here, it will find nothing.**
+
+For a header the plugin reads whatever it is configured to do, list it at the
+root of the schema:
+
+```json
+{
+  "type": "object",
+  "x-barbacane-reads-headers": ["authorization"],
+  "properties": { }
+}
+```
+
+For a header named by a configuration value, mark the field with the `format`
+that matches how the value is written:
+
+| `format` | The field holds | Example |
+|---|---|---|
+| `header-name` | a header name, or a list of them | `apikey-auth.header_name`, `cache.vary` |
+| `header-ref` | a selector that may name a header among other things | `rate-limit.partition_key` (`header:x-tenant`), `kafka.key` (`$request.header.x-order-id`) |
+| `header-name-map` | an object whose **keys** are header names | `request-transformer.headers.rename` |
+
+```json
+"header_name": {
+  "type": "string",
+  "format": "header-name",
+  "default": "X-API-Key",
+  "description": "Header to read the key from"
+}
+```
+
+A `default` is collected too, since it is the header the plugin reads when the
+configuration leaves the field out.
+
+Names are matched case-insensitively. The `x-auth-*` namespace belongs to the
+auth plugins' output, so naming one is a compile error (**E1056**).
+
 After changing `config-schema.json`, regenerate the vacuum ruleset validators
 (`node docs/rulesets/generate.mjs`) and run `docs/rulesets/tests/run-tests.sh`.
 
