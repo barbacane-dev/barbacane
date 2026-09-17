@@ -196,6 +196,12 @@ instead. Set `category = "authentication"` in `plugin.toml`, and the compiler
 then requires every operation using the plugin to name the security scheme
 carrying the credential (**E1057**), which is what admits the header.
 
+The SDK macros embed `config-schema.json` into the `.wasm`, as they already do
+`plugin.toml`, so these annotations reach the compiler wherever the binary
+travels and no sidecar file has to accompany it. **Rebuild the plugin after
+editing either file**, or the compiler reads the copy embedded by the previous
+build.
+
 After changing `config-schema.json`, regenerate the vacuum ruleset validators
 (`node docs/rulesets/generate.mjs`) and run `docs/rulesets/tests/run-tests.sh`.
 
