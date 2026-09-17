@@ -208,6 +208,185 @@ async fn test_http_upstream_headers_forwarded() {
 }
 
 // ========================
+// Request header allowlist (ADR-0033)
+// ========================
+
+/// A spec whose operation declares one header parameter and nothing else, so
+/// the upstream should receive that header and not the rest.
+fn allowlist_spec(upstream_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let spec = format!(
+        r#"openapi: "3.1.0"
+info:
+  title: Header Allowlist Test API
+  version: "1.0.0"
+components:
+  securitySchemes:
+    Bearer:
+      type: http
+      scheme: bearer
+paths:
+  /declared:
+    get:
+      operationId: declaredHeader
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          schema:
+            type: string
+      security:
+        - Bearer: []
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{url}"
+          path: "/received"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /anonymous:
+    get:
+      operationId: anonymousOperation
+      security: []
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{url}"
+          path: "/received"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+"#,
+        url = upstream_url
+    );
+    let path = temp.path().join("allowlist.yaml");
+    std::fs::write(&path, spec).expect("write spec");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  http-upstream:\n    path: {}\n",
+            plugin_wasm("http-upstream").display()
+        ),
+    )
+    .expect("write manifest");
+    (temp, path)
+}
+
+/// What the spec declares reaches the upstream, and what it does not is gone
+/// before any plugin or upstream sees it.
+#[tokio::test]
+async fn test_undeclared_request_headers_do_not_reach_the_upstream() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    /// Answer with the header names the upstream actually received.
+    struct EchoHeaders;
+    impl Respond for EchoHeaders {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let names: Vec<String> = req
+                .headers
+                .iter()
+                .map(|(name, _)| name.as_str().to_ascii_lowercase())
+                .collect();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "received": names }))
+        }
+    }
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/received"))
+        .respond_with(EchoHeaders)
+        .mount(&upstream)
+        .await;
+
+    let (_tmp, spec) = allowlist_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/declared")
+        .header("X-Tenant-Id", "acme")
+        .header("Authorization", "Bearer token")
+        .header("Accept", "application/json")
+        .header("X-Debug-Mode", "on")
+        .header("X-Internal-Flag", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let received: Vec<String> = serde_json::from_value(body["received"].clone()).expect("names");
+    let got = |name: &str| received.iter().any(|h| h == name);
+
+    // Declared as a parameter.
+    assert!(got("x-tenant-id"), "declared header missing: {received:?}");
+    // Carried because the operation declares a security scheme.
+    assert!(got("authorization"), "credential missing: {received:?}");
+    // Baseline.
+    assert!(got("accept"), "baseline header missing: {received:?}");
+    // Declared nowhere.
+    assert!(
+        !got("x-debug-mode"),
+        "undeclared header forwarded: {received:?}"
+    );
+    assert!(
+        !got("x-internal-flag"),
+        "undeclared header forwarded: {received:?}"
+    );
+}
+
+/// An operation that opts out of the root requirement takes no credential, so
+/// `authorization` does not reach its upstream.
+#[tokio::test]
+async fn test_anonymous_operation_does_not_forward_the_credential() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    struct EchoHeaders;
+    impl Respond for EchoHeaders {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let names: Vec<String> = req
+                .headers
+                .iter()
+                .map(|(name, _)| name.as_str().to_ascii_lowercase())
+                .collect();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "received": names }))
+        }
+    }
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/received"))
+        .respond_with(EchoHeaders)
+        .mount(&upstream)
+        .await;
+
+    let (_tmp, spec) = allowlist_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/anonymous")
+        .header("Authorization", "Bearer token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let received: Vec<String> = serde_json::from_value(body["received"].clone()).expect("names");
+    assert!(
+        !received.iter().any(|h| h == "authorization"),
+        "an operation declaring `security: []` must not forward a credential: {received:?}"
+    );
+}
+
+// ========================
 // M6a: TLS Termination Tests
 // ========================
 

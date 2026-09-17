@@ -1,4 +1,5 @@
 {
+  "x-barbacane-reads-headers": ["authorization"],
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:barbacane:plugin:jwt-auth:config",
   "title": "JWT Authentication Middleware Config",

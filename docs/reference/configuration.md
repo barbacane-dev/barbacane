@@ -47,6 +47,39 @@ These changes are intentional secure defaults. Adopt them as follows:
    capabilities; custom plugins must list theirs under
    `[capabilities] host_functions = [...]`.
 
+## Request headers reaching your upstream
+
+A request carries only the headers its operation admits. Everything else is
+dropped at ingress, before any plugin or the dispatcher sees it, so the spec
+describes what an upstream receives and not merely what a client may send.
+
+An operation admits:
+
+| Source | Headers |
+|---|---|
+| Baseline, on every operation | framing and negotiation (`host`, `content-type`, `content-length`, `content-encoding`, `transfer-encoding`, `accept`, `accept-encoding`, `accept-language`, `accept-charset`, `user-agent`, `range`, the `if-*` conditionals, `cache-control`, `pragma`, `expect`), CORS (`origin`, `access-control-request-method`, `access-control-request-headers`), tracing (`traceparent`, `tracestate`, `x-request-id`), the WebSocket handshake (`upgrade`, `connection`, `sec-websocket-*`), and the proxy chain (`x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host`, `x-real-ip`, `forwarded`) |
+| Declared parameters | every `in: header` parameter, and `cookie` when the operation declares an `in: cookie` parameter |
+| Security schemes | the credential header the operation's `security` requirement names: an `apiKey` scheme's own name, or `authorization` for `http`, `oauth2` and `openIdConnect` |
+| Plugins in the chain | the headers a plugin reads, whether fixed (an auth middleware reads `authorization`) or configured (`apikey-auth`'s `header_name`, a `rate-limit` `header:` partition, `cache`'s `vary` list) |
+
+`authorization` is deliberately not in the baseline. It travels because the
+operation says it is authenticated, and for no other reason.
+
+The `x-auth-*` namespace is never accepted from a client. It carries what an
+auth plugin tells `acl` and the upstream about the caller, and declaring one in
+a spec is a compile error (`E1056`).
+
+The WAF is not filtered this way. It inspects what the client actually sent,
+which is the point of it.
+
+### Finding what to declare
+
+`barbacane_request_headers_dropped_total` counts what was dropped. It carries no
+header name, since a name is attacker-controlled and would let a caller grow the
+series set without bound. To see the names, run with `--dev`, which logs each
+dropped header at warn level on the request that carried it; without `--dev` the
+same goes to debug.
+
 ## Admin endpoints (loopback by default)
 
 The data plane serves `/health`, `/metrics`, and `/provenance` on a dedicated

@@ -1750,6 +1750,14 @@ fn collect_configured_header_names(
     config: &serde_json::Value,
     out: &mut BTreeSet<String>,
 ) -> Result<(), CompileError> {
+    // Headers the plugin reads whatever it is configured to do, such as the
+    // `authorization` an auth middleware always looks for. They are named by
+    // the plugin rather than by a value in the spec, so nothing else admits
+    // them, and dropping them would leave the middleware with nothing to read.
+    if let Some(always) = schema.get("x-barbacane-reads-headers") {
+        extract_header_names(always, out)?;
+    }
+
     match schema.get("format").and_then(|f| f.as_str()) {
         Some("header-name") => return extract_header_names(config, out),
         Some("header-ref") => return extract_referenced_header_names(config, out),
@@ -1764,13 +1772,18 @@ fn collect_configured_header_names(
         _ => {}
     }
 
-    if let (Some(props), Some(values)) = (
-        schema.get("properties").and_then(|p| p.as_object()),
-        config.as_object(),
-    ) {
+    if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+        let values = config.as_object();
         for (field, subschema) in props {
-            if let Some(value) = values.get(field) {
-                collect_configured_header_names(subschema, value, out)?;
+            // A field left out of the configuration still applies through its
+            // default, which is the header the plugin will actually read.
+            match values.and_then(|v| v.get(field)) {
+                Some(value) => collect_configured_header_names(subschema, value, out)?,
+                None => {
+                    if let Some(default) = subschema.get("default") {
+                        collect_configured_header_names(subschema, default, out)?;
+                    }
+                }
             }
         }
     }
@@ -2429,6 +2442,57 @@ mod tests {
             let mut out = BTreeSet::new();
             collect_configured_header_names(&schema(), &config, &mut out).expect("collect");
             out
+        }
+
+        /// A plugin may read a header whatever it is configured to do, as an
+        /// auth middleware reads `authorization`. Nothing in the spec names it,
+        /// so without this the credential would be dropped and the middleware
+        /// would find nothing to check.
+        #[test]
+        fn headers_a_plugin_always_reads_are_admitted() {
+            let schema = serde_json::json!({
+                "x-barbacane-reads-headers": ["authorization"],
+                "type": "object",
+                "properties": {"realm": {"type": "string"}}
+            });
+            let mut found = BTreeSet::new();
+            collect_configured_header_names(&schema, &serde_json::json!({}), &mut found);
+            assert!(found.contains("authorization"));
+        }
+
+        /// A field left out of the configuration still applies through its
+        /// default, which is the header the plugin will actually read.
+        #[test]
+        fn a_default_names_the_header_when_the_field_is_absent() {
+            let schema = serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "header_name": {
+                        "type": "string",
+                        "format": "header-name",
+                        "default": "X-API-Key"
+                    }
+                }
+            });
+            let mut found = BTreeSet::new();
+            collect_configured_header_names(&schema, &serde_json::json!({}), &mut found);
+            assert!(
+                found.contains("x-api-key"),
+                "an unset field still reads its default"
+            );
+
+            // And a value given in the spec replaces it.
+            let mut found = BTreeSet::new();
+            collect_configured_header_names(
+                &schema,
+                &serde_json::json!({"header_name": "X-Key"}),
+                &mut found,
+            );
+            assert!(found.contains("x-key"));
+            assert!(
+                !found.contains("x-api-key"),
+                "the default no longer applies"
+            );
         }
 
         /// A plain value names one header, and a list names several.

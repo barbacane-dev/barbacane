@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **plugin-sdk**: `barbacane_plugin_sdk::ldap` wraps the LDAP host functions with typed `Connection` / `SearchRequest` / `Entry` types, maps host result codes to `LdapError`, and provides `escape_filter_value` (RFC 4515) and `escape_dn_value` (RFC 4514).
 - **cli**: `barbacane dev` accepts the request-limit and log-format flags of `serve` (`--max-body-size`, `--max-headers`, `--max-header-size`, `--max-uri-length`, `--log-format`), so a dev loop that uploads files larger than 1 MiB no longer needs the separate compile-then-serve cycle (#177).
 
+### Changed
+
+- **data plane**: a request carries only the headers its operation admits. The baseline every operation accepts (message framing and negotiation, CORS, tracing, the WebSocket handshake, and the proxy chain as it arrives), plus the `in: header` parameters the operation declares, `cookie` when it declares an `in: cookie` parameter, the credential header named by its security scheme, and the headers a plugin in its chain reads. Everything else is dropped before any plugin or upstream sees it, so the spec describes what an upstream receives rather than only what a client may send. Decision record: ADR-0033.
+
+  > **Upgrade note (breaking):** **a header not described by the spec no longer reaches your upstream.** Declare it as an `in: header` parameter on the operation, on the path item, or through `components/parameters`, for it to travel. `authorization` is not in the baseline: it travels because the operation's `security` requirement names a scheme carrying it, or because an auth middleware in its chain declares that it reads it, so an operation authenticated either way still works. An upstream expecting a credential the spec does not describe will not receive one. `cookie` travels only when the operation declares an `in: cookie` parameter. Dropped headers are counted by `barbacane_request_headers_dropped_total`, and `serve --dev` logs each one by name, so a first run against an existing spec shows exactly what to declare.
+
 ### Fixed
 
 - **plugins/rate-limit**: `partition_key: "context:<key>"` now reads the request context (`host_context_get`). It previously used the key name itself as the partition, so `context:auth.sub` rate-limited every caller in one bucket named `auth.sub`. Requests without the context value share one `unknown` bucket, as a missing header does (#180).
