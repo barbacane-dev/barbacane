@@ -276,6 +276,7 @@ barbacane validate --spec <FILES>... [OPTIONS]
 | E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
 | E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
 | E1071 | Manifest | A plugin was bundled without its manifest or config schema, so its configured headers are not admitted (warning) |
+| E1072 | Security | A security scheme and an authentication plugin's configuration name different credential headers (warning) |
 
 ### Examples
 

@@ -85,6 +85,8 @@ paths:
                 name: Query Key
                 scopes:
                   - read
+      security:
+        - ApiKeyQuery: []
       x-barbacane-dispatch:
         name: mock
         config:
@@ -108,3 +110,7 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
+    ApiKeyQuery:
+      type: apiKey
+      in: query
+      name: api_key

@@ -43,6 +43,10 @@ An operation may run an auth middleware through `x-barbacane-middlewares` and de
 
 Such an operation is a compile error (`E1057`) rather than a silently broken one. A plugin's `plugin.toml` states its family in `category`, and `authentication` is the one the compiler acts on: an operation running such a plugin must name a requirement, on itself or at the root, resolving to a scheme defined under `components.securitySchemes`. The credential header then comes from set 3 like any other, and a third-party auth plugin works the same way without the compiler knowing its name.
 
+The scheme says where the credential travels and the plugin follows, so the compiler does not second-guess it. A key in the query string satisfies the requirement and admits no header, because it needs none. Only `mutualTLS` alone fails, since a certificate is presented during the handshake and no middleware reads it off the request. Where the scheme names a header and the plugin's configuration names a different one, the document wins and the disagreement is reported as `E1072`.
+
+Pairing a plugin with a scheme it does not implement, such as `jwt-auth` with an `apiKey`, is a different question and belongs to `E1032`.
+
 `category` also carries the grouping the middleware guide documents, so the pages and the compiler read one source rather than two.
 
 ### Reserved namespace

@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   > **Note for plugin authors:** a plugin's manifest is embedded in its `.wasm` at build time, so rebuild the plugin after adding `category` for the compiler to see it.
 
+- **compiler**: the security scheme decides where a credential travels and the plugin reading it follows, so an `apiKey` in the query string satisfies the requirement and admits no header. `E1072` warns when a scheme names one header and the plugin's configuration names another, since the document is the contract.
+
 ### Fixed
 
 - **plugins/rate-limit**: `partition_key: "context:<key>"` now reads the request context (`host_context_get`). It previously used the key name itself as the partition, so `context:auth.sub` rate-limited every caller in one bucket named `auth.sub`. Requests without the context value share one `unknown` bucket, as a missing header does (#180).

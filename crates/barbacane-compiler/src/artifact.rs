@@ -960,11 +960,45 @@ fn compile_inner(
             }
 
             // An operation running an authentication plugin must say which
-            // scheme carries the credential (E1057).
+            // scheme carries the credential (E1057), and the plugin must not be
+            // configured to read a different one (E1072).
             for middleware in &middlewares {
                 let key = crate::manifest::normalize_plugin_name(&middleware.name);
-                if authentication_plugins.contains(key.as_str()) {
-                    require_security_requirement(op, spec, &middleware.name, &location)?;
+                if !authentication_plugins.contains(key.as_str()) {
+                    continue;
+                }
+                require_security_requirement(op, spec, &middleware.name, &location)?;
+
+                let Some(schema) = plugin_schemas.get(key.as_str()) else {
+                    continue;
+                };
+                let mut configured = BTreeSet::new();
+                collect_configured_header_names(schema, &middleware.config, &mut configured)?;
+                if configured.is_empty() {
+                    continue;
+                }
+                // Only a header scheme is comparable. One naming the query
+                // string says the credential is not a header at all, and the
+                // plugin follows the document.
+                for header in applied_scheme_headers(op, spec) {
+                    if !configured.contains(&header) {
+                        warnings.push(CompileWarning {
+                            code: "E1072".to_string(),
+                            message: format!(
+                                "the security scheme says '{}' carries the credential, but \
+                                 '{}' is configured to read {}. The document is the contract, \
+                                 so name the same header in both",
+                                header,
+                                middleware.name,
+                                configured
+                                    .iter()
+                                    .map(|h| format!("'{h}'"))
+                                    .collect::<Vec<_>>()
+                                    .join(" and ")
+                            ),
+                            location: Some(location.clone()),
+                        });
+                    }
                 }
             }
 
@@ -1970,18 +2004,49 @@ fn push_header_name(name: &str, out: &mut BTreeSet<String>) -> Result<(), Compil
 /// The plugin family whose members verify a client credential.
 const AUTHENTICATION_CATEGORY: &str = "authentication";
 
-/// Whether a scheme names a request header the client sends the credential in.
+/// The request headers the operation's own security requirement names.
 ///
-/// A key in the query string travels outside the headers, and a client
-/// certificate is not a header at all, so neither admits one.
-fn scheme_carries_a_header(scheme: &crate::spec_parser::SecurityScheme) -> bool {
+/// Only schemes that put the credential in a header, so a requirement naming a
+/// key in the query string contributes nothing and nothing is compared.
+fn applied_scheme_headers(op: &crate::spec_parser::Operation, spec: &ApiSpec) -> BTreeSet<String> {
+    let requirements = op.security.as_ref().or(spec.security.as_ref());
+    requirements
+        .map(|reqs| {
+            reqs.iter()
+                .flat_map(|r| r.keys())
+                .filter_map(|name| spec.security_schemes.get(name))
+                .filter_map(scheme_header_name)
+                .filter(|h| h != "authorization" && h != "cookie")
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a scheme describes a credential the client sends with the request.
+///
+/// The scheme says where the credential travels, and the plugin reading it
+/// follows. A key in the query string is one, and admits no header because it
+/// needs none. A client certificate is presented during the handshake, so it is
+/// not something a middleware reads off the request at all.
+fn scheme_carries_a_credential(scheme: &crate::spec_parser::SecurityScheme) -> bool {
+    use crate::spec_parser::SecurityScheme;
+    !matches!(scheme, SecurityScheme::MutualTls)
+}
+
+/// The request header a scheme names, when it names one.
+fn scheme_header_name(scheme: &crate::spec_parser::SecurityScheme) -> Option<String> {
     use crate::spec_parser::SecurityScheme;
     match scheme {
-        SecurityScheme::ApiKey { location, .. } => matches!(location.as_str(), "header" | "cookie"),
-        SecurityScheme::Http { .. } | SecurityScheme::OAuth2 | SecurityScheme::OpenIdConnect => {
-            true
+        SecurityScheme::ApiKey { name, location } if location == "header" => {
+            Some(name.to_ascii_lowercase())
         }
-        SecurityScheme::MutualTls => false,
+        SecurityScheme::ApiKey { location, .. } if location == "cookie" => {
+            Some("cookie".to_string())
+        }
+        SecurityScheme::Http { .. } | SecurityScheme::OAuth2 | SecurityScheme::OpenIdConnect => {
+            Some("authorization".to_string())
+        }
+        _ => None,
     }
 }
 
@@ -2024,17 +2089,18 @@ fn require_security_requirement(
         )));
     }
 
-    // A requirement that resolves only to schemes carrying no request header
-    // admits no credential, so the plugin would still find nothing to verify.
+    // A requirement naming only `mutualTLS` describes a certificate presented
+    // during the handshake, which no middleware reads off the request, so the
+    // plugin would still find no credential to verify.
     if !names
         .iter()
         .filter_map(|name| spec.security_schemes.get(*name))
-        .any(scheme_carries_a_header)
+        .any(scheme_carries_a_credential)
     {
         return Err(CompileError::MissingSecurityRequirement(format!(
-            "{location}: '{plugin}' reads the credential from a request header, but no scheme \
-             the requirement names carries one. An `apiKey` in the query string and `mutualTLS` \
-             travel outside the headers. Name a scheme the client sends in a header"
+            "{location}: '{plugin}' verifies a credential the client sends, but the requirement \
+             names only `mutualTLS`, which is presented during the TLS handshake. Name a scheme \
+             describing a credential the request carries"
         )));
     }
 
@@ -2984,6 +3050,33 @@ mod tests {
             dangling.security = Some(vec![req]);
             assert!(matches!(
                 require_security_requirement(&dangling, &bare, "basic-auth", "GET /x"),
+                Err(CompileError::MissingSecurityRequirement(_))
+            ));
+
+            // The scheme says where the credential travels and the plugin
+            // follows, so a key in the query string satisfies it and admits no
+            // header because it needs none.
+            let mut query = spec(&[(
+                "ApiKeyQuery",
+                SecurityScheme::ApiKey {
+                    name: "api_key".into(),
+                    location: "query".into(),
+                },
+            )]);
+            let mut q = BTreeMap::new();
+            q.insert("ApiKeyQuery".to_string(), vec![]);
+            query.security = Some(vec![q]);
+            require_security_requirement(&op(&[]), &query, "apikey-auth", "GET /x")
+                .expect("a key in the query string is a credential the client sends");
+
+            // A certificate is presented during the handshake, so no middleware
+            // reads it off the request.
+            let mut mtls = spec(&[("Mtls", SecurityScheme::MutualTls)]);
+            let mut m = BTreeMap::new();
+            m.insert("Mtls".to_string(), vec![]);
+            mtls.security = Some(vec![m]);
+            assert!(matches!(
+                require_security_requirement(&op(&[]), &mtls, "basic-auth", "GET /x"),
                 Err(CompileError::MissingSecurityRequirement(_))
             ));
 
