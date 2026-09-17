@@ -717,6 +717,8 @@ impl Gateway {
         let manifest =
             load_manifest(artifact_path).map_err(|e| format!("failed to load manifest: {}", e))?;
 
+        check_artifact_version(manifest.barbacane_artifact_version)?;
+
         let routes =
             load_routes(artifact_path).map_err(|e| format!("failed to load routes: {}", e))?;
 
@@ -5430,6 +5432,46 @@ fn extract_path_param(template: &str, resolved: &str, param_name: &str) -> Optio
 /// value is dropped here; otherwise a caller could forge groups an auth plugin
 /// leaves unset. Used by every path that builds a plugin request (dispatch and
 /// CORS preflight).
+/// Refuse an artifact format this binary does not read.
+///
+/// Without this the mismatch surfaces as an integrity failure, because the
+/// hash covers the files whose shape changed. That names the wrong cause and
+/// sends the operator looking for tampering.
+fn check_artifact_version(found: u32) -> Result<(), String> {
+    let expected = barbacane_compiler::ARTIFACT_VERSION;
+    if found != expected {
+        return Err(format!(
+            "artifact format version {found} is not supported by this build, which reads \
+             version {expected}. Recompile the spec with this version of barbacane."
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod artifact_version_tests {
+    use super::check_artifact_version;
+
+    #[test]
+    fn accepts_the_version_this_build_writes() {
+        assert!(check_artifact_version(barbacane_compiler::ARTIFACT_VERSION).is_ok());
+    }
+
+    #[test]
+    fn refuses_another_version_and_says_why() {
+        let err = check_artifact_version(barbacane_compiler::ARTIFACT_VERSION - 1)
+            .expect_err("an older format must be refused");
+        assert!(
+            err.contains("Recompile"),
+            "the message must say what to do: {err}"
+        );
+        assert!(
+            err.contains(&barbacane_compiler::ARTIFACT_VERSION.to_string()),
+            "and which version this build reads: {err}"
+        );
+    }
+}
+
 fn plugin_request_headers(
     headers: &HashMap<String, String>,
 ) -> std::collections::BTreeMap<String, String> {

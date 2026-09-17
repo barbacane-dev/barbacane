@@ -21,6 +21,12 @@ use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
 ///
+/// v6 records each operation's `allowed_request_headers`, the request headers
+/// it accepts on top of the data plane's baseline. The data plane compares this
+/// constant on load, so an artifact built before it is refused by version
+/// rather than by the integrity check that would otherwise name the wrong
+/// cause.
+///
 /// v5 binds two WAF policy fields into the manifest and `artifact_hash`:
 /// `max_response_body` (the phase-4 body inspection cap) and `audit` (the audit
 /// engine policy). Because the data plane recomputes and verifies `artifact_hash`
@@ -28,7 +34,7 @@ use crate::manifest::ProjectManifest;
 ///
 /// v4 added Ed25519 signing fields and recorded each plugin's declared
 /// capability `host_functions` in the manifest.
-pub const ARTIFACT_VERSION: u32 = 5;
+pub const ARTIFACT_VERSION: u32 = 6;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
@@ -364,6 +370,11 @@ pub struct CompiledOperation {
     /// MCP-specific tool description override.
     #[serde(default)]
     pub mcp_description: Option<String>,
+    /// Request headers this operation accepts on top of the data plane's
+    /// baseline, lowercased and sorted. Derived from the header and cookie
+    /// parameters it declares and the security schemes its requirement applies.
+    #[serde(default)]
+    pub allowed_request_headers: Vec<String>,
 }
 
 /// Compile one or more spec files into a .bca artifact.
@@ -919,6 +930,9 @@ fn compile_inner(
                 responses: op.responses.clone(),
                 mcp_enabled,
                 mcp_description,
+                allowed_request_headers: operation_header_allowlist(op, spec)?
+                    .into_iter()
+                    .collect(),
             });
         }
     }
@@ -1684,6 +1698,87 @@ fn normalize_path_template(path: &str) -> String {
     result
 }
 
+/// Request headers an operation accepts beyond the data plane's baseline.
+///
+/// Derived from the spec's own vocabulary, so the document stays the contract
+/// for what an upstream receives:
+///
+/// - every `in: header` parameter the operation declares,
+/// - `cookie` when it declares any `in: cookie` parameter, since cookies travel
+///   in that one header,
+/// - the credential header named by each security scheme the operation's
+///   requirement applies, which is the only reason `authorization` is forwarded.
+///
+/// Names are lowercased, as HTTP matches them case-insensitively.
+fn operation_header_allowlist(
+    op: &crate::spec_parser::Operation,
+    spec: &ApiSpec,
+) -> Result<BTreeSet<String>, CompileError> {
+    let mut allow = BTreeSet::new();
+
+    for param in &op.parameters {
+        match param.location.as_str() {
+            "header" => {
+                allow.insert(reserved_checked(&param.name, "parameter")?);
+            }
+            "cookie" => {
+                allow.insert("cookie".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    // An operation's own requirement replaces the root's; `security: []` is
+    // present and empty, which makes the operation anonymous.
+    let requirements = op.security.as_ref().or(spec.security.as_ref());
+    if let Some(requirements) = requirements {
+        for requirement in requirements {
+            for scheme_name in requirement.keys() {
+                let Some(scheme) = spec.security_schemes.get(scheme_name) else {
+                    continue;
+                };
+                match scheme {
+                    crate::spec_parser::SecurityScheme::ApiKey { name, location } => {
+                        match location.as_str() {
+                            "header" => {
+                                allow.insert(reserved_checked(name, "security scheme")?);
+                            }
+                            "cookie" => {
+                                allow.insert("cookie".to_string());
+                            }
+                            // A key in the query string needs no header.
+                            _ => {}
+                        }
+                    }
+                    crate::spec_parser::SecurityScheme::Http { .. }
+                    | crate::spec_parser::SecurityScheme::OAuth2
+                    | crate::spec_parser::SecurityScheme::OpenIdConnect => {
+                        allow.insert("authorization".to_string());
+                    }
+                    // A client certificate carries no request header.
+                    crate::spec_parser::SecurityScheme::MutualTls => {}
+                }
+            }
+        }
+    }
+
+    Ok(allow)
+}
+
+/// Lowercase a header name, refusing the namespace the auth plugins own.
+///
+/// `x-auth-*` is what an auth plugin writes for `acl` and the upstream to read.
+/// A spec that could declare one would let a client supply it instead.
+fn reserved_checked(name: &str, source: &str) -> Result<String, CompileError> {
+    let lowered = name.trim().to_ascii_lowercase();
+    if lowered.starts_with("x-auth-") {
+        return Err(CompileError::ReservedHeaderName(format!(
+            "{source} '{name}'"
+        )));
+    }
+    Ok(lowered)
+}
+
 /// Validate schema complexity (E1051, E1052).
 fn validate_schema_complexity(
     schema: &serde_json::Value,
@@ -2143,6 +2238,219 @@ fn resolve_mcp_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod header_allowlist {
+        use super::*;
+        use crate::spec_parser::{Operation, SecurityScheme};
+
+        fn op(params: &[(&str, &str)]) -> Operation {
+            Operation {
+                path: "/x".into(),
+                method: "GET".into(),
+                operation_id: None,
+                summary: None,
+                description: None,
+                parameters: params
+                    .iter()
+                    .map(|(name, location)| Parameter {
+                        name: (*name).into(),
+                        location: (*location).into(),
+                        required: false,
+                        schema: None,
+                    })
+                    .collect(),
+                request_body: None,
+                dispatch: None,
+                middlewares: None,
+                deprecated: false,
+                sunset: None,
+                extensions: BTreeMap::new(),
+                messages: vec![],
+                bindings: BTreeMap::new(),
+                responses: BTreeMap::new(),
+                security: None,
+            }
+        }
+
+        fn spec(schemes: &[(&str, SecurityScheme)]) -> ApiSpec {
+            ApiSpec {
+                filename: None,
+                format: SpecFormat::OpenApi,
+                version: "3.1.0".into(),
+                title: "t".into(),
+                api_version: "1".into(),
+                operations: vec![],
+                global_middlewares: vec![],
+                extensions: BTreeMap::new(),
+                security_schemes: schemes
+                    .iter()
+                    .map(|(n, s)| ((*n).to_string(), s.clone()))
+                    .collect(),
+                security: None,
+            }
+        }
+
+        /// A declared header parameter is forwarded, matched case-insensitively
+        /// as HTTP header names are, so the stored form is lowercase.
+        #[test]
+        fn declared_header_parameters_are_allowed() {
+            let allow = operation_header_allowlist(
+                &op(&[("X-Tenant-Id", "header"), ("limit", "query")]),
+                &spec(&[]),
+            )
+            .expect("allowlist");
+            assert!(allow.contains("x-tenant-id"));
+            assert!(
+                !allow.contains("limit"),
+                "a query parameter is not a header"
+            );
+        }
+
+        /// Cookies travel in one header, so declaring any cookie parameter lets
+        /// `cookie` through, and declaring none keeps it out.
+        #[test]
+        fn cookie_parameter_allows_the_cookie_header() {
+            let with = operation_header_allowlist(&op(&[("session", "cookie")]), &spec(&[]))
+                .expect("allowlist");
+            assert!(with.contains("cookie"));
+            assert!(!with.contains("session"), "the cookie name is not a header");
+
+            let without = operation_header_allowlist(&op(&[]), &spec(&[])).expect("allowlist");
+            assert!(!without.contains("cookie"));
+        }
+
+        /// The credential an operation accepts is whatever its security scheme
+        /// names, which is the only reason `authorization` is ever forwarded.
+        #[test]
+        fn security_schemes_contribute_their_credential_header() {
+            let schemes = [
+                (
+                    "Key",
+                    SecurityScheme::ApiKey {
+                        name: "X-API-Key".into(),
+                        location: "header".into(),
+                    },
+                ),
+                (
+                    "Session",
+                    SecurityScheme::ApiKey {
+                        name: "sid".into(),
+                        location: "cookie".into(),
+                    },
+                ),
+                (
+                    "Query",
+                    SecurityScheme::ApiKey {
+                        name: "token".into(),
+                        location: "query".into(),
+                    },
+                ),
+                (
+                    "Bearer",
+                    SecurityScheme::Http {
+                        scheme: "bearer".into(),
+                    },
+                ),
+                ("Oidc", SecurityScheme::OpenIdConnect),
+                ("Mtls", SecurityScheme::MutualTls),
+            ];
+            let mut s = spec(&schemes);
+
+            let require = |names: &[&str]| {
+                let mut req = BTreeMap::new();
+                for n in names {
+                    req.insert((*n).to_string(), vec![]);
+                }
+                Some(vec![req])
+            };
+
+            s.security = require(&["Key"]);
+            let a = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
+            assert!(a.contains("x-api-key"));
+
+            s.security = require(&["Session"]);
+            let a = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
+            assert!(
+                a.contains("cookie"),
+                "an apiKey in a cookie needs the cookie header"
+            );
+
+            s.security = require(&["Query"]);
+            let a = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
+            assert!(a.is_empty(), "an apiKey in the query needs no header");
+
+            for scheme in ["Bearer", "Oidc"] {
+                s.security = require(&[scheme]);
+                let a = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
+                assert!(
+                    a.contains("authorization"),
+                    "{scheme} travels in authorization"
+                );
+            }
+
+            s.security = require(&["Mtls"]);
+            let a = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
+            assert!(a.is_empty(), "mutualTLS carries no header");
+        }
+
+        /// The operation's own requirement replaces the root's, and an empty one
+        /// makes it anonymous, so no credential header is forwarded.
+        #[test]
+        fn operation_security_overrides_the_root() {
+            let mut s = spec(&[(
+                "Bearer",
+                SecurityScheme::Http {
+                    scheme: "bearer".into(),
+                },
+            )]);
+            let mut root = BTreeMap::new();
+            root.insert("Bearer".to_string(), vec![]);
+            s.security = Some(vec![root]);
+
+            // Inherits the root requirement.
+            let inherited = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
+            assert!(inherited.contains("authorization"));
+
+            // `security: []` opts out, so the credential is not forwarded.
+            let mut anonymous = op(&[]);
+            anonymous.security = Some(vec![]);
+            let a = operation_header_allowlist(&anonymous, &s).expect("allowlist");
+            assert!(
+                !a.contains("authorization"),
+                "an anonymous operation takes no credential"
+            );
+        }
+
+        /// The identity headers are the auth plugins' output. A spec that could
+        /// declare one would let a client forge the identity the gateway trusts.
+        #[test]
+        fn reserved_identity_headers_are_refused() {
+            let err = operation_header_allowlist(&op(&[("x-auth-consumer", "header")]), &spec(&[]))
+                .expect_err("x-auth-* must not be declarable");
+            assert!(
+                matches!(err, CompileError::ReservedHeaderName(_)),
+                "{err:?}"
+            );
+
+            // Including through a security scheme, and whatever the case.
+            let s = spec(&[(
+                "Sneaky",
+                SecurityScheme::ApiKey {
+                    name: "X-Auth-Consumer".into(),
+                    location: "header".into(),
+                },
+            )]);
+            let mut s = s;
+            let mut req = BTreeMap::new();
+            req.insert("Sneaky".to_string(), vec![]);
+            s.security = Some(vec![req]);
+            let err = operation_header_allowlist(&op(&[]), &s).expect_err("also via a scheme");
+            assert!(
+                matches!(err, CompileError::ReservedHeaderName(_)),
+                "{err:?}"
+            );
+        }
+    }
 
     /// Definitions a schema carries still count towards its complexity. They
     /// hold the body that a `$ref` points at, so skipping them would measure an

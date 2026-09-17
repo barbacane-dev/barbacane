@@ -52,6 +52,11 @@ pub enum CompileError {
     AmbiguousRoute(String),
 
     /// E1051: Schema exceeds maximum nesting depth.
+    /// The `x-auth-*` namespace belongs to the auth plugins' output. A spec
+    /// declaring one would let a client supply an identity the gateway trusts.
+    #[error("E1060: reserved header name, x-auth-* belongs to auth plugins: {0}")]
+    ReservedHeaderName(String),
+
     #[error("E1051: schema too deep: {0}")]
     SchemaTooDeep(String),
 
