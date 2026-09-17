@@ -1,0 +1,41 @@
+openapi: 3.1.0
+info:
+  title: Reserved header names
+  version: 1.0.0
+components:
+  securitySchemes:
+    Forged:
+      type: apiKey
+      in: header
+      name: X-Auth-Consumer
+  parameters:
+    Shared:
+      name: x-auth-user
+      in: header
+      schema:
+        type: string
+paths:
+  /forged:
+    parameters:
+      - name: X-Auth-Scopes
+        in: header
+        schema:
+          type: string
+    get:
+      parameters:
+        - name: x-auth-consumer-groups
+          in: header
+          schema:
+            type: string
+        - name: x-tenant
+          in: header
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: "ok"
+      responses:
+        "200":
+          description: ok
