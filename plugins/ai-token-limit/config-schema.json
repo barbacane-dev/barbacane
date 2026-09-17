@@ -48,6 +48,7 @@
     },
     "partition_key": {
       "type": "string",
+      "format": "header-ref",
       "description": "Source of the per-consumer partition key. Accepted forms: `client_ip`, `header:<name>`, `context:<key>`, or a literal string (shared budget across all requests). Matches the `rate-limit` plugin's semantics.",
       "default": "client_ip"
     },

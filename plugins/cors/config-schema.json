@@ -23,6 +23,7 @@
     },
     "allowed_headers": {
       "type": "array",
+      "format": "header-name",
       "items": {
         "type": "string"
       },

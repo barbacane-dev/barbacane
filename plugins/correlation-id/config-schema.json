@@ -5,6 +5,7 @@
   "properties": {
     "header_name": {
       "type": "string",
+      "format": "header-name",
       "description": "Header name for the correlation ID",
       "default": "x-correlation-id"
     },

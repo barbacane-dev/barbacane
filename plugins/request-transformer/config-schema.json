@@ -20,11 +20,13 @@
         },
         "remove": {
           "type": "array",
+          "format": "header-name",
           "items": { "type": "string" },
           "description": "Remove headers by name (case-insensitive)"
         },
         "rename": {
           "type": "object",
+          "format": "header-name-map",
           "additionalProperties": { "type": "string" },
           "description": "Rename headers (old-name → new-name)"
         }

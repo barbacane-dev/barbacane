@@ -277,8 +277,11 @@ async fn resolve_project_plugins(
             // The registry doesn't persist config-schema.json, so no secret
             // (writeOnly) fields are known here; the plaintext-secret warning
             // (E1070) is a no-op for control-plane compiles. Same limitation as
-            // host_functions above (WA-1).
+            // host_functions above (WA-1). For the same reason the schema is
+            // absent, so header names a plugin's configuration tells it to read
+            // are not collected here and must be declared in the spec.
             secret_fields: vec![],
+            config_schema: None,
         });
     }
 

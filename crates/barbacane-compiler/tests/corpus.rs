@@ -334,3 +334,68 @@ fn every_schema_compiles() {
         }
     }
 }
+
+/// The allowlist admits what the chain's own configuration tells a plugin to
+/// read. Nothing in the spec's vocabulary mentions those headers, so if they
+/// are not collected here the plugin would stop seeing them once the list is
+/// enforced.
+#[test]
+fn configured_header_names_reach_the_allowlist() {
+    use barbacane_compiler::{compile_with_manifest, CompileOptions, ProjectManifest};
+
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repository root");
+    let fixtures = repo_root.join("tests/fixtures");
+    let manifest_path = fixtures.join("barbacane.yaml");
+    let Ok(manifest_text) = std::fs::read_to_string(&manifest_path) else {
+        eprintln!("skipping: no fixture manifest");
+        return;
+    };
+    let Ok(manifest) = ProjectManifest::parse(&manifest_text, &manifest_path) else {
+        eprintln!("skipping: fixture manifest does not parse");
+        return;
+    };
+
+    // The fixture's plugins must be built for it to compile. Skip only when they
+    // are absent, as in a clean tree, so a real compilation failure still fails.
+    let repo_plugins = repo_root.join("plugins");
+    for plugin in ["rate-limit", "basic-auth"] {
+        if !repo_plugins
+            .join(plugin)
+            .join(format!("{plugin}.wasm"))
+            .exists()
+        {
+            eprintln!("skipping: {plugin}.wasm is not built");
+            return;
+        }
+    }
+
+    let spec = fixtures.join("rate-limit.yaml");
+    let out = std::env::temp_dir().join("barbacane-corpus-allowlist.bca");
+    // Plugin paths in the manifest are relative to the directory holding it.
+    compile_with_manifest(
+        &[spec.as_path()],
+        &manifest,
+        &fixtures,
+        &out,
+        &CompileOptions::default(),
+    )
+    .expect("the fixture must compile once its plugins are built");
+
+    let routes = barbacane_compiler::load_routes(&out).expect("read routes back");
+    let limited = routes
+        .operations
+        .iter()
+        .find(|o| o.path == "/limited")
+        .expect("/limited");
+    assert!(
+        limited
+            .allowed_request_headers
+            .iter()
+            .any(|h| h == "x-client-id"),
+        "rate-limit partitions on header:x-client-id, which must be admitted: {:?}",
+        limited.allowed_request_headers
+    );
+}
