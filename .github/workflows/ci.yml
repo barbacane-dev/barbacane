@@ -84,8 +84,8 @@ jobs:
       # release it comes from is not trusted on the strength of its tag alone.
       JSCPD_VERSION: v5.2.1
       JSCPD_SHA256: 1030dfff5e4b0525f4804c12e49cdce40a8140935f9453b312fdb9da45eac743
-      # Raise only with a reason. Current figure is 3.87%.
-      JSCPD_THRESHOLD: "4"
+      # Raise only with a reason. Current figure is 3.34%.
+      JSCPD_THRESHOLD: "3.5"
     steps:
       - uses: actions/checkout@v6
         with:

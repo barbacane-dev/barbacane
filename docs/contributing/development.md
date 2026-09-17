@@ -295,7 +295,7 @@ jscpd crates plugins \
   --format rust \
   --ignore "**/target/**,crates/barbacane-test/**" \
   --min-lines 10 --min-tokens 70 \
-  --threshold 4
+  --threshold 3.5
 ```
 
 `crates/barbacane-test` is excluded because repeated setup across integration
