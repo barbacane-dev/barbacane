@@ -70,6 +70,19 @@ impl SchemaDefs {
         self.bodies.insert(name.clone(), None);
         name
     }
+
+    /// Reserve a unique name for a definition the schema declared itself, which
+    /// has no document pointer to key it by.
+    fn reserve(&mut self, base: &str) -> String {
+        let mut name = base.to_string();
+        let mut n = 2;
+        while self.bodies.contains_key(&name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        self.bodies.insert(name.clone(), None);
+        name
+    }
 }
 
 /// Resolve a schema's `$ref` pointers into a self-contained schema.
@@ -78,7 +91,7 @@ impl SchemaDefs {
 /// schema resolves against itself once it is separated from the document.
 fn resolve_schema(value: &Value, root: &Value) -> Result<Value, ParseError> {
     let mut defs = SchemaDefs::default();
-    let mut resolved = resolve_schema_refs(value, root, &mut defs)?;
+    let mut resolved = resolve_schema_refs(value, root, &mut defs, &BTreeMap::new())?;
 
     if !defs.bodies.is_empty() {
         let mut map = serde_json::Map::new();
@@ -107,13 +120,18 @@ fn resolve_schema_refs(
     value: &Value,
     root: &Value,
     defs: &mut SchemaDefs,
+    scope: &BTreeMap<String, String>,
 ) -> Result<Value, ParseError> {
     match value {
         Value::Object(obj) => {
             if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
-                // Already local: the schema carries what this points at.
-                if ref_str.starts_with("#/$defs/") {
-                    return Ok(value.clone());
+                // A pointer into definitions the source schema declared. Those
+                // are hoisted and renamed, so it points at the new name.
+                if let Some(local) = ref_str.strip_prefix("#/$defs/") {
+                    return Ok(match scope.get(local) {
+                        Some(hoisted) => local_ref(hoisted),
+                        None => value.clone(),
+                    });
                 }
                 // An already-known pointer needs no second resolution, which is
                 // also what stops a cycle: the body is in flight above us.
@@ -123,13 +141,34 @@ fn resolve_schema_refs(
                 let name = defs.name_for(ref_str);
                 let target = resolve_ref(root, ref_str)
                     .ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
-                let resolved = resolve_schema_refs(target, root, defs)?;
+                let resolved = resolve_schema_refs(target, root, defs, scope)?;
                 defs.bodies.insert(name.clone(), Some(resolved));
                 Ok(local_ref(&name))
             } else {
+                // Definitions the schema declares itself are lifted to the one
+                // set the schema ends up carrying, under a name reserved there,
+                // so a pointer at them still resolves once the schema is
+                // detached from its document.
+                let mut scope = scope.clone();
+                if let Some(Value::Object(local_defs)) = obj.get("$defs") {
+                    for name in local_defs.keys() {
+                        let hoisted = defs.reserve(name);
+                        scope.insert(name.clone(), hoisted);
+                    }
+                    for (name, body) in local_defs {
+                        let hoisted = scope.get(name).cloned().unwrap_or_else(|| name.clone());
+                        let resolved = resolve_schema_refs(body, root, defs, &scope)?;
+                        defs.bodies.insert(hoisted, Some(resolved));
+                    }
+                }
+
                 let mut new_obj = serde_json::Map::with_capacity(obj.len());
                 for (key, val) in obj {
-                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, defs)?);
+                    // Its definitions now live in the schema's own set.
+                    if key == "$defs" {
+                        continue;
+                    }
+                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, defs, &scope)?);
                 }
                 Ok(Value::Object(new_obj))
             }
@@ -137,7 +176,7 @@ fn resolve_schema_refs(
         Value::Array(arr) => {
             let items: Result<Vec<_>, _> = arr
                 .iter()
-                .map(|v| resolve_schema_refs(v, root, defs))
+                .map(|v| resolve_schema_refs(v, root, defs, scope))
                 .collect();
             Ok(Value::Array(items?))
         }
@@ -2864,6 +2903,60 @@ paths:
             !validator.is_valid(&bad),
             "a missing required field three levels down must fail"
         );
+    }
+
+    /// A schema may carry its own `$defs`, since OpenAPI 3.1 schemas are full
+    /// JSON Schema. Those definitions must survive alongside the ones added for
+    /// component references, or the pointers into them dangle.
+    #[test]
+    fn existing_defs_are_kept() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Order:
+      type: object
+      $defs:
+        Money:
+          type: object
+          properties:
+            amount:
+              type: integer
+      properties:
+        total:
+          $ref: "#/$defs/Money"
+paths:
+  /orders:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Order"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        let defs = schema
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .expect("$defs");
+        assert!(
+            defs.contains_key("Money"),
+            "the schema's own definition must survive: {:?}",
+            defs.keys().collect::<Vec<_>>()
+        );
+        // And it must still compile, which it cannot with a dangling pointer.
+        jsonschema::options()
+            .build(schema)
+            .expect("schema with its own $defs must compile");
     }
 
     /// A schema is self-contained: every reference points at a definition it
