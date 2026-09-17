@@ -283,6 +283,29 @@ barbacane/
    git commit -m "feat: add my feature"
    ```
 
+### Code Duplication
+
+CI fails when copy-paste duplication across `crates/` and `plugins/` exceeds the
+threshold in the `duplication` job of `.github/workflows/ci.yml`. Reproduce it
+locally with the same settings:
+
+```bash
+cargo install jscpd --locked
+jscpd crates plugins \
+  --format rust \
+  --ignore "**/target/**,crates/barbacane-test/**" \
+  --min-lines 10 --min-tokens 70 \
+  --threshold 3.5
+```
+
+`crates/barbacane-test` is excluded because repeated setup across integration
+tests says nothing about the shipped code. Unit tests in `#[cfg(test)]` modules
+are counted, as they cannot be separated by path.
+
+The threshold guards against growth rather than demanding a cleanup. Lower it
+when a change reduces duplication, so the reduction is kept. Raising it needs a
+reason in the pull request.
+
 ### Commit Messages
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
