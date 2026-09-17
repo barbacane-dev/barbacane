@@ -1,0 +1,73 @@
+# Runs the parser's differential checks over published specs, which are too
+# large to keep in the repository (25 MB against a 19 MB .git) and change on
+# their own schedule. Informational: it reports when a real document starts
+# failing, and is not a merge gate. The same checks run on every pull request
+# against the repository's own fixtures.
+name: Spec Corpus
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    name: Published specs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Fetch published specs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/corpus"
+          cd "$RUNNER_TEMP/corpus"
+          # Each is a spec its publisher maintains, so a failure here is either
+          # our bug or a construct we do not handle yet. Fetching rather than
+          # vendoring keeps 25 MB out of the repository and follows upstream.
+          fetch() {
+            curl -fsSL --retry 3 --max-time 120 -o "$1" "$2" \
+              && echo "  fetched $1 ($(du -h "$1" | cut -f1))" \
+              || echo "::warning::could not fetch $1, skipping"
+          }
+          fetch petstore.json   https://petstore3.swagger.io/api/v3/openapi.json
+          fetch stripe.json     https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json
+          fetch github.json     https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json
+          fetch box.json        https://raw.githubusercontent.com/box/box-openapi/main/openapi.json
+          fetch asana.yaml      https://raw.githubusercontent.com/Asana/openapi/master/defs/asana_oas.yaml
+          fetch asyncapi-streetlights.yml https://raw.githubusercontent.com/asyncapi/spec/master/examples/streetlights-kafka-asyncapi.yml
+          fetch asyncapi-websocket.yml    https://raw.githubusercontent.com/asyncapi/spec/master/examples/websocket-gemini-asyncapi.yml
+          # Kubernetes publishes its 3.0 description per API group. The core
+          # group alone carries 113 paths whose schemas reference each other
+          # heavily, which is the shape that breaks a resolver. Its top-level
+          # swagger.json is 2.0 and is deliberately not used.
+          k8s=https://raw.githubusercontent.com/kubernetes/kubernetes/master/api/openapi-spec/v3
+          fetch k8s-core.json  "$k8s/api__v1_openapi.json"
+          fetch k8s-apps.json  "$k8s/apis__apps__v1_openapi.json"
+          fetch k8s-batch.json "$k8s/apis__batch__v1_openapi.json"
+          fetch k8s-rbac.json  "$k8s/apis__rbac.authorization.k8s.io__v1_openapi.json"
+          ls -1
+
+      - name: Run the corpus checks over them
+        env:
+          BARBACANE_CORPUS_DIR: ${{ runner.temp }}/corpus
+        run: cargo test -p barbacane-compiler --test corpus -- --nocapture
