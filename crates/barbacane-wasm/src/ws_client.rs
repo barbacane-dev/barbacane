@@ -80,25 +80,11 @@ pub async fn connect_upstream(
 
     let timeout = Duration::from_millis(req.connect_timeout_ms);
     let connect_future = async move {
-        // Connect the TCP socket to a vetted address (try each in turn), then run
-        // the WebSocket/TLS handshake over that pinned stream.
-        let mut last_err: Option<String> = None;
-        let mut tcp = None;
-        for addr in &addrs {
-            match tokio::net::TcpStream::connect(addr).await {
-                Ok(stream) => {
-                    tcp = Some(stream);
-                    break;
-                }
-                Err(e) => last_err = Some(e.to_string()),
-            }
-        }
-        let tcp = tcp.ok_or_else(|| {
-            format!(
-                "WebSocket connection failed: {}",
-                last_err.unwrap_or_else(|| "no reachable address".to_string())
-            )
-        })?;
+        // Connect the TCP socket to a vetted address, then run the WebSocket/TLS
+        // handshake over that pinned stream.
+        let tcp = crate::http_client::connect_pinned_tcp(&addrs)
+            .await
+            .map_err(|e| format!("WebSocket connection failed: {e}"))?;
 
         tokio_tungstenite::client_async_tls(ws_request, tcp)
             .await

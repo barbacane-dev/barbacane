@@ -576,6 +576,22 @@ pub(crate) async fn resolve_permitted_addrs(
     Ok(addrs)
 }
 
+/// Open a TCP connection to the first reachable address in `addrs`, in order.
+/// Callers pass the vetted addresses from [`resolve_permitted_addrs`] so the
+/// socket lands on a checked address rather than on a fresh resolution.
+pub(crate) async fn connect_pinned_tcp(
+    addrs: &[SocketAddr],
+) -> Result<tokio::net::TcpStream, String> {
+    let mut last_err: Option<String> = None;
+    for addr in addrs {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_err = Some(e.to_string()),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "no reachable address".to_string()))
+}
+
 /// Headers a plugin may not set on an outbound HTTP request. `host` is derived
 /// from the URL; the rest are hop-by-hop / message-framing headers owned by the
 /// HTTP client. Allowing a plugin to override any of these enables routing
@@ -837,6 +853,31 @@ mod tests {
             .await
             .expect("internal permitted when egress allowed");
         assert_eq!(addrs, vec!["10.0.0.5:9092".parse().unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn connect_pinned_tcp_uses_first_reachable_address() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let reachable = listener.local_addr().expect("local addr");
+        // A port bound then released, so the first connect is refused and the
+        // helper moves on to the next address.
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind")
+            .local_addr()
+            .expect("local addr");
+
+        let stream = connect_pinned_tcp(&[closed, reachable])
+            .await
+            .expect("second address reachable");
+        assert_eq!(stream.peer_addr().expect("peer addr"), reachable);
+
+        assert_eq!(
+            connect_pinned_tcp(&[]).await.expect_err("no addresses"),
+            "no reachable address"
+        );
     }
 
     #[test]

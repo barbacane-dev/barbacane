@@ -113,9 +113,7 @@ impl NatsPublisher {
         }
 
         // SSRF guard: resolve once and refuse internal/metadata targets unless the
-        // operator has opted into internal egress. We keep the vetted addresses so
-        // the connection can be pinned to them (closing the DNS-rebinding window
-        // async_nats would otherwise reopen by resolving again at connect time).
+        // operator has opted into internal egress.
         let (host, port) = crate::broker::split_host_port(url, DEFAULT_NATS_PORT);
         let addrs = match crate::http_client::resolve_permitted_addrs(
             &host,
@@ -133,26 +131,20 @@ impl NatsPublisher {
             }
         };
 
-        // Pin plaintext (`nats://`) connections to the vetted IPs. For `tls://`
-        // we keep the hostname so TLS SNI/cert validation still works; the
-        // pre-connect resolution above already blocked internal targets, leaving
-        // only a narrow rebinding window for a TLS broker (which would need a
-        // valid cert on the rebound internal target to be usable).
-        let is_tls = url.trim_start().starts_with("tls://");
-        let client = if is_tls {
-            tokio::time::timeout(CONNECT_TIMEOUT, async_nats::connect(url.to_string())).await
+        let servers = if address_may_be_pinned(url)? {
+            pinned_server_addrs(&addrs)?
         } else {
-            let pinned: Vec<async_nats::ServerAddr> = addrs
-                .iter()
-                .map(|a| format!("nats://{a}").parse())
-                .collect::<Result<_, _>>()
-                .map_err(|e| {
-                    BrokerError::ConnectionFailed(format!("invalid pinned NATS address: {e}"))
-                })?;
-            tokio::time::timeout(CONNECT_TIMEOUT, async_nats::connect(pinned)).await
-        }
-        .map_err(|_| BrokerError::Timeout)?
-        .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+            vec![url
+                .parse::<async_nats::ServerAddr>()
+                .map_err(|e| BrokerError::ConnectionFailed(format!("invalid NATS URL: {e}")))?]
+        };
+        // Servers advertised in INFO.connect_urls never pass the SSRF guard, so
+        // they are refused and the pool keeps only the servers configured here.
+        let options = async_nats::ConnectOptions::new().ignore_discovered_servers();
+        let client = tokio::time::timeout(CONNECT_TIMEOUT, options.connect(servers))
+            .await
+            .map_err(|_| BrokerError::Timeout)?
+            .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
 
         tracing::info!(url = %url, "established NATS connection");
 
@@ -171,6 +163,45 @@ impl NatsPublisher {
     }
 }
 
+/// Whether a vetted address may stand in for the URL.
+///
+/// Only plain NATS over TCP may: a vetted address is rendered as `nats://ip:port`,
+/// which carries neither the TLS server name a `tls://` or `wss://` handshake
+/// needs for SNI nor the path a websocket URL carries. Schemes are compared
+/// case-insensitively, so `TLS://` cannot fall through to the plaintext branch
+/// and downgrade the connection. A scheme `async_nats` does not accept is an
+/// error rather than a silent plaintext connection.
+fn address_may_be_pinned(url: &str) -> Result<bool, BrokerError> {
+    let Some((scheme, _)) = url.trim_start().split_once("://") else {
+        // A bare `host:port` is plain NATS over TCP.
+        return Ok(true);
+    };
+    if scheme.eq_ignore_ascii_case("nats") {
+        Ok(true)
+    } else if ["tls", "ws", "wss"]
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s))
+    {
+        Ok(false)
+    } else {
+        Err(BrokerError::ConnectionFailed(format!(
+            "unsupported NATS URL scheme '{scheme}'"
+        )))
+    }
+}
+
+/// Plaintext server list, one entry per vetted address. The hostname is left
+/// out on purpose: it would let the client resolve it again.
+fn pinned_server_addrs(
+    addrs: &[std::net::SocketAddr],
+) -> Result<Vec<async_nats::ServerAddr>, BrokerError> {
+    addrs
+        .iter()
+        .map(|a| format!("nats://{a}").parse())
+        .collect::<Result<_, _>>()
+        .map_err(|e| BrokerError::ConnectionFailed(format!("invalid pinned NATS address: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +211,80 @@ mod tests {
         let publisher = NatsPublisher::new(true).expect("nats publisher");
         let conns = publisher.connections.lock();
         assert!(conns.is_empty());
+    }
+
+    /// A plaintext server list carries the vetted addresses, never the hostname
+    /// the client could resolve again.
+    #[test]
+    fn pinned_server_addrs_use_vetted_addresses_not_the_hostname() {
+        let vetted: Vec<std::net::SocketAddr> = vec![
+            "203.0.113.7:4222".parse().expect("addr"),
+            "203.0.113.8:4222".parse().expect("addr"),
+        ];
+
+        let plain = pinned_server_addrs(&vetted).expect("addrs");
+        let rendered: Vec<String> = plain
+            .iter()
+            .map(|a| format!("{}:{}", a.host(), a.port()))
+            .collect();
+        assert_eq!(rendered, vec!["203.0.113.7:4222", "203.0.113.8:4222"]);
+        assert!(plain.iter().all(|a| !a.tls_required()));
+        assert!(
+            plain.iter().all(|a| a.host() != "broker.example.com"),
+            "the hostname must not reach the connect list"
+        );
+    }
+
+    /// A `tls://` server keeps its hostname so the ClientHello carries SNI.
+    #[test]
+    fn tls_url_keeps_the_hostname_for_sni() {
+        let addr: async_nats::ServerAddr = "tls://broker.example.com:4222".parse().expect("addr");
+        assert!(addr.tls_required());
+        assert_eq!(addr.host(), "broker.example.com");
+    }
+
+    /// Only plain NATS over TCP is replaced by a vetted address. A scheme
+    /// carrying TLS or a websocket path keeps its URL, whatever its case, so a
+    /// TLS server can never fall through to the plaintext branch.
+    #[test]
+    fn only_plain_nats_is_pinned_and_scheme_case_does_not_downgrade() {
+        for url in [
+            "nats://broker.example.com:4222",
+            "NATS://broker.example.com:4222",
+            "broker.example.com:4222",
+        ] {
+            assert!(
+                address_may_be_pinned(url).expect("supported scheme"),
+                "{url} is plain NATS and may be pinned"
+            );
+        }
+
+        for url in [
+            "tls://broker.example.com:4222",
+            "TLS://broker.example.com:4222",
+            "Tls://broker.example.com:4222",
+            "ws://broker.example.com:8080/nats",
+            "wss://broker.example.com:443/nats",
+            "WSS://broker.example.com:443/nats",
+        ] {
+            assert!(
+                !address_may_be_pinned(url).expect("supported scheme"),
+                "{url} must keep its URL rather than become a plaintext address"
+            );
+        }
+    }
+
+    /// A scheme async_nats does not accept fails instead of quietly becoming a
+    /// plaintext NATS connection, so a typo cannot downgrade the transport.
+    #[test]
+    fn unsupported_scheme_is_refused() {
+        for url in ["tsl://broker.example.com:4222", "http://broker.example.com"] {
+            let err = address_may_be_pinned(url).expect_err("unsupported scheme must fail");
+            assert!(
+                matches!(err, BrokerError::ConnectionFailed(ref m) if m.contains("unsupported")),
+                "{url}: {err}"
+            );
+        }
     }
 
     #[test]
