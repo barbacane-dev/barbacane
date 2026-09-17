@@ -417,6 +417,7 @@ dependencies = [
  "flate2",
  "hex",
  "home",
+ "jsonschema",
  "reqwest 0.12.28",
  "ring",
  "serde",

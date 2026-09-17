@@ -70,6 +70,19 @@ impl SchemaDefs {
         self.bodies.insert(name.clone(), None);
         name
     }
+
+    /// Reserve a unique name for a definition the schema declared itself, which
+    /// has no document pointer to key it by.
+    fn reserve(&mut self, base: &str) -> String {
+        let mut name = base.to_string();
+        let mut n = 2;
+        while self.bodies.contains_key(&name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        self.bodies.insert(name.clone(), None);
+        name
+    }
 }
 
 /// Resolve a schema's `$ref` pointers into a self-contained schema.
@@ -78,7 +91,7 @@ impl SchemaDefs {
 /// schema resolves against itself once it is separated from the document.
 fn resolve_schema(value: &Value, root: &Value) -> Result<Value, ParseError> {
     let mut defs = SchemaDefs::default();
-    let mut resolved = resolve_schema_refs(value, root, &mut defs)?;
+    let mut resolved = resolve_schema_refs(value, root, &mut defs, &BTreeMap::new())?;
 
     if !defs.bodies.is_empty() {
         let mut map = serde_json::Map::new();
@@ -107,13 +120,34 @@ fn resolve_schema_refs(
     value: &Value,
     root: &Value,
     defs: &mut SchemaDefs,
+    scope: &BTreeMap<String, String>,
 ) -> Result<Value, ParseError> {
     match value {
         Value::Object(obj) => {
             if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
-                // Already local: the schema carries what this points at.
-                if ref_str.starts_with("#/$defs/") {
-                    return Ok(value.clone());
+                // A pointer into definitions the source schema declared. Those
+                // are hoisted and renamed, so it points at the new name.
+                // Only the first token names the definition. Anything after it
+                // addresses a place inside that definition and is carried over
+                // unchanged, so a pointer such as `#/$defs/Money/properties/amount`
+                // follows the definition to its new name instead of resolving
+                // against whichever definition kept the old one.
+                if let Some(suffix) = ref_str.strip_prefix("#/$defs/") {
+                    let (first, rest) = match suffix.split_once('/') {
+                        Some((first, rest)) => (first, Some(rest)),
+                        None => (suffix, None),
+                    };
+                    return Ok(match scope.get(&pointer_unescape(first)) {
+                        Some(hoisted) => {
+                            let mut pointer = format!("#/$defs/{}", pointer_escape(hoisted));
+                            if let Some(rest) = rest {
+                                pointer.push('/');
+                                pointer.push_str(rest);
+                            }
+                            pointer_ref(&pointer)
+                        }
+                        None => value.clone(),
+                    });
                 }
                 // An already-known pointer needs no second resolution, which is
                 // also what stops a cycle: the body is in flight above us.
@@ -123,13 +157,34 @@ fn resolve_schema_refs(
                 let name = defs.name_for(ref_str);
                 let target = resolve_ref(root, ref_str)
                     .ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
-                let resolved = resolve_schema_refs(target, root, defs)?;
+                let resolved = resolve_schema_refs(target, root, defs, scope)?;
                 defs.bodies.insert(name.clone(), Some(resolved));
                 Ok(local_ref(&name))
             } else {
+                // Definitions the schema declares itself are lifted to the one
+                // set the schema ends up carrying, under a name reserved there,
+                // so a pointer at them still resolves once the schema is
+                // detached from its document.
+                let mut scope = scope.clone();
+                if let Some(Value::Object(local_defs)) = obj.get("$defs") {
+                    for name in local_defs.keys() {
+                        let hoisted = defs.reserve(name);
+                        scope.insert(name.clone(), hoisted);
+                    }
+                    for (name, body) in local_defs {
+                        let hoisted = scope.get(name).cloned().unwrap_or_else(|| name.clone());
+                        let resolved = resolve_schema_refs(body, root, defs, &scope)?;
+                        defs.bodies.insert(hoisted, Some(resolved));
+                    }
+                }
+
                 let mut new_obj = serde_json::Map::with_capacity(obj.len());
                 for (key, val) in obj {
-                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, defs)?);
+                    // Its definitions now live in the schema's own set.
+                    if key == "$defs" {
+                        continue;
+                    }
+                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, defs, &scope)?);
                 }
                 Ok(Value::Object(new_obj))
             }
@@ -137,7 +192,7 @@ fn resolve_schema_refs(
         Value::Array(arr) => {
             let items: Result<Vec<_>, _> = arr
                 .iter()
-                .map(|v| resolve_schema_refs(v, root, defs))
+                .map(|v| resolve_schema_refs(v, root, defs, scope))
                 .collect();
             Ok(Value::Array(items?))
         }
@@ -147,9 +202,24 @@ fn resolve_schema_refs(
 
 /// A reference to a definition carried by the schema itself.
 fn local_ref(name: &str) -> Value {
+    pointer_ref(&format!("#/$defs/{}", pointer_escape(name)))
+}
+
+/// A `$ref` node holding `pointer`.
+fn pointer_ref(pointer: &str) -> Value {
     let mut obj = serde_json::Map::with_capacity(1);
-    obj.insert("$ref".to_string(), Value::String(format!("#/$defs/{name}")));
+    obj.insert("$ref".to_string(), Value::String(pointer.to_string()));
     Value::Object(obj)
+}
+
+/// Escape a name for use as one JSON Pointer token (RFC 6901): `~` then `/`.
+fn pointer_escape(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// Decode one JSON Pointer token (RFC 6901): `~1` then `~0`.
+fn pointer_unescape(token: &str) -> String {
+    token.replace("~1", "/").replace("~0", "~")
 }
 
 /// Resolve a component entry that may be a `$ref` into the object it names.
@@ -2863,6 +2933,204 @@ paths:
         assert!(
             !validator.is_valid(&bad),
             "a missing required field three levels down must fail"
+        );
+    }
+
+    /// A schema may carry its own `$defs`, since OpenAPI 3.1 schemas are full
+    /// JSON Schema. Those definitions must survive alongside the ones added for
+    /// component references, or the pointers into them dangle.
+    #[test]
+    fn existing_defs_are_kept() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Order:
+      type: object
+      $defs:
+        Money:
+          type: object
+          properties:
+            amount:
+              type: integer
+      properties:
+        total:
+          $ref: "#/$defs/Money"
+paths:
+  /orders:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Order"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        let defs = schema
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .expect("$defs");
+        assert!(
+            defs.contains_key("Money"),
+            "the schema's own definition must survive: {:?}",
+            defs.keys().collect::<Vec<_>>()
+        );
+        // And it must still compile, which it cannot with a dangling pointer.
+        jsonschema::options()
+            .build(schema)
+            .expect("schema with its own $defs must compile");
+    }
+
+    /// A pointer may address a place inside a definition, not just the
+    /// definition itself. Hoisting renames the definition, so only the first
+    /// token may be rewritten and the rest has to survive untouched.
+    #[test]
+    fn descendant_pointer_follows_the_renamed_definition() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Order:
+      type: object
+      $defs:
+        Money:
+          type: string
+      properties:
+        outer:
+          $ref: "#/$defs/Money"
+        line:
+          $ref: "#/components/schemas/Line"
+    Line:
+      type: object
+      $defs:
+        Money:
+          type: object
+          properties:
+            amount:
+              type: integer
+      properties:
+        paid:
+          $ref: "#/$defs/Money/properties/amount"
+        total:
+          $ref: "#/$defs/Money"
+paths:
+  /orders:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Order"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        let defs = schema
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .expect("$defs");
+        let order = deref_local(schema, schema);
+        let order_props = order
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("properties");
+        let line = deref_local(schema, &order_props["line"]);
+        let line_props = line
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("properties");
+
+        // Both schemas declare a definition called Money, so the second is
+        // renamed. Every pointer at it, whole or descendant, has to follow it
+        // rather than resolve against the one that kept the name.
+        let whole = line_props["total"]["$ref"].as_str().expect("total ref");
+        let part = line_props["paid"]["$ref"].as_str().expect("paid ref");
+        let named = whole.strip_prefix("#/$defs/").expect("local pointer");
+        assert_eq!(
+            part,
+            format!("#/$defs/{named}/properties/amount"),
+            "the descendant pointer must name the same definition as the whole one"
+        );
+
+        // It addresses the object definition, not the string one that shares
+        // its declared name.
+        assert_eq!(defs[named]["type"], "object");
+        assert!(
+            defs[named]["properties"]["amount"].is_object(),
+            "the descendant it names must exist"
+        );
+
+        // The other schema's Money is a different definition and still a string.
+        let outer = order_props["outer"]["$ref"].as_str().expect("outer ref");
+        let outer_named = outer.strip_prefix("#/$defs/").expect("local pointer");
+        assert_ne!(outer_named, named, "the two are distinct definitions");
+        assert_eq!(defs[outer_named]["type"], "string");
+    }
+
+    /// A definition name may contain characters a JSON Pointer escapes, so the
+    /// token has to be decoded before it is matched and escaped when emitted.
+    #[test]
+    fn pointer_escaped_definition_name_resolves() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Order:
+      type: object
+      $defs:
+        "a/b":
+          type: integer
+      properties:
+        value:
+          $ref: "#/$defs/a~1b"
+paths:
+  /orders:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Order"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("parse");
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+        let order = deref_local(schema, schema);
+        let reference = order["properties"]["value"]["$ref"].as_str().expect("ref");
+        let name = reference.strip_prefix("#/$defs/").expect("local pointer");
+        // Whatever the escaping, the pointer must name a definition that exists
+        // and holds the declared body.
+        let decoded = name.replace("~1", "/").replace("~0", "~");
+        let defs = schema
+            .get("$defs")
+            .and_then(|d| d.as_object())
+            .expect("$defs");
+        assert_eq!(
+            defs[&decoded]["type"], "integer",
+            "the escaped name must resolve to its definition"
         );
     }
 
