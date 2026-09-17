@@ -16,6 +16,7 @@
     },
     "key": {
       "type": "string",
+      "format": "header-ref",
       "description": "Message key expression (supports $request.header.X-Key, $request.path.id, or literal value)"
     },
     "ack_response": {
@@ -40,6 +41,7 @@
     },
     "headers_from_request": {
       "type": "array",
+      "format": "header-name",
       "description": "Request headers to pass as Kafka message headers",
       "items": { "type": "string" }
     }

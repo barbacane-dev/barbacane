@@ -119,20 +119,12 @@ fn read_embedded_manifest(wasm: &[u8]) -> Option<String> {
 /// Read config-schema.json next to the WASM and return the names of fields
 /// marked `writeOnly` (secret). Best-effort: an absent or invalid schema yields
 /// an empty list (no secret-field warnings for that plugin).
-fn read_secret_fields(wasm_path: &Path) -> Vec<String> {
-    let Some(dir) = wasm_path.parent() else {
-        return Vec::new();
-    };
-    let content = match std::fs::read_to_string(dir.join("config-schema.json")) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    match serde_json::from_str::<serde_json::Value>(&content) {
-        Ok(schema) => crate::artifact::collect_writeonly_fields(&schema)
-            .into_iter()
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+/// Read a plugin's `config-schema.json`, which carries the annotations the
+/// compiler reads: `writeOnly` for a secret, and the header-name formats.
+fn read_config_schema(wasm_path: &Path) -> Option<serde_json::Value> {
+    let dir = wasm_path.parent()?;
+    let content = std::fs::read_to_string(dir.join("config-schema.json")).ok()?;
+    serde_json::from_str::<serde_json::Value>(&content).ok()
 }
 
 /// Resolve a WASM path from a plugin source, relative to a base path.
@@ -210,12 +202,20 @@ fn resolve_plugin(
 
     // Secret (writeOnly) config fields from config-schema.json (path plugins
     // only; URL plugins do not fetch the schema).
-    let secret_fields = match source {
+    let config_schema = match source {
         PluginSource::Path(path_source) => {
-            read_secret_fields(&resolve_wasm_path(path_source, base_path))
+            read_config_schema(&resolve_wasm_path(path_source, base_path))
         }
-        PluginSource::Url(_) => Vec::new(),
+        PluginSource::Url(_) => None,
     };
+    let secret_fields = config_schema
+        .as_ref()
+        .map(|schema| {
+            crate::artifact::collect_writeonly_fields(schema)
+                .into_iter()
+                .collect()
+        })
+        .unwrap_or_default();
 
     Ok(ResolvedPlugin {
         name: name.to_string(),
@@ -229,6 +229,7 @@ fn resolve_plugin(
             .map(|m| m.host_functions.clone())
             .unwrap_or_default(),
         secret_fields,
+        config_schema,
     })
 }
 
@@ -354,6 +355,10 @@ pub struct ResolvedPlugin {
     pub host_functions: Vec<String>,
     /// Config fields marked `writeOnly` (secret) in config-schema.json, if present.
     pub secret_fields: Vec<String>,
+    /// The plugin's `config-schema.json`, kept so the compiler can read the
+    /// annotations on it. Absent for a URL-sourced plugin, whose schema is not
+    /// fetched, and for one that ships none.
+    pub config_schema: Option<serde_json::Value>,
 }
 
 impl ProjectManifest {

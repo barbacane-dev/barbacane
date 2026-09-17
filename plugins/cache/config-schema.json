@@ -13,6 +13,7 @@
     },
     "vary": {
       "type": "array",
+      "format": "header-name",
       "items": {
         "type": "string"
       },

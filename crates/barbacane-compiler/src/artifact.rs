@@ -450,6 +450,7 @@ pub fn compile_with_manifest(
             body_access: p.body_access,
             host_functions: p.host_functions,
             secret_fields: p.secret_fields,
+            config_schema: p.config_schema,
         })
         .collect();
 
@@ -652,6 +653,10 @@ pub struct PluginBundle {
     pub host_functions: Vec<String>,
     /// Config fields marked `writeOnly` (secret) in the plugin's config-schema.json.
     pub secret_fields: Vec<String>,
+    /// The plugin's `config-schema.json`, read for the annotations that say
+    /// which configured values name a request header. Absent for a plugin whose
+    /// schema the compiler cannot see.
+    pub config_schema: Option<serde_json::Value>,
 }
 
 /// Parse spec files into (ApiSpec, content, sha256) tuples.
@@ -711,6 +716,14 @@ fn compile_inner(
         .iter()
         .filter(|p| !p.secret_fields.is_empty())
         .map(|p| (p.name.as_str(), p.secret_fields.iter().cloned().collect()))
+        .collect();
+
+    // Schemas carry the annotations saying which configured values name a
+    // request header. A URL-sourced plugin has none, so headers it is told to
+    // read must be declared in the spec like any other.
+    let plugin_schemas: HashMap<&str, &serde_json::Value> = plugins
+        .iter()
+        .filter_map(|p| p.config_schema.as_ref().map(|s| (p.name.as_str(), s)))
         .collect();
 
     let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
@@ -912,6 +925,24 @@ fn compile_inner(
                 }
             }
 
+            // The headers this operation accepts: what the spec declares, plus
+            // what the chain's own configuration tells a plugin to read, which
+            // is not in the spec's vocabulary and nothing else would admit.
+            let allowed_request_headers = {
+                let mut allow = operation_header_allowlist(op, spec)?;
+                let mut collect = |name: &str, config: &serde_json::Value| {
+                    let key = crate::manifest::normalize_plugin_name(name);
+                    if let Some(schema) = plugin_schemas.get(key.as_str()) {
+                        collect_configured_header_names(schema, config, &mut allow);
+                    }
+                };
+                for middleware in &middlewares {
+                    collect(&middleware.name, &middleware.config);
+                }
+                collect(&dispatch.name, &dispatch.config);
+                allow.into_iter().collect::<Vec<String>>()
+            };
+
             operations.push(CompiledOperation {
                 index: operations.len(),
                 path: op.path.clone(),
@@ -930,9 +961,7 @@ fn compile_inner(
                 responses: op.responses.clone(),
                 mcp_enabled,
                 mcp_description,
-                allowed_request_headers: operation_header_allowlist(op, spec)?
-                    .into_iter()
-                    .collect(),
+                allowed_request_headers,
             });
         }
     }
@@ -1698,6 +1727,130 @@ fn normalize_path_template(path: &str) -> String {
     result
 }
 
+/// Request header names a plugin's configuration tells it to read.
+///
+/// A plugin marks such a field in its own `config-schema.json`, the way
+/// `writeOnly` already marks a secret:
+///
+/// - `"format": "header-name"` on a field whose value is a header name, or a
+///   list of them.
+/// - `"format": "header-ref"` on a field that may *reference* a header among
+///   other things, as a partition key does with `header:<name>` or a message
+///   key with `$request.header.<name>`. Any other value selects something that
+///   is not a header, such as `client_ip`, and names nothing.
+/// - `"format": "header-name-map"` on an object whose *keys* are header names,
+///   as a rename table is.
+///
+/// The configuration is walked alongside the schema, so a marked field is read
+/// at the place it actually sits rather than wherever its name appears.
+fn collect_configured_header_names(
+    schema: &serde_json::Value,
+    config: &serde_json::Value,
+    out: &mut BTreeSet<String>,
+) {
+    match schema.get("format").and_then(|f| f.as_str()) {
+        Some("header-name") => {
+            extract_header_names(config, out);
+            return;
+        }
+        Some("header-ref") => {
+            extract_referenced_header_names(config, out);
+            return;
+        }
+        Some("header-name-map") => {
+            if let Some(map) = config.as_object() {
+                for key in map.keys() {
+                    push_header_name(key, out);
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    if let (Some(props), Some(values)) = (
+        schema.get("properties").and_then(|p| p.as_object()),
+        config.as_object(),
+    ) {
+        for (field, subschema) in props {
+            if let Some(value) = values.get(field) {
+                collect_configured_header_names(subschema, value, out);
+            }
+        }
+    }
+
+    // A list or map whose entries share one schema.
+    for keyword in ["items", "additionalProperties"] {
+        let Some(subschema) = schema.get(keyword) else {
+            continue;
+        };
+        match config {
+            serde_json::Value::Array(entries) => {
+                for entry in entries {
+                    collect_configured_header_names(subschema, entry, out);
+                }
+            }
+            serde_json::Value::Object(entries) => {
+                for entry in entries.values() {
+                    collect_configured_header_names(subschema, entry, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Read a value that is a header name, or a list of them.
+fn extract_header_names(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::String(text) => push_header_name(text, out),
+        serde_json::Value::Array(entries) => {
+            for entry in entries {
+                extract_header_names(entry, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Read a value that may reference a header among other things.
+///
+/// `header:<name>` selects one, and `$request.header.<name>` names one inside a
+/// longer expression. Anything else selects something that is not a header,
+/// such as `client_ip`, and contributes nothing.
+fn extract_referenced_header_names(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(name) = text.strip_prefix("header:") {
+                push_header_name(name, out);
+                return;
+            }
+            if let Some(rest) = text.split("$request.header.").nth(1) {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                push_header_name(&name, out);
+            }
+        }
+        serde_json::Value::Array(entries) => {
+            for entry in entries {
+                extract_referenced_header_names(entry, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Record a header name, lowercased, ignoring anything that is not one.
+fn push_header_name(name: &str, out: &mut BTreeSet<String>) {
+    let name = name.trim().to_ascii_lowercase();
+    if name.is_empty() || name.contains(' ') {
+        return;
+    }
+    out.insert(name);
+}
+
 /// Request headers an operation accepts beyond the data plane's baseline.
 ///
 /// Derived from the spec's own vocabulary, so the document stays the contract
@@ -2238,6 +2391,94 @@ fn resolve_mcp_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod configured_headers {
+        use super::*;
+
+        fn schema() -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "header_name": {"type": "string", "format": "header-name"},
+                    "partition_key": {"type": "string", "format": "header-ref"},
+                    "vary": {"type": "array", "items": {"type": "string"}, "format": "header-name"},
+                    "key": {"type": "string", "format": "header-ref"},
+                    "policy_name": {"type": "string"},
+                    "headers": {
+                        "type": "object",
+                        "properties": {
+                            "remove": {"type": "array", "format": "header-name"},
+                            "rename": {"type": "object", "format": "header-name-map"},
+                            "set": {"type": "object"}
+                        }
+                    }
+                }
+            })
+        }
+
+        fn names(config: serde_json::Value) -> BTreeSet<String> {
+            let mut out = BTreeSet::new();
+            collect_configured_header_names(&schema(), &config, &mut out);
+            out
+        }
+
+        /// A plain value names one header, and a list names several.
+        #[test]
+        fn plain_and_list_values_are_read() {
+            let found = names(serde_json::json!({
+                "header_name": "X-API-Key",
+                "vary": ["Accept", "X-Tenant"]
+            }));
+            assert!(found.contains("x-api-key"));
+            assert!(found.contains("accept"));
+            assert!(found.contains("x-tenant"));
+        }
+
+        /// A selector names a header only when it selects one. `client_ip`
+        /// selects something else and must not become a header.
+        #[test]
+        fn only_the_header_selector_names_a_header() {
+            assert!(
+                names(serde_json::json!({"partition_key": "header:X-Client-Id"}))
+                    .contains("x-client-id")
+            );
+            assert!(names(serde_json::json!({"partition_key": "client_ip"})).is_empty());
+        }
+
+        /// A template may name a header inside a longer expression.
+        #[test]
+        fn a_template_expression_is_read() {
+            assert!(
+                names(serde_json::json!({"key": "$request.header.X-Order-Id"}))
+                    .contains("x-order-id")
+            );
+        }
+
+        /// A rename table names headers with its keys, not its values, and a
+        /// field that is not marked is not read at all.
+        #[test]
+        fn map_keys_are_read_and_unmarked_fields_are_not() {
+            let found = names(serde_json::json!({
+                "headers": {
+                    "remove": ["X-Debug"],
+                    "rename": {"X-Old": "X-New"},
+                    "set": {"X-Written": "value"}
+                },
+                "policy_name": "default"
+            }));
+            assert!(found.contains("x-debug"));
+            assert!(found.contains("x-old"), "a rename reads the old name");
+            assert!(
+                !found.contains("x-new"),
+                "the new name is written, not read"
+            );
+            assert!(
+                !found.contains("x-written"),
+                "an unmarked field is not a header"
+            );
+            assert!(!found.contains("default"), "nor is a policy name");
+        }
+    }
 
     mod header_allowlist {
         use super::*;
@@ -2848,6 +3089,7 @@ paths:
             body_access: false,
             host_functions: vec![],
             secret_fields: vec![],
+            config_schema: None,
         }];
 
         let result = compile(

@@ -31,6 +31,7 @@
     },
     "headers_from_request": {
       "type": "array",
+      "format": "header-name",
       "description": "Request headers to pass as NATS message headers",
       "items": { "type": "string" }
     }
