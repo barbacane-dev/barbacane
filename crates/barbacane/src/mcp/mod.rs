@@ -324,6 +324,7 @@ mod tests {
                 responses: BTreeMap::new(),
                 mcp_enabled: Some(true),
                 mcp_description: None,
+                allowed_request_headers: Vec::new(),
             },
             CompiledOperation {
                 index: 1,
@@ -346,6 +347,7 @@ mod tests {
                 responses: BTreeMap::new(),
                 mcp_enabled: None,
                 mcp_description: None,
+                allowed_request_headers: Vec::new(),
             },
         ]
     }
@@ -628,6 +630,7 @@ mod tests {
             responses: BTreeMap::new(),
             mcp_enabled: Some(true),
             mcp_description: None,
+            allowed_request_headers: Vec::new(),
         }];
         let config = McpConfig {
             enabled: true,
