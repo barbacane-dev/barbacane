@@ -1752,6 +1752,18 @@ fn measure_schema_complexity(value: &serde_json::Value, current_depth: usize) ->
                 }
             }
 
+            // Definitions the schema carries. A `$ref` to one is a leaf in this
+            // walk, so a definition is only measured here. They sit beside the
+            // schema rather than inside it, so they do not add depth of their
+            // own.
+            if let Some(serde_json::Value::Object(defs)) = obj.get("$defs") {
+                for def in defs.values() {
+                    let (d, p) = measure_schema_complexity(def, current_depth);
+                    max_depth = max_depth.max(d);
+                    total_props += p;
+                }
+            }
+
             (max_depth, total_props)
         }
         serde_json::Value::Array(arr) => {
@@ -2131,6 +2143,36 @@ fn resolve_mcp_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Definitions a schema carries still count towards its complexity. They
+    /// hold the body that a `$ref` points at, so skipping them would measure an
+    /// empty schema and let the E1051 and E1052 limits pass anything.
+    #[test]
+    fn complexity_counts_carried_definitions() {
+        let schema = serde_json::json!({
+            "$ref": "#/$defs/User",
+            "$defs": {
+                "User": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "address": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}}
+                        }
+                    }
+                }
+            }
+        });
+        let (depth, props) = measure_schema_complexity(&schema, 0);
+        assert_eq!(props, 4, "every property in the definition is counted");
+        assert!(depth >= 1, "nesting inside the definition is measured");
+
+        // And the limits actually bite on what the definition holds.
+        assert!(validate_schema_complexity(&schema, 10, 2, "test").is_err());
+        assert!(validate_schema_complexity(&schema, 10, 10, "test").is_ok());
+    }
     use std::io::Write;
     use tempfile::TempDir;
 

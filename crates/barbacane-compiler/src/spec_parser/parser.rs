@@ -23,33 +23,117 @@ fn resolve_ref<'a>(root: &'a Value, ref_path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
-/// Recursively resolve all `$ref` pointers in a JSON Schema value.
+/// Definitions a schema carries for the references that cannot be inlined.
 ///
-/// Inlines the referenced definition in place. `visited` tracks the current resolution
-/// chain to detect circular references.
+/// A schema travels alone in the artifact, with no document to resolve against,
+/// so a reference that survives inlining has to point inside the schema itself.
+#[derive(Default)]
+struct SchemaDefs {
+    /// Reference pointer to the `$defs` key standing in for it.
+    names: BTreeMap<String, String>,
+    /// `$defs` key to its body, absent while that body is still being resolved.
+    bodies: BTreeMap<String, Option<Value>>,
+}
+
+impl SchemaDefs {
+    /// The `$defs` key for a reference, derived from its last segment and made
+    /// unique so two pointers ending in the same name stay distinct.
+    fn name_for(&mut self, ref_str: &str) -> String {
+        if let Some(existing) = self.names.get(ref_str) {
+            return existing.clone();
+        }
+        let base: String = ref_str
+            .rsplit('/')
+            .next()
+            .unwrap_or("schema")
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let base = if base.is_empty() {
+            "schema".to_string()
+        } else {
+            base
+        };
+        let mut name = base.clone();
+        let mut n = 2;
+        while self.bodies.contains_key(&name) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        self.names.insert(ref_str.to_string(), name.clone());
+        self.bodies.insert(name.clone(), None);
+        name
+    }
+}
+
+/// Resolve a schema's `$ref` pointers into a self-contained schema.
+///
+/// Every referenced definition is carried in `$defs` and pointed at, so the
+/// schema resolves against itself once it is separated from the document.
+fn resolve_schema(value: &Value, root: &Value) -> Result<Value, ParseError> {
+    let mut defs = SchemaDefs::default();
+    let mut resolved = resolve_schema_refs(value, root, &mut defs)?;
+
+    if !defs.bodies.is_empty() {
+        let mut map = serde_json::Map::new();
+        for (name, body) in defs.bodies {
+            if let Some(body) = body {
+                map.insert(name, body);
+            }
+        }
+        if !map.is_empty() {
+            match &mut resolved {
+                Value::Object(obj) => {
+                    obj.insert("$defs".to_string(), Value::Object(map));
+                }
+                // A non-object schema cannot carry definitions, and cannot
+                // contain a reference either, so there is nothing to attach.
+                _ => {}
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+/// Recursively rewrite `$ref` pointers to point inside the schema.
+///
+/// Each referenced definition is resolved once into `$defs` and referred to
+/// from every use site. Inlining instead would copy a definition per use, which
+/// on a document that reuses its schemas heavily expands combinatorially, and
+/// cannot terminate at all when a definition refers back to itself.
 fn resolve_schema_refs(
     value: &Value,
     root: &Value,
-    visited: &mut HashSet<String>,
+    defs: &mut SchemaDefs,
 ) -> Result<Value, ParseError> {
     match value {
         Value::Object(obj) => {
             if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
-                if !visited.insert(ref_str.to_string()) {
-                    return Err(ParseError::SchemaError(format!(
-                        "circular $ref detected: {}",
-                        ref_str
-                    )));
+                // Already local: the schema carries what this points at.
+                if ref_str.starts_with("#/$defs/") {
+                    return Ok(value.clone());
                 }
+                // An already-known pointer needs no second resolution, which is
+                // also what stops a cycle: the body is in flight above us.
+                if let Some(name) = defs.names.get(ref_str).cloned() {
+                    return Ok(local_ref(&name));
+                }
+                let name = defs.name_for(ref_str);
                 let target = resolve_ref(root, ref_str)
                     .ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
-                let resolved = resolve_schema_refs(target, root, visited)?;
-                visited.remove(ref_str);
-                Ok(resolved)
+                let resolved = resolve_schema_refs(target, root, defs)?;
+                defs.bodies.insert(name.clone(), Some(resolved));
+                Ok(local_ref(&name))
             } else {
                 let mut new_obj = serde_json::Map::with_capacity(obj.len());
                 for (key, val) in obj {
-                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, visited)?);
+                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, defs)?);
                 }
                 Ok(Value::Object(new_obj))
             }
@@ -57,12 +141,19 @@ fn resolve_schema_refs(
         Value::Array(arr) => {
             let items: Result<Vec<_>, _> = arr
                 .iter()
-                .map(|v| resolve_schema_refs(v, root, visited))
+                .map(|v| resolve_schema_refs(v, root, defs))
                 .collect();
             Ok(Value::Array(items?))
         }
         other => Ok(other.clone()),
     }
+}
+
+/// A reference to a definition carried by the schema itself.
+fn local_ref(name: &str) -> Value {
+    let mut obj = serde_json::Map::with_capacity(1);
+    obj.insert("$ref".to_string(), Value::String(format!("#/$defs/{name}")));
+    Value::Object(obj)
 }
 
 /// Resolve a component entry that may be a `$ref` into the object it names.
@@ -554,7 +645,7 @@ fn parse_parameters(
         };
 
         let schema = raw_schema
-            .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+            .map(|s| resolve_schema(&s, spec_root))
             .transpose()?;
 
         let Some(name) = param_obj.get("name").and_then(|v| v.as_str()) else {
@@ -606,7 +697,7 @@ fn parse_request_body(
     for (media_type, media_obj) in content_obj {
         let raw_schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
         let schema = raw_schema
-            .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+            .map(|s| resolve_schema(&s, spec_root))
             .transpose()?;
         content.insert(media_type.clone(), ContentSchema { schema });
     }
@@ -625,8 +716,13 @@ fn parse_responses(
 
     let mut result = BTreeMap::new();
     for (status_code, resp_value) in responses {
-        // Resolve $ref on the response object itself
-        let resolved = resolve_schema_refs(resp_value, spec_root, &mut HashSet::new())?;
+        // Resolve a `$ref` on the response object itself, without descending:
+        // each content schema is resolved below, and resolving twice would meet
+        // the `#/$defs/` pointers the first pass produced.
+        let mut visited = HashSet::new();
+        let Some(resolved) = resolve_component_ref(resp_value, spec_root, &mut visited)? else {
+            continue;
+        };
         let Some(resp_obj) = resolved.as_object() else {
             continue;
         };
@@ -639,7 +735,7 @@ fn parse_responses(
         for (media_type, media_obj) in content_obj {
             let raw_schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
             let schema = raw_schema
-                .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+                .map(|s| resolve_schema(&s, spec_root))
                 .transpose()?;
             content.insert(media_type.clone(), ContentSchema { schema });
         }
@@ -862,7 +958,7 @@ fn parse_channel_messages(
 
         let payload = msg_obj
             .get("payload")
-            .map(|p| resolve_schema_refs(p, spec_root, &mut HashSet::new()))
+            .map(|p| resolve_schema(p, spec_root))
             .transpose()?;
 
         let content_type = msg_obj
@@ -906,7 +1002,7 @@ fn parse_channel_parameters(
             .as_object()
             .and_then(|o| o.get("schema").cloned());
         let schema = raw_schema
-            .map(|s| resolve_schema_refs(&s, spec_root, &mut HashSet::new()))
+            .map(|s| resolve_schema(&s, spec_root))
             .transpose()?;
 
         // In AsyncAPI, channel parameters are always required
@@ -1015,7 +1111,7 @@ fn parse_operation_messages(
             .to_string();
         let payload = obj
             .get("payload")
-            .map(|p| resolve_schema_refs(p, spec_root, &mut HashSet::new()))
+            .map(|p| resolve_schema(p, spec_root))
             .transpose()?;
         let content_type = obj
             .get("contentType")
@@ -1039,6 +1135,23 @@ fn parse_operation_messages(
         });
     }
     Ok(result)
+}
+
+/// Follow a schema's local `$ref` to the definition the schema carries.
+///
+/// `root` is the schema that owns `$defs`; `node` is the value being inspected,
+/// which may be `root` itself or something nested inside it.
+#[cfg(test)]
+fn deref_local<'a>(root: &'a Value, node: &'a Value) -> &'a Value {
+    let Some(reference) = node.get("$ref").and_then(|v| v.as_str()) else {
+        return node;
+    };
+    let name = reference
+        .strip_prefix("#/$defs/")
+        .unwrap_or_else(|| panic!("reference is not local: {reference}"));
+    root.get("$defs")
+        .and_then(|d| d.get(name))
+        .unwrap_or_else(|| panic!("schema does not carry $defs/{name}"))
 }
 
 #[cfg(test)]
@@ -1802,10 +1915,10 @@ paths:
         let spec = parse_spec(yaml).unwrap();
         let param = &spec.operations[0].parameters[0];
         let schema = param.schema.as_ref().unwrap();
-        // $ref should be inlined — no $ref key, actual schema fields present
-        assert!(schema.get("$ref").is_none());
-        assert_eq!(schema.get("type").unwrap(), "integer");
-        assert_eq!(schema.get("format").unwrap(), "int64");
+        // The reference resolves inside the schema, which carries the target.
+        let target = deref_local(schema, schema);
+        assert_eq!(target.get("type").unwrap(), "integer");
+        assert_eq!(target.get("format").unwrap(), "int64");
     }
 
     #[test]
@@ -2243,9 +2356,9 @@ paths:
         let spec = parse_spec(yaml).unwrap();
         let body = spec.operations[0].request_body.as_ref().unwrap();
         let schema = body.content["application/json"].schema.as_ref().unwrap();
-        assert!(schema.get("$ref").is_none());
-        assert_eq!(schema.get("type").unwrap(), "object");
-        assert!(schema.get("properties").is_some());
+        let target = deref_local(schema, schema);
+        assert_eq!(target.get("type").unwrap(), "object");
+        assert!(target.get("properties").is_some());
     }
 
     #[test]
@@ -2282,11 +2395,14 @@ paths:
         let spec = parse_spec(yaml).unwrap();
         let body = spec.operations[0].request_body.as_ref().unwrap();
         let schema = body.content["application/json"].schema.as_ref().unwrap();
-        assert!(schema.get("$ref").is_none());
-        // Nested $ref inside User.properties.address should also be resolved
-        let address_schema = schema.get("properties").unwrap().get("address").unwrap();
-        assert!(address_schema.get("$ref").is_none());
-        assert_eq!(address_schema.get("type").unwrap(), "object");
+        let user = deref_local(schema, schema);
+        // The nested reference inside User.properties.address resolves through
+        // the same definitions, however deep it sits.
+        let address = deref_local(
+            schema,
+            user.get("properties").unwrap().get("address").unwrap(),
+        );
+        assert_eq!(address.get("type").unwrap(), "object");
     }
 
     #[test]
@@ -2315,8 +2431,10 @@ paths:
         );
     }
 
+    /// A schema that refers to itself is valid JSON Schema. The cycle is kept as
+    /// a definition the schema points at, since inlining it does not terminate.
     #[test]
-    fn circular_ref_returns_error() {
+    fn circular_ref_becomes_a_local_definition() {
         let yaml = r##"
 openapi: "3.1.0"
 info:
@@ -2340,12 +2458,18 @@ paths:
       x-barbacane-dispatch:
         name: mock
 "##;
-        let err = parse_spec(yaml).unwrap_err();
+        let spec = parse_spec(yaml).expect("a self-referential schema is valid");
+        let schema = spec.operations[0].parameters[0]
+            .schema
+            .as_ref()
+            .expect("schema");
+        let text = serde_json::to_string(schema).expect("serialize");
         assert!(
-            matches!(err, ParseError::SchemaError(ref s) if s.contains("circular")),
-            "expected SchemaError with 'circular', got: {:?}",
-            err
+            !text.contains("#/components/"),
+            "no reference may escape the schema: {text}"
         );
+        assert!(text.contains("#/$defs/Node"), "cycle kept as a ref: {text}");
+        assert!(schema.get("$defs").is_some(), "definitions travel with it");
     }
 
     #[test]
@@ -2379,8 +2503,8 @@ operations:
         let op = &spec.operations[0];
         let msg = &op.messages[0];
         let payload = msg.payload.as_ref().unwrap();
-        assert!(payload.get("$ref").is_none());
-        assert_eq!(payload.get("type").unwrap(), "object");
+        let target = deref_local(payload, payload);
+        assert_eq!(target.get("type").unwrap(), "object");
     }
 
     #[test]
@@ -2513,8 +2637,8 @@ paths:
             .as_ref()
             .expect("schema");
         // $ref should be resolved inline
-        assert!(schema.get("$ref").is_none());
-        assert!(schema["properties"]["id"].is_object());
+        let target = deref_local(schema, schema);
+        assert!(target["properties"]["id"].is_object());
     }
 
     #[test]
@@ -2554,10 +2678,7 @@ mod conformance {
     /// tree shape has one. Stripe's published document contains 38 such schemas
     /// among its first 400, so rejecting them rejects the whole spec.
     ///
-    /// Ignored until #195: `resolve_schema_refs` inlines every reference, and a
-    /// recursive one cannot be inlined, so the parser reports a cycle.
     #[test]
-    #[ignore = "recursive schemas are rejected, see #195"]
     fn recursive_schema_is_accepted() {
         let yaml = r##"
 openapi: "3.1.0"
@@ -2594,7 +2715,6 @@ paths:
     /// Two schemas that refer to each other are the same problem one step out,
     /// and are what Stripe actually trips on (`file` -> `file_link` -> `file`).
     #[test]
-    #[ignore = "recursive schemas are rejected, see #195"]
     fn mutually_recursive_schemas_are_accepted() {
         let yaml = r##"
 openapi: "3.1.0"
@@ -2626,6 +2746,166 @@ paths:
 "##;
         let spec = parse_spec(yaml).expect("mutually recursive schemas are valid");
         assert_eq!(spec.operations.len(), 1);
+    }
+
+    /// A recursive schema stays resolvable: the cycle is carried as a `$defs`
+    /// entry the schema points at, rather than inlined into itself.
+    #[test]
+    fn recursive_schema_keeps_the_cycle_as_a_local_ref() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Comment:
+      type: object
+      properties:
+        body:
+          type: string
+        replies:
+          type: array
+          items:
+            $ref: "#/components/schemas/Comment"
+paths:
+  /comments:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Comment"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).expect("a self-referential schema is valid JSON Schema");
+        let body = spec.operations[0].request_body.as_ref().expect("body");
+        let schema = body.content["application/json"]
+            .schema
+            .as_ref()
+            .expect("schema");
+
+        // Nothing may still point outside this schema: the artifact carries the
+        // schema alone, with no document to resolve against.
+        let text = serde_json::to_string(schema).expect("serialize");
+        assert!(
+            !text.contains("#/components/"),
+            "no reference may escape the schema: {text}"
+        );
+        // The cycle survives as a local reference.
+        assert!(
+            text.contains("#/$defs/"),
+            "cycle should become a $defs ref: {text}"
+        );
+        assert!(
+            schema.get("$defs").and_then(|d| d.as_object()).is_some(),
+            "the definitions it points at must travel with it"
+        );
+    }
+
+    /// The data plane builds a `jsonschema::Validator` from exactly this value,
+    /// so it has to compile and judge nested data correctly.
+    #[test]
+    fn recursive_schema_compiles_and_validates_nested_data() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    Comment:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+        replies:
+          type: array
+          items:
+            $ref: "#/components/schemas/Comment"
+paths:
+  /comments:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Comment"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let schema = spec.operations[0].request_body.as_ref().unwrap().content["application/json"]
+            .schema
+            .clone()
+            .expect("schema");
+
+        let validator = jsonschema::options()
+            .should_validate_formats(true)
+            .build(&schema)
+            .expect("the schema must compile");
+
+        // Three levels deep, all valid.
+        let good = serde_json::json!({
+            "body": "top",
+            "replies": [
+                {"body": "middle", "replies": [{"body": "leaf"}]}
+            ]
+        });
+        assert!(validator.is_valid(&good), "nested comments should validate");
+
+        // A violation nested inside the recursion must still be caught, which
+        // is the point of keeping the reference resolvable.
+        let bad = serde_json::json!({
+            "body": "top",
+            "replies": [
+                {"body": "middle", "replies": [{"replies": []}]}
+            ]
+        });
+        assert!(
+            !validator.is_valid(&bad),
+            "a missing required field three levels down must fail"
+        );
+    }
+
+    /// A schema is self-contained: every reference points at a definition it
+    /// carries, so nothing has to be resolved against the document it came from.
+    #[test]
+    fn schema_is_self_contained() {
+        let yaml = r##"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  schemas:
+    UserId:
+      type: integer
+      format: int64
+paths:
+  /users/{id}:
+    get:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/UserId"
+      x-barbacane-dispatch:
+        name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let schema = spec.operations[0].parameters[0].schema.as_ref().unwrap();
+        let text = serde_json::to_string(schema).expect("serialize");
+        assert!(
+            !text.contains("#/components/"),
+            "no reference may escape the schema: {text}"
+        );
+        let target = deref_local(schema, schema);
+        assert_eq!(target.get("type").unwrap(), "integer");
+        assert_eq!(target.get("format").unwrap(), "int64");
     }
 
     /// Every operation is extracted once, with its parameters attributed to the
