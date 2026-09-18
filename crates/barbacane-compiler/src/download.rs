@@ -23,14 +23,44 @@ pub struct DownloadResult {
     pub plugin_toml: Option<String>,
 }
 
-/// Build a blocking HTTP client with appropriate defaults.
-fn build_client() -> Result<reqwest::blocking::Client, CompileError> {
-    reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(120))
-        .user_agent(format!("barbacane-compiler/{}", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| CompileError::PluginResolution(format!("failed to build HTTP client: {e}")))
+/// The blocking HTTP client used for every plugin download.
+///
+/// Built once and never dropped. A blocking client owns a tokio runtime, and
+/// `compile` runs inside one, where dropping a runtime is a panic in tokio.
+/// Keeping it in a `OnceLock` means the process never drops it, and downloads
+/// reuse one connection pool rather than building a client each time.
+static CLIENT: std::sync::OnceLock<Result<reqwest::blocking::Client, String>> =
+    std::sync::OnceLock::new();
+
+/// The shared blocking HTTP client.
+///
+/// Built on a plain thread, once, and never dropped. `compile` runs inside a
+/// tokio runtime, and a blocking client both creates and drops a temporary
+/// runtime while being constructed, which tokio refuses to do inside an async
+/// context. A thread of our own has no such context. Storing the result means
+/// the cost is paid once and downloads share one connection pool.
+fn client() -> Result<&'static reqwest::blocking::Client, CompileError> {
+    CLIENT
+        .get_or_init(|| {
+            std::thread::Builder::new()
+                .name("barbacane-http-init".into())
+                .spawn(|| {
+                    reqwest::blocking::Client::builder()
+                        .connect_timeout(Duration::from_secs(30))
+                        .timeout(Duration::from_secs(120))
+                        .user_agent(format!("barbacane-compiler/{}", env!("CARGO_PKG_VERSION")))
+                        .build()
+                        .map_err(|e| format!("failed to build HTTP client: {e}"))
+                })
+                .map_err(|e| format!("failed to start the HTTP client thread: {e}"))
+                .and_then(|h| {
+                    h.join()
+                        .map_err(|_| "the HTTP client thread panicked".to_string())
+                })
+                .and_then(|r| r)
+        })
+        .as_ref()
+        .map_err(|e| CompileError::PluginResolution(e.clone()))
 }
 
 /// Derive candidate plugin.toml URLs from a .wasm URL.
@@ -56,13 +86,27 @@ fn derive_plugin_toml_urls(wasm_url: &str) -> Vec<String> {
 /// Fetches the .wasm binary and attempts to fetch `plugin.toml` from
 /// the same directory (best-effort — 404 is fine).
 pub fn download_plugin(url: &str) -> Result<DownloadResult, CompileError> {
+    // `reqwest::blocking` refuses to run inside a tokio runtime, on construction
+    // and on every request, and `compile` runs inside one. A scoped thread has
+    // no async context and can still borrow `url`.
+    std::thread::scope(
+        |scope| match scope.spawn(|| download_plugin_blocking(url)).join() {
+            Ok(result) => result,
+            Err(_) => Err(CompileError::PluginResolution(format!(
+                "the download thread panicked fetching {url}"
+            ))),
+        },
+    )
+}
+
+fn download_plugin_blocking(url: &str) -> Result<DownloadResult, CompileError> {
     if !url.starts_with("https://") {
         return Err(CompileError::PluginResolution(format!(
             "plugin URL must use HTTPS: {url}"
         )));
     }
 
-    let client = build_client()?;
+    let client = client()?;
 
     tracing::info!(url, "downloading remote plugin");
 

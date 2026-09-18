@@ -8,6 +8,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Sending a real SIGTERM in the process-lifecycle test.
+libc = "0.2"
 barbacane-compiler = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
