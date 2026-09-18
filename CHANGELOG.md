@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **data plane**: `barbacane serve` exits 0 on `SIGTERM` instead of panicking and exiting 101. The plugin host builds a NATS publisher, a Kafka publisher and an LDAP client whatever the artifact contains, each carrying its own tokio runtime, and dropping a runtime inside an async context is a panic. Every clean shutdown therefore looked like a crash to a supervisor: restart backoff, crash-loop counters and alerts fired on an ordinary stop. The same panic fired when startup failed after the artifact loaded, for instance on a taken port, burying the real cause and making a configuration error indistinguishable from a crash by exit code.
+- **compiler**: `compile` resolves a URL-sourced plugin instead of panicking. `reqwest::blocking` refuses to run inside a tokio runtime, on construction and on every request, and `compile` runs inside one, so a manifest with a remote plugin could not be compiled at all from a dev-profile build. The download now runs on a thread of its own.
+
 ## [0.11.0] - 2026-09-17
 
 Headline: a request now carries only the headers its operation admits, so the document describes what an upstream receives and not only what a client may send. Specs that could not be compiled at all now can, including any with a recursive schema.
