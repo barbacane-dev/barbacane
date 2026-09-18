@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **data plane**: the headers a browser sends unasked reach the upstream without being declared: `referer`, the `sec-fetch-*` set, the `sec-ch-ua*` client hints, `dnt`, `sec-gpc` and `priority`. They describe the request rather than the caller, which is why `user-agent`, `accept-language` and `origin` were already in the baseline. The fetch-metadata set is the one that mattered: an upstream uses it to reject cross-site requests, so dropping it silently removed a defence the upstream believed it had. It also made `serve --dev` unusable, naming eight headers on every browser request that no operation should ever declare, which buried the ones an author had to act on.
+
 ## [0.11.0] - 2026-09-17
 
 Headline: a request now carries only the headers its operation admits, so the document describes what an upstream receives and not only what a client may send. Specs that could not be compiled at all now can, including any with a recursive schema.
