@@ -5590,6 +5590,22 @@ const BASELINE_REQUEST_HEADERS: &[&str] = &[
     "origin",
     "access-control-request-method",
     "access-control-request-headers",
+    // Browser request metadata, sent automatically and describing the request
+    // rather than the caller. `user-agent`, `accept-language` and `origin`
+    // above are the same class. The fetch-metadata set matters most: an
+    // upstream uses it to reject cross-site requests, so dropping it silently
+    // removes a defence the upstream believes it has.
+    "referer",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-dest",
+    "sec-fetch-user",
+    "sec-ch-ua",
+    "sec-ch-ua-mobile",
+    "sec-ch-ua-platform",
+    "dnt",
+    "sec-gpc",
+    "priority",
     // Tracing and correlation
     "traceparent",
     "tracestate",
@@ -5720,6 +5736,27 @@ mod request_header_filter_tests {
             false,
         );
         assert_eq!(kept.len(), 3);
+    }
+
+    /// A browser sends these on an ordinary navigation without being asked, so
+    /// an operation cannot reasonably be expected to declare them. Before they
+    /// were in the baseline the dev log named eight of them on every request,
+    /// which buried the headers an author actually had to act on.
+    #[test]
+    fn browser_metadata_travels_without_being_declared() {
+        let sent = headers(&[
+            ("Referer", "https://example.test/app"),
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Sec-Fetch-Mode", "cors"),
+            ("Sec-Fetch-Dest", "empty"),
+            ("Sec-CH-UA", "\"Chromium\";v=\"140\""),
+            ("Sec-CH-UA-Mobile", "?0"),
+            ("Sec-CH-UA-Platform", "\"macOS\""),
+            ("DNT", "1"),
+        ]);
+        let (kept, dropped) = filter_request_headers(&[], &sent, false);
+        assert_eq!(dropped, 0, "kept: {:?}", kept.keys().collect::<Vec<_>>());
+        assert_eq!(kept.len(), sent.len());
     }
 
     /// HTTP matches header names without regard to case, so the list must too,
