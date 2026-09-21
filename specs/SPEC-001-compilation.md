@@ -113,6 +113,7 @@ The compiler performs validation in order. Compilation stops at the first catego
 | `E1022` | Referenced plugin version not found |
 | `E1023` | Plugin config does not match the plugin's declared JSON Schema |
 | `E1024` | Plugin type mismatch (e.g. a dispatcher referenced as middleware) |
+| `E1040` | Plugin used in a spec but not declared in `barbacane.yaml` |
 
 ### 4.4 Security checks
 
@@ -127,8 +128,8 @@ The compiler performs validation in order. Compilation stops at the first catego
 
 | Code | Condition |
 |------|-----------|
-| `E1040` | `securitySchemes` defined but never referenced by any operation |
 | `E1041` | Middleware in chain references a `context:*` key that no prior middleware in the chain produces (warning) |
+| `E1042` | `securitySchemes` defined but never referenced by any operation |
 
 ---
 

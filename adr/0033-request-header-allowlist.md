@@ -70,7 +70,7 @@ Request headers entering the middleware chain and reaching dispatchers: HTTP, We
 
 Set 3 rests on spec vocabulary the compiler does not read today: neither `components.securitySchemes` nor the `security` blocks are parsed, and no Rust type models the scheme kinds. The compiler gains that model: `security` at the root and on the operation, `components.securitySchemes`, and a `SecurityScheme` enum covering `apiKey` (with its `in` and `name`), `http`, `oauth2` and `openIdConnect`. Resolution follows the OpenAPI rule that an operation's `security` overrides the root's, and an empty requirement (`security: []`) makes the operation anonymous and contributes nothing.
 
-The same model is what the scheme checks need. `E1032` is built on it: an operation running an authentication plugin whose `implements` list names none of the scheme types its requirement resolves to. So is `E1033`, the warning for an operation whose security requirement no middleware in its chain verifies. The scheme-defined-but-never-referenced check rests on it too and is not yet written; `E1040` is already in use for `UndeclaredPlugin`, so it takes a free code.
+The same model is what the scheme checks need. `E1032` is built on it: an operation running an authentication plugin whose `implements` list names none of the scheme types its requirement resolves to. So is `E1033`, the warning for an operation whose security requirement no middleware in its chain verifies. The scheme-defined-but-never-referenced check rests on it too and is not yet written. It is `E1042`: `E1040` belongs to `UndeclaredPlugin`, which is what the compiler emits under that code.
 
 ### Artifact and validation
 
