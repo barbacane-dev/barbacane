@@ -189,6 +189,31 @@ impl KafkaPublisher {
     }
 }
 
+impl KafkaPublisher {
+    /// The runtime, which is present for the whole life of the value and taken
+    /// only by `Drop`.
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime
+            .as_ref()
+            .expect("the runtime is taken only while dropping")
+    }
+}
+
+impl Drop for KafkaPublisher {
+    /// Hand the runtime to tokio's background shutdown instead of waiting for
+    /// it here.
+    ///
+    /// Dropping a runtime blocks until its workers stop, which tokio refuses
+    /// inside an async context. This type is reachable from tasks running on
+    /// the gateway's runtime, so the last reference can fall anywhere, and
+    /// `shutdown_background` is safe wherever that happens.
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,30 +301,5 @@ mod tests {
         );
         // Connection refused, but validates comma-separated broker parsing
         assert!(matches!(result, Err(BrokerError::ConnectionFailed(_))));
-    }
-}
-
-impl KafkaPublisher {
-    /// The runtime, which is present for the whole life of the value and taken
-    /// only by `Drop`.
-    fn runtime(&self) -> &tokio::runtime::Runtime {
-        self.runtime
-            .as_ref()
-            .expect("the runtime is taken only while dropping")
-    }
-}
-
-impl Drop for KafkaPublisher {
-    /// Hand the runtime to tokio's background shutdown instead of waiting for
-    /// it here.
-    ///
-    /// Dropping a runtime blocks until its workers stop, which tokio refuses
-    /// inside an async context. This type is reachable from tasks running on
-    /// the gateway's runtime, so the last reference can fall anywhere, and
-    /// `shutdown_background` is safe wherever that happens.
-    fn drop(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            runtime.shutdown_background();
-        }
     }
 }
