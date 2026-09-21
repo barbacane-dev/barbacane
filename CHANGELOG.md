@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **compiler**: an authentication plugin declares the security scheme types it reads, as `implements` in its `plugin.toml` (`apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`, `mutualTLS`). An operation pairing the plugin with a requirement naming none of them is refused (`E1032`). Both halves of such a pairing are valid on their own, so nothing caught it before and the first sign was a 401 on every call. A plugin declaring no list is exempt, so a third-party plugin compiles as before. The reverse case, an operation requiring a credential with no authentication plugin in its chain, is a warning (`E1033`): the credential is forwarded and the request reaches the upstream unauthenticated, though the upstream may be the one checking it.
+- **compiler**: an authentication plugin declares the security scheme types it reads, as `implements` in its `plugin.toml` (`apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`). An operation pairing the plugin with a requirement naming none of them is refused (`E1032`). Schemes the connection carries take no part in the match, since no middleware reads one off a request. Both halves of such a pairing are valid on their own, so nothing caught it before and the first sign was a 401 on every call. A plugin declaring no list is exempt, so a third-party plugin compiles as before. The reverse case, an operation requiring a credential with no authentication plugin in its chain, is a warning (`E1033`): the credential is forwarded and the request reaches the upstream unauthenticated, though the upstream may be the one checking it.
 
 ### Fixed
 
