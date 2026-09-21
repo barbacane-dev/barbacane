@@ -2304,8 +2304,10 @@ fn operation_header_allowlist(
                     | crate::spec_parser::SecurityScheme::OpenIdConnect => {
                         allow.insert("authorization".to_string());
                     }
-                    // A client certificate carries no request header.
-                    crate::spec_parser::SecurityScheme::MutualTls => {}
+                    // A client certificate or a broker credential carries no
+                    // request header.
+                    crate::spec_parser::SecurityScheme::MutualTls
+                    | crate::spec_parser::SecurityScheme::Transport { .. } => {}
                 }
             }
         }
