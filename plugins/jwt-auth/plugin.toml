@@ -3,6 +3,7 @@ name = "jwt-auth"
 version = "0.1.0"
 type = "middleware"
 category = "authentication"
+implements = ["http:bearer", "oauth2", "openIdConnect"]
 description = "JWT authentication middleware for validating Bearer tokens"
 wasm = "jwt-auth.wasm"
 

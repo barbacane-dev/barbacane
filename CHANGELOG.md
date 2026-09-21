@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **compiler**: an authentication plugin declares the security scheme types it reads, as `implements` in its `plugin.toml` (`apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`). An operation pairing the plugin with a requirement naming none of them is refused (`E1032`). Schemes the connection carries take no part in the match, since no middleware reads one off a request. Both halves of such a pairing are valid on their own, so nothing caught it before and the first sign was a 401 on every call. A plugin declaring no list is exempt, so a third-party plugin compiles as before. The reverse case, an operation requiring a credential with no authentication plugin in its chain, is a warning (`E1033`): the credential is forwarded and the request reaches the upstream unauthenticated, though the upstream may be the one checking it.
+
 ### Fixed
 
 - **data plane**: the headers a browser sends unasked reach the upstream without being declared: `referer`, the `sec-fetch-*` set, the `sec-ch-ua*` client hints, `dnt`, `sec-gpc` and `priority`. They describe the request rather than the caller, which is why `user-agent`, `accept-language` and `origin` were already in the baseline. The fetch-metadata set is the one that mattered: an upstream uses it to reject cross-site requests, so dropping it silently removed a defence the upstream believed it had. It also made `serve --dev` unusable, naming eight headers on every browser request that no operation should ever declare, which buried the ones an author had to act on.

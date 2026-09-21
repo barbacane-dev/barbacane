@@ -33,6 +33,8 @@ paths:
     get:
       summary: Endpoint with auth + OPA chain (unreachable OPA)
       operationId: getOpaWithAuth
+      security:
+        - BasicAuth: []
       x-barbacane-middlewares:
         - name: basic-auth
           config:
@@ -81,8 +83,6 @@ paths:
 
 # The operations run an authentication middleware, so the document names the
 # scheme carrying the credential. That is what admits the header (ADR-0033).
-security:
-  - BasicAuth: []
 
 components:
   securitySchemes:

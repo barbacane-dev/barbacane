@@ -3,6 +3,7 @@ name = "oauth2-auth"
 version = "0.1.0"
 type = "middleware"
 category = "authentication"
+implements = ["http:bearer", "oauth2", "openIdConnect"]
 description = "OAuth2 token introspection middleware for validating Bearer tokens via RFC 7662"
 wasm = "oauth2-auth.wasm"
 

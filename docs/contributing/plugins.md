@@ -109,6 +109,7 @@ name = "my-plugin"
 version = "0.1.0"
 type = "middleware"  # or "dispatcher"
 category = "traffic-control"
+# implements = ["http:bearer"]  # authentication plugins only
 description = "My custom plugin"
 wasm = "my_plugin.wasm"
 
@@ -195,6 +196,29 @@ A plugin that verifies a client credential reads its header from the spec
 instead. Set `category = "authentication"` in `plugin.toml`, and the compiler
 then requires every operation using the plugin to name the security scheme
 carrying the credential (**E1057**), which is what admits the header.
+
+Such a plugin also says which kinds of credential it reads, so a document
+pairing it with a scheme it cannot read is refused (**E1032**) rather than
+rejecting every request at runtime:
+
+```toml
+[plugin]
+category = "authentication"
+implements = ["http:bearer", "oauth2", "openIdConnect"]
+```
+
+The tokens name security scheme types: `apiKey`, `http:<scheme>` (`http:basic`,
+`http:bearer`), `oauth2` and `openIdConnect`. An `http` scheme is qualified by
+its authentication scheme, since reading Basic credentials is not reading a
+Bearer token. Matching is case-insensitive, and one match among the schemes an
+operation names is enough. Leaving `implements` out exempts the plugin from the
+check.
+
+Schemes the connection carries have no token, since no middleware reads one off
+a request: `mutualTLS`, whose certificate is presented during the TLS handshake,
+and AsyncAPI's broker mechanisms (`X509`, the SCRAM pair, `gssapi`, `plain`,
+`userPassword`). They take no part in the match, so an operation naming one
+alongside a request credential is judged on the request credential alone.
 
 The SDK macros embed `config-schema.json` into the `.wasm`, as they already do
 `plugin.toml`, so these annotations reach the compiler wherever the binary

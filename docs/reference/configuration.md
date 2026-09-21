@@ -67,7 +67,11 @@ operation says it is authenticated, and for no other reason. An operation that
 runs an authentication middleware must therefore declare a `security`
 requirement naming a scheme defined under `components.securitySchemes`.
 Compiling one that does not is an error (`E1057`), since the credential would
-be dropped and the middleware would reject every request.
+be dropped and the middleware would reject every request. The scheme must also
+be one the middleware reads: pairing `jwt-auth` with an `apiKey` scheme is an
+error too (`E1032`). The other way round, an operation requiring a credential
+with no authentication middleware in its chain compiles with a warning
+(`E1033`), since the upstream may be the one checking it.
 
 The `x-auth-*` namespace is never accepted from a client. It carries what an
 auth plugin tells `acl` and the upstream about the caller, and declaring one in
