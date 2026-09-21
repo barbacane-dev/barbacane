@@ -5,6 +5,8 @@
 //! gateway logs the cause of every error it answers with, and a test that
 //! cannot see those logs reports a status and nothing else.
 
+use std::time::Duration;
+
 use barbacane_test::TestGateway;
 
 fn fixture(name: &str) -> String {
@@ -23,14 +25,12 @@ async fn the_harness_captures_what_the_gateway_logs() {
         .await
         .expect("failed to start gateway");
 
-    let log = gateway.log().text();
+    // The reader threads run alongside the gateway, so wait for the line
+    // rather than racing them.
     assert!(
-        !log.is_empty(),
-        "the gateway printed nothing, or nothing was drained"
-    );
-    assert!(
-        gateway.log().contains("route(s)"),
-        "the startup line should be there, got:\n{log}"
+        gateway.log().wait_for("route(s)", Duration::from_secs(10)),
+        "the startup line never arrived, got:\n{}",
+        gateway.log().text()
     );
 }
 
@@ -48,16 +48,13 @@ async fn an_error_response_is_explained_by_the_log() {
     let resp = gateway.get("/opa-protected").await.expect("request");
     let status = resp.status();
 
-    // Give the reader threads the last lines.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    let log = gateway.log().text();
-
+    // Poll rather than sleeping a fixed amount: the gateway writes the reason
+    // asynchronously and a fixed wait is a race either way it is tuned.
+    let explained = gateway.log().wait_for("19999", Duration::from_secs(10))
+        || gateway.log().wait_for("connect", Duration::from_secs(1));
     assert!(
-        !log.is_empty(),
-        "status {status} arrived with no gateway output to explain it"
-    );
-    assert!(
-        log.contains("19999") || log.to_lowercase().contains("connect"),
-        "the log should name the failure behind status {status}, got:\n{log}"
+        explained,
+        "the log should name the failure behind status {status}, got:\n{}",
+        gateway.log().text()
     );
 }

@@ -62,6 +62,8 @@ pub struct TestGateway {
 #[derive(Clone, Default)]
 pub struct GatewayLog {
     lines: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// The reader threads, kept so their last lines can be waited for.
+    readers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
 }
 
 impl GatewayLog {
@@ -99,11 +101,48 @@ impl GatewayLog {
     /// the output readable.
     fn drain<R: std::io::Read + Send + 'static>(&self, stream: R, stream_name: &'static str) {
         let log = self.clone();
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
                 log.push(format!("[{stream_name}] {line}"));
             }
         });
+        if let Ok(mut readers) = self.readers.lock() {
+            readers.push(handle);
+        }
+    }
+
+    /// Wait for the reader threads to finish.
+    ///
+    /// A reader ends when its pipe reaches EOF, which happens when the child
+    /// closes it, so this must follow the child exiting or being reaped.
+    /// Without it `text()` can be read while the lines explaining a failure are
+    /// still in a reader's buffer, which is the whole thing this exists to
+    /// prevent.
+    fn join_readers(&self) {
+        let handles: Vec<_> = match self.readers.lock() {
+            Ok(mut readers) => readers.drain(..).collect(),
+            Err(_) => return,
+        };
+        for handle in handles {
+            let _ = handle.join();
+        }
+    }
+
+    /// Wait until the log contains `needle`, up to `limit`.
+    ///
+    /// The gateway writes asynchronously, so a test that reads immediately
+    /// after the request races the reader thread.
+    pub fn wait_for(&self, needle: &str, limit: Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            if self.contains(needle) {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -366,9 +405,10 @@ impl TestGateway {
 
             // Check if the process has exited
             if let Ok(Some(status)) = self.child.try_wait() {
-                // Give the reader threads a moment to finish the last lines
-                // before reporting what the gateway said on its way out.
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                // The child is gone, so its pipes are closed and the readers
+                // will reach EOF. Wait for them rather than racing the lines
+                // that say why it died.
+                self.log.join_readers();
                 return Err(TestError::StartupFailed(format!(
                     "gateway exited with status: {}\n{}",
                     status,
@@ -528,18 +568,21 @@ pub async fn assert_status(resp: reqwest::Response, expected: u16) {
 
 impl Drop for TestGateway {
     fn drop(&mut self) {
-        // A failing assertion sees a status and no reason. Print what the
-        // gateway said, since the process is about to be killed and its output
-        // with it.
+        // Kill and reap first: the readers end at EOF, which only arrives once
+        // the child has closed its pipes. Printing before that races the lines
+        // that explain the failure.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+
+        // A failing assertion sees a status and no reason, so hand it what the
+        // gateway said before this goes out of scope with it.
         if std::thread::panicking() {
+            self.log.join_readers();
             let log = self.log.text();
             if !log.is_empty() {
                 eprintln!("--- gateway on port {} said ---\n{}\n---", self.port, log);
             }
         }
-        // Kill the child process
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
