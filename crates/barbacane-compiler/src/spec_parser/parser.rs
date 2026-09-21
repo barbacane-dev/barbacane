@@ -408,22 +408,37 @@ fn parse_security_schemes(root: &Value) -> Result<BTreeMap<String, SecuritySchem
         };
 
         let scheme = match kind {
+            // OpenAPI's `apiKey` names a request parameter. AsyncAPI reuses the
+            // word for a broker credential placed in the connection's user or
+            // password field, which has no `name` and reaches no request.
             "apiKey" => {
-                let key_name = obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ParseError::SchemaError(format!(
-                        "security scheme '{}' of type apiKey has no 'name'",
-                        name
-                    ))
-                })?;
-                let location = obj.get("in").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ParseError::SchemaError(format!(
-                        "security scheme '{}' of type apiKey has no 'in'",
-                        name
-                    ))
-                })?;
-                SecurityScheme::ApiKey {
-                    name: key_name.to_string(),
-                    location: location.to_ascii_lowercase(),
+                let location = obj
+                    .get("in")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ParseError::SchemaError(format!(
+                            "security scheme '{}' of type apiKey has no 'in'",
+                            name
+                        ))
+                    })?
+                    .to_ascii_lowercase();
+                match location.as_str() {
+                    "user" | "password" => SecurityScheme::Transport {
+                        kind: kind.to_string(),
+                    },
+                    _ => {
+                        let key_name =
+                            obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                                ParseError::SchemaError(format!(
+                                    "security scheme '{}' of type apiKey has no 'name'",
+                                    name
+                                ))
+                            })?;
+                        SecurityScheme::ApiKey {
+                            name: key_name.to_string(),
+                            location,
+                        }
+                    }
                 }
             }
             "http" => {
@@ -440,6 +455,38 @@ fn parse_security_schemes(root: &Value) -> Result<BTreeMap<String, SecuritySchem
             "oauth2" => SecurityScheme::OAuth2,
             "openIdConnect" => SecurityScheme::OpenIdConnect,
             "mutualTLS" => SecurityScheme::MutualTls,
+            // AsyncAPI's spelling of an API key in a header, query parameter
+            // or cookie. Same shape as OpenAPI's `apiKey`, different name.
+            "httpApiKey" => {
+                let key_name = obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "security scheme '{}' of type httpApiKey has no 'name'",
+                        name
+                    ))
+                })?;
+                let location = obj.get("in").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "security scheme '{}' of type httpApiKey has no 'in'",
+                        name
+                    ))
+                })?;
+                SecurityScheme::ApiKey {
+                    name: key_name.to_string(),
+                    location: location.to_ascii_lowercase(),
+                }
+            }
+            // The rest of AsyncAPI's set. A credential the transport or the
+            // broker carries, so none reaches a request header.
+            "X509"
+            | "symmetricEncryption"
+            | "asymmetricEncryption"
+            | "scramSha256"
+            | "scramSha512"
+            | "gssapi"
+            | "plain"
+            | "userPassword" => SecurityScheme::Transport {
+                kind: kind.to_string(),
+            },
             other => {
                 return Err(ParseError::SchemaError(format!(
                     "security scheme '{}' has unknown type '{}'",
@@ -2377,6 +2424,100 @@ paths:
         assert_eq!(s["Oidc"], SecurityScheme::OpenIdConnect);
         assert_eq!(s["Flows"], SecurityScheme::OAuth2);
         assert_eq!(s["Mtls"], SecurityScheme::MutualTls);
+    }
+
+    /// AsyncAPI has its own security scheme vocabulary. A document using it
+    /// must parse whole: an unknown type fails the entire spec, not the scheme.
+    #[test]
+    fn parses_every_asyncapi_security_scheme_type() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+components:
+  securitySchemes:
+    Certs:
+      type: X509
+    SaslScram:
+      type: scramSha256
+    SaslScram512:
+      type: scramSha512
+    Symmetric:
+      type: symmetricEncryption
+    Asymmetric:
+      type: asymmetricEncryption
+    Kerberos:
+      type: gssapi
+    SaslPlain:
+      type: plain
+    UserPassword:
+      type: userPassword
+    BrokerUser:
+      type: apiKey
+      in: user
+    BrokerPassword:
+      type: apiKey
+      in: password
+    KeyHeader:
+      type: httpApiKey
+      name: X-API-Key
+      in: header
+    Bearer:
+      type: http
+      scheme: bearer
+channels:
+  events:
+    address: /events
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let s = &spec.security_schemes;
+        assert_eq!(s.len(), 12);
+
+        for (name, kind) in [
+            ("Certs", "X509"),
+            ("SaslScram", "scramSha256"),
+            ("SaslScram512", "scramSha512"),
+            ("Symmetric", "symmetricEncryption"),
+            ("Asymmetric", "asymmetricEncryption"),
+            ("Kerberos", "gssapi"),
+            ("SaslPlain", "plain"),
+            ("UserPassword", "userPassword"),
+            // AsyncAPI's `apiKey` places the credential in the connection's
+            // user or password field and carries no `name`.
+            ("BrokerUser", "apiKey"),
+            ("BrokerPassword", "apiKey"),
+        ] {
+            assert_eq!(
+                s[name],
+                SecurityScheme::Transport {
+                    kind: kind.to_string()
+                },
+                "{name} is a transport credential"
+            );
+        }
+
+        // `httpApiKey` is AsyncAPI's spelling of a request parameter.
+        assert_eq!(
+            s["KeyHeader"],
+            SecurityScheme::ApiKey {
+                name: "X-API-Key".to_string(),
+                location: "header".to_string(),
+            }
+        );
+        assert_eq!(
+            s["Bearer"],
+            SecurityScheme::Http {
+                scheme: "bearer".to_string()
+            }
+        );
     }
 
     #[test]

@@ -60,6 +60,16 @@ pub enum SecurityScheme {
     /// Client certificate authentication, which carries no request header.
     #[serde(rename = "mutualTLS")]
     MutualTls,
+    /// A credential the transport or broker carries rather than the request.
+    ///
+    /// AsyncAPI defines more scheme types than OpenAPI, and most of them are
+    /// of this kind: `X509` and the encryption schemes belong to the
+    /// transport, `scramSha256`, `scramSha512`, `gssapi`, `plain` and
+    /// `userPassword` are broker mechanisms. None puts anything in a request
+    /// header, so none contributes to the allowlist. The declared type is kept
+    /// for diagnostics.
+    #[serde(rename = "transport")]
+    Transport { kind: String },
 }
 
 /// Detected spec format.
