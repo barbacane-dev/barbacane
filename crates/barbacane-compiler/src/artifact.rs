@@ -2065,11 +2065,15 @@ fn applied_scheme_headers(op: &crate::spec_parser::Operation, spec: &ApiSpec) ->
 ///
 /// The scheme says where the credential travels, and the plugin reading it
 /// follows. A key in the query string is one, and admits no header because it
-/// needs none. A client certificate is presented during the handshake, so it is
-/// not something a middleware reads off the request at all.
+/// needs none. A client certificate is presented during the TLS handshake and
+/// AsyncAPI's broker mechanisms travel on the connection, so neither is
+/// something a middleware reads off the request at all.
 fn scheme_carries_a_credential(scheme: &crate::spec_parser::SecurityScheme) -> bool {
     use crate::spec_parser::SecurityScheme;
-    !matches!(scheme, SecurityScheme::MutualTls)
+    !matches!(
+        scheme,
+        SecurityScheme::MutualTls | SecurityScheme::Transport { .. }
+    )
 }
 
 /// The request header a scheme names, when it names one.
@@ -2128,9 +2132,9 @@ fn require_security_requirement(
         )));
     }
 
-    // A requirement naming only `mutualTLS` describes a certificate presented
-    // during the handshake, which no middleware reads off the request, so the
-    // plugin would still find no credential to verify.
+    // A requirement naming only connection-level schemes describes a credential
+    // the TLS handshake or the broker carries, which no middleware reads off the
+    // request, so the plugin would still find none to verify.
     if !names
         .iter()
         .filter_map(|name| spec.security_schemes.get(*name))
@@ -2138,8 +2142,8 @@ fn require_security_requirement(
     {
         return Err(CompileError::MissingSecurityRequirement(format!(
             "{location}: '{plugin}' verifies a credential the client sends, but the requirement \
-             names only `mutualTLS`, which is presented during the TLS handshake. Name a scheme \
-             describing a credential the request carries"
+             names only schemes the connection carries, such as `mutualTLS` or AsyncAPI's broker \
+             mechanisms. Name a scheme describing a credential the request carries"
         )));
     }
 
@@ -2159,6 +2163,8 @@ fn scheme_token(scheme: &crate::spec_parser::SecurityScheme) -> String {
         SecurityScheme::OAuth2 => "oauth2".to_string(),
         SecurityScheme::OpenIdConnect => "openIdConnect".to_string(),
         SecurityScheme::MutualTls => "mutualTLS".to_string(),
+        // AsyncAPI's broker mechanisms keep their declared type as the token.
+        SecurityScheme::Transport { kind } => kind.clone(),
     }
 }
 
@@ -2221,8 +2227,9 @@ fn require_implemented_scheme(
 /// The scheme types an operation's security requirement resolves to, limited to
 /// the ones describing a credential the client sends.
 ///
-/// `mutualTLS` is excluded: a certificate is presented during the handshake, so
-/// no middleware reads it off the request.
+/// Connection-level schemes are excluded: a `mutualTLS` certificate is
+/// presented during the handshake and AsyncAPI's broker mechanisms travel on
+/// the connection, so no middleware reads either off the request.
 fn required_scheme_tokens(op: &crate::spec_parser::Operation, spec: &ApiSpec) -> BTreeSet<String> {
     op.security
         .as_ref()
@@ -3348,6 +3355,39 @@ mod tests {
             let s = secured(&[("ApiKeyQuery", api_key_query())]);
             require_implemented_scheme(&op(&[]), &s, "third-party-auth", &[], "GET /x")
                 .expect("no declaration means no check");
+        }
+
+        /// AsyncAPI's broker mechanisms are carried by the connection, exactly
+        /// like a `mutualTLS` certificate, so an authentication plugin finds no
+        /// credential on the request to verify.
+        #[test]
+        fn broker_schemes_carry_no_request_credential() {
+            for kind in ["X509", "scramSha256", "gssapi", "userPassword"] {
+                let scheme = SecurityScheme::Transport {
+                    kind: kind.to_string(),
+                };
+                assert!(
+                    !scheme_carries_a_credential(&scheme),
+                    "{kind} travels on the connection"
+                );
+                assert_eq!(scheme_header_name(&scheme), None, "{kind} names no header");
+            }
+
+            // So a requirement naming only one fails E1057, as mutualTLS does.
+            let s = secured(&[(
+                "SaslScram",
+                SecurityScheme::Transport {
+                    kind: "scramSha256".into(),
+                },
+            )]);
+            assert!(matches!(
+                require_security_requirement(&op(&[]), &s, "basic-auth", "GET /x"),
+                Err(CompileError::MissingSecurityRequirement(_))
+            ));
+
+            // And it contributes no header to the allowlist.
+            let allow = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
+            assert!(allow.is_empty(), "got: {allow:?}");
         }
 
         /// Tokens name scheme types, not their spelling, so case does not decide
