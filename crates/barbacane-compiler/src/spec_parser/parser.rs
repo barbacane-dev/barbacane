@@ -1044,11 +1044,8 @@ fn parse_asyncapi_channels(
 
         // AsyncAPI declares the credential on the server the channel is reached
         // through, so the operation inherits it from there.
-        let security = server_security_requirement(
-            referenced_channel_name(op_obj).as_deref(),
-            channel_servers,
-            server_security,
-        );
+        let reached = operation_servers(op_obj, channel_servers, server_security)?;
+        let security = server_security_requirement(reached.as_deref(), server_security);
 
         // Parse operation-level messages (may override or filter channel messages)
         let messages = parse_operation_messages(op_obj, &channel_messages, spec_root)?;
@@ -1233,44 +1230,80 @@ fn parse_channel_servers(
             continue;
         };
 
-        let mut names = Vec::new();
-        for entry in entries {
-            let reference = entry.get("$ref").and_then(|v| v.as_str()).ok_or_else(|| {
-                ParseError::SchemaError(format!(
-                    "channel '{channel_name}' lists a server that is not a $ref; `servers` \
-                     entries must reference #/servers/..."
-                ))
-            })?;
-            let name = reference.strip_prefix("#/servers/").ok_or_else(|| {
-                ParseError::SchemaError(format!(
-                    "channel '{channel_name}' server $ref '{reference}' must point into #/servers"
-                ))
-            })?;
-            if !servers.contains_key(name) {
-                return Err(ParseError::SchemaError(format!(
-                    "channel '{channel_name}' is declared on server '{name}', which is not \
-                     defined under `servers`"
-                )));
-            }
-            names.push(name.to_string());
-        }
-
-        by_channel.insert(channel_name.clone(), names);
+        by_channel.insert(
+            channel_name.clone(),
+            channel_server_names(channel_name, entries, servers)?,
+        );
     }
 
     Ok(by_channel)
 }
 
-/// The channel an operation refers to by name.
+/// Resolve a channel's `servers` list to server names.
 ///
-/// `None` for an inline channel definition, which names no entry under
-/// `channels` and so narrows nothing.
-fn referenced_channel_name(op: &serde_json::Map<String, Value>) -> Option<String> {
-    op.get("channel")?
-        .get("$ref")?
-        .as_str()?
-        .strip_prefix("#/channels/")
-        .map(|name| name.to_string())
+/// Every reference must resolve. One that does not narrows the channel to a
+/// server that is not there, leaving the operation requiring nothing and
+/// dropping the credential the document declares, so it is refused instead.
+fn channel_server_names(
+    channel_name: &str,
+    entries: &[Value],
+    servers: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<String>, ParseError> {
+    let mut names = Vec::new();
+    for entry in entries {
+        let reference = entry.get("$ref").and_then(|v| v.as_str()).ok_or_else(|| {
+            ParseError::SchemaError(format!(
+                "channel '{channel_name}' lists a server that is not a $ref; `servers` entries \
+                 must reference #/servers/..."
+            ))
+        })?;
+        let name = reference.strip_prefix("#/servers/").ok_or_else(|| {
+            ParseError::SchemaError(format!(
+                "channel '{channel_name}' server $ref '{reference}' must point into #/servers"
+            ))
+        })?;
+        if !servers.contains_key(name) {
+            return Err(ParseError::SchemaError(format!(
+                "channel '{channel_name}' is declared on server '{name}', which is not defined \
+                 under `servers`"
+            )));
+        }
+        names.push(name.to_string());
+    }
+    Ok(names)
+}
+
+/// The servers an operation's channel is reached through.
+///
+/// `None` means every server, which is what a channel naming none is available
+/// on. A channel referenced by name is looked up; one defined inline carries its
+/// own `servers` list and is read directly, since it appears under no name.
+fn operation_servers(
+    op: &serde_json::Map<String, Value>,
+    channel_servers: &BTreeMap<String, Vec<String>>,
+    declared: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<Vec<String>>, ParseError> {
+    let Some(channel) = op.get("channel") else {
+        return Ok(None);
+    };
+
+    if let Some(reference) = channel.get("$ref").and_then(|v| v.as_str()) {
+        let Some(name) = reference.strip_prefix("#/channels/") else {
+            return Ok(None);
+        };
+        return Ok(channel_servers.get(name).cloned());
+    }
+
+    // Inline channel: its `servers` list narrows it exactly as a named one's
+    // does, so ignoring it would inherit credentials from servers the channel
+    // cannot be reached through.
+    let Some(obj) = channel.as_object() else {
+        return Ok(None);
+    };
+    match obj.get("servers").and_then(|v| v.as_array()) {
+        Some(entries) => Ok(Some(channel_server_names("<inline>", entries, declared)?)),
+        None => Ok(None),
+    }
 }
 
 /// The security requirement an operation inherits from the servers it reaches.
@@ -1279,8 +1312,7 @@ fn referenced_channel_name(op: &serde_json::Map<String, Value>) -> Option<String
 /// connection. `None` when nothing applies, which leaves the operation as
 /// unconstrained as it was.
 fn server_security_requirement(
-    channel_name: Option<&str>,
-    channel_servers: &BTreeMap<String, Vec<String>>,
+    reached_servers: Option<&[String]>,
     server_security: &BTreeMap<String, Vec<String>>,
 ) -> Option<Vec<SecurityRequirement>> {
     // Nothing declares a credential anywhere, so every operation stays as
@@ -1290,7 +1322,7 @@ fn server_security_requirement(
     }
 
     // A channel naming servers reaches those; one naming none reaches all.
-    let applicable: Vec<&String> = match channel_name.and_then(|name| channel_servers.get(name)) {
+    let applicable: Vec<&String> = match reached_servers {
         Some(names) => names.iter().collect(),
         None => server_security.keys().collect(),
     };
@@ -3116,6 +3148,96 @@ components:
         let err = parse_spec(yaml).expect_err("the server is not defined");
         assert!(
             matches!(err, ParseError::SchemaError(ref m) if m.contains("interal")),
+            "{err:?}"
+        );
+    }
+
+    /// A channel defined inline on the operation carries its own `servers` list.
+    /// Ignoring it inherits credentials from servers the channel cannot be
+    /// reached through, admitting a header the document does not offer there.
+    #[test]
+    fn an_inline_channel_honours_its_own_servers_list() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Inline
+  version: "1.0.0"
+servers:
+  gateway:
+    host: a.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/GatewayKey'
+  internal:
+    host: b.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/InternalKey'
+operations:
+  publish:
+    action: send
+    channel:
+      address: /events
+      servers:
+        - $ref: '#/servers/gateway'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    GatewayKey:
+      type: httpApiKey
+      name: X-Gateway-Key
+      in: header
+    InternalKey:
+      type: httpApiKey
+      name: X-Internal-Key
+      in: header
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let names: Vec<&String> = spec.operations[0]
+            .security
+            .as_ref()
+            .expect("the gateway server requires a key")
+            .iter()
+            .flat_map(|r| r.keys())
+            .collect();
+        assert_eq!(names, vec!["GatewayKey"], "only the server it names");
+    }
+
+    /// The same validation applies inline: a reference to a server that is not
+    /// defined is refused rather than silently widening the channel.
+    #[test]
+    fn an_inline_channel_on_an_undefined_server_is_an_error() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Inline
+  version: "1.0.0"
+servers:
+  gateway:
+    host: a.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/GatewayKey'
+operations:
+  publish:
+    action: send
+    channel:
+      address: /events
+      servers:
+        - $ref: '#/servers/getway'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    GatewayKey:
+      type: httpApiKey
+      name: X-Gateway-Key
+      in: header
+"##;
+        let err = parse_spec(yaml).expect_err("the server is not defined");
+        assert!(
+            matches!(err, ParseError::SchemaError(ref m) if m.contains("getway")),
             "{err:?}"
         );
     }
