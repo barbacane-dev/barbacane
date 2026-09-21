@@ -208,3 +208,54 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod runtime_context_tests {
+    use super::*;
+
+    /// `compile` runs inside a tokio runtime, and `reqwest::blocking` refuses
+    /// to run inside one, on construction and on every request alike. A
+    /// manifest with a remote plugin could not be compiled at all because of
+    /// it. The call must reach the network and come back with an error, not
+    /// take the process down.
+    #[test]
+    fn downloading_from_inside_a_runtime_returns_an_error_rather_than_panicking() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let result = rt.block_on(async {
+            // A reserved domain that resolves nowhere, so the request fails
+            // fast without depending on the network being reachable.
+            download_plugin("https://barbacane-does-not-resolve.invalid/plugin.wasm")
+        });
+
+        assert!(
+            result.is_err(),
+            "the download should fail, not succeed against an invalid host"
+        );
+    }
+
+    /// The same from a spawned task, which is a worker thread rather than the
+    /// one `block_on` runs on.
+    #[test]
+    fn downloading_from_a_spawned_task_returns_an_error_rather_than_panicking() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let result = rt.block_on(async {
+            tokio::spawn(async {
+                download_plugin("https://barbacane-does-not-resolve.invalid/plugin.wasm")
+            })
+            .await
+            .expect("the task must not panic")
+        });
+
+        assert!(result.is_err());
+    }
+}

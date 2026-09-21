@@ -29,7 +29,7 @@ const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
 /// (heartbeats, reconnection) stay alive between publish calls. Connections are
 /// created lazily on first publish and reused for subsequent messages to the same server.
 pub struct NatsPublisher {
-    runtime: tokio::runtime::Runtime,
+    runtime: Option<tokio::runtime::Runtime>,
     connections: Mutex<HashMap<String, async_nats::Client>>,
     /// When false, server addresses resolving to internal/metadata ranges are
     /// rejected (SSRF guard). Operators opt in for trusted internal servers.
@@ -46,7 +46,7 @@ impl NatsPublisher {
             .build()
             .map_err(|e| BrokerError::ConnectionFailed(format!("failed to create runtime: {e}")))?;
         Ok(Self {
-            runtime,
+            runtime: Some(runtime),
             connections: Mutex::new(HashMap::new()),
             allow_internal_egress,
         })
@@ -63,7 +63,7 @@ impl NatsPublisher {
         payload: Bytes,
         headers: BTreeMap<String, String>,
     ) -> Result<PublishResult, BrokerError> {
-        self.runtime
+        self.runtime()
             .block_on(self.publish(url, subject, payload, headers))
     }
 
@@ -346,5 +346,75 @@ mod tests {
         );
         // Connection refused, but validates the headers code path
         assert!(matches!(result, Err(BrokerError::ConnectionFailed(_))));
+    }
+}
+
+impl NatsPublisher {
+    /// The runtime, which is present for the whole life of the value and taken
+    /// only by `Drop`.
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime
+            .as_ref()
+            .expect("the runtime is taken only while dropping")
+    }
+}
+
+impl Drop for NatsPublisher {
+    /// Hand the runtime to tokio's background shutdown instead of waiting for
+    /// it here.
+    ///
+    /// Dropping a runtime blocks until its workers stop, which tokio refuses
+    /// inside an async context. This type is reachable from tasks running on
+    /// the gateway's runtime, so the last reference can fall anywhere, and
+    /// `shutdown_background` is safe wherever that happens.
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+#[cfg(test)]
+mod drop_safety_tests {
+    use super::*;
+
+    /// The gateway holds this behind an `Arc` that background tasks clone, so
+    /// the last reference can fall on a tokio worker. Dropping a runtime there
+    /// blocks, which tokio refuses, and the process died on an ordinary
+    /// shutdown because of it.
+    #[test]
+    fn dropping_inside_a_runtime_does_not_panic() {
+        let outer = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("outer runtime");
+
+        outer.block_on(async {
+            let publisher = NatsPublisher::new(true).expect("publisher");
+            drop(publisher);
+        });
+    }
+
+    /// And from a spawned task, which is where the gateway's eviction and
+    /// hot-reload tasks would drop it.
+    #[test]
+    fn dropping_inside_a_spawned_task_does_not_panic() {
+        let outer = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("outer runtime");
+
+        outer.block_on(async {
+            let shared = std::sync::Arc::new(NatsPublisher::new(true).expect("publisher"));
+            let held = shared.clone();
+            let task = tokio::spawn(async move {
+                // The task outlives the local reference, so its drop is last.
+                drop(held);
+            });
+            drop(shared);
+            task.await.expect("task");
+        });
     }
 }

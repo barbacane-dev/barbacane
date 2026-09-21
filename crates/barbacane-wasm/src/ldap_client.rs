@@ -89,7 +89,7 @@ struct CachedConn {
 /// between calls. Search connections are created lazily and reused while they
 /// stay open; a closed connection is evicted and re-established on next use.
 pub struct LdapClient {
-    runtime: tokio::runtime::Runtime,
+    runtime: Option<tokio::runtime::Runtime>,
     connections: Mutex<HashMap<ConnKey, CachedConn>>,
     /// When false, directory addresses resolving to internal/metadata ranges are
     /// rejected (SSRF guard). Operators opt in for trusted internal directories.
@@ -106,7 +106,7 @@ impl LdapClient {
             .build()
             .map_err(|e| LdapError::ConnectionFailed(format!("failed to create runtime: {e}")))?;
         Ok(Self {
-            runtime,
+            runtime: Some(runtime),
             connections: Mutex::new(HashMap::new()),
             allow_internal_egress,
         })
@@ -117,7 +117,7 @@ impl LdapClient {
     /// Must be called from a thread that is NOT inside a tokio runtime context
     /// (e.g. from within `std::thread::scope`).
     pub fn bind_blocking(&self, req: &LdapBindRequest) -> Result<LdapResult, LdapError> {
-        self.runtime.block_on(self.bind(req))
+        self.runtime().block_on(self.bind(req))
     }
 
     /// Blocking search for use from sync WASM host functions. `plugin` names the
@@ -130,7 +130,7 @@ impl LdapClient {
         plugin: &str,
         req: &LdapSearchRequest,
     ) -> Result<LdapResult, LdapError> {
-        self.runtime.block_on(self.search(plugin, req))
+        self.runtime().block_on(self.search(plugin, req))
     }
 
     /// Verify credentials with a simple bind on a fresh connection.
@@ -742,5 +742,30 @@ mod tests {
             .map(|(i, k)| (k, now + Duration::from_secs(i as u64)));
         let victim = eviction_victim(entries, "newcomer");
         assert_eq!(victim, Some(keys[0].clone()));
+    }
+}
+
+impl LdapClient {
+    /// The runtime, which is present for the whole life of the value and taken
+    /// only by `Drop`.
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime
+            .as_ref()
+            .expect("the runtime is taken only while dropping")
+    }
+}
+
+impl Drop for LdapClient {
+    /// Hand the runtime to tokio's background shutdown instead of waiting for
+    /// it here.
+    ///
+    /// Dropping a runtime blocks until its workers stop, which tokio refuses
+    /// inside an async context. This type is reachable from tasks running on
+    /// the gateway's runtime, so the last reference can fall anywhere, and
+    /// `shutdown_background` is safe wherever that happens.
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
     }
 }

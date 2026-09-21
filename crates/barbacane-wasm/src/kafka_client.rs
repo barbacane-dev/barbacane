@@ -31,7 +31,7 @@ const PRODUCE_TIMEOUT: Duration = Duration::from_secs(10);
 /// stay alive between publish calls. Connections are created lazily on first
 /// publish and reused for subsequent messages to the same broker.
 pub struct KafkaPublisher {
-    runtime: tokio::runtime::Runtime,
+    runtime: Option<tokio::runtime::Runtime>,
     clients: Mutex<HashMap<String, Arc<Client>>>,
     /// When false, broker addresses resolving to internal/metadata ranges are
     /// rejected (SSRF guard). Operators opt in for trusted internal brokers.
@@ -48,7 +48,7 @@ impl KafkaPublisher {
             .build()
             .map_err(|e| BrokerError::ConnectionFailed(format!("failed to create runtime: {e}")))?;
         Ok(Self {
-            runtime,
+            runtime: Some(runtime),
             clients: Mutex::new(HashMap::new()),
             allow_internal_egress,
         })
@@ -66,7 +66,7 @@ impl KafkaPublisher {
         payload: &str,
         headers: BTreeMap<String, String>,
     ) -> Result<PublishResult, BrokerError> {
-        self.runtime
+        self.runtime()
             .block_on(self.publish(brokers, topic, key, payload, headers))
     }
 
@@ -276,5 +276,30 @@ mod tests {
         );
         // Connection refused, but validates comma-separated broker parsing
         assert!(matches!(result, Err(BrokerError::ConnectionFailed(_))));
+    }
+}
+
+impl KafkaPublisher {
+    /// The runtime, which is present for the whole life of the value and taken
+    /// only by `Drop`.
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime
+            .as_ref()
+            .expect("the runtime is taken only while dropping")
+    }
+}
+
+impl Drop for KafkaPublisher {
+    /// Hand the runtime to tokio's background shutdown instead of waiting for
+    /// it here.
+    ///
+    /// Dropping a runtime blocks until its workers stop, which tokio refuses
+    /// inside an async context. This type is reachable from tasks running on
+    /// the gateway's runtime, so the last reference can fall anywhere, and
+    /// `shutdown_background` is safe wherever that happens.
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
     }
 }
