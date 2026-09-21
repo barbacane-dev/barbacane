@@ -120,14 +120,26 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
     // Output path for artifact
     let output_path = temp_dir.path().join("artifact.bca");
 
-    // Run compilation with resolved plugins
-    let spec_path_refs: Vec<&Path> = spec_paths.iter().map(|p| p.as_path()).collect();
+    // Run compilation with resolved plugins.
+    //
+    // `compile` is synchronous throughout: it reads and parses every spec,
+    // compiles each schema validator, hashes the plugin binaries and writes the
+    // archive. Running that on the worker that polled this task would stop it
+    // serving anything else for as long as the project takes, so it goes to the
+    // blocking pool. Nothing here is used afterwards except `output_path`, which
+    // the caller reads back, so the inputs move in.
     let options = barbacane_compiler::CompileOptions {
         allow_plaintext: !compilation.production,
         ..Default::default()
     };
-    let compile_result =
-        barbacane_compiler::compile(&spec_path_refs, &plugin_bundles, &output_path, &options);
+    let compile_result = {
+        let output_path = output_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let spec_path_refs: Vec<&Path> = spec_paths.iter().map(|p| p.as_path()).collect();
+            barbacane_compiler::compile(&spec_path_refs, &plugin_bundles, &output_path, &options)
+        })
+        .await?
+    };
 
     match compile_result {
         Ok(result) => {
