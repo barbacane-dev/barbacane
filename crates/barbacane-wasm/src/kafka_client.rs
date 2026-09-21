@@ -215,6 +215,50 @@ impl Drop for KafkaPublisher {
 }
 
 #[cfg(test)]
+mod drop_safety_tests {
+    use super::*;
+
+    /// The last reference can fall on a runtime thread, since the gateway holds
+    /// this type behind an `Arc` that background tasks clone. Dropping a
+    /// runtime there is what tokio refuses, so the drop must not do it.
+    #[test]
+    fn dropping_inside_a_runtime_does_not_panic() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let client = KafkaPublisher::new(true).expect("kafka publisher");
+            drop(client);
+        });
+    }
+
+    /// And from a spawned task, which is where the gateway's eviction and
+    /// hot-reload tasks would drop it.
+    #[test]
+    fn dropping_inside_a_spawned_task_does_not_panic() {
+        let outer = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("outer runtime");
+
+        outer.block_on(async {
+            let shared = std::sync::Arc::new(KafkaPublisher::new(true).expect("kafka publisher"));
+            let held = shared.clone();
+            let task = tokio::spawn(async move {
+                // The task outlives the local reference, so its drop is last.
+                drop(held);
+            });
+            drop(shared);
+            task.await.expect("task");
+        });
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

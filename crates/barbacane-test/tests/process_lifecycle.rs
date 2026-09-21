@@ -13,22 +13,33 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The gateway binary built alongside these tests.
+///
+/// A test executable lives at `target/<profile>/deps/<name>-<hash>`, so the
+/// gateway is two levels up: one pop drops the file name, the second drops
+/// `deps`.
 fn gateway_binary() -> std::path::PathBuf {
     let mut dir = std::env::current_exe().expect("test binary path");
+    dir.pop(); // the test executable's own file name
     dir.pop(); // deps/
-    dir.pop(); // debug/ or release/
     dir.join("barbacane")
 }
 
 /// The smallest artifact the repository can build: one mock route.
-fn build_artifact(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+///
+/// Returns the reason it could not, never a bare `None`: a test that skips
+/// without saying so reads as a pass, and `cargo test` hides the output of one.
+fn build_artifact(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .parent()?
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or("the repository root is not two levels above the crate")?
         .to_path_buf();
     let mock = repo.join("plugins/mock/mock.wasm");
     if !mock.exists() {
-        return None;
+        return Err(format!(
+            "{} is not built; run `make plugins`",
+            mock.display()
+        ));
     }
 
     let manifest = dir.join("barbacane.yaml");
@@ -36,7 +47,7 @@ fn build_artifact(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         &manifest,
         format!("plugins:\n  mock:\n    path: {}\n", mock.display()),
     )
-    .ok()?;
+    .map_err(|e| format!("could not write the manifest: {e}"))?;
 
     let spec = dir.join("api.yaml");
     std::fs::write(
@@ -51,7 +62,7 @@ paths:
       responses: { "200": { description: ok } }
 "#,
     )
-    .ok()?;
+    .map_err(|e| format!("could not write the spec: {e}"))?;
 
     let out = dir.join("api.bca");
     let status = Command::new(gateway_binary())
@@ -62,15 +73,14 @@ paths:
         .arg("-o")
         .arg(&out)
         .output()
-        .ok()?;
+        .map_err(|e| format!("could not run the compiler: {e}"))?;
     if !status.status.success() {
-        eprintln!(
-            "skipping: could not compile the fixture: {}",
+        return Err(format!(
+            "compiling the fixture failed: {}",
             String::from_utf8_lossy(&status.stderr)
-        );
-        return None;
+        ));
     }
-    Some(out)
+    Ok(out)
 }
 
 fn wait_for_port(port: u16, limit: Duration) -> bool {
@@ -90,14 +100,14 @@ fn wait_for_port(port: u16, limit: Duration) -> bool {
 #[test]
 fn sigterm_on_a_serving_gateway_exits_zero() {
     let binary = gateway_binary();
-    if !binary.exists() {
-        eprintln!("skipping: {} is not built", binary.display());
-        return;
-    }
+    assert!(
+        binary.exists(),
+        "{} is not built. Every test in this crate drives the real binary, so a \
+         missing one is a broken run, not a reason to pass quietly",
+        binary.display()
+    );
     let dir = tempfile::tempdir().expect("temp dir");
-    let Some(artifact) = build_artifact(dir.path()) else {
-        return;
-    };
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
 
     let mut child = Command::new(&binary)
         .arg("serve")
@@ -157,9 +167,7 @@ fn a_taken_port_reports_the_cause_without_panicking() {
         return;
     }
     let dir = tempfile::tempdir().expect("temp dir");
-    let Some(artifact) = build_artifact(dir.path()) else {
-        return;
-    };
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
 
     let held = std::net::TcpListener::bind("127.0.0.1:34202").expect("hold the port");
 
