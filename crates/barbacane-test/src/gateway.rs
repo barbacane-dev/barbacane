@@ -1,8 +1,9 @@
 //! TestGateway: full-stack integration test harness.
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tempfile::TempDir;
@@ -46,6 +47,64 @@ pub struct TestGateway {
     _temp_dir: TempDir,
     /// Whether TLS is enabled.
     tls_enabled: bool,
+    /// What the gateway wrote to stdout and stderr, drained as it runs.
+    ///
+    /// The gateway logs the cause of every error it answers with, so without
+    /// this a failing assertion reports a status and nothing about why.
+    log: GatewayLog,
+}
+
+/// The tail of a gateway's output, collected by reader threads.
+///
+/// Bounded, because a `--dev` gateway logging every dropped header on every
+/// request will outrun any test that reads it. The most recent lines are the
+/// ones that explain the failure.
+#[derive(Clone, Default)]
+pub struct GatewayLog {
+    lines: Arc<Mutex<std::collections::VecDeque<String>>>,
+}
+
+impl GatewayLog {
+    /// Keep this many lines. Enough for a panic backtrace and the lines around
+    /// it, small enough to print in a test failure.
+    const CAPACITY: usize = 400;
+
+    fn push(&self, line: String) {
+        let Ok(mut lines) = self.lines.lock() else {
+            return;
+        };
+        if lines.len() == Self::CAPACITY {
+            lines.pop_front();
+        }
+        lines.push_back(line);
+    }
+
+    /// Everything kept, oldest first.
+    pub fn text(&self) -> String {
+        match self.lines.lock() {
+            Ok(lines) => lines.iter().cloned().collect::<Vec<_>>().join("\n"),
+            Err(_) => String::new(),
+        }
+    }
+
+    /// Whether the gateway logged anything matching `needle`.
+    pub fn contains(&self, needle: &str) -> bool {
+        self.text().contains(needle)
+    }
+
+    /// Drain a pipe into this log on a thread of its own.
+    ///
+    /// A piped stream nothing reads fills its buffer and blocks the writer, so
+    /// draining is what keeps the gateway running as much as it is what makes
+    /// the output readable.
+    fn drain<R: std::io::Read + Send + 'static>(&self, stream: R, stream_name: &'static str) {
+        let log = self.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                log.push(format!("[{stream_name}] {line}"));
+            }
+        });
+    }
 }
 
 /// Generated TLS certificates for testing.
@@ -236,7 +295,18 @@ impl TestGateway {
         }
 
         // Start the gateway process
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
+
+        // Drain both pipes immediately. Until this runs the gateway can block
+        // writing to a full pipe, and anything it logs is lost when the child
+        // is killed.
+        let log = GatewayLog::default();
+        if let Some(stdout) = child.stdout.take() {
+            log.drain::<ChildStdout>(stdout, "stdout");
+        }
+        if let Some(stderr) = child.stderr.take() {
+            log.drain::<ChildStderr>(stderr, "stderr");
+        }
 
         // Create HTTP client (with custom TLS config if needed)
         let client = if let Some(ref certs) = tls_certs {
@@ -267,6 +337,7 @@ impl TestGateway {
             client,
             _temp_dir: temp_dir,
             tls_enabled,
+            log,
         };
 
         // Wait for the gateway to be ready
@@ -295,23 +366,13 @@ impl TestGateway {
 
             // Check if the process has exited
             if let Ok(Some(status)) = self.child.try_wait() {
-                // Try to read stderr to get the error message
-                let stderr = self
-                    .child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = String::new();
-                        use std::io::Read;
-                        let _ = s.read_to_string(&mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
-
+                // Give the reader threads a moment to finish the last lines
+                // before reporting what the gateway said on its way out.
+                tokio::time::sleep(Duration::from_millis(50)).await;
                 return Err(TestError::StartupFailed(format!(
-                    "gateway exited with status: {}\nstderr: {}",
+                    "gateway exited with status: {}\n{}",
                     status,
-                    stderr.trim()
+                    self.log.text()
                 )));
             }
 
@@ -337,6 +398,14 @@ impl TestGateway {
     /// Check if TLS is enabled.
     pub fn is_tls_enabled(&self) -> bool {
         self.tls_enabled
+    }
+
+    /// What the gateway has logged so far.
+    ///
+    /// The gateway logs the cause of every error it answers with, so this is
+    /// where a 500 says which middleware failed and why.
+    pub fn log(&self) -> &GatewayLog {
+        &self.log
     }
 
     /// Get the base URL of the admin API.
@@ -459,6 +528,15 @@ pub async fn assert_status(resp: reqwest::Response, expected: u16) {
 
 impl Drop for TestGateway {
     fn drop(&mut self) {
+        // A failing assertion sees a status and no reason. Print what the
+        // gateway said, since the process is about to be killed and its output
+        // with it.
+        if std::thread::panicking() {
+            let log = self.log.text();
+            if !log.is_empty() {
+                eprintln!("--- gateway on port {} said ---\n{}\n---", self.port, log);
+            }
+        }
         // Kill the child process
         let _ = self.child.kill();
         let _ = self.child.wait();
