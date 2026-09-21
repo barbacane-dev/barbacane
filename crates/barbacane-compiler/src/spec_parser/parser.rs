@@ -589,7 +589,7 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
             // AsyncAPI puts the security requirement on the server, and an
             // inline scheme there is registered as it is read.
             let server_security = parse_server_security(root_obj, &root, &mut security_schemes)?;
-            let channel_servers = parse_channel_servers(root_obj);
+            let channel_servers = parse_channel_servers(root_obj, &server_security)?;
             parse_asyncapi_channels(root_obj, &root, &server_security, &channel_servers)?
         }
     };
@@ -1159,7 +1159,11 @@ fn parse_server_security(
     };
 
     for (server_name, server) in servers {
+        // A server declaring no security is recorded with an empty list, not
+        // skipped: a channel reachable through it can be reached without a
+        // credential, and that is an alternative the operation must keep.
         let Some(entries) = server.get("security").and_then(|v| v.as_array()) else {
+            by_server.insert(server_name.clone(), Vec::new());
             continue;
         };
 
@@ -1200,9 +1204,7 @@ fn parse_server_security(
             }
         }
 
-        if !names.is_empty() {
-            by_server.insert(server_name.clone(), names);
-        }
+        by_server.insert(server_name.clone(), names);
     }
 
     Ok(by_server)
@@ -1212,27 +1214,51 @@ fn parse_server_security(
 ///
 /// A channel may narrow itself with `servers: [$ref]`. One that does not is
 /// available on every server, which this records as an absent entry.
-fn parse_channel_servers(root: &serde_json::Map<String, Value>) -> BTreeMap<String, Vec<String>> {
+///
+/// Every reference must resolve. One that does not narrows the channel to a
+/// server that is not there, leaving the operation requiring nothing and
+/// dropping the credential the document declares, so it is refused instead.
+fn parse_channel_servers(
+    root: &serde_json::Map<String, Value>,
+    servers: &BTreeMap<String, Vec<String>>,
+) -> Result<BTreeMap<String, Vec<String>>, ParseError> {
     let mut by_channel = BTreeMap::new();
 
     let Some(channels) = root.get("channels").and_then(|v| v.as_object()) else {
-        return by_channel;
+        return Ok(by_channel);
     };
 
     for (channel_name, channel) in channels {
         let Some(entries) = channel.get("servers").and_then(|v| v.as_array()) else {
             continue;
         };
-        let names: Vec<String> = entries
-            .iter()
-            .filter_map(|entry| entry.get("$ref").and_then(|v| v.as_str()))
-            .filter_map(|reference| reference.strip_prefix("#/servers/"))
-            .map(|name| name.to_string())
-            .collect();
+
+        let mut names = Vec::new();
+        for entry in entries {
+            let reference = entry.get("$ref").and_then(|v| v.as_str()).ok_or_else(|| {
+                ParseError::SchemaError(format!(
+                    "channel '{channel_name}' lists a server that is not a $ref; `servers` \
+                     entries must reference #/servers/..."
+                ))
+            })?;
+            let name = reference.strip_prefix("#/servers/").ok_or_else(|| {
+                ParseError::SchemaError(format!(
+                    "channel '{channel_name}' server $ref '{reference}' must point into #/servers"
+                ))
+            })?;
+            if !servers.contains_key(name) {
+                return Err(ParseError::SchemaError(format!(
+                    "channel '{channel_name}' is declared on server '{name}', which is not \
+                     defined under `servers`"
+                )));
+            }
+            names.push(name.to_string());
+        }
+
         by_channel.insert(channel_name.clone(), names);
     }
 
-    by_channel
+    Ok(by_channel)
 }
 
 /// The channel an operation refers to by name.
@@ -1257,7 +1283,9 @@ fn server_security_requirement(
     channel_servers: &BTreeMap<String, Vec<String>>,
     server_security: &BTreeMap<String, Vec<String>>,
 ) -> Option<Vec<SecurityRequirement>> {
-    if server_security.is_empty() {
+    // Nothing declares a credential anywhere, so every operation stays as
+    // unconstrained as it was.
+    if server_security.values().all(|schemes| schemes.is_empty()) {
         return None;
     }
 
@@ -1268,9 +1296,15 @@ fn server_security_requirement(
     };
 
     let mut schemes: BTreeSet<&String> = BTreeSet::new();
+    let mut reachable_without_a_credential = false;
     for server in applicable {
-        if let Some(names) = server_security.get(server) {
-            schemes.extend(names.iter());
+        match server_security.get(server) {
+            Some(names) if !names.is_empty() => schemes.extend(names.iter()),
+            // Reaching the channel through a server that requires nothing is an
+            // alternative of its own, so the operation is not unconditionally
+            // authenticated.
+            Some(_) => reachable_without_a_credential = true,
+            None => {}
         }
     }
 
@@ -1278,16 +1312,18 @@ fn server_security_requirement(
         return None;
     }
 
-    Some(
-        schemes
-            .into_iter()
-            .map(|name| {
-                let mut requirement = BTreeMap::new();
-                requirement.insert(name.clone(), Vec::new());
-                requirement
-            })
-            .collect(),
-    )
+    let mut requirements: Vec<SecurityRequirement> = schemes
+        .into_iter()
+        .map(|name| {
+            let mut requirement = SecurityRequirement::new();
+            requirement.insert(name.clone(), Vec::new());
+            requirement
+        })
+        .collect();
+    if reachable_without_a_credential {
+        requirements.push(SecurityRequirement::new());
+    }
+    Some(requirements)
 }
 
 /// Build a lookup map of channel names to their definitions.
@@ -2966,6 +3002,120 @@ operations:
         let err = parse_spec(yaml).expect_err("the scheme is not defined");
         assert!(
             matches!(err, ParseError::SchemaError(ref m) if m.contains("Nowhere")),
+            "{err:?}"
+        );
+    }
+
+    /// A channel reachable through a secured server and an unsecured one can be
+    /// reached without a credential, so anonymous stays an alternative. Dropping
+    /// it would describe the operation as authenticated on every route to it.
+    #[test]
+    fn a_channel_on_a_secured_and_an_unsecured_server_keeps_the_anonymous_route() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  secured:
+    host: secure.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/Key'
+  open:
+    host: open.example.com
+    protocol: ws
+channels:
+  events:
+    address: /events
+  securedOnly:
+    address: /secured
+    servers:
+      - $ref: '#/servers/secured'
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+  publishSecured:
+    action: send
+    channel:
+      $ref: '#/channels/securedOnly'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    Key:
+      type: httpApiKey
+      name: X-Key
+      in: header
+"##;
+        let spec = parse_spec(yaml).unwrap();
+
+        let open = spec
+            .operations
+            .iter()
+            .find(|o| o.path == "/events")
+            .expect("events");
+        let requirement = open.security.as_ref().expect("the secured server applies");
+        assert_eq!(requirement.len(), 2, "the key, or nothing: {requirement:?}");
+        assert!(
+            requirement.iter().any(|r| r.is_empty()),
+            "an unsecured server is an anonymous alternative: {requirement:?}"
+        );
+        assert!(requirement.iter().any(|r| r.contains_key("Key")));
+
+        // A channel narrowed to the secured server has no anonymous route.
+        let secured = spec
+            .operations
+            .iter()
+            .find(|o| o.path == "/secured")
+            .expect("secured");
+        let requirement = secured.security.as_ref().expect("required");
+        assert_eq!(requirement.len(), 1, "{requirement:?}");
+        assert!(requirement[0].contains_key("Key"));
+    }
+
+    /// A channel narrowed to a server that is not defined would leave the
+    /// operation requiring nothing, dropping the credential the document
+    /// declares. A typo must not do that quietly.
+    #[test]
+    fn a_channel_on_an_undefined_server_is_an_error() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  internal:
+    host: internal.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/Key'
+channels:
+  events:
+    address: /events
+    servers:
+      - $ref: '#/servers/interal'
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    Key:
+      type: httpApiKey
+      name: X-Key
+      in: header
+"##;
+        let err = parse_spec(yaml).expect_err("the server is not defined");
+        assert!(
+            matches!(err, ParseError::SchemaError(ref m) if m.contains("interal")),
             "{err:?}"
         );
     }
