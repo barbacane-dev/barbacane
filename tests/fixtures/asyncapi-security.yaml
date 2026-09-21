@@ -1,0 +1,56 @@
+asyncapi: "3.0.0"
+info:
+  title: Broker Security Test API
+  version: "1.0.0"
+  description: Covers AsyncAPI's security scheme vocabulary
+
+servers:
+  scram-connections:
+    host: broker.example.com:9092
+    protocol: kafka-secure
+    security:
+      - $ref: '#/components/securitySchemes/saslScram'
+  mtls-connections:
+    host: broker.example.com:28092
+    protocol: kafka-secure
+    security:
+      - $ref: '#/components/securitySchemes/certs'
+
+channels:
+  orderEvents:
+    address: /events/orders
+    messages:
+      OrderPlaced:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            orderId:
+              type: string
+              format: uuid
+
+operations:
+  publishOrderPlaced:
+    action: send
+    channel:
+      $ref: '#/channels/orderEvents'
+    x-barbacane-dispatch:
+      name: mock
+
+components:
+  securitySchemes:
+    saslScram:
+      type: scramSha256
+      description: SASL/SCRAM credentials carried by the broker connection
+    certs:
+      type: X509
+      description: Client certificate presented on the broker connection
+    kerberos:
+      type: gssapi
+    brokerUser:
+      type: apiKey
+      in: user
+    apiKeyHeader:
+      type: httpApiKey
+      name: X-API-Key
+      in: header
