@@ -3,6 +3,7 @@ name = "basic-auth"
 version = "0.1.0"
 type = "middleware"
 category = "authentication"
+implements = ["http:basic"]
 description = "HTTP Basic authentication middleware (RFC 7617)"
 wasm = "basic-auth.wasm"
 

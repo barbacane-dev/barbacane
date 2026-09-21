@@ -125,7 +125,6 @@ The first three rungs of the trusted spec-to-run pipeline are shipped (artifact 
 |---|---|---|
 | Spec pointers in errors | P2 | Add JSON Pointer (e.g., `#/paths/~1users/get`) to all compile errors |
 | Schema composition analysis | P2 | Interpret `allOf`/`oneOf`/`anyOf`/`discriminator` at compile time instead of treating as opaque JSON |
-| E1032 validation | P2 | Warn on OpenAPI security scheme without matching auth middleware |
 | OPA WASM compilation | P1 | Define OPA version, compilation flags, error handling |
 | Auth plugin auditing | P1 | Security review process for auth plugins |
 | Ingress timeouts & limits | P1 | Header-read/idle/handshake timeouts, connection cap, streaming body-size limit on the data plane (wire the parsed `--keepalive-timeout`) |

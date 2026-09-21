@@ -43,6 +43,8 @@ paths:
     get:
       operationId: perUserEndpoint
       summary: Rate limited per authenticated consumer (2 req/60s) via context:auth.sub
+      security:
+        - BasicAuth: []
       x-barbacane-middlewares:
         - name: basic-auth
           config:
@@ -73,8 +75,6 @@ paths:
 
 # The operations run an authentication middleware, so the document names the
 # scheme carrying the credential. That is what admits the header (ADR-0033).
-security:
-  - BasicAuth: []
 
 components:
   securitySchemes:
