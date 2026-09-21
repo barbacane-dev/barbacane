@@ -132,13 +132,38 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
         allow_plaintext: !compilation.production,
         ..Default::default()
     };
-    let compile_result = {
+    let joined = {
         let output_path = output_path.clone();
         tokio::task::spawn_blocking(move || {
             let spec_path_refs: Vec<&Path> = spec_paths.iter().map(|p| p.as_path()).collect();
             barbacane_compiler::compile(&spec_path_refs, &plugin_bundles, &output_path, &options)
         })
-        .await?
+        .await
+    };
+
+    // A panic inside the compiler arrives as a `JoinError`. Returning it here
+    // would leave the row this worker claimed sitting in `compiling` forever,
+    // since `run_worker` only logs what `process_compilation` returns. Record
+    // the failure first, so the compilation ends in a state a caller can see.
+    let compile_result = match joined {
+        Ok(result) => result,
+        Err(e) => {
+            compilations_repo
+                .mark_failed(
+                    compilation_id,
+                    serde_json::json!([{
+                        "code": "E1000",
+                        "message": format!("the compiler stopped unexpectedly: {e}"),
+                    }]),
+                )
+                .await?;
+            tracing::error!(
+                compilation_id = %compilation_id,
+                error = %e,
+                "Compilation task did not finish"
+            );
+            return Ok(());
+        }
     };
 
     match compile_result {
@@ -209,16 +234,24 @@ async fn resolve_project_plugins(
     project_id: Uuid,
     spec_paths: &[std::path::PathBuf],
 ) -> anyhow::Result<Vec<barbacane_compiler::PluginBundle>> {
-    // Parse specs to extract referenced plugin names
-    let mut api_specs = Vec::new();
+    // Read the specs asynchronously, then parse them off the runtime. Parsing is
+    // YAML plus a full traversal of the document, so a large spec blocks the
+    // worker exactly as `compile` did.
+    let mut sources = Vec::with_capacity(spec_paths.len());
     for path in spec_paths {
-        let content = tokio::fs::read_to_string(path).await?;
-        let spec = barbacane_compiler::parse_spec(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse spec {}: {}", path.display(), e))?;
-        api_specs.push(spec);
+        sources.push((path.clone(), tokio::fs::read_to_string(path).await?));
     }
 
-    let referenced_plugins = barbacane_compiler::extract_plugin_names(&api_specs);
+    let referenced_plugins = tokio::task::spawn_blocking(move || {
+        let mut api_specs = Vec::with_capacity(sources.len());
+        for (path, content) in &sources {
+            let spec = barbacane_compiler::parse_spec(content)
+                .map_err(|e| anyhow::anyhow!("Failed to parse spec {}: {}", path.display(), e))?;
+            api_specs.push(spec);
+        }
+        Ok::<_, anyhow::Error>(barbacane_compiler::extract_plugin_names(&api_specs))
+    })
+    .await??;
     if referenced_plugins.is_empty() {
         return Ok(vec![]);
     }
