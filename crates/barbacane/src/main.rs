@@ -4779,6 +4779,7 @@ async fn run_serve(
         Ok(a) => a,
         Err(_) => {
             eprintln!("error: invalid listen address: {}", listen);
+            drop_off_runtime(gateway);
             return ExitCode::from(1);
         }
     };
@@ -4788,6 +4789,7 @@ async fn run_serve(
         Ok(l) => l,
         Err(e) => {
             eprintln!("error: failed to bind to {}: {}", addr, e);
+            drop_off_runtime(gateway);
             return ExitCode::from(1);
         }
     };
@@ -4799,6 +4801,7 @@ async fn run_serve(
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("error: {}", e);
+                    drop_off_runtime(gateway);
                     return ExitCode::from(1);
                 }
             };
@@ -4871,6 +4874,7 @@ async fn run_serve(
                     "error: invalid --admin-bind address '{}': {}",
                     admin_bind, e
                 );
+                drop_off_runtime(gateway);
                 return ExitCode::from(1);
             }
         };
@@ -5173,7 +5177,32 @@ async fn run_serve(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
+    // The gateway holds runtimes; letting it fall out of scope here panics.
+    drop_off_runtime(gateway);
+
     ExitCode::SUCCESS
+}
+
+/// Drop a value outside the async runtime.
+///
+/// The plugin host owns broker and directory clients, each carrying its own
+/// tokio runtime for the synchronous host calls WASM makes. Dropping a runtime
+/// inside an async context is a panic in tokio, so the last reference must not
+/// fall out of scope on a runtime thread. A plain thread has no async context.
+///
+/// Silent when the value is not the last reference: the drop is then cheap and
+/// touches no runtime.
+fn drop_off_runtime<T: Send + 'static>(value: T) {
+    if let Err(e) = std::thread::Builder::new()
+        .name("barbacane-drop".into())
+        .spawn(move || drop(value))
+        .and_then(|h| {
+            h.join()
+                .map_err(|_| std::io::Error::other("drop thread panicked"))
+        })
+    {
+        tracing::debug!(error = %e, "could not drop off the runtime; leaking instead of panicking");
+    }
 }
 
 /// Wait for shutdown signal (SIGTERM or SIGINT).

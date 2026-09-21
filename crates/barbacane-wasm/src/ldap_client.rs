@@ -89,7 +89,7 @@ struct CachedConn {
 /// between calls. Search connections are created lazily and reused while they
 /// stay open; a closed connection is evicted and re-established on next use.
 pub struct LdapClient {
-    runtime: tokio::runtime::Runtime,
+    runtime: Option<tokio::runtime::Runtime>,
     connections: Mutex<HashMap<ConnKey, CachedConn>>,
     /// When false, directory addresses resolving to internal/metadata ranges are
     /// rejected (SSRF guard). Operators opt in for trusted internal directories.
@@ -106,7 +106,7 @@ impl LdapClient {
             .build()
             .map_err(|e| LdapError::ConnectionFailed(format!("failed to create runtime: {e}")))?;
         Ok(Self {
-            runtime,
+            runtime: Some(runtime),
             connections: Mutex::new(HashMap::new()),
             allow_internal_egress,
         })
@@ -117,7 +117,7 @@ impl LdapClient {
     /// Must be called from a thread that is NOT inside a tokio runtime context
     /// (e.g. from within `std::thread::scope`).
     pub fn bind_blocking(&self, req: &LdapBindRequest) -> Result<LdapResult, LdapError> {
-        self.runtime.block_on(self.bind(req))
+        self.runtime().block_on(self.bind(req))
     }
 
     /// Blocking search for use from sync WASM host functions. `plugin` names the
@@ -130,7 +130,7 @@ impl LdapClient {
         plugin: &str,
         req: &LdapSearchRequest,
     ) -> Result<LdapResult, LdapError> {
-        self.runtime.block_on(self.search(plugin, req))
+        self.runtime().block_on(self.search(plugin, req))
     }
 
     /// Verify credentials with a simple bind on a fresh connection.
@@ -488,6 +488,75 @@ fn map_search_error(e: ldap3::LdapError) -> LdapError {
             LdapError::SearchFailed(format!("rc={} {}", result.rc, result.text))
         }
         other => LdapError::ConnectionFailed(other.to_string()),
+    }
+}
+
+impl LdapClient {
+    /// The runtime, which is present for the whole life of the value and taken
+    /// only by `Drop`.
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime
+            .as_ref()
+            .expect("the runtime is taken only while dropping")
+    }
+}
+
+impl Drop for LdapClient {
+    /// Hand the runtime to tokio's background shutdown instead of waiting for
+    /// it here.
+    ///
+    /// Dropping a runtime blocks until its workers stop, which tokio refuses
+    /// inside an async context. This type is reachable from tasks running on
+    /// the gateway's runtime, so the last reference can fall anywhere, and
+    /// `shutdown_background` is safe wherever that happens.
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+#[cfg(test)]
+mod drop_safety_tests {
+    use super::*;
+
+    /// The last reference can fall on a runtime thread, since the gateway holds
+    /// this type behind an `Arc` that background tasks clone. Dropping a
+    /// runtime there is what tokio refuses, so the drop must not do it.
+    #[test]
+    fn dropping_inside_a_runtime_does_not_panic() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let client = LdapClient::new(true).expect("ldap client");
+            drop(client);
+        });
+    }
+
+    /// And from a spawned task, which is where the gateway's eviction and
+    /// hot-reload tasks would drop it.
+    #[test]
+    fn dropping_inside_a_spawned_task_does_not_panic() {
+        let outer = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("outer runtime");
+
+        outer.block_on(async {
+            let shared = std::sync::Arc::new(LdapClient::new(true).expect("ldap client"));
+            let held = shared.clone();
+            let task = tokio::spawn(async move {
+                // The task outlives the local reference, so its drop is last.
+                drop(held);
+            });
+            drop(shared);
+            task.await.expect("task");
+        });
     }
 }
 
