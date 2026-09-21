@@ -234,6 +234,30 @@ barbacane compile -s api.yaml -m barbacane.yaml -o api.bca \
   --provenance-source ci/github-actions
 ```
 
+### Error Codes
+
+Compilation runs every check, since it is the only command that resolves
+plugins and builds an artifact.
+
+| Code | Category | Description |
+|------|----------|-------------|
+| E1001 | Spec validity | Not a valid OpenAPI 3.x or AsyncAPI 3.x |
+| E1002 | Spec validity | YAML/JSON parse error |
+| E1003 | Spec validity | Unresolved `$ref` reference |
+| E1004 | Spec validity | Schema validation error (missing info, etc.) |
+| E1010 | Extension | Routing conflict (same path+method in multiple specs) |
+| E1011 | Extension | Middleware entry missing `name` |
+| E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
+| E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
+| E1031 | Extension | Plaintext HTTP URL not allowed (use `--allow-plaintext` to override) |
+| E1032 | Security | An operation runs an authentication middleware that reads none of the schemes its `security` requirement names |
+| E1033 | Security | An operation requires a credential and runs no authentication middleware (warning) |
+| E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
+| E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
+| E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
+| E1071 | Manifest | A plugin was bundled without its manifest or config schema, so its configured headers are not admitted (warning) |
+| E1072 | Security | A security scheme and an authentication plugin's configuration name different credential headers (warning) |
+
 ### Exit Codes
 
 | Code | Meaning |
@@ -261,24 +285,20 @@ barbacane validate --spec <FILES>... [OPTIONS]
 
 ### Error Codes
 
+`validate` reads the specs and nothing else: it resolves no plugins and builds
+no artifact, so it reports only the codes that need neither.
+
 | Code | Category | Description |
 |------|----------|-------------|
+| E1000 | I/O | The spec file could not be read |
 | E1001 | Spec validity | Not a valid OpenAPI 3.x or AsyncAPI 3.x |
 | E1002 | Spec validity | YAML/JSON parse error |
 | E1003 | Spec validity | Unresolved `$ref` reference |
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
-| E1010 | Extension | Routing conflict (same path+method in multiple specs) |
 | E1011 | Extension | Middleware entry missing `name` |
-| E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
-| E1031 | Extension | Plaintext HTTP URL not allowed (use `--allow-plaintext` to override) |
-| E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
-| E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
-| E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
-| E1032 | Security | An operation runs an authentication middleware that does not read any scheme its `security` requirement names |
-| E1033 | Security | An operation requires a credential and runs no authentication middleware (warning) |
-| E1071 | Manifest | A plugin was bundled without its manifest or config schema, so its configured headers are not admitted (warning) |
-| E1072 | Security | A security scheme and an authentication plugin's configuration name different credential headers (warning) |
+
+Every other code is reported by `barbacane compile`, whose table lists them all.
 
 ### Examples
 

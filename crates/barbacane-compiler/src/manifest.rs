@@ -50,7 +50,7 @@ struct PluginMetadata {
     /// operation must name the security scheme that carries it.
     category: Option<String>,
     /// The security scheme types an authentication plugin reads, as tokens:
-    /// `apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`, `mutualTLS`. Empty
+    /// `apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`. Empty
     /// when the plugin declares none, which exempts it from the check.
     implements: Vec<String>,
     body_access: bool,
@@ -417,7 +417,7 @@ pub struct ResolvedPlugin {
     /// The plugin's family from plugin.toml, such as `authentication`.
     pub category: Option<String>,
     /// The security scheme types an authentication plugin reads, as tokens:
-    /// `apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`, `mutualTLS`. Empty
+    /// `apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`. Empty
     /// when the plugin declares none, which exempts it from the check.
     pub implements: Vec<String>,
     /// Whether this plugin needs the request body in `on_request`.

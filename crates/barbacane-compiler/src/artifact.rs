@@ -652,7 +652,7 @@ pub struct PluginBundle {
     /// operation using it must name the security scheme that carries it.
     pub category: Option<String>,
     /// The security scheme types this plugin reads, as tokens: `apiKey`,
-    /// `http:<scheme>`, `oauth2`, `openIdConnect`, `mutualTLS`. An operation
+    /// `http:<scheme>`, `oauth2`, `openIdConnect`. An operation
     /// pairing the plugin with a requirement naming none of them is refused
     /// (E1032). Empty exempts the plugin, so one declaring nothing compiles as
     /// before.
@@ -2197,12 +2197,16 @@ fn require_implemented_scheme(
         .collect();
 
     // An operation's own requirement replaces the root's, as in E1057.
+    // Connection-level schemes are left out: no middleware reads one off the
+    // request, so declaring `mutualTLS` must not satisfy a requirement that
+    // also names a credential the plugin cannot read.
     let requirements = op.security.as_ref().or(spec.security.as_ref());
     let named: BTreeSet<String> = requirements
         .map(|reqs| {
             reqs.iter()
                 .flat_map(|r| r.keys())
                 .filter_map(|name| spec.security_schemes.get(name))
+                .filter(|scheme| scheme_carries_a_credential(scheme))
                 .map(scheme_token)
                 .collect()
         })
@@ -2230,19 +2234,22 @@ fn require_implemented_scheme(
 /// Connection-level schemes are excluded: a `mutualTLS` certificate is
 /// presented during the handshake and AsyncAPI's broker mechanisms travel on
 /// the connection, so no middleware reads either off the request.
+///
+/// An empty requirement object makes authentication optional, so an operation
+/// offering one requires nothing and yields no tokens.
 fn required_scheme_tokens(op: &crate::spec_parser::Operation, spec: &ApiSpec) -> BTreeSet<String> {
-    op.security
-        .as_ref()
-        .or(spec.security.as_ref())
-        .map(|reqs| {
-            reqs.iter()
-                .flat_map(|r| r.keys())
-                .filter_map(|name| spec.security_schemes.get(name))
-                .filter(|scheme| scheme_carries_a_credential(scheme))
-                .map(scheme_token)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(reqs) = op.security.as_ref().or(spec.security.as_ref()) else {
+        return BTreeSet::new();
+    };
+    if reqs.iter().any(|r| r.is_empty()) {
+        return BTreeSet::new();
+    }
+    reqs.iter()
+        .flat_map(|r| r.keys())
+        .filter_map(|name| spec.security_schemes.get(name))
+        .filter(|scheme| scheme_carries_a_credential(scheme))
+        .map(scheme_token)
+        .collect()
 }
 
 /// Render scheme tokens for an error message.
@@ -3388,6 +3395,74 @@ mod tests {
             // And it contributes no header to the allowlist.
             let allow = operation_header_allowlist(&op(&[]), &s).expect("allowlist");
             assert!(allow.is_empty(), "got: {allow:?}");
+        }
+
+        /// A scheme the connection carries takes no part in the match. A plugin
+        /// declaring only `mutualTLS` reads no request credential, so it must
+        /// not be satisfied by a requirement that also names one.
+        #[test]
+        fn a_connection_level_token_does_not_satisfy_a_request_credential() {
+            let mut s = secured(&[("Mtls", SecurityScheme::MutualTls)]);
+            s.security_schemes.insert(
+                "KeyHeader".to_string(),
+                SecurityScheme::ApiKey {
+                    name: "x-api-key".into(),
+                    location: "header".into(),
+                },
+            );
+            let mut req = BTreeMap::new();
+            req.insert("Mtls".to_string(), vec![]);
+            req.insert("KeyHeader".to_string(), vec![]);
+            s.security = Some(vec![req]);
+
+            assert!(
+                matches!(
+                    require_implemented_scheme(
+                        &op(&[]),
+                        &s,
+                        "cert-auth",
+                        &["mutualTLS".to_string()],
+                        "GET /x"
+                    ),
+                    Err(CompileError::UnimplementedSecurityScheme(_))
+                ),
+                "mutualTLS is not a credential a middleware reads"
+            );
+
+            // The plugin that reads the request credential still passes.
+            require_implemented_scheme(
+                &op(&[]),
+                &s,
+                "apikey-auth",
+                &["apiKey".to_string()],
+                "GET /x",
+            )
+            .expect("apikey-auth reads the key");
+        }
+
+        /// An empty requirement object makes authentication optional, so the
+        /// operation requires nothing and E1033 has nothing to warn about.
+        #[test]
+        fn an_optional_requirement_requires_nothing() {
+            let mut s = secured(&[(
+                "BasicAuth",
+                SecurityScheme::Http {
+                    scheme: "basic".into(),
+                },
+            )]);
+            assert!(
+                !required_scheme_tokens(&op(&[]), &s).is_empty(),
+                "a plain requirement requires its scheme"
+            );
+
+            // `security: [{}, {BasicAuth: []}]` permits anonymous access.
+            let mut named = BTreeMap::new();
+            named.insert("BasicAuth".to_string(), vec![]);
+            s.security = Some(vec![BTreeMap::new(), named]);
+            assert!(
+                required_scheme_tokens(&op(&[]), &s).is_empty(),
+                "an empty alternative makes the credential optional"
+            );
         }
 
         /// Tokens name scheme types, not their spelling, so case does not decide

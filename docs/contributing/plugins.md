@@ -208,11 +208,17 @@ implements = ["http:bearer", "oauth2", "openIdConnect"]
 ```
 
 The tokens name security scheme types: `apiKey`, `http:<scheme>` (`http:basic`,
-`http:bearer`), `oauth2`, `openIdConnect`, `mutualTLS`. An `http` scheme is
-qualified by its authentication scheme, since reading Basic credentials is not
-reading a Bearer token. Matching is case-insensitive, and one match among the
-schemes an operation names is enough. Leaving `implements` out exempts the
-plugin from the check.
+`http:bearer`), `oauth2` and `openIdConnect`. An `http` scheme is qualified by
+its authentication scheme, since reading Basic credentials is not reading a
+Bearer token. Matching is case-insensitive, and one match among the schemes an
+operation names is enough. Leaving `implements` out exempts the plugin from the
+check.
+
+Schemes the connection carries have no token, since no middleware reads one off
+a request: `mutualTLS`, whose certificate is presented during the TLS handshake,
+and AsyncAPI's broker mechanisms (`X509`, the SCRAM pair, `gssapi`, `plain`,
+`userPassword`). They take no part in the match, so an operation naming one
+alongside a request credential is judged on the request credential alone.
 
 The SDK macros embed `config-schema.json` into the `.wasm`, as they already do
 `plugin.toml`, so these annotations reach the compiler wherever the binary
