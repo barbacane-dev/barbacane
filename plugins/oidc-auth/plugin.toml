@@ -3,6 +3,7 @@ name = "oidc-auth"
 version = "0.1.0"
 type = "middleware"
 category = "authentication"
+implements = ["http:bearer", "oauth2", "openIdConnect"]
 description = "OIDC authentication middleware with auto-discovery and JWKS rotation"
 wasm = "oidc-auth.wasm"
 

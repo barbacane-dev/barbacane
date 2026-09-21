@@ -278,6 +278,7 @@ async fn resolve_project_plugins(
         // The plugin's family and config schema travel inside the WASM, so both
         // are read from the binary the registry stores, before it is moved.
         let category = barbacane_compiler::embedded_category(&plugin_with_binary.wasm_binary);
+        let implements = barbacane_compiler::embedded_implements(&plugin_with_binary.wasm_binary);
         let config_schema =
             barbacane_compiler::embedded_config_schema(&plugin_with_binary.wasm_binary);
 
@@ -286,6 +287,7 @@ async fn resolve_project_plugins(
             version: plugin_with_binary.version.clone(),
             plugin_type: plugin_with_binary.plugin_type.clone(),
             category,
+            implements,
             wasm_bytes: plugin_with_binary.wasm_binary,
             // TODO: read body_access + host_functions from the registry once the
             // plugins table persists capabilities. Until then the control plane

@@ -259,7 +259,10 @@ jobs:
           path: |
             plugins/*/*.wasm
             plugins/*/target
-          key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'crates/barbacane-plugin-sdk/**') }}
+          # plugin.toml and config-schema.json are embedded into the .wasm at
+          # build time and the compiler reads them from there, so a change to
+          # either must miss this cache or the binary keeps the old copy.
+          key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'plugins/**/plugin.toml', 'plugins/**/config-schema.json', 'crates/barbacane-plugin-sdk/**') }}
 
       - name: Build workspace
         run: cargo build --workspace --all-targets

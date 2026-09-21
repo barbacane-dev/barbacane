@@ -110,7 +110,7 @@ security:
   - BearerAuth: []
 ```
 
-The compiler validates that every `securitySchemes` entry referenced in a `security` block has a corresponding auth middleware in the chain (SPEC-001 `E1032`).
+The compiler checks the requirement against the chain in both directions. An operation running an authentication plugin must name a scheme that plugin reads, or compilation is refused (SPEC-001 `E1032`). An operation naming a scheme with no authentication plugin in its chain compiles with a warning (`E1033`), since the credential is forwarded and the upstream may be the one checking it.
 
 ### 4.2 Auth middleware output convention
 

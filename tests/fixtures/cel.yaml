@@ -49,6 +49,8 @@ paths:
     get:
       summary: CEL checks consumer identity after basic-auth
       operationId: getCelWithAuth
+      security:
+        - BasicAuth: []
       x-barbacane-middlewares:
         - name: basic-auth
           config:
@@ -162,8 +164,6 @@ paths:
 
 # The operations run an authentication middleware, so the document names the
 # scheme carrying the credential. That is what admits the header (ADR-0033).
-security:
-  - BasicAuth: []
 
 components:
   securitySchemes:
