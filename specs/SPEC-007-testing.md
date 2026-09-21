@@ -166,7 +166,8 @@ The compiler catches most issues before runtime:
 | Plugin config mismatch | Compile | `E1023` |
 | Missing dispatcher | Compile | `E1020` |
 | `http://` upstream (production mode) | Compile | `E1031` |
-| Auth middleware missing for secured route | Compile | `E1032` |
+| Auth plugin paired with a scheme it does not read | Compile | `E1032` |
+| Secured route with no auth plugin in its chain | Compile | `E1033` (warning) |
 | Unreachable upstream | Runtime | — |
 | Auth misconfiguration (wrong JWKS URI) | Runtime | — |
 

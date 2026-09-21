@@ -46,7 +46,7 @@ Such an operation is a compile error (`E1057`) rather than a silently broken one
 
 The scheme says where the credential travels and the plugin follows, so the compiler does not second-guess it. A key in the query string satisfies the requirement and admits no header, because it needs none. Only `mutualTLS` alone fails, since a certificate is presented during the handshake and no middleware reads it off the request. Where the scheme names a header and the plugin's configuration names a different one, the document wins and the disagreement is reported as `E1072`.
 
-Pairing a plugin with a scheme it does not implement, such as `jwt-auth` with an `apiKey`, is a different question and belongs to `E1032`.
+Pairing a plugin with a scheme it does not implement, such as `jwt-auth` with an `apiKey`, is `E1032`. An authentication plugin lists the scheme types it reads in `plugin.toml` as `implements`, using the tokens `apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect` and `mutualTLS`, and an operation whose requirement resolves to none of them is refused. A plugin declaring no list is exempt, so the mechanism stays opt-in for a third-party plugin exactly as `category` does.
 
 `category` also carries the grouping the middleware guide documents, so the pages and the compiler read one source rather than two.
 
@@ -70,7 +70,7 @@ Request headers entering the middleware chain and reaching dispatchers: HTTP, We
 
 Set 3 rests on spec vocabulary the compiler does not read today: neither `components.securitySchemes` nor the `security` blocks are parsed, and no Rust type models the scheme kinds. The compiler gains that model: `security` at the root and on the operation, `components.securitySchemes`, and a `SecurityScheme` enum covering `apiKey` (with its `in` and `name`), `http`, `oauth2` and `openIdConnect`. Resolution follows the OpenAPI rule that an operation's `security` overrides the root's, and an empty requirement (`security: []`) makes the operation anonymous and contributes nothing.
 
-The same model is what the long-specified `E1032` (a referenced scheme has no matching auth middleware) and `E1040` (a scheme is defined but never referenced) need. Those checks are not part of this decision, but the model is shaped to carry them. `E1040` is already in use for `UndeclaredPlugin`, so a scheme check takes a free code.
+The same model is what `E1032` (a referenced scheme has no matching auth middleware) and the scheme-defined-but-never-referenced check need. `E1032` is built on it, together with `E1033`, the warning for an operation whose requirement nothing in its chain verifies. `E1040` is already in use for `UndeclaredPlugin`, so the remaining check takes a free code.
 
 ### Artifact and validation
 

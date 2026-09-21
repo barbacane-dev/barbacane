@@ -447,6 +447,7 @@ pub fn compile_with_manifest(
             version: p.version.unwrap_or_else(|| "0.1.0".to_string()),
             plugin_type: p.plugin_type.unwrap_or_else(|| "plugin".to_string()),
             category: p.category,
+            implements: p.implements,
             wasm_bytes: p.wasm_bytes,
             body_access: p.body_access,
             host_functions: p.host_functions,
@@ -650,6 +651,12 @@ pub struct PluginBundle {
     /// one the compiler acts on: such a plugin verifies a credential, so an
     /// operation using it must name the security scheme that carries it.
     pub category: Option<String>,
+    /// The security scheme types this plugin reads, as tokens: `apiKey`,
+    /// `http:<scheme>`, `oauth2`, `openIdConnect`, `mutualTLS`. An operation
+    /// pairing the plugin with a requirement naming none of them is refused
+    /// (E1032). Empty exempts the plugin, so one declaring nothing compiles as
+    /// before.
+    pub implements: Vec<String>,
     /// WASM binary content.
     pub wasm_bytes: Vec<u8>,
     /// Whether this plugin needs the request body.
@@ -734,10 +741,12 @@ fn compile_inner(
     // Plugins whose manifest puts them in the `authentication` family. Each
     // verifies a credential the client sends, and the security scheme is what
     // says which header carries it.
-    let authentication_plugins: HashSet<&str> = plugins
+    // Each maps to the security scheme types the plugin declares it reads,
+    // which is empty for one that declares none.
+    let authentication_plugins: HashMap<&str, &[String]> = plugins
         .iter()
         .filter(|p| p.category.as_deref() == Some(AUTHENTICATION_CATEGORY))
-        .map(|p| p.name.as_str())
+        .map(|p| (p.name.as_str(), p.implements.as_slice()))
         .collect();
 
     // A bundle can arrive without the files those two read, as it does from the
@@ -960,14 +969,16 @@ fn compile_inner(
             }
 
             // An operation running an authentication plugin must say which
-            // scheme carries the credential (E1057), and the plugin must not be
-            // configured to read a different one (E1072).
+            // scheme carries the credential (E1057), must name one the plugin
+            // reads (E1032), and the plugin must not be configured to read a
+            // different header (E1072).
             for middleware in &middlewares {
                 let key = crate::manifest::normalize_plugin_name(&middleware.name);
-                if !authentication_plugins.contains(key.as_str()) {
+                let Some(implements) = authentication_plugins.get(key.as_str()) else {
                     continue;
-                }
+                };
                 require_security_requirement(op, spec, &middleware.name, &location)?;
+                require_implemented_scheme(op, spec, &middleware.name, implements, &location)?;
 
                 let Some(schema) = plugin_schemas.get(key.as_str()) else {
                     continue;
@@ -999,6 +1010,34 @@ fn compile_inner(
                             location: Some(location.clone()),
                         });
                     }
+                }
+            }
+
+            // The other direction: the operation names a credential the client
+            // sends, and nothing in the chain verifies it (E1033). The gateway
+            // then forwards the credential header and lets the request through
+            // unauthenticated, which the document does not say. A warning, since
+            // an upstream may be doing the checking.
+            let required = required_scheme_tokens(op, spec);
+            if !required.is_empty() {
+                // A chain that runs one is already covered by E1057 and E1032,
+                // which say whether it reads the right scheme.
+                let has_authentication = middlewares.iter().any(|middleware| {
+                    let key = crate::manifest::normalize_plugin_name(&middleware.name);
+                    authentication_plugins.contains_key(key.as_str())
+                });
+                if !has_authentication {
+                    warnings.push(CompileWarning {
+                        code: "E1033".to_string(),
+                        message: format!(
+                            "the operation requires {}, but no authentication plugin in its \
+                             chain verifies it. The credential is forwarded and the request \
+                             reaches the upstream unauthenticated. Add the plugin that reads \
+                             the scheme, or drop the requirement if the upstream checks it",
+                            joined(required.iter())
+                        ),
+                        location: Some(location.clone()),
+                    });
                 }
             }
 
@@ -2107,6 +2146,107 @@ fn require_security_requirement(
     Ok(())
 }
 
+/// The token a plugin's `implements` list uses for a security scheme.
+///
+/// An `http` scheme is qualified by its authentication scheme, since a plugin
+/// reading Basic credentials does not read a Bearer token. Every other type is
+/// its own token.
+fn scheme_token(scheme: &crate::spec_parser::SecurityScheme) -> String {
+    use crate::spec_parser::SecurityScheme;
+    match scheme {
+        SecurityScheme::ApiKey { .. } => "apiKey".to_string(),
+        SecurityScheme::Http { scheme } => format!("http:{scheme}"),
+        SecurityScheme::OAuth2 => "oauth2".to_string(),
+        SecurityScheme::OpenIdConnect => "openIdConnect".to_string(),
+        SecurityScheme::MutualTls => "mutualTLS".to_string(),
+    }
+}
+
+/// Require that an authentication plugin reads one of the schemes the operation
+/// names (E1032).
+///
+/// `E1057` establishes that a requirement exists and describes a credential the
+/// client sends. This one asks whether the plugin can read that kind of
+/// credential: `jwt-auth` against a requirement naming only an `apiKey` scheme
+/// is two valid halves whose pairing rejects every request.
+///
+/// A plugin declaring no `implements` list is exempt, so a third-party plugin
+/// compiles exactly as it did before.
+fn require_implemented_scheme(
+    op: &crate::spec_parser::Operation,
+    spec: &ApiSpec,
+    plugin: &str,
+    implements: &[String],
+    location: &str,
+) -> Result<(), CompileError> {
+    if implements.is_empty() {
+        return Ok(());
+    }
+
+    // Tokens are compared case-insensitively, so `openIdConnect` and
+    // `openidconnect` name the same scheme type.
+    let implemented: BTreeSet<String> = implements
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+
+    // An operation's own requirement replaces the root's, as in E1057.
+    let requirements = op.security.as_ref().or(spec.security.as_ref());
+    let named: BTreeSet<String> = requirements
+        .map(|reqs| {
+            reqs.iter()
+                .flat_map(|r| r.keys())
+                .filter_map(|name| spec.security_schemes.get(name))
+                .map(scheme_token)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if named
+        .iter()
+        .any(|token| implemented.contains(&token.to_ascii_lowercase()))
+    {
+        return Ok(());
+    }
+
+    Err(CompileError::UnimplementedSecurityScheme(format!(
+        "{location}: '{plugin}' reads {}, but the security requirement names {}. The plugin \
+         would find no credential it understands and reject every request. Name a scheme the \
+         plugin reads, or run the plugin that reads the scheme named",
+        joined(implements.iter()),
+        joined(named.iter()),
+    )))
+}
+
+/// The scheme types an operation's security requirement resolves to, limited to
+/// the ones describing a credential the client sends.
+///
+/// `mutualTLS` is excluded: a certificate is presented during the handshake, so
+/// no middleware reads it off the request.
+fn required_scheme_tokens(op: &crate::spec_parser::Operation, spec: &ApiSpec) -> BTreeSet<String> {
+    op.security
+        .as_ref()
+        .or(spec.security.as_ref())
+        .map(|reqs| {
+            reqs.iter()
+                .flat_map(|r| r.keys())
+                .filter_map(|name| spec.security_schemes.get(name))
+                .filter(|scheme| scheme_carries_a_credential(scheme))
+                .map(scheme_token)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Render scheme tokens for an error message.
+fn joined<'a>(tokens: impl Iterator<Item = &'a String>) -> String {
+    let rendered: Vec<String> = tokens.map(|t| format!("`{t}`")).collect();
+    if rendered.is_empty() {
+        return "nothing".to_string();
+    }
+    rendered.join(", ")
+}
+
 /// Request headers an operation accepts beyond the data plane's baseline.
 ///
 /// Derived from the spec's own vocabulary, so the document stays the contract
@@ -3095,6 +3235,162 @@ mod tests {
                 .expect("an inherited requirement is enough");
         }
 
+        /// Build a spec whose root requirement names every scheme given.
+        fn secured(schemes: &[(&str, SecurityScheme)]) -> ApiSpec {
+            let mut s = spec(schemes);
+            let mut req = BTreeMap::new();
+            for (name, _) in schemes {
+                req.insert((*name).to_string(), vec![]);
+            }
+            s.security = Some(vec![req]);
+            s
+        }
+
+        fn bearer() -> SecurityScheme {
+            SecurityScheme::Http {
+                scheme: "bearer".into(),
+            }
+        }
+
+        fn api_key_query() -> SecurityScheme {
+            SecurityScheme::ApiKey {
+                name: "token".into(),
+                location: "query".into(),
+            }
+        }
+
+        /// A plugin paired with a scheme it does not read rejects every request,
+        /// though both halves are valid on their own.
+        #[test]
+        fn an_authentication_plugin_must_read_a_scheme_the_operation_names() {
+            let jwt = ["http:bearer".to_string(), "oauth2".to_string()];
+
+            let mismatch = secured(&[("ApiKeyQuery", api_key_query())]);
+            let err = require_implemented_scheme(&op(&[]), &mismatch, "jwt-auth", &jwt, "GET /x")
+                .expect_err("jwt-auth does not read an apiKey");
+            assert!(
+                matches!(err, CompileError::UnimplementedSecurityScheme(_)),
+                "{err:?}"
+            );
+            // The message names both sides, since either can be the mistake.
+            let message = err.to_string();
+            assert!(message.contains("http:bearer"), "{message}");
+            assert!(message.contains("apiKey"), "{message}");
+
+            let matching = secured(&[("BearerAuth", bearer())]);
+            require_implemented_scheme(&op(&[]), &matching, "jwt-auth", &jwt, "GET /x")
+                .expect("jwt-auth reads a bearer token");
+
+            // OAuth2 is one of several the plugin reads, and one match is enough.
+            let oauth = secured(&[("OAuth2", SecurityScheme::OAuth2)]);
+            require_implemented_scheme(&op(&[]), &oauth, "jwt-auth", &jwt, "GET /x")
+                .expect("oauth2 is implemented too");
+        }
+
+        /// An `http` scheme is qualified by its authentication scheme: reading
+        /// Basic credentials is not reading a Bearer token.
+        #[test]
+        fn http_schemes_are_distinguished_by_their_scheme() {
+            let basic = ["http:basic".to_string()];
+            let s = secured(&[("BearerAuth", bearer())]);
+            assert!(matches!(
+                require_implemented_scheme(&op(&[]), &s, "basic-auth", &basic, "GET /x"),
+                Err(CompileError::UnimplementedSecurityScheme(_))
+            ));
+
+            let s = secured(&[(
+                "BasicAuth",
+                SecurityScheme::Http {
+                    scheme: "basic".into(),
+                },
+            )]);
+            require_implemented_scheme(&op(&[]), &s, "basic-auth", &basic, "GET /x")
+                .expect("basic-auth reads Basic");
+        }
+
+        /// Several schemes in the requirement, one of which the plugin reads.
+        /// That is the shape of a chain running two authentication plugins.
+        #[test]
+        fn one_matching_scheme_among_several_is_enough() {
+            let s = secured(&[
+                (
+                    "BasicAuth",
+                    SecurityScheme::Http {
+                        scheme: "basic".into(),
+                    },
+                ),
+                ("BearerAuth", bearer()),
+            ]);
+            require_implemented_scheme(
+                &op(&[]),
+                &s,
+                "jwt-auth",
+                &["http:bearer".to_string()],
+                "GET /x",
+            )
+            .expect("the requirement names a bearer scheme too");
+            require_implemented_scheme(
+                &op(&[]),
+                &s,
+                "basic-auth",
+                &["http:basic".to_string()],
+                "GET /x",
+            )
+            .expect("and a basic one");
+        }
+
+        /// A plugin declaring nothing is exempt, so a third-party plugin
+        /// compiles exactly as it did before the check existed.
+        #[test]
+        fn a_plugin_declaring_nothing_is_not_checked() {
+            let s = secured(&[("ApiKeyQuery", api_key_query())]);
+            require_implemented_scheme(&op(&[]), &s, "third-party-auth", &[], "GET /x")
+                .expect("no declaration means no check");
+        }
+
+        /// Tokens name scheme types, not their spelling, so case does not decide
+        /// whether a document compiles.
+        #[test]
+        fn tokens_match_case_insensitively() {
+            let s = secured(&[("Oidc", SecurityScheme::OpenIdConnect)]);
+            require_implemented_scheme(
+                &op(&[]),
+                &s,
+                "oidc-auth",
+                &["OPENIDCONNECT".to_string()],
+                "GET /x",
+            )
+            .expect("openIdConnect however it is written");
+        }
+
+        /// The operation's own requirement replaces the root's here too, so a
+        /// plugin is judged against the schemes that actually apply to it.
+        #[test]
+        fn the_operations_own_requirement_is_the_one_checked() {
+            let mut s = secured(&[("BearerAuth", bearer())]);
+            s.security_schemes
+                .insert("ApiKeyQuery".to_string(), api_key_query());
+
+            let mut narrowed = op(&[]);
+            let mut req = BTreeMap::new();
+            req.insert("ApiKeyQuery".to_string(), vec![]);
+            narrowed.security = Some(vec![req]);
+
+            assert!(
+                matches!(
+                    require_implemented_scheme(
+                        &narrowed,
+                        &s,
+                        "jwt-auth",
+                        &["http:bearer".to_string()],
+                        "GET /x"
+                    ),
+                    Err(CompileError::UnimplementedSecurityScheme(_))
+                ),
+                "the root's bearer scheme no longer applies"
+            );
+        }
+
         /// The identity headers are the auth plugins' output. A spec that could
         /// declare one would let a client forge the identity the gateway trusts.
         #[test]
@@ -3282,6 +3578,85 @@ paths:
 
         // Verify the artifact file was created
         assert!(output_path.exists());
+    }
+
+    /// A spec whose only plugins are non-authentication ones, so the chain
+    /// cannot verify the credential the requirement names.
+    fn spec_requiring_basic(operation_security: &str) -> String {
+        format!(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+components:
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic
+paths:
+  /thing:
+    get:
+      operationId: getThing
+{operation_security}      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+"#
+        )
+    }
+
+    /// An operation requiring a credential with no authentication plugin in its
+    /// chain forwards the credential and lets the request through, which the
+    /// document does not say (E1033). A warning, since an upstream may be the
+    /// one checking.
+    #[test]
+    fn compile_warns_when_nothing_verifies_the_required_credential() {
+        let temp = TempDir::new().unwrap();
+        let spec_path = create_test_spec(
+            temp.path(),
+            "test.yaml",
+            &spec_requiring_basic("      security:\n        - BasicAuth: []\n"),
+        );
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &temp.path().join("artifact.bca"),
+            &CompileOptions::default(),
+        )
+        .expect("a warning, not a refusal");
+
+        let warned: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.code == "E1033")
+            .collect();
+        assert_eq!(warned.len(), 1, "got: {:?}", result.warnings);
+        assert!(
+            warned[0].message.contains("http:basic"),
+            "the message names the scheme: {}",
+            warned[0].message
+        );
+
+        // An operation declaring itself anonymous requires nothing, so there is
+        // nothing to warn about.
+        let anonymous = create_test_spec(
+            temp.path(),
+            "anonymous.yaml",
+            &spec_requiring_basic("      security: []\n"),
+        );
+        let result = compile(
+            &[anonymous.as_path()],
+            &[],
+            &temp.path().join("anonymous.bca"),
+            &CompileOptions::default(),
+        )
+        .expect("compiles");
+        assert!(
+            !result.warnings.iter().any(|w| w.code == "E1033"),
+            "got: {:?}",
+            result.warnings
+        );
     }
 
     #[test]
@@ -3519,6 +3894,7 @@ paths:
             version: "1.0.0".to_string(),
             plugin_type: "middleware".to_string(),
             category: None,
+            implements: vec![],
             wasm_bytes: fake_wasm.clone(),
             body_access: false,
             host_functions: vec![],

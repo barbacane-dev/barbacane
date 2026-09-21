@@ -120,7 +120,8 @@ The compiler performs validation in order. Compilation stops at the first catego
 |------|-----------|
 | `E1030` | `x-sunset` present but `deprecated` is not `true` |
 | `E1031` | `http://` upstream URL in production mode |
-| `E1032` | Operation declares `security` but no matching auth middleware in the chain |
+| `E1032` | Operation runs an authentication plugin whose `implements` list names none of the scheme types its `security` requirement resolves to |
+| `E1033` | Operation requires a credential the client sends and no authentication plugin runs in its chain (warning) |
 
 ### 4.5 Completeness checks
 

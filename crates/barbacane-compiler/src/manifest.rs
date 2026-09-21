@@ -29,6 +29,8 @@ struct PluginMeta {
     plugin_type: String,
     #[serde(default)]
     category: Option<String>,
+    #[serde(default)]
+    implements: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -47,6 +49,10 @@ struct PluginMetadata {
     /// one the compiler acts on: such a plugin verifies a credential, so the
     /// operation must name the security scheme that carries it.
     category: Option<String>,
+    /// The security scheme types an authentication plugin reads, as tokens:
+    /// `apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`, `mutualTLS`. Empty
+    /// when the plugin declares none, which exempts it from the check.
+    implements: Vec<String>,
     body_access: bool,
     host_functions: Vec<String>,
 }
@@ -58,6 +64,7 @@ fn parse_plugin_metadata(content: &str) -> Option<PluginMetadata> {
         version: parsed.plugin.version,
         plugin_type: parsed.plugin.plugin_type,
         category: parsed.plugin.category,
+        implements: parsed.plugin.implements,
         body_access: parsed.capabilities.body_access,
         host_functions: parsed.capabilities.host_functions,
     })
@@ -157,6 +164,16 @@ pub fn embedded_category(wasm: &[u8]) -> Option<String> {
         .as_deref()
         .and_then(parse_plugin_metadata)
         .and_then(|m| m.category)
+}
+
+/// Read the security scheme types a plugin declares it reads, from the manifest
+/// inside its WASM binary.
+pub fn embedded_implements(wasm: &[u8]) -> Vec<String> {
+    read_embedded_manifest(wasm)
+        .as_deref()
+        .and_then(parse_plugin_metadata)
+        .map(|m| m.implements)
+        .unwrap_or_default()
 }
 
 /// The plugin's `config-schema.json` as embedded in the WASM binary.
@@ -267,6 +284,10 @@ fn resolve_plugin(
         version: metadata.as_ref().map(|m| m.version.clone()),
         plugin_type: metadata.as_ref().map(|m| m.plugin_type.clone()),
         category: metadata.as_ref().and_then(|m| m.category.clone()),
+        implements: metadata
+            .as_ref()
+            .map(|m| m.implements.clone())
+            .unwrap_or_default(),
         body_access: metadata.as_ref().is_some_and(|m| m.body_access),
         host_functions: metadata
             .as_ref()
@@ -395,6 +416,10 @@ pub struct ResolvedPlugin {
     pub plugin_type: Option<String>,
     /// The plugin's family from plugin.toml, such as `authentication`.
     pub category: Option<String>,
+    /// The security scheme types an authentication plugin reads, as tokens:
+    /// `apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`, `mutualTLS`. Empty
+    /// when the plugin declares none, which exempts it from the check.
+    pub implements: Vec<String>,
     /// Whether this plugin needs the request body in `on_request`.
     pub body_access: bool,
     /// Declared capability host-function names from plugin.toml.

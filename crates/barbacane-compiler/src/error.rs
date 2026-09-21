@@ -63,6 +63,13 @@ pub enum CompileError {
     #[error("E1057: authentication plugin without a security requirement: {0}")]
     MissingSecurityRequirement(String),
 
+    /// E1032: An operation pairs an authentication plugin with a security
+    /// requirement naming no scheme that plugin reads. Both halves are valid on
+    /// their own; the pairing rejects every request, since the plugin looks for
+    /// a credential the document says the client does not send.
+    #[error("E1032: security scheme the authentication plugin does not implement: {0}")]
+    UnimplementedSecurityScheme(String),
+
     /// E1051: Schema exceeds maximum nesting depth.
     #[error("E1051: schema too deep: {0}")]
     SchemaTooDeep(String),

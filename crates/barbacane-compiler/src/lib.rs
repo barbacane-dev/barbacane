@@ -19,8 +19,8 @@ pub use artifact::{
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{
-    embedded_category, embedded_config_schema, extract_plugin_names, PathSource, PluginSource,
-    ProjectManifest, ResolvedPlugin, UrlSource,
+    embedded_category, embedded_config_schema, embedded_implements, extract_plugin_names,
+    PathSource, PluginSource, ProjectManifest, ResolvedPlugin, UrlSource,
 };
 // Re-export spec-parser types for convenience
 pub use spec_parser::{
