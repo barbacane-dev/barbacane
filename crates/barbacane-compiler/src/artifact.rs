@@ -991,25 +991,35 @@ fn compile_inner(
                 // Only a header scheme is comparable. One naming the query
                 // string says the credential is not a header at all, and the
                 // plugin follows the document.
-                for header in applied_scheme_headers(op, spec) {
-                    if !configured.contains(&header) {
-                        warnings.push(CompileWarning {
-                            code: "E1072".to_string(),
-                            message: format!(
-                                "the security scheme says '{}' carries the credential, but \
-                                 '{}' is configured to read {}. The document is the contract, \
-                                 so name the same header in both",
-                                header,
-                                middleware.name,
-                                configured
-                                    .iter()
-                                    .map(|h| format!("'{h}'"))
-                                    .collect::<Vec<_>>()
-                                    .join(" and ")
-                            ),
-                            location: Some(location.clone()),
-                        });
-                    }
+                //
+                // Requirements are alternatives, so the plugin agrees with the
+                // document as soon as it reads one of them. Reporting each
+                // header it does not read would fire on every operation an
+                // AsyncAPI channel reaches through more than one server.
+                let scheme_headers = applied_scheme_headers(op, spec);
+                if !scheme_headers.is_empty()
+                    && !scheme_headers.iter().any(|h| configured.contains(h))
+                {
+                    warnings.push(CompileWarning {
+                        code: "E1072".to_string(),
+                        message: format!(
+                            "the security scheme says {} carries the credential, but '{}' is \
+                             configured to read {}. The document is the contract, so name the \
+                             same header in both",
+                            scheme_headers
+                                .iter()
+                                .map(|h| format!("'{h}'"))
+                                .collect::<Vec<_>>()
+                                .join(" or "),
+                            middleware.name,
+                            configured
+                                .iter()
+                                .map(|h| format!("'{h}'"))
+                                .collect::<Vec<_>>()
+                                .join(" and ")
+                        ),
+                        location: Some(location.clone()),
+                    });
                 }
             }
 
@@ -3505,6 +3515,42 @@ mod tests {
                     Err(CompileError::UnimplementedSecurityScheme(_))
                 ),
                 "the root's bearer scheme no longer applies"
+            );
+        }
+
+        /// The scheme headers an operation offers are alternatives, so a plugin
+        /// reading any one of them agrees with the document. A channel reached
+        /// through several AsyncAPI servers offers one per server, and warning
+        /// per header would fire on every such operation.
+        #[test]
+        fn scheme_headers_are_alternatives_for_the_configured_header() {
+            let mut s = spec(&[
+                (
+                    "KeyA",
+                    SecurityScheme::ApiKey {
+                        name: "X-Key-A".into(),
+                        location: "header".into(),
+                    },
+                ),
+                (
+                    "KeyB",
+                    SecurityScheme::ApiKey {
+                        name: "X-Key-B".into(),
+                        location: "header".into(),
+                    },
+                ),
+            ]);
+            let mut a = BTreeMap::new();
+            a.insert("KeyA".to_string(), vec![]);
+            let mut b = BTreeMap::new();
+            b.insert("KeyB".to_string(), vec![]);
+            s.security = Some(vec![a, b]);
+
+            let headers = applied_scheme_headers(&op(&[]), &s);
+            assert_eq!(headers.len(), 2, "both are offered: {headers:?}");
+            assert!(
+                headers.contains("x-key-a") && headers.contains("x-key-b"),
+                "{headers:?}"
             );
         }
 

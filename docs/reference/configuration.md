@@ -59,7 +59,7 @@ An operation admits:
 |---|---|
 | Baseline, on every operation | framing and negotiation (`host`, `content-type`, `content-length`, `content-encoding`, `transfer-encoding`, `accept`, `accept-encoding`, `accept-language`, `accept-charset`, `user-agent`, `range`, the `if-*` conditionals, `cache-control`, `pragma`, `expect`), CORS (`origin`, `access-control-request-method`, `access-control-request-headers`), browser metadata a browser sends unasked (`referer`, the `sec-fetch-*` set, the `sec-ch-ua*` client hints, `dnt`, `sec-gpc`, `priority`), tracing (`traceparent`, `tracestate`, `x-request-id`), the WebSocket handshake (`upgrade`, `connection`, `sec-websocket-*`), and the proxy chain (`x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host`, `x-real-ip`, `forwarded`) |
 | Declared parameters | every `in: header` parameter, and `cookie` when the operation declares an `in: cookie` parameter |
-| Security schemes | the credential header the operation's `security` requirement names: an `apiKey` scheme's own name, or `authorization` for `http`, `oauth2` and `openIdConnect` |
+| Security schemes | the credential header the operation's `security` requirement names: an `apiKey` scheme's own name, or `authorization` for `http`, `oauth2` and `openIdConnect`. An AsyncAPI operation takes its requirement from the servers its channel is reached through, which is where AsyncAPI declares one |
 | Plugins in the chain | the headers a plugin's own configuration names, such as `apikey-auth`'s `header_name`, a `rate-limit` `header:` partition, or `cache`'s `vary` list |
 
 `authorization` is deliberately not in the baseline. It travels because the
