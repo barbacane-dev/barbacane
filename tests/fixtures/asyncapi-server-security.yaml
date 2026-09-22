@@ -1,0 +1,87 @@
+asyncapi: "3.0.0"
+info:
+  title: Server Security Test API
+  version: "1.0.0"
+  description: A credential declared on the server reaches the request allowlist
+
+servers:
+  gateway:
+    host: gateway.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/apiKeyHeader'
+  internal:
+    host: internal.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/internalKey'
+
+channels:
+  publicEvents:
+    address: /events/public
+    messages:
+      Event:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+  internalEvents:
+    address: /events/internal
+    servers:
+      - $ref: '#/servers/internal'
+    messages:
+      Event:
+        contentType: application/json
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+
+operations:
+  publishPublic:
+    action: send
+    channel:
+      $ref: '#/channels/publicEvents'
+    x-barbacane-middlewares:
+      - name: apikey-auth
+        config:
+          header_name: X-API-Key
+          keys:
+            - key: "env://PUBLIC_API_KEY"
+              consumer: publisher
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+
+  publishInternal:
+    action: send
+    channel:
+      $ref: '#/channels/internalEvents'
+    x-barbacane-middlewares:
+      - name: apikey-auth
+        config:
+          header_name: X-Internal-Key
+          keys:
+            - key: "env://INTERNAL_API_KEY"
+              consumer: internal
+    x-barbacane-dispatch:
+      name: mock
+      config:
+        status: 202
+
+components:
+  securitySchemes:
+    apiKeyHeader:
+      type: httpApiKey
+      name: X-API-Key
+      in: header
+      description: Key the gateway server expects
+    internalKey:
+      type: httpApiKey
+      name: X-Internal-Key
+      in: header
+      description: Key the internal server expects

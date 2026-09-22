@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde_json::Value;
 
@@ -397,106 +397,116 @@ fn parse_security_schemes(root: &Value) -> Result<BTreeMap<String, SecuritySchem
         let Some(resolved) = resolve_component_ref(value, root, &mut visited)? else {
             continue;
         };
-        let Some(obj) = resolved.as_object() else {
-            continue;
-        };
-        let Some(kind) = obj.get("type").and_then(|v| v.as_str()) else {
-            return Err(ParseError::SchemaError(format!(
-                "security scheme '{}' has no 'type'",
-                name
-            )));
-        };
+        out.insert(name.clone(), parse_security_scheme(name, resolved)?);
+    }
+    Ok(out)
+}
 
-        let scheme = match kind {
-            // OpenAPI's `apiKey` names a request parameter. AsyncAPI reuses the
-            // word for a broker credential placed in the connection's user or
-            // password field, which has no `name` and reaches no request.
-            "apiKey" => {
-                let location = obj
-                    .get("in")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
+/// Parse one security scheme object.
+///
+/// Shared by `components.securitySchemes` and the inline schemes an AsyncAPI
+/// server may declare, so both understand the same vocabulary.
+fn parse_security_scheme(name: &str, resolved: &Value) -> Result<SecurityScheme, ParseError> {
+    let Some(obj) = resolved.as_object() else {
+        return Err(ParseError::SchemaError(format!(
+            "security scheme '{}' must be an object",
+            name
+        )));
+    };
+    let Some(kind) = obj.get("type").and_then(|v| v.as_str()) else {
+        return Err(ParseError::SchemaError(format!(
+            "security scheme '{}' has no 'type'",
+            name
+        )));
+    };
+
+    let scheme = match kind {
+        // OpenAPI's `apiKey` names a request parameter. AsyncAPI reuses the
+        // word for a broker credential placed in the connection's user or
+        // password field, which has no `name` and reaches no request.
+        "apiKey" => {
+            let location = obj
+                .get("in")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "security scheme '{}' of type apiKey has no 'in'",
+                        name
+                    ))
+                })?
+                .to_ascii_lowercase();
+            match location.as_str() {
+                "user" | "password" => SecurityScheme::Transport {
+                    kind: kind.to_string(),
+                },
+                _ => {
+                    let key_name = obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
                         ParseError::SchemaError(format!(
-                            "security scheme '{}' of type apiKey has no 'in'",
+                            "security scheme '{}' of type apiKey has no 'name'",
                             name
                         ))
-                    })?
-                    .to_ascii_lowercase();
-                match location.as_str() {
-                    "user" | "password" => SecurityScheme::Transport {
-                        kind: kind.to_string(),
-                    },
-                    _ => {
-                        let key_name =
-                            obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-                                ParseError::SchemaError(format!(
-                                    "security scheme '{}' of type apiKey has no 'name'",
-                                    name
-                                ))
-                            })?;
-                        SecurityScheme::ApiKey {
-                            name: key_name.to_string(),
-                            location,
-                        }
+                    })?;
+                    SecurityScheme::ApiKey {
+                        name: key_name.to_string(),
+                        location,
                     }
                 }
             }
-            "http" => {
-                let http_scheme = obj.get("scheme").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ParseError::SchemaError(format!(
-                        "security scheme '{}' of type http has no 'scheme'",
-                        name
-                    ))
-                })?;
-                SecurityScheme::Http {
-                    scheme: http_scheme.to_ascii_lowercase(),
-                }
+        }
+        "http" => {
+            let http_scheme = obj.get("scheme").and_then(|v| v.as_str()).ok_or_else(|| {
+                ParseError::SchemaError(format!(
+                    "security scheme '{}' of type http has no 'scheme'",
+                    name
+                ))
+            })?;
+            SecurityScheme::Http {
+                scheme: http_scheme.to_ascii_lowercase(),
             }
-            "oauth2" => SecurityScheme::OAuth2,
-            "openIdConnect" => SecurityScheme::OpenIdConnect,
-            "mutualTLS" => SecurityScheme::MutualTls,
-            // AsyncAPI's spelling of an API key in a header, query parameter
-            // or cookie. Same shape as OpenAPI's `apiKey`, different name.
-            "httpApiKey" => {
-                let key_name = obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ParseError::SchemaError(format!(
-                        "security scheme '{}' of type httpApiKey has no 'name'",
-                        name
-                    ))
-                })?;
-                let location = obj.get("in").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ParseError::SchemaError(format!(
-                        "security scheme '{}' of type httpApiKey has no 'in'",
-                        name
-                    ))
-                })?;
-                SecurityScheme::ApiKey {
-                    name: key_name.to_string(),
-                    location: location.to_ascii_lowercase(),
-                }
+        }
+        "oauth2" => SecurityScheme::OAuth2,
+        "openIdConnect" => SecurityScheme::OpenIdConnect,
+        "mutualTLS" => SecurityScheme::MutualTls,
+        // AsyncAPI's spelling of an API key in a header, query parameter
+        // or cookie. Same shape as OpenAPI's `apiKey`, different name.
+        "httpApiKey" => {
+            let key_name = obj.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                ParseError::SchemaError(format!(
+                    "security scheme '{}' of type httpApiKey has no 'name'",
+                    name
+                ))
+            })?;
+            let location = obj.get("in").and_then(|v| v.as_str()).ok_or_else(|| {
+                ParseError::SchemaError(format!(
+                    "security scheme '{}' of type httpApiKey has no 'in'",
+                    name
+                ))
+            })?;
+            SecurityScheme::ApiKey {
+                name: key_name.to_string(),
+                location: location.to_ascii_lowercase(),
             }
-            // The rest of AsyncAPI's set. A credential the transport or the
-            // broker carries, so none reaches a request header.
-            "X509"
-            | "symmetricEncryption"
-            | "asymmetricEncryption"
-            | "scramSha256"
-            | "scramSha512"
-            | "gssapi"
-            | "plain"
-            | "userPassword" => SecurityScheme::Transport {
-                kind: kind.to_string(),
-            },
-            other => {
-                return Err(ParseError::SchemaError(format!(
-                    "security scheme '{}' has unknown type '{}'",
-                    name, other
-                )));
-            }
-        };
-        out.insert(name.clone(), scheme);
-    }
-    Ok(out)
+        }
+        // The rest of AsyncAPI's set. A credential the transport or the
+        // broker carries, so none reaches a request header.
+        "X509"
+        | "symmetricEncryption"
+        | "asymmetricEncryption"
+        | "scramSha256"
+        | "scramSha512"
+        | "gssapi"
+        | "plain"
+        | "userPassword" => SecurityScheme::Transport {
+            kind: kind.to_string(),
+        },
+        other => {
+            return Err(ParseError::SchemaError(format!(
+                "security scheme '{}' has unknown type '{}'",
+                name, other
+            )));
+        }
+    };
+    Ok(scheme)
 }
 
 /// Parse a `security` list. `None` when the key is absent, so an operation can
@@ -569,13 +579,19 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     let global_middlewares = extract_middlewares(root_obj);
 
     // Security schemes and the root-level requirement they are referenced by
-    let security_schemes = parse_security_schemes(&root)?;
+    let mut security_schemes = parse_security_schemes(&root)?;
     let security = parse_security(root_obj);
 
     // Parse operations based on format
     let operations = match format {
         SpecFormat::OpenApi => parse_openapi_paths(root_obj, &root)?,
-        SpecFormat::AsyncApi => parse_asyncapi_channels(root_obj, &root)?,
+        SpecFormat::AsyncApi => {
+            // AsyncAPI puts the security requirement on the server, and an
+            // inline scheme there is registered as it is read.
+            let server_security = parse_server_security(root_obj, &root, &mut security_schemes)?;
+            let channel_servers = parse_channel_servers(root_obj, &server_security)?;
+            parse_asyncapi_channels(root_obj, &root, &server_security, &channel_servers)?
+        }
     };
 
     Ok(ApiSpec {
@@ -978,6 +994,8 @@ fn parse_responses(
 fn parse_asyncapi_channels(
     root: &serde_json::Map<String, Value>,
     spec_root: &Value,
+    server_security: &BTreeMap<String, Vec<String>>,
+    channel_servers: &BTreeMap<String, Vec<String>>,
 ) -> Result<Vec<Operation>, ParseError> {
     let mut operations = Vec::new();
 
@@ -1023,6 +1041,11 @@ fn parse_asyncapi_channels(
         // Resolve channel reference
         let (address, channel_messages, channel_params, channel_bindings) =
             resolve_channel_ref(op_obj, &channel_lookup, spec_root)?;
+
+        // AsyncAPI declares the credential on the server the channel is reached
+        // through, so the operation inherits it from there.
+        let reached = operation_servers(op_obj, channel_servers, server_security)?;
+        let security = server_security_requirement(reached.as_deref(), server_security);
 
         // Parse operation-level messages (may override or filter channel messages)
         let messages = parse_operation_messages(op_obj, &channel_messages, spec_root)?;
@@ -1099,8 +1122,7 @@ fn parse_asyncapi_channels(
             messages,
             bindings,
             responses: BTreeMap::new(),
-            // AsyncAPI carries no OpenAPI security requirement.
-            security: None,
+            security,
         });
     }
 
@@ -1114,6 +1136,227 @@ type ChannelInfo = (
     Vec<Parameter>,
     BTreeMap<String, Value>,
 );
+
+/// The security scheme names each AsyncAPI server requires.
+///
+/// AsyncAPI puts the security requirement on the server rather than the
+/// operation: `servers.<name>.security` is a list of Security Scheme Objects,
+/// each satisfying the connection on its own. An entry is normally a `$ref` into
+/// `components.securitySchemes`; an inline object is registered under a
+/// synthesized name so it reaches the header allowlist like any other.
+fn parse_server_security(
+    root: &serde_json::Map<String, Value>,
+    spec_root: &Value,
+    schemes: &mut BTreeMap<String, SecurityScheme>,
+) -> Result<BTreeMap<String, Vec<String>>, ParseError> {
+    let mut by_server = BTreeMap::new();
+
+    let Some(servers) = root.get("servers").and_then(|v| v.as_object()) else {
+        return Ok(by_server);
+    };
+
+    for (server_name, server) in servers {
+        // A server declaring no security is recorded with an empty list, not
+        // skipped: a channel reachable through it can be reached without a
+        // credential, and that is an alternative the operation must keep.
+        let Some(entries) = server.get("security").and_then(|v| v.as_array()) else {
+            by_server.insert(server_name.clone(), Vec::new());
+            continue;
+        };
+
+        let mut names = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            match entry.get("$ref").and_then(|v| v.as_str()) {
+                Some(reference) => {
+                    let name = reference
+                        .strip_prefix("#/components/securitySchemes/")
+                        .ok_or_else(|| {
+                            ParseError::SchemaError(format!(
+                                "server '{server_name}' security $ref '{reference}' must point \
+                                 into #/components/securitySchemes"
+                            ))
+                        })?;
+                    if !schemes.contains_key(name) {
+                        return Err(ParseError::SchemaError(format!(
+                            "server '{server_name}' requires security scheme '{name}', which is \
+                             not defined under components.securitySchemes"
+                        )));
+                    }
+                    names.push(name.to_string());
+                }
+                // An inline scheme has no name of its own, so it gets one. The
+                // allowlist is keyed on names, and an unnamed scheme would
+                // otherwise contribute nothing and silently drop its header.
+                None => {
+                    let mut visited = HashSet::new();
+                    let Some(resolved) = resolve_component_ref(entry, spec_root, &mut visited)?
+                    else {
+                        continue;
+                    };
+                    let name = format!("{server_name}#{index}");
+                    let scheme = parse_security_scheme(&name, resolved)?;
+                    schemes.insert(name.clone(), scheme);
+                    names.push(name);
+                }
+            }
+        }
+
+        by_server.insert(server_name.clone(), names);
+    }
+
+    Ok(by_server)
+}
+
+/// The servers a channel is available on, by channel name.
+///
+/// A channel may narrow itself with `servers: [$ref]`. One that does not is
+/// available on every server, which this records as an absent entry.
+///
+/// Every reference must resolve. One that does not narrows the channel to a
+/// server that is not there, leaving the operation requiring nothing and
+/// dropping the credential the document declares, so it is refused instead.
+fn parse_channel_servers(
+    root: &serde_json::Map<String, Value>,
+    servers: &BTreeMap<String, Vec<String>>,
+) -> Result<BTreeMap<String, Vec<String>>, ParseError> {
+    let mut by_channel = BTreeMap::new();
+
+    let Some(channels) = root.get("channels").and_then(|v| v.as_object()) else {
+        return Ok(by_channel);
+    };
+
+    for (channel_name, channel) in channels {
+        let Some(entries) = channel.get("servers").and_then(|v| v.as_array()) else {
+            continue;
+        };
+
+        by_channel.insert(
+            channel_name.clone(),
+            channel_server_names(channel_name, entries, servers)?,
+        );
+    }
+
+    Ok(by_channel)
+}
+
+/// Resolve a channel's `servers` list to server names.
+///
+/// Every reference must resolve. One that does not narrows the channel to a
+/// server that is not there, leaving the operation requiring nothing and
+/// dropping the credential the document declares, so it is refused instead.
+fn channel_server_names(
+    channel_name: &str,
+    entries: &[Value],
+    servers: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<String>, ParseError> {
+    let mut names = Vec::new();
+    for entry in entries {
+        let reference = entry.get("$ref").and_then(|v| v.as_str()).ok_or_else(|| {
+            ParseError::SchemaError(format!(
+                "channel '{channel_name}' lists a server that is not a $ref; `servers` entries \
+                 must reference #/servers/..."
+            ))
+        })?;
+        let name = reference.strip_prefix("#/servers/").ok_or_else(|| {
+            ParseError::SchemaError(format!(
+                "channel '{channel_name}' server $ref '{reference}' must point into #/servers"
+            ))
+        })?;
+        if !servers.contains_key(name) {
+            return Err(ParseError::SchemaError(format!(
+                "channel '{channel_name}' is declared on server '{name}', which is not defined \
+                 under `servers`"
+            )));
+        }
+        names.push(name.to_string());
+    }
+    Ok(names)
+}
+
+/// The servers an operation's channel is reached through.
+///
+/// `None` means every server, which is what a channel naming none is available
+/// on. A channel referenced by name is looked up; one defined inline carries its
+/// own `servers` list and is read directly, since it appears under no name.
+fn operation_servers(
+    op: &serde_json::Map<String, Value>,
+    channel_servers: &BTreeMap<String, Vec<String>>,
+    declared: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<Vec<String>>, ParseError> {
+    let Some(channel) = op.get("channel") else {
+        return Ok(None);
+    };
+
+    if let Some(reference) = channel.get("$ref").and_then(|v| v.as_str()) {
+        let Some(name) = reference.strip_prefix("#/channels/") else {
+            return Ok(None);
+        };
+        return Ok(channel_servers.get(name).cloned());
+    }
+
+    // Inline channel: its `servers` list narrows it exactly as a named one's
+    // does, so ignoring it would inherit credentials from servers the channel
+    // cannot be reached through.
+    let Some(obj) = channel.as_object() else {
+        return Ok(None);
+    };
+    match obj.get("servers").and_then(|v| v.as_array()) {
+        Some(entries) => Ok(Some(channel_server_names("<inline>", entries, declared)?)),
+        None => Ok(None),
+    }
+}
+
+/// The security requirement an operation inherits from the servers it reaches.
+///
+/// Each scheme is its own alternative, since satisfying one authorizes the
+/// connection. `None` when nothing applies, which leaves the operation as
+/// unconstrained as it was.
+fn server_security_requirement(
+    reached_servers: Option<&[String]>,
+    server_security: &BTreeMap<String, Vec<String>>,
+) -> Option<Vec<SecurityRequirement>> {
+    // Nothing declares a credential anywhere, so every operation stays as
+    // unconstrained as it was.
+    if server_security.values().all(|schemes| schemes.is_empty()) {
+        return None;
+    }
+
+    // A channel naming servers reaches those; one naming none reaches all.
+    let applicable: Vec<&String> = match reached_servers {
+        Some(names) => names.iter().collect(),
+        None => server_security.keys().collect(),
+    };
+
+    let mut schemes: BTreeSet<&String> = BTreeSet::new();
+    let mut reachable_without_a_credential = false;
+    for server in applicable {
+        match server_security.get(server) {
+            Some(names) if !names.is_empty() => schemes.extend(names.iter()),
+            // Reaching the channel through a server that requires nothing is an
+            // alternative of its own, so the operation is not unconditionally
+            // authenticated.
+            Some(_) => reachable_without_a_credential = true,
+            None => {}
+        }
+    }
+
+    if schemes.is_empty() {
+        return None;
+    }
+
+    let mut requirements: Vec<SecurityRequirement> = schemes
+        .into_iter()
+        .map(|name| {
+            let mut requirement = SecurityRequirement::new();
+            requirement.insert(name.clone(), Vec::new());
+            requirement
+        })
+        .collect();
+    if reachable_without_a_credential {
+        requirements.push(SecurityRequirement::new());
+    }
+    Some(requirements)
+}
 
 /// Build a lookup map of channel names to their definitions.
 fn build_channel_lookup(
@@ -2517,6 +2760,485 @@ operations:
             SecurityScheme::Http {
                 scheme: "bearer".to_string()
             }
+        );
+    }
+
+    /// AsyncAPI declares the credential on the server, so an operation inherits
+    /// it from the servers its channel is reached through. Without this the
+    /// operation reads as anonymous and the credential header is dropped at
+    /// ingress, though the document declares it.
+    #[test]
+    fn asyncapi_operations_inherit_their_server_security() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  gateway:
+    host: broker.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/apiKeyHeader'
+channels:
+  events:
+    address: /events
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    apiKeyHeader:
+      type: httpApiKey
+      name: X-API-Key
+      in: header
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let op = &spec.operations[0];
+        let requirement = op.security.as_ref().expect("the server requires a key");
+        assert_eq!(requirement.len(), 1);
+        assert!(
+            requirement[0].contains_key("apiKeyHeader"),
+            "{requirement:?}"
+        );
+    }
+
+    /// A channel may narrow itself to particular servers, and then only those
+    /// servers' credentials apply to operations on it.
+    #[test]
+    fn a_channel_inherits_only_from_the_servers_it_names() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  public:
+    host: public.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/PublicKey'
+  internal:
+    host: internal.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/InternalKey'
+channels:
+  restricted:
+    address: /restricted
+    servers:
+      - $ref: '#/servers/internal'
+  open:
+    address: /open
+operations:
+  onRestricted:
+    action: send
+    channel:
+      $ref: '#/channels/restricted'
+    x-barbacane-dispatch:
+      name: mock
+  onOpen:
+    action: send
+    channel:
+      $ref: '#/channels/open'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    PublicKey:
+      type: httpApiKey
+      name: X-Public-Key
+      in: header
+    InternalKey:
+      type: httpApiKey
+      name: X-Internal-Key
+      in: header
+"##;
+        let spec = parse_spec(yaml).unwrap();
+
+        let restricted = spec
+            .operations
+            .iter()
+            .find(|o| o.path == "/restricted")
+            .expect("restricted");
+        let names: Vec<&String> = restricted
+            .security
+            .as_ref()
+            .expect("required")
+            .iter()
+            .flat_map(|r| r.keys())
+            .collect();
+        assert_eq!(names, vec!["InternalKey"], "only the server it names");
+
+        // A channel naming no servers is available on every one, so every
+        // server's credential applies as an alternative.
+        let open = spec
+            .operations
+            .iter()
+            .find(|o| o.path == "/open")
+            .expect("open");
+        let mut names: Vec<&String> = open
+            .security
+            .as_ref()
+            .expect("required")
+            .iter()
+            .flat_map(|r| r.keys())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["InternalKey", "PublicKey"]);
+    }
+
+    /// Each scheme is its own alternative: satisfying one authorizes the
+    /// connection, which is AsyncAPI's rule for a server's security list.
+    #[test]
+    fn server_schemes_are_alternatives() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  gateway:
+    host: broker.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/KeyA'
+      - $ref: '#/components/securitySchemes/KeyB'
+channels:
+  events:
+    address: /events
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    KeyA:
+      type: httpApiKey
+      name: X-Key-A
+      in: header
+    KeyB:
+      type: httpApiKey
+      name: X-Key-B
+      in: header
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let requirement = spec.operations[0].security.as_ref().expect("required");
+        assert_eq!(requirement.len(), 2, "two alternatives, not one AND");
+        assert!(requirement.iter().all(|r| r.len() == 1));
+    }
+
+    /// A server may declare a scheme inline rather than referencing one. It has
+    /// no name of its own, so it gets one: the allowlist is keyed on names and
+    /// an unnamed scheme would silently contribute nothing.
+    #[test]
+    fn an_inline_server_scheme_is_registered() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  gateway:
+    host: broker.example.com
+    protocol: ws
+    security:
+      - type: httpApiKey
+        name: X-Inline-Key
+        in: header
+channels:
+  events:
+    address: /events
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let requirement = spec.operations[0].security.as_ref().expect("required");
+        let name = requirement[0].keys().next().expect("a name");
+        assert_eq!(
+            spec.security_schemes.get(name),
+            Some(&SecurityScheme::ApiKey {
+                name: "X-Inline-Key".to_string(),
+                location: "header".to_string(),
+            }),
+            "the inline scheme is registered under its synthesized name"
+        );
+    }
+
+    /// A server with no security leaves its operations as they were, rather
+    /// than declaring them anonymous.
+    #[test]
+    fn a_server_without_security_requires_nothing() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  gateway:
+    host: broker.example.com
+    protocol: ws
+channels:
+  events:
+    address: /events
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        assert!(spec.operations[0].security.is_none());
+    }
+
+    /// A requirement naming a scheme the document does not define resolves to
+    /// nothing, so it is refused rather than silently admitting no header.
+    #[test]
+    fn a_server_referencing_an_undefined_scheme_is_an_error() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  gateway:
+    host: broker.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/Nowhere'
+channels:
+  events:
+    address: /events
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+"##;
+        let err = parse_spec(yaml).expect_err("the scheme is not defined");
+        assert!(
+            matches!(err, ParseError::SchemaError(ref m) if m.contains("Nowhere")),
+            "{err:?}"
+        );
+    }
+
+    /// A channel reachable through a secured server and an unsecured one can be
+    /// reached without a credential, so anonymous stays an alternative. Dropping
+    /// it would describe the operation as authenticated on every route to it.
+    #[test]
+    fn a_channel_on_a_secured_and_an_unsecured_server_keeps_the_anonymous_route() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  secured:
+    host: secure.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/Key'
+  open:
+    host: open.example.com
+    protocol: ws
+channels:
+  events:
+    address: /events
+  securedOnly:
+    address: /secured
+    servers:
+      - $ref: '#/servers/secured'
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+  publishSecured:
+    action: send
+    channel:
+      $ref: '#/channels/securedOnly'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    Key:
+      type: httpApiKey
+      name: X-Key
+      in: header
+"##;
+        let spec = parse_spec(yaml).unwrap();
+
+        let open = spec
+            .operations
+            .iter()
+            .find(|o| o.path == "/events")
+            .expect("events");
+        let requirement = open.security.as_ref().expect("the secured server applies");
+        assert_eq!(requirement.len(), 2, "the key, or nothing: {requirement:?}");
+        assert!(
+            requirement.iter().any(|r| r.is_empty()),
+            "an unsecured server is an anonymous alternative: {requirement:?}"
+        );
+        assert!(requirement.iter().any(|r| r.contains_key("Key")));
+
+        // A channel narrowed to the secured server has no anonymous route.
+        let secured = spec
+            .operations
+            .iter()
+            .find(|o| o.path == "/secured")
+            .expect("secured");
+        let requirement = secured.security.as_ref().expect("required");
+        assert_eq!(requirement.len(), 1, "{requirement:?}");
+        assert!(requirement[0].contains_key("Key"));
+    }
+
+    /// A channel narrowed to a server that is not defined would leave the
+    /// operation requiring nothing, dropping the credential the document
+    /// declares. A typo must not do that quietly.
+    #[test]
+    fn a_channel_on_an_undefined_server_is_an_error() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Broker API
+  version: "1.0.0"
+servers:
+  internal:
+    host: internal.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/Key'
+channels:
+  events:
+    address: /events
+    servers:
+      - $ref: '#/servers/interal'
+operations:
+  publish:
+    action: send
+    channel:
+      $ref: '#/channels/events'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    Key:
+      type: httpApiKey
+      name: X-Key
+      in: header
+"##;
+        let err = parse_spec(yaml).expect_err("the server is not defined");
+        assert!(
+            matches!(err, ParseError::SchemaError(ref m) if m.contains("interal")),
+            "{err:?}"
+        );
+    }
+
+    /// A channel defined inline on the operation carries its own `servers` list.
+    /// Ignoring it inherits credentials from servers the channel cannot be
+    /// reached through, admitting a header the document does not offer there.
+    #[test]
+    fn an_inline_channel_honours_its_own_servers_list() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Inline
+  version: "1.0.0"
+servers:
+  gateway:
+    host: a.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/GatewayKey'
+  internal:
+    host: b.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/InternalKey'
+operations:
+  publish:
+    action: send
+    channel:
+      address: /events
+      servers:
+        - $ref: '#/servers/gateway'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    GatewayKey:
+      type: httpApiKey
+      name: X-Gateway-Key
+      in: header
+    InternalKey:
+      type: httpApiKey
+      name: X-Internal-Key
+      in: header
+"##;
+        let spec = parse_spec(yaml).unwrap();
+        let names: Vec<&String> = spec.operations[0]
+            .security
+            .as_ref()
+            .expect("the gateway server requires a key")
+            .iter()
+            .flat_map(|r| r.keys())
+            .collect();
+        assert_eq!(names, vec!["GatewayKey"], "only the server it names");
+    }
+
+    /// The same validation applies inline: a reference to a server that is not
+    /// defined is refused rather than silently widening the channel.
+    #[test]
+    fn an_inline_channel_on_an_undefined_server_is_an_error() {
+        let yaml = r##"
+asyncapi: "3.0.0"
+info:
+  title: Inline
+  version: "1.0.0"
+servers:
+  gateway:
+    host: a.example.com
+    protocol: ws
+    security:
+      - $ref: '#/components/securitySchemes/GatewayKey'
+operations:
+  publish:
+    action: send
+    channel:
+      address: /events
+      servers:
+        - $ref: '#/servers/getway'
+    x-barbacane-dispatch:
+      name: mock
+components:
+  securitySchemes:
+    GatewayKey:
+      type: httpApiKey
+      name: X-Gateway-Key
+      in: header
+"##;
+        let err = parse_spec(yaml).expect_err("the server is not defined");
+        assert!(
+            matches!(err, ParseError::SchemaError(ref m) if m.contains("getway")),
+            "{err:?}"
         );
     }
 
