@@ -3,10 +3,17 @@
 # `.coderabbit.yaml` gates automatic review on that label, which covers a pull
 # request opened with it already applied. Labelling one that is already open is
 # the common case here, and a comment is what reliably triggers a review then.
+#
+# `pull_request`, not `pull_request_target`. The latter would also work for a
+# pull request from a fork, where this one gets a read-only token and the
+# comment fails, but it runs with write access in the base repository's context
+# and zizmor rates it high severity for that reason. A fork's pull request is
+# rare here and a maintainer can ask for the review in a comment, which is not
+# worth carrying that trigger for.
 name: Deep review
 
 on:
-  pull_request_target:
+  pull_request:
     types: [labeled]
 
 permissions:
@@ -15,9 +22,6 @@ permissions:
 jobs:
   request:
     name: Request a CodeRabbit review
-    # `pull_request_target` runs with write access against the base repository,
-    # so this checks out nothing and runs no code from the pull request. It only
-    # posts a comment.
     if: github.event.label.name == 'deep-review'
     runs-on: ubuntu-latest
     steps:
