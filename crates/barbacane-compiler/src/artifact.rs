@@ -341,30 +341,31 @@ fn merge_schema_defs(
         return renames;
     };
 
+    // A name already taken is renamed, whether or not the two bodies look the
+    // same. Identical bodies are not interchangeable: each carries references
+    // resolved against its own document, so sharing one entry between two specs
+    // would let a rename in the second silently change what the first resolves.
+    // Every spec therefore owns the entries it contributes.
     for (name, body) in defs {
-        match pool.get(name) {
-            // The same definition under the same name: one copy serves both.
-            Some(existing) if existing == body => {}
-            Some(_) => {
-                let mut renamed = format!("{name}__{spec_index}");
-                let mut nth = 2;
-                while pool.contains_key(&renamed) {
-                    renamed = format!("{name}__{spec_index}_{nth}");
-                    nth += 1;
-                }
-                pool.insert(renamed.clone(), body.clone());
-                renames.insert(name.clone(), renamed);
+        if pool.contains_key(name) {
+            let mut renamed = format!("{name}__{spec_index}");
+            let mut nth = 2;
+            while pool.contains_key(&renamed) {
+                renamed = format!("{name}__{spec_index}_{nth}");
+                nth += 1;
             }
-            None => {
-                pool.insert(name.clone(), body.clone());
-            }
+            pool.insert(renamed.clone(), body.clone());
+            renames.insert(name.clone(), renamed);
+        } else {
+            pool.insert(name.clone(), body.clone());
         }
     }
 
-    // A renamed definition may be referenced from other definitions in the same
-    // pool, so the bodies just inserted are rewritten too.
+    // A renamed definition may be referenced from others this spec contributed,
+    // so its own entries are rewritten. Only its own: every key touched here was
+    // inserted just above.
     if !renames.is_empty() {
-        for (name, _) in defs {
+        for name in defs.keys() {
             let key = renames.get(name).unwrap_or(name);
             if let Some(body) = pool.get_mut(key) {
                 rewrite_defs_refs(body, &renames);
@@ -412,8 +413,16 @@ fn rewrite_defs_refs(value: &mut serde_json::Value, renames: &BTreeMap<String, S
                         Some((first, rest)) => (first, Some(rest)),
                         None => (suffix, None),
                     };
-                    if let Some(renamed) = renames.get(first) {
-                        let mut updated = format!("#/$defs/{renamed}");
+                    // Pointers carry an escaped token; the pool and the rename
+                    // map are keyed on the name itself. A definition named with
+                    // a `/` or a `~` is legal, and matching the escaped form
+                    // against an unescaped key would silently miss the rename,
+                    // leaving the pointer on a name that now means something
+                    // else.
+                    let name = crate::spec_parser::pointer_unescape(first);
+                    if let Some(renamed) = renames.get(&name) {
+                        let mut updated =
+                            format!("#/$defs/{}", crate::spec_parser::pointer_escape(renamed));
                         if let Some(rest) = rest {
                             updated.push('/');
                             updated.push_str(rest);

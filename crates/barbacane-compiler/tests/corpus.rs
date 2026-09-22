@@ -488,3 +488,121 @@ components:
         }
     }
 }
+
+/// Two documents in one artifact keep their own definitions.
+///
+/// Both declare `Wrapper` with a byte-identical body, and both declare `Inner`
+/// with different bodies. Sharing one `Wrapper` entry between them would let the
+/// rename of the second document's `Inner` reach back and change what the first
+/// document's operations resolve, silently swapping one schema for another.
+#[test]
+fn two_specs_sharing_a_definition_name_keep_their_own() {
+    use barbacane_compiler::{compile_with_manifest, CompileOptions, ProjectManifest};
+    fn spec_with(inner_type: &str) -> String {
+        format!(
+            r#"openapi: "3.1.0"
+info: {{ title: Shared, version: "1.0.0" }}
+paths:
+  /{inner_type}:
+    post:
+      operationId: post{inner_type}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {{ $ref: '#/components/schemas/Wrapper' }}
+      responses:
+        "200": {{ description: ok }}
+      x-barbacane-dispatch: {{ name: mock, config: {{ status: 200 }} }}
+components:
+  schemas:
+    Wrapper:
+      type: object
+      properties:
+        inner: {{ $ref: '#/components/schemas/Inner' }}
+    Inner:
+      type: {inner_type}
+"#
+        )
+    }
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut paths = Vec::new();
+    for kind in ["string", "integer"] {
+        let path = dir.path().join(format!("{kind}.yaml"));
+        std::fs::write(&path, spec_with(kind)).expect("write");
+        paths.push(path);
+    }
+
+    let manifest_path = dir.path().join("barbacane.yaml");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repository root");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "plugins:\n  mock:\n    path: {}\n",
+            repo.join("plugins/mock/mock.wasm").display()
+        ),
+    )
+    .expect("write manifest");
+
+    let out = dir.path().join("out.bca");
+    let refs: Vec<&Path> = paths.iter().map(|p| p.as_path()).collect();
+    let manifest_text = std::fs::read_to_string(&manifest_path).expect("manifest");
+    let manifest = ProjectManifest::parse(&manifest_text, &manifest_path).expect("manifest");
+    compile_with_manifest(
+        &refs,
+        &manifest,
+        manifest_path.parent().expect("parent"),
+        &out,
+        &CompileOptions {
+            allow_plaintext: true,
+            ..Default::default()
+        },
+    )
+    .expect("compile");
+
+    // Each operation must still reach the `Inner` its own document declared.
+    let routes = barbacane_compiler::load_routes(&out).expect("read routes back");
+    let pool = routes
+        .schema_defs
+        .expect("the pool holds both documents' definitions");
+
+    for op in &routes.operations {
+        let expected = op.path.trim_start_matches('/');
+        let schema = op
+            .request_body
+            .as_ref()
+            .expect("body")
+            .content
+            .values()
+            .next()
+            .expect("content")
+            .schema
+            .as_ref()
+            .expect("schema");
+
+        // Follow the wrapper, then its inner, through the pool.
+        let wrapper_name = schema["$ref"]
+            .as_str()
+            .expect("ref")
+            .rsplit('/')
+            .next()
+            .unwrap();
+        let wrapper = &pool[wrapper_name];
+        let inner_ref = wrapper["properties"]["inner"]["$ref"]
+            .as_str()
+            .expect("inner ref")
+            .rsplit('/')
+            .next()
+            .unwrap();
+        let inner_type = pool[inner_ref]["type"].as_str().expect("type");
+        assert_eq!(
+            inner_type, expected,
+            "operation {} resolved to the other document's Inner",
+            op.path
+        );
+    }
+}

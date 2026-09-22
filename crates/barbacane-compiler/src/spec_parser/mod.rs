@@ -15,3 +15,4 @@ pub use model::{
     SpecFormat,
 };
 pub use parser::{parse_spec, parse_spec_file};
+pub(crate) use parser::{pointer_escape, pointer_unescape};

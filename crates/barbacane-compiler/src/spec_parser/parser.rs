@@ -321,12 +321,12 @@ fn pointer_ref(pointer: &str) -> Value {
 }
 
 /// Escape a name for use as one JSON Pointer token (RFC 6901): `~` then `/`.
-fn pointer_escape(token: &str) -> String {
+pub(crate) fn pointer_escape(token: &str) -> String {
     token.replace('~', "~0").replace('/', "~1")
 }
 
 /// Decode one JSON Pointer token (RFC 6901): `~1` then `~0`.
-fn pointer_unescape(token: &str) -> String {
+pub(crate) fn pointer_unescape(token: &str) -> String {
     token.replace("~1", "/").replace("~0", "~")
 }
 
