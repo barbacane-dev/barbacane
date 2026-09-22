@@ -488,6 +488,7 @@ mod tests {
     fn empty_spec() -> ApiSpec {
         ApiSpec {
             filename: None,
+            schema_defs: None,
             format: SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "Test".to_string(),

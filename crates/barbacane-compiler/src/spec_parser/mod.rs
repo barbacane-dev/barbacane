@@ -8,6 +8,7 @@ pub mod model;
 pub mod parser;
 
 pub use error::ParseError;
+pub use model::attach_reachable_defs;
 pub use model::{
     ApiSpec, AsyncAction, Channel, ContentSchema, DispatchConfig, Message, MiddlewareConfig,
     Operation, Parameter, RequestBody, ResponseContent, SecurityRequirement, SecurityScheme,

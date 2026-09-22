@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use barbacane_compiler::spec_parser::{parse_spec_file, ApiSpec};
+use barbacane_compiler::spec_parser::{parse_spec, parse_spec_file, ApiSpec};
 use serde_json::Value;
 
 /// Methods an OpenAPI path item may hold, including `query` from 3.2.
@@ -294,6 +294,9 @@ fn every_local_reference_resolves() {
     for path in corpus() {
         let spec = parse_spec_file(&path).expect("parse");
         for (where_, schema) in schemas_of(&spec) {
+            // Definitions are held once for the document, so a schema resolves
+            // against the pool rather than against itself.
+            let schema = spec.self_contained(&schema);
             let mut dangling = Vec::new();
             each_ref(&schema, &mut |reference| {
                 let Some(rest) = reference.strip_prefix("#/") else {
@@ -313,7 +316,7 @@ fn every_local_reference_resolves() {
             });
             assert!(
                 dangling.is_empty(),
-                "{} {where_} points at definitions it does not carry: {dangling:?}",
+                "{} {where_} points at definitions the document does not hold: {dangling:?}",
                 path.display()
             );
         }
@@ -325,6 +328,9 @@ fn every_schema_compiles() {
     for path in corpus() {
         let spec = parse_spec_file(&path).expect("parse");
         for (where_, schema) in schemas_of(&spec) {
+            // The data plane attaches the pool before compiling, so this builds
+            // the same value it does.
+            let schema = spec.self_contained(&schema);
             if let Err(e) = jsonschema::options().build(&schema) {
                 panic!(
                     "{} {where_} produced a schema the validator cannot build: {e}",
@@ -398,4 +404,87 @@ fn configured_header_names_reach_the_allowlist() {
         "rate-limit partitions on header:x-client-id, which must be admitted: {:?}",
         limited.allowed_request_headers
     );
+}
+
+/// A definition many operations reach is held once, not once per operation.
+///
+/// Parsing a published Stripe document used 5.67 GB before this was true: its
+/// `error` schema is referenced once per operation, 594 times, and reaches most
+/// of a 1454-component graph, so every operation carried its own copy. The cost
+/// has to scale with the size of the schema graph, not with the number of
+/// operations that reach it.
+#[test]
+fn a_shared_definition_is_not_copied_per_operation() {
+    /// A document where every operation references the same deep schema.
+    fn spec_with(operations: usize) -> String {
+        let mut paths = String::new();
+        for i in 0..operations {
+            paths.push_str(&format!(
+                r#"
+  /thing{i}:
+    post:
+      operationId: post{i}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {{ $ref: '#/components/schemas/Shared' }}
+      responses:
+        "200": {{ description: ok }}
+      x-barbacane-dispatch: {{ name: mock, config: {{ status: 200 }} }}"#
+            ));
+        }
+        format!(
+            r#"openapi: "3.1.0"
+info: {{ title: Shared, version: "1.0.0" }}
+paths:{paths}
+components:
+  schemas:
+    Shared:
+      type: object
+      properties:
+        a: {{ $ref: '#/components/schemas/LevelA' }}
+    LevelA:
+      type: object
+      properties:
+        b: {{ $ref: '#/components/schemas/LevelB' }}
+    LevelB:
+      type: object
+      properties:
+        c: {{ type: string }}
+"#
+        )
+    }
+
+    let small = parse_spec(&spec_with(2)).expect("parse");
+    let large = parse_spec(&spec_with(200)).expect("parse");
+
+    let defs_len = |spec: &ApiSpec| {
+        spec.schema_defs
+            .as_ref()
+            .and_then(|d| d.as_object())
+            .map(|o| o.len())
+            .unwrap_or(0)
+    };
+
+    // The pool holds the three shared definitions once, whatever the operation
+    // count. A per-operation copy would grow with it.
+    assert_eq!(defs_len(&small), 3, "pool: {:?}", small.schema_defs);
+    assert_eq!(
+        defs_len(&large),
+        defs_len(&small),
+        "the pool must not grow with the number of operations that reach it"
+    );
+
+    // And no schema carries its own copy of the definitions.
+    for op in &large.operations {
+        let body = op.request_body.as_ref().expect("request body");
+        for content in body.content.values() {
+            let schema = content.schema.as_ref().expect("schema");
+            assert!(
+                schema.get("$defs").is_none(),
+                "a schema carried its own definitions: {schema}"
+            );
+        }
+    }
 }
