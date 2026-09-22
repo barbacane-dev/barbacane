@@ -6,6 +6,11 @@ use std::collections::BTreeMap;
 pub struct ApiSpec {
     /// Original filename (if parsed from file).
     pub filename: Option<String>,
+    /// The document's `$defs` pool: every resolved definition, held once and
+    /// pointed at by every schema that reaches it. `None` when no schema in the
+    /// document references anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_defs: Option<serde_json::Value>,
     /// The format detected from the root field.
     pub format: SpecFormat,
     /// The spec version string (e.g. "3.1.0").
@@ -70,6 +75,89 @@ pub enum SecurityScheme {
     /// for diagnostics.
     #[serde(rename = "transport")]
     Transport { kind: String },
+}
+
+impl ApiSpec {
+    /// A schema with the document's definition pool attached.
+    ///
+    /// Definitions are held once per document and pointed at, so a schema on
+    /// its own carries `#/$defs/...` pointers and nothing to resolve them. This
+    /// puts the pool back, which is what the data plane does before compiling a
+    /// validator, and what anything reading a schema in isolation needs.
+    pub fn self_contained(&self, schema: &serde_json::Value) -> serde_json::Value {
+        attach_reachable_defs(schema, self.schema_defs.as_ref())
+    }
+}
+
+/// Attach the definitions a schema reaches, from a document's `$defs` pool.
+///
+/// Only what the schema actually reaches, not the whole pool: attaching every
+/// definition to every schema would cost exactly the copy-per-schema that
+/// holding them once exists to avoid.
+///
+/// A schema already carrying its own `$defs`, as one from an older artifact
+/// does, is returned unchanged.
+pub fn attach_reachable_defs(
+    schema: &serde_json::Value,
+    pool: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let (Some(serde_json::Value::Object(pool)), Some(obj)) = (pool, schema.as_object()) else {
+        return schema.clone();
+    };
+    if obj.contains_key("$defs") {
+        return schema.clone();
+    }
+
+    let mut reachable = std::collections::BTreeSet::new();
+    collect_reachable_defs(schema, pool, &mut reachable);
+    if reachable.is_empty() {
+        return schema.clone();
+    }
+
+    let mut defs = serde_json::Map::with_capacity(reachable.len());
+    for name in reachable {
+        if let Some(body) = pool.get(&name) {
+            defs.insert(name, body.clone());
+        }
+    }
+    let mut merged = obj.clone();
+    merged.insert("$defs".to_string(), serde_json::Value::Object(defs));
+    serde_json::Value::Object(merged)
+}
+
+/// Collect the `$defs` names a value reaches, following definitions it names.
+fn collect_reachable_defs(
+    value: &serde_json::Value,
+    pool: &serde_json::Map<String, serde_json::Value>,
+    found: &mut std::collections::BTreeSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(obj) => {
+            if let Some(serde_json::Value::String(pointer)) = obj.get("$ref") {
+                if let Some(suffix) = pointer.strip_prefix("#/$defs/") {
+                    // Pointers escape a name, the pool keys it unescaped.
+                    let escaped = suffix.split('/').next().unwrap_or(suffix);
+                    let name = escaped.replace("~1", "/").replace("~0", "~");
+                    // A definition already seen is already followed, which is
+                    // also what terminates a schema that refers to itself.
+                    if found.insert(name.clone()) {
+                        if let Some(body) = pool.get(&name) {
+                            collect_reachable_defs(body, pool, found);
+                        }
+                    }
+                }
+            }
+            for v in obj.values() {
+                collect_reachable_defs(v, pool, found);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                collect_reachable_defs(v, pool, found);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Detected spec format.

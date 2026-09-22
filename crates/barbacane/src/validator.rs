@@ -319,6 +319,18 @@ fn compile_schema_with_formats(schema: &Value) -> Option<jsonschema::Validator> 
         .ok()
 }
 
+/// Compile a schema that points into the artifact's shared definition pool.
+///
+/// The compiler holds each definition once for the whole artifact, so a schema
+/// arrives carrying `#/$defs/...` pointers and no definitions of its own. The
+/// pool is attached here, for this compilation only, so the pointers resolve.
+/// A schema that already carries its own `$defs`, as one from an older artifact
+/// does, is left exactly as it is.
+fn compile_schema_with_defs(schema: &Value, defs: Option<&Value>) -> Option<jsonschema::Validator> {
+    let attached = barbacane_compiler::spec_parser::attach_reachable_defs(schema, defs);
+    compile_schema_with_formats(&attached)
+}
+
 /// Compiled validator for an operation.
 pub struct OperationValidator {
     /// Path parameters with their compiled schemas.
@@ -392,6 +404,15 @@ fn validate_params(
 impl OperationValidator {
     /// Create a new validator from parsed operation metadata.
     pub fn new(parameters: &[Parameter], request_body: Option<&RequestBody>) -> Self {
+        Self::with_defs(parameters, request_body, None)
+    }
+
+    /// Build against the artifact's shared definition pool.
+    pub fn with_defs(
+        parameters: &[Parameter],
+        request_body: Option<&RequestBody>,
+        schema_defs: Option<&Value>,
+    ) -> Self {
         let mut path_params = Vec::new();
         let mut query_params = Vec::new();
         let mut header_params = Vec::new();
@@ -401,7 +422,10 @@ impl OperationValidator {
             let compiled = CompiledParam {
                 name: param.name.clone(),
                 required: param.required || param.location == "path", // Path params always required
-                schema: param.schema.as_ref().and_then(compile_schema_with_formats),
+                schema: param
+                    .schema
+                    .as_ref()
+                    .and_then(|s| compile_schema_with_defs(s, schema_defs)),
             };
 
             match param.location.as_str() {
@@ -419,7 +443,7 @@ impl OperationValidator {
                 let schema = content_schema
                     .schema
                     .as_ref()
-                    .and_then(compile_schema_with_formats);
+                    .and_then(|s| compile_schema_with_defs(s, schema_defs));
                 content.insert(media_type.clone(), schema);
             }
             CompiledRequestBody {

@@ -21,6 +21,13 @@ use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
 ///
+/// v7 moves schema definitions out of the individual schemas and into one
+/// `schema_defs` pool on `routes.json`, which every schema points into. A
+/// definition many operations reach is held once instead of once per operation.
+/// A v6 artifact carries its definitions inside each schema and still validates,
+/// so the data plane attaches the pool only to a schema that has none, but a v7
+/// artifact cannot be read by a data plane that does not know about the pool.
+///
 /// v6 records each operation's `allowed_request_headers`, the request headers
 /// it accepts on top of the data plane's baseline. The data plane compares this
 /// constant on load, so an artifact built before it is refused by version
@@ -34,7 +41,7 @@ use crate::manifest::ProjectManifest;
 ///
 /// v4 added Ed25519 signing fields and recorded each plugin's declared
 /// capability `host_functions` in the manifest.
-pub const ARTIFACT_VERSION: u32 = 6;
+pub const ARTIFACT_VERSION: u32 = 7;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
@@ -318,10 +325,137 @@ pub struct SourceSpec {
     pub version: String,
 }
 
+/// Merge one spec's definition pool into the artifact's, renaming collisions.
+///
+/// Definition names come from a reference's last segment, so two documents can
+/// each produce `error` for different schemas. A name already taken by a
+/// different body is given a spec-scoped one, and the returned map says which
+/// references that spec must rewrite.
+fn merge_schema_defs(
+    spec: &ApiSpec,
+    spec_index: usize,
+    pool: &mut serde_json::Map<String, serde_json::Value>,
+) -> BTreeMap<String, String> {
+    let mut renames = BTreeMap::new();
+    let Some(serde_json::Value::Object(defs)) = spec.schema_defs.as_ref() else {
+        return renames;
+    };
+
+    // A name already taken is renamed, whether or not the two bodies look the
+    // same. Identical bodies are not interchangeable: each carries references
+    // resolved against its own document, so sharing one entry between two specs
+    // would let a rename in the second silently change what the first resolves.
+    // Every spec therefore owns the entries it contributes.
+    for (name, body) in defs {
+        if pool.contains_key(name) {
+            let mut renamed = format!("{name}__{spec_index}");
+            let mut nth = 2;
+            while pool.contains_key(&renamed) {
+                renamed = format!("{name}__{spec_index}_{nth}");
+                nth += 1;
+            }
+            pool.insert(renamed.clone(), body.clone());
+            renames.insert(name.clone(), renamed);
+        } else {
+            pool.insert(name.clone(), body.clone());
+        }
+    }
+
+    // A renamed definition may be referenced from others this spec contributed,
+    // so its own entries are rewritten. Only its own: every key touched here was
+    // inserted just above.
+    if !renames.is_empty() {
+        for name in defs.keys() {
+            let key = renames.get(name).unwrap_or(name);
+            if let Some(body) = pool.get_mut(key) {
+                rewrite_defs_refs(body, &renames);
+            }
+        }
+    }
+    renames
+}
+
+/// Rewrite every `$defs` pointer an operation's schemas carry.
+fn rewrite_operation_defs_refs(op: &mut CompiledOperation, renames: &BTreeMap<String, String>) {
+    for param in &mut op.parameters {
+        if let Some(schema) = param.schema.as_mut() {
+            rewrite_defs_refs(schema, renames);
+        }
+    }
+    if let Some(body) = op.request_body.as_mut() {
+        for content in body.content.values_mut() {
+            if let Some(schema) = content.schema.as_mut() {
+                rewrite_defs_refs(schema, renames);
+            }
+        }
+    }
+    for response in op.responses.values_mut() {
+        for content in response.content.values_mut() {
+            if let Some(schema) = content.schema.as_mut() {
+                rewrite_defs_refs(schema, renames);
+            }
+        }
+    }
+    for message in &mut op.messages {
+        if let Some(payload) = message.payload.as_mut() {
+            rewrite_defs_refs(payload, renames);
+        }
+    }
+}
+
+/// Rewrite `#/$defs/<name>` pointers according to `renames`, in place.
+fn rewrite_defs_refs(value: &mut serde_json::Value, renames: &BTreeMap<String, String>) {
+    match value {
+        serde_json::Value::Object(obj) => {
+            if let Some(serde_json::Value::String(pointer)) = obj.get("$ref") {
+                if let Some(suffix) = pointer.strip_prefix("#/$defs/") {
+                    let (first, rest) = match suffix.split_once('/') {
+                        Some((first, rest)) => (first, Some(rest)),
+                        None => (suffix, None),
+                    };
+                    // Pointers carry an escaped token; the pool and the rename
+                    // map are keyed on the name itself. A definition named with
+                    // a `/` or a `~` is legal, and matching the escaped form
+                    // against an unescaped key would silently miss the rename,
+                    // leaving the pointer on a name that now means something
+                    // else.
+                    let name = crate::spec_parser::pointer_unescape(first);
+                    if let Some(renamed) = renames.get(&name) {
+                        let mut updated =
+                            format!("#/$defs/{}", crate::spec_parser::pointer_escape(renamed));
+                        if let Some(rest) = rest {
+                            updated.push('/');
+                            updated.push_str(rest);
+                        }
+                        obj.insert("$ref".to_string(), serde_json::Value::String(updated));
+                    }
+                }
+            }
+            for v in obj.values_mut() {
+                rewrite_defs_refs(v, renames);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                rewrite_defs_refs(v, renames);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Compiled route data stored in routes.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompiledRoutes {
     pub operations: Vec<CompiledOperation>,
+    /// The `$defs` pool every operation schema points into.
+    ///
+    /// Held once for the artifact rather than copied into each schema. A
+    /// definition many operations reach costs one entry here instead of one per
+    /// operation, which is the difference between megabytes and gigabytes on a
+    /// document that shares its schemas heavily.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_defs: Option<serde_json::Value>,
 }
 
 /// A compiled operation ready for the data plane.
@@ -721,6 +855,8 @@ fn compile_inner(
 ) -> Result<CompileResult, CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut operations: Vec<CompiledOperation> = Vec::new();
+    // The artifact's shared definition pool, merged from each spec's own.
+    let mut schema_defs = serde_json::Map::new();
 
     // Per-plugin set of secret (writeOnly) config fields, from each plugin's
     // config-schema.json, used to warn on plaintext secrets baked into configs.
@@ -776,8 +912,14 @@ fn compile_inner(
     // Extract root-level MCP config from first spec that has it
     let root_mcp_config = extract_root_mcp_config(specs);
 
-    for (spec, _, _) in specs {
+    for (spec_index, (spec, _, _)) in specs.iter().enumerate() {
         let spec_file = spec.filename.as_deref().unwrap_or("unknown");
+
+        // Names come from a reference's last segment, so two documents can each
+        // produce `error` for different schemas. Merging renames a collision
+        // and records it, and every reference this spec emits is rewritten to
+        // follow.
+        let renames = merge_schema_defs(spec, spec_index, &mut schema_defs);
 
         // Validate global middlewares (E1011)
         for (idx, mw) in spec.global_middlewares.iter().enumerate() {
@@ -1091,6 +1233,13 @@ fn compile_inner(
                 mcp_description,
                 allowed_request_headers,
             });
+
+            // Follow any definition this spec had renamed on merge.
+            if !renames.is_empty() {
+                if let Some(compiled) = operations.last_mut() {
+                    rewrite_operation_defs_refs(compiled, &renames);
+                }
+            }
         }
     }
 
@@ -1101,7 +1250,10 @@ fn compile_inner(
     }
 
     // Build routes.json
-    let routes = CompiledRoutes { operations };
+    let routes = CompiledRoutes {
+        operations,
+        schema_defs: (!schema_defs.is_empty()).then_some(serde_json::Value::Object(schema_defs)),
+    };
     let routes_json = serde_json::to_string_pretty(&routes)?;
     let routes_sha256 = compute_sha256(routes_json.as_bytes());
 
@@ -3040,6 +3192,7 @@ mod tests {
         fn spec(schemes: &[(&str, SecurityScheme)]) -> ApiSpec {
             ApiSpec {
                 filename: None,
+                schema_defs: None,
                 format: SpecFormat::OpenApi,
                 version: "3.1.0".into(),
                 title: "t".into(),
@@ -5269,6 +5422,7 @@ paths:
     fn extract_root_mcp_config_enabled() {
         let spec = ApiSpec {
             filename: None,
+            schema_defs: None,
             format: SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "My API".to_string(),
@@ -5296,6 +5450,7 @@ paths:
     fn extract_root_mcp_config_disabled_by_default() {
         let spec = ApiSpec {
             filename: None,
+            schema_defs: None,
             format: SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "Test".to_string(),
@@ -5557,6 +5712,7 @@ mod waf_tests {
     fn spec_with_waf(value: serde_json::Value) -> (ApiSpec, String, String) {
         let spec = ApiSpec {
             filename: Some("api.yaml".to_string()),
+            schema_defs: None,
             format: crate::spec_parser::SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "test".to_string(),

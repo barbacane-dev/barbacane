@@ -8,9 +8,11 @@ pub mod model;
 pub mod parser;
 
 pub use error::ParseError;
+pub use model::attach_reachable_defs;
 pub use model::{
     ApiSpec, AsyncAction, Channel, ContentSchema, DispatchConfig, Message, MiddlewareConfig,
     Operation, Parameter, RequestBody, ResponseContent, SecurityRequirement, SecurityScheme,
     SpecFormat,
 };
 pub use parser::{parse_spec, parse_spec_file};
+pub(crate) use parser::{pointer_escape, pointer_unescape};

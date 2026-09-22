@@ -185,31 +185,37 @@ fn is_openapi_30(root: &Value) -> bool {
 ///
 /// Every referenced definition is carried in `$defs` and pointed at, so the
 /// schema resolves against itself once it is separated from the document.
-fn resolve_schema(value: &Value, root: &Value) -> Result<Value, ParseError> {
-    let mut defs = SchemaDefs::default();
-    let mut resolved = resolve_schema_refs(value, root, &mut defs, &BTreeMap::new())?;
-
-    if !defs.bodies.is_empty() {
-        let mut map = serde_json::Map::new();
-        for (name, body) in defs.bodies {
-            if let Some(body) = body {
-                map.insert(name, body);
-            }
-        }
-        // A non-object schema carries no reference, so it needs no definitions.
-        if !map.is_empty() {
-            if let Value::Object(obj) = &mut resolved {
-                obj.insert("$defs".to_string(), Value::Object(map));
-            }
-        }
-    }
-
-    // After the definitions are in place, so the schemas they hold are
-    // converted too.
+fn resolve_schema(value: &Value, root: &Value, defs: &mut SchemaDefs) -> Result<Value, ParseError> {
+    let mut resolved = resolve_schema_refs(value, root, defs, &BTreeMap::new())?;
     if is_openapi_30(root) {
         convert_draft4_exclusive_bounds(&mut resolved);
     }
     Ok(resolved)
+}
+
+/// The document's definition pool, as the `$defs` object every schema in it
+/// points into.
+///
+/// One pool per document rather than one per schema. A definition reachable
+/// from many operations is then held once instead of once per operation, which
+/// is what a document like Stripe's does with its `error` schema: 594
+/// references, one per operation, each reaching most of the schema graph.
+fn finish_schema_defs(defs: SchemaDefs, root: &Value) -> Option<Value> {
+    let openapi_30 = is_openapi_30(root);
+    let mut map = serde_json::Map::new();
+    for (name, body) in defs.bodies {
+        if let Some(mut body) = body {
+            if openapi_30 {
+                convert_draft4_exclusive_bounds(&mut body);
+            }
+            map.insert(name, body);
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(Value::Object(map))
+    }
 }
 
 /// Recursively rewrite `$ref` pointers to point inside the schema.
@@ -315,12 +321,12 @@ fn pointer_ref(pointer: &str) -> Value {
 }
 
 /// Escape a name for use as one JSON Pointer token (RFC 6901): `~` then `/`.
-fn pointer_escape(token: &str) -> String {
+pub(crate) fn pointer_escape(token: &str) -> String {
     token.replace('~', "~0").replace('/', "~1")
 }
 
 /// Decode one JSON Pointer token (RFC 6901): `~1` then `~0`.
-fn pointer_unescape(token: &str) -> String {
+pub(crate) fn pointer_unescape(token: &str) -> String {
     token.replace("~1", "/").replace("~0", "~")
 }
 
@@ -582,20 +588,33 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     let mut security_schemes = parse_security_schemes(&root)?;
     let security = parse_security(root_obj);
 
+    // One definition pool for the whole document. Every schema points into it,
+    // so a definition many operations reach is held once.
+    let mut defs = SchemaDefs::default();
+
     // Parse operations based on format
     let operations = match format {
-        SpecFormat::OpenApi => parse_openapi_paths(root_obj, &root)?,
+        SpecFormat::OpenApi => parse_openapi_paths(root_obj, &root, &mut defs)?,
         SpecFormat::AsyncApi => {
             // AsyncAPI puts the security requirement on the server, and an
             // inline scheme there is registered as it is read.
             let server_security = parse_server_security(root_obj, &root, &mut security_schemes)?;
             let channel_servers = parse_channel_servers(root_obj, &server_security)?;
-            parse_asyncapi_channels(root_obj, &root, &server_security, &channel_servers)?
+            parse_asyncapi_channels(
+                root_obj,
+                &root,
+                &server_security,
+                &channel_servers,
+                &mut defs,
+            )?
         }
     };
 
+    let schema_defs = finish_schema_defs(defs, &root);
+
     Ok(ApiSpec {
         filename: None,
+        schema_defs,
         format,
         version,
         title,
@@ -674,6 +693,7 @@ fn extract_dispatch(obj: &serde_json::Map<String, Value>) -> Option<DispatchConf
 fn parse_openapi_paths(
     root: &serde_json::Map<String, Value>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<Vec<Operation>, ParseError> {
     let mut operations = Vec::new();
 
@@ -696,7 +716,7 @@ fn parse_openapi_paths(
         })?;
 
         // Path-level parameters (inherited by all operations)
-        let path_params = parse_parameters(path_obj, spec_root)?;
+        let path_params = parse_parameters(path_obj, spec_root, defs)?;
 
         for method in HTTP_METHODS {
             if let Some(op_value) = path_obj.get(*method) {
@@ -708,7 +728,8 @@ fn parse_openapi_paths(
                     ))
                 })?;
 
-                let params = merge_parameters(&path_params, parse_parameters(op_obj, spec_root)?);
+                let params =
+                    merge_parameters(&path_params, parse_parameters(op_obj, spec_root, defs)?);
 
                 let operation_id = op_obj
                     .get("operationId")
@@ -725,8 +746,8 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                let request_body = parse_request_body(op_obj, spec_root)?;
-                let responses = parse_responses(op_obj, spec_root)?;
+                let request_body = parse_request_body(op_obj, spec_root, defs)?;
+                let responses = parse_responses(op_obj, spec_root, defs)?;
 
                 let dispatch = extract_dispatch(op_obj);
 
@@ -784,7 +805,8 @@ fn parse_openapi_paths(
                     ))
                 })?;
 
-                let params = merge_parameters(&path_params, parse_parameters(op_obj, spec_root)?);
+                let params =
+                    merge_parameters(&path_params, parse_parameters(op_obj, spec_root, defs)?);
 
                 let operation_id = op_obj
                     .get("operationId")
@@ -801,8 +823,8 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                let request_body = parse_request_body(op_obj, spec_root)?;
-                let responses = parse_responses(op_obj, spec_root)?;
+                let request_body = parse_request_body(op_obj, spec_root, defs)?;
+                let responses = parse_responses(op_obj, spec_root, defs)?;
                 let dispatch = extract_dispatch(op_obj);
 
                 let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
@@ -855,6 +877,7 @@ fn parse_openapi_paths(
 fn parse_parameters(
     obj: &serde_json::Map<String, Value>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<Vec<Parameter>, ParseError> {
     let Some(arr) = obj.get("parameters").and_then(|v| v.as_array()) else {
         return Ok(Vec::new());
@@ -884,7 +907,7 @@ fn parse_parameters(
         };
 
         let schema = raw_schema
-            .map(|s| resolve_schema(&s, spec_root))
+            .map(|s| resolve_schema(&s, spec_root, defs))
             .transpose()?;
 
         let Some(name) = param_obj.get("name").and_then(|v| v.as_str()) else {
@@ -918,6 +941,7 @@ fn extract_content_schema(param_obj: &serde_json::Map<String, Value>) -> Option<
 fn parse_request_body(
     obj: &serde_json::Map<String, Value>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<Option<RequestBody>, ParseError> {
     let Some(body) = obj.get("requestBody").and_then(|v| v.as_object()) else {
         return Ok(None);
@@ -936,7 +960,7 @@ fn parse_request_body(
     for (media_type, media_obj) in content_obj {
         let raw_schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
         let schema = raw_schema
-            .map(|s| resolve_schema(&s, spec_root))
+            .map(|s| resolve_schema(&s, spec_root, defs))
             .transpose()?;
         content.insert(media_type.clone(), ContentSchema { schema });
     }
@@ -948,6 +972,7 @@ fn parse_request_body(
 fn parse_responses(
     obj: &serde_json::Map<String, Value>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<BTreeMap<String, ResponseContent>, ParseError> {
     let Some(responses) = obj.get("responses").and_then(|v| v.as_object()) else {
         return Ok(BTreeMap::new());
@@ -974,7 +999,7 @@ fn parse_responses(
         for (media_type, media_obj) in content_obj {
             let raw_schema = media_obj.as_object().and_then(|o| o.get("schema").cloned());
             let schema = raw_schema
-                .map(|s| resolve_schema(&s, spec_root))
+                .map(|s| resolve_schema(&s, spec_root, defs))
                 .transpose()?;
             content.insert(media_type.clone(), ContentSchema { schema });
         }
@@ -996,6 +1021,7 @@ fn parse_asyncapi_channels(
     spec_root: &Value,
     server_security: &BTreeMap<String, Vec<String>>,
     channel_servers: &BTreeMap<String, Vec<String>>,
+    defs: &mut SchemaDefs,
 ) -> Result<Vec<Operation>, ParseError> {
     let mut operations = Vec::new();
 
@@ -1010,7 +1036,7 @@ fn parse_asyncapi_channels(
     };
 
     // Build channel lookup: channel_name -> (address, messages, parameters, bindings)
-    let channel_lookup = build_channel_lookup(channels, spec_root)?;
+    let channel_lookup = build_channel_lookup(channels, spec_root, defs)?;
 
     for (op_id, op_value) in ops {
         let op_obj = op_value.as_object().ok_or_else(|| {
@@ -1040,7 +1066,7 @@ fn parse_asyncapi_channels(
 
         // Resolve channel reference
         let (address, channel_messages, channel_params, channel_bindings) =
-            resolve_channel_ref(op_obj, &channel_lookup, spec_root)?;
+            resolve_channel_ref(op_obj, &channel_lookup, spec_root, defs)?;
 
         // AsyncAPI declares the credential on the server the channel is reached
         // through, so the operation inherits it from there.
@@ -1048,7 +1074,7 @@ fn parse_asyncapi_channels(
         let security = server_security_requirement(reached.as_deref(), server_security);
 
         // Parse operation-level messages (may override or filter channel messages)
-        let messages = parse_operation_messages(op_obj, &channel_messages, spec_root)?;
+        let messages = parse_operation_messages(op_obj, &channel_messages, spec_root, defs)?;
 
         // For SEND operations, create a request body from the first message payload
         let request_body = if method == "SEND" && !messages.is_empty() {
@@ -1362,6 +1388,7 @@ fn server_security_requirement(
 fn build_channel_lookup(
     channels: Option<&serde_json::Map<String, Value>>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<BTreeMap<String, ChannelInfo>, ParseError> {
     let mut lookup = BTreeMap::new();
 
@@ -1384,10 +1411,10 @@ fn build_channel_lookup(
             .unwrap_or_else(|| name.clone());
 
         // Parse messages
-        let messages = parse_channel_messages(channel_obj, spec_root)?;
+        let messages = parse_channel_messages(channel_obj, spec_root, defs)?;
 
         // Parse parameters
-        let parameters = parse_channel_parameters(channel_obj, spec_root)?;
+        let parameters = parse_channel_parameters(channel_obj, spec_root, defs)?;
 
         // Parse bindings
         let bindings = channel_obj
@@ -1410,6 +1437,7 @@ fn build_channel_lookup(
 fn parse_channel_messages(
     channel: &serde_json::Map<String, Value>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<Vec<Message>, ParseError> {
     let messages_obj = match channel.get("messages").and_then(|v| v.as_object()) {
         Some(m) => m,
@@ -1424,7 +1452,7 @@ fn parse_channel_messages(
 
         let payload = msg_obj
             .get("payload")
-            .map(|p| resolve_schema(p, spec_root))
+            .map(|p| resolve_schema(p, spec_root, defs))
             .transpose()?;
 
         let content_type = msg_obj
@@ -1456,6 +1484,7 @@ fn parse_channel_messages(
 fn parse_channel_parameters(
     channel: &serde_json::Map<String, Value>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<Vec<Parameter>, ParseError> {
     let params = match channel.get("parameters").and_then(|v| v.as_object()) {
         Some(p) => p,
@@ -1468,7 +1497,7 @@ fn parse_channel_parameters(
             .as_object()
             .and_then(|o| o.get("schema").cloned());
         let schema = raw_schema
-            .map(|s| resolve_schema(&s, spec_root))
+            .map(|s| resolve_schema(&s, spec_root, defs))
             .transpose()?;
 
         // In AsyncAPI, channel parameters are always required
@@ -1487,6 +1516,7 @@ fn resolve_channel_ref(
     op: &serde_json::Map<String, Value>,
     lookup: &BTreeMap<String, ChannelInfo>,
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<ChannelInfo, ParseError> {
     let channel = op
         .get("channel")
@@ -1517,8 +1547,8 @@ fn resolve_channel_ref(
                 .map(|s| s.to_string())
                 .unwrap_or_default();
 
-            let messages = parse_channel_messages(channel_obj, spec_root)?;
-            let parameters = parse_channel_parameters(channel_obj, spec_root)?;
+            let messages = parse_channel_messages(channel_obj, spec_root, defs)?;
+            let parameters = parse_channel_parameters(channel_obj, spec_root, defs)?;
             let bindings = channel_obj
                 .get("bindings")
                 .and_then(|v| v.as_object())
@@ -1543,6 +1573,7 @@ fn parse_operation_messages(
     op: &serde_json::Map<String, Value>,
     channel_messages: &[Message],
     spec_root: &Value,
+    defs: &mut SchemaDefs,
 ) -> Result<Vec<Message>, ParseError> {
     // If operation has explicit messages array, use those
     let Some(msgs) = op.get("messages").and_then(|v| v.as_array()) else {
@@ -1577,7 +1608,7 @@ fn parse_operation_messages(
             .to_string();
         let payload = obj
             .get("payload")
-            .map(|p| resolve_schema(p, spec_root))
+            .map(|p| resolve_schema(p, spec_root, defs))
             .transpose()?;
         let content_type = obj
             .get("contentType")
@@ -2381,8 +2412,10 @@ paths:
         let spec = parse_spec(yaml).unwrap();
         let param = &spec.operations[0].parameters[0];
         let schema = param.schema.as_ref().unwrap();
-        // The reference resolves inside the schema, which carries the target.
-        let target = deref_local(schema, schema);
+        // The reference resolves against the document's definition pool, which
+        // is where the target is held.
+        let resolved = spec.self_contained(schema);
+        let target = deref_local(&resolved, schema);
         assert_eq!(target.get("type").unwrap(), "integer");
         assert_eq!(target.get("format").unwrap(), "int64");
     }
@@ -3395,6 +3428,8 @@ paths:
         let spec = parse_spec(yaml).unwrap();
         let body = spec.operations[0].request_body.as_ref().unwrap();
         let schema = body.content["application/json"].schema.as_ref().unwrap();
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let target = deref_local(schema, schema);
         assert_eq!(target.get("type").unwrap(), "object");
         assert!(target.get("properties").is_some());
@@ -3434,6 +3469,8 @@ paths:
         let spec = parse_spec(yaml).unwrap();
         let body = spec.operations[0].request_body.as_ref().unwrap();
         let schema = body.content["application/json"].schema.as_ref().unwrap();
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let user = deref_local(schema, schema);
         // The nested reference inside User.properties.address resolves through
         // the same definitions, however deep it sits.
@@ -3502,7 +3539,11 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
-        let text = serde_json::to_string(schema).expect("serialize");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
+        let text = serde_json::to_string(&schema).expect("serialize");
         assert!(
             !text.contains("#/components/"),
             "no reference may escape the schema: {text}"
@@ -3542,6 +3583,8 @@ operations:
         let op = &spec.operations[0];
         let msg = &op.messages[0];
         let payload = msg.payload.as_ref().unwrap();
+        let payload = spec.self_contained(payload);
+        let payload = &payload;
         let target = deref_local(payload, payload);
         assert_eq!(target.get("type").unwrap(), "object");
     }
@@ -3637,6 +3680,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         assert!(schema["properties"]["order_id"].is_object());
     }
 
@@ -3675,6 +3720,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         // $ref should be resolved inline
         let target = deref_local(schema, schema);
         assert!(target["properties"]["id"].is_object());
@@ -3824,6 +3871,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
 
         // Nothing may still point outside this schema: the artifact carries the
         // schema alone, with no document to resolve against.
@@ -3880,6 +3929,7 @@ paths:
             .schema
             .clone()
             .expect("schema");
+        let schema = spec.self_contained(&schema);
 
         let validator = jsonschema::options()
             .should_validate_formats(true)
@@ -3948,6 +3998,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let defs = schema
             .get("$defs")
             .and_then(|d| d.as_object())
@@ -4014,6 +4066,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let defs = schema
             .get("$defs")
             .and_then(|d| d.as_object())
@@ -4091,6 +4145,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let order = deref_local(schema, schema);
         let reference = order["properties"]["value"]["$ref"].as_str().expect("ref");
         let name = reference.strip_prefix("#/$defs/").expect("local pointer");
@@ -4202,6 +4258,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let props = &schema["properties"];
 
         // `true` moves the bound onto the exclusive keyword.
@@ -4269,6 +4327,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let rule = &schema["properties"]["rule"];
 
         // The default is a value a request may carry, not a constraint.
@@ -4317,6 +4377,8 @@ paths:
             .schema
             .as_ref()
             .expect("schema");
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         assert_eq!(schema["properties"]["amount"]["exclusiveMinimum"], 5);
     }
 
@@ -4348,6 +4410,8 @@ paths:
 "##;
         let spec = parse_spec(yaml).unwrap();
         let schema = spec.operations[0].parameters[0].schema.as_ref().unwrap();
+        let schema = spec.self_contained(schema);
+        let schema = &schema;
         let text = serde_json::to_string(schema).expect("serialize");
         assert!(
             !text.contains("#/components/"),

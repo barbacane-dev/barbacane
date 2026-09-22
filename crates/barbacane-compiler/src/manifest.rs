@@ -922,6 +922,7 @@ plugins:
 
         let spec = ApiSpec {
             filename: Some("test.yaml".to_string()),
+            schema_defs: None,
             format: SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "Test".to_string(),
@@ -1000,6 +1001,7 @@ plugins:
 
         let spec = ApiSpec {
             filename: Some("test.yaml".to_string()),
+            schema_defs: None,
             format: SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "Test".to_string(),
@@ -1049,6 +1051,7 @@ plugins:
 
         let spec = ApiSpec {
             filename: Some("test.yaml".to_string()),
+            schema_defs: None,
             format: SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "Test".to_string(),
@@ -1101,6 +1104,7 @@ plugins:
 
         ApiSpec {
             filename: Some("test.yaml".to_string()),
+            schema_defs: None,
             format: SpecFormat::OpenApi,
             version: "3.1.0".to_string(),
             title: "Test".to_string(),

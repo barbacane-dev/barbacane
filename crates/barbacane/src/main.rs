@@ -993,8 +993,13 @@ impl Gateway {
                 },
             );
 
-            // Pre-compile validator for this operation
-            let validator = OperationValidator::new(&op.parameters, op.request_body.as_ref());
+            // Pre-compile validator for this operation. Schemas point into the
+            // artifact's shared definition pool rather than carrying their own.
+            let validator = OperationValidator::with_defs(
+                &op.parameters,
+                op.request_body.as_ref(),
+                routes.schema_defs.as_ref(),
+            );
             validators.push(validator);
 
             // Log middleware chain for this operation (informational)

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **compiler**: schema definitions are held once per document instead of once per schema. Resolution already shared a definition between the references inside one schema, but each schema started a fresh set, so a definition many operations reach was copied into every one of them. Parsing Stripe's published document needed 5.67 GB for 7.7 MB of JSON: its `error` schema is referenced once per operation, 594 times, and reaches most of a 1454-component graph. It now needs 0.09 GB. The pool is stored once in `routes.json` and the data plane attaches to each schema only the definitions that schema reaches, so `ARTIFACT_VERSION` is 7 and an artifact must be recompiled for a gateway that reads it.
+
 ### Added
 
 - **compiler**: an authentication plugin declares the security scheme types it reads, as `implements` in its `plugin.toml` (`apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`). An operation pairing the plugin with a requirement naming none of them is refused (`E1032`). Schemes the connection carries take no part in the match, since no middleware reads one off a request. Both halves of such a pairing are valid on their own, so nothing caught it before and the first sign was a 401 on every call. A plugin declaring no list is exempt, so a third-party plugin compiles as before. The reverse case, an operation requiring a credential with no authentication plugin in its chain, is a warning (`E1033`): the credential is forwarded and the request reaches the upstream unauthenticated, though the upstream may be the one checking it.
