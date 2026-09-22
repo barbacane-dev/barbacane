@@ -16,6 +16,11 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    # Reviews are rate limited to one an hour on the OSS plan, so they are spent
+    # on a pull request that is ready for one rather than on every push. A local
+    # model reviews every update; this label asks for the deep pass.
+    labels:
+      - "deep-review"
     base_branches:
       - "main"
 

@@ -1,0 +1,29 @@
+# Ask CodeRabbit for a review when a pull request is labelled `deep-review`.
+#
+# `.coderabbit.yaml` gates automatic review on that label, which covers a pull
+# request opened with it already applied. Labelling one that is already open is
+# the common case here, and a comment is what reliably triggers a review then.
+name: Deep review
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  request:
+    name: Request a CodeRabbit review
+    # `pull_request_target` runs with write access against the base repository,
+    # so this checks out nothing and runs no code from the pull request. It only
+    # posts a comment.
+    if: github.event.label.name == 'deep-review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr comment "$PR" --repo "$REPO" --body "@coderabbitai review"
