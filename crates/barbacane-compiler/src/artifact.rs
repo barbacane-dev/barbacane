@@ -874,6 +874,20 @@ fn compile_inner(
         .filter_map(|p| p.config_schema.as_ref().map(|s| (p.name.as_str(), s)))
         .collect();
 
+    // Validators for those same schemas, built once and reused for every
+    // operation that names the plugin. A schema the validator cannot build is
+    // the plugin's problem, not the spec's, so it is skipped rather than failing
+    // a compile the author cannot fix.
+    let plugin_validators: HashMap<&str, jsonschema::Validator> = plugin_schemas
+        .iter()
+        .filter_map(|(name, schema)| {
+            jsonschema::options()
+                .build(schema)
+                .ok()
+                .map(|validator| (*name, validator))
+        })
+        .collect();
+
     // Plugins whose manifest puts them in the `authentication` family. Each
     // verifies a credential the client sends, and the security scheme is what
     // says which header carries it.
@@ -1107,6 +1121,32 @@ fn compile_inner(
                                 .to_string(),
                         location: Some(location.clone()),
                     });
+                }
+            }
+
+            // A configuration the plugin's own schema rejects is refused here
+            // (E1023). The plugin refuses it at init, which reaches a caller as
+            // a 500 on every request through that operation, so a compile is
+            // where it should stop.
+            for (name, config) in middlewares
+                .iter()
+                .map(|m| (&m.name, &m.config))
+                .chain(std::iter::once((&dispatch.name, &dispatch.config)))
+            {
+                // An omitted `config` is not an empty one: the plugin applies
+                // its own defaults, which the schema does not always restate.
+                if config.is_null() {
+                    continue;
+                }
+                let key = crate::manifest::normalize_plugin_name(name);
+                let Some(validator) = plugin_validators.get(key.as_str()) else {
+                    continue;
+                };
+                if let Some(error) = validator.iter_errors(config).next() {
+                    return Err(CompileError::InvalidPluginConfig(
+                        name.clone(),
+                        format!("{location}: {error}"),
+                    ));
                 }
             }
 

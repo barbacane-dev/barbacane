@@ -44,10 +44,9 @@ paths:
         config:
           status: 200
           body: '{"slow":true}'
-          delay_ms: 50
       responses:
         "200":
-          description: Slow response (will violate SLO)
+          description: Response measured against a 10ms SLO
 
   /detailed:
     post:

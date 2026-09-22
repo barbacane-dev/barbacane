@@ -63,6 +63,13 @@ pub enum CompileError {
     #[error("E1057: authentication plugin without a security requirement: {0}")]
     MissingSecurityRequirement(String),
 
+    /// E1023: A plugin's configuration does not satisfy the JSON Schema the
+    /// plugin publishes for it. The plugin refuses such a configuration at
+    /// init, which the data plane surfaces as a 500 on every request through it,
+    /// so the artifact is refused instead.
+    #[error("E1023: invalid config for plugin '{0}': {1}")]
+    InvalidPluginConfig(String, String),
+
     /// E1032: An operation pairs an authentication plugin with a security
     /// requirement naming no scheme that plugin reads. Both halves are valid on
     /// their own; the pairing rejects every request, since the plugin looks for

@@ -11,6 +11,9 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+# Plugin configurations are validated against the schema each plugin publishes
+# (E1023), so this is needed by the compiler itself and not only by tests.
+jsonschema = { workspace = true }
 parapet.workspace = true
 chrono = { workspace = true }
 hex = { workspace = true }
