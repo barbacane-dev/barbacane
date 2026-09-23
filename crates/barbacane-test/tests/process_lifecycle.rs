@@ -12,6 +12,8 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT, STARTUP_TIMEOUT};
+
 /// The gateway binary built alongside these tests.
 ///
 /// A test executable lives at `target/<profile>/deps/<name>-<hash>`, so the
@@ -191,4 +193,56 @@ fn a_taken_port_reports_the_cause_without_panicking() {
         "a taken port is a configuration error, not a panic:\n{stderr}"
     );
     assert_eq!(output.status.code(), Some(1), "stderr:\n{stderr}");
+}
+
+/// An admin API that cannot bind must not stop the data plane.
+///
+/// `/health`, `/metrics` and `/provenance` are operational surface. Losing them
+/// to a port conflict is a degradation; refusing to serve traffic over it turns
+/// one misconfigured port into an outage.
+#[test]
+fn a_taken_admin_port_does_not_stop_the_gateway_serving() {
+    let binary = gateway_binary();
+    if !binary.exists() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("temp dir");
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
+
+    // Held for the whole of startup, so the gateway's admin bind must fail.
+    let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
+    let taken = held.local_addr().expect("local addr").port();
+
+    let mut cmd = Command::new(&binary);
+    cmd.arg("serve")
+        .arg("--artifact")
+        .arg(&artifact)
+        .args(["--listen", LISTEN_ANY_PORT])
+        .arg("--admin-bind")
+        .arg(format!("127.0.0.1:{taken}"));
+
+    let mut process = LoggedChild::spawn(&mut cmd).expect("spawn the gateway");
+    let port = match process.announced_port("listening on", STARTUP_TIMEOUT) {
+        Some(port) => port,
+        None => {
+            let log = process.log().text();
+            process.kill_and_reap();
+            panic!("the gateway stopped instead of serving without its admin API:\n{log}");
+        }
+    };
+
+    let serving = wait_for_port(port, Duration::from_secs(30));
+    let log = process.log().text();
+    process.kill_and_reap();
+    drop(held);
+
+    assert!(serving, "the data plane must accept connections:\n{log}");
+    assert!(
+        log.contains("admin API unavailable"),
+        "the conflict must be reported, not swallowed:\n{log}"
+    );
+    assert!(
+        !log.contains("panicked"),
+        "a taken admin port is a configuration error, not a panic:\n{log}"
+    );
 }
