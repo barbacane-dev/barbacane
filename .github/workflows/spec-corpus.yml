@@ -1,8 +1,11 @@
 # Runs the parser's differential checks over published specs, which are too
 # large to keep in the repository (25 MB against a 19 MB .git) and change on
 # their own schedule. Informational: it reports when a real document starts
-# failing, and is not a merge gate. The same checks run on every pull request
-# against the repository's own fixtures.
+# failing, and is not a merge gate.
+#
+# This is the only workflow that runs the `corpus` test target: the pull request
+# suite runs `cargo test --workspace --lib --bins`, which does not build
+# integration test targets.
 name: Spec Corpus
 
 on:
@@ -24,6 +27,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -35,6 +40,36 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      # Four of the eleven corpus checks compile a fixture through a plugin, and
+      # a missing .wasm fails the compile rather than the check. Its own cache
+      # key: this builds a subset, and saving that under the key the pull request
+      # workflow uses would hand a later `make plugins` a cache hit for plugins
+      # it has not built.
+      - name: Cache the plugins the corpus checks compile against
+        uses: actions/cache@v5
+        with:
+          path: |
+            plugins/*/*.wasm
+            plugins/mock/target
+            plugins/rate-limit/target
+            plugins/basic-auth/target
+            plugins/ai-proxy/target
+          key: ${{ runner.os }}-corpus-plugins-${{ hashFiles('plugins/mock/**/*.rs', 'plugins/rate-limit/**/*.rs', 'plugins/basic-auth/**/*.rs', 'plugins/ai-proxy/**/*.rs', 'plugins/*/Cargo.lock', 'crates/barbacane-plugin-sdk/**') }}
+          restore-keys: |
+            ${{ runner.os }}-corpus-plugins-
+
+      - name: Build them
+        run: |
+          set -euo pipefail
+          for plugin in mock rate-limit basic-auth ai-proxy; do
+            (cd "plugins/$plugin" && cargo build --release --target wasm32-unknown-unknown)
+            # The crate name is not the directory name, so glob for it. Exactly
+            # one artifact is expected; cp rejects more than one.
+            built=("plugins/$plugin/target/wasm32-unknown-unknown/release/"*.wasm)
+            cp "${built[@]}" "plugins/$plugin/$plugin.wasm"
+            echo "  $plugin.wasm ($(du -h "plugins/$plugin/$plugin.wasm" | cut -f1))"
+          done
 
       - name: Fetch published specs
         run: |
