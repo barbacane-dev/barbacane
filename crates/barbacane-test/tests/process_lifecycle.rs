@@ -225,24 +225,65 @@ fn a_taken_admin_port_does_not_stop_the_gateway_serving() {
     let port = match process.announced_port("listening on", STARTUP_TIMEOUT) {
         Some(port) => port,
         None => {
-            let log = process.log().text();
             process.kill_and_reap();
+            let log = process.log().text();
             panic!("the gateway stopped instead of serving without its admin API:\n{log}");
         }
     };
 
-    let serving = wait_for_port(port, Duration::from_secs(30));
-    let log = process.log().text();
+    // The data plane is announced before the admin bind is attempted, so wait
+    // for the conflict to be reported before asking whether it is still up.
+    // Otherwise a gateway on its way out still answers.
+    let reported = process
+        .log()
+        .wait_for("admin API unavailable", Duration::from_secs(30));
+
+    // An HTTP response, not a TCP accept: the socket stays connectable for as
+    // long as the listener is open, including while the process is dying.
+    let served = serves_http(port, "/__barbacane/health", Duration::from_secs(30));
+
+    // Reap before reading: the reader threads end at EOF, and `text()` read
+    // earlier can miss the lines that explain a failure.
     process.kill_and_reap();
+    let log = process.log().text();
     drop(held);
 
-    assert!(serving, "the data plane must accept connections:\n{log}");
     assert!(
-        log.contains("admin API unavailable"),
+        reported,
         "the conflict must be reported, not swallowed:\n{log}"
     );
+    assert!(served, "the data plane must still answer requests:\n{log}");
     assert!(
         !log.contains("panicked"),
         "a taken admin port is a configuration error, not a panic:\n{log}"
     );
+}
+
+/// Whether `path` answers with a 2xx within `limit`.
+///
+/// Raw HTTP/1.1 over a socket, to keep this test synchronous like its
+/// neighbours rather than pulling in a runtime for one request.
+fn serves_http(port: u16, path: &str, limit: Duration) -> bool {
+    use std::io::{Read, Write};
+
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            let request =
+                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            if stream.write_all(request.as_bytes()).is_ok() {
+                let mut response = String::new();
+                if stream.read_to_string(&mut response).is_ok() {
+                    if let Some(status) = response.lines().next() {
+                        if status.starts_with("HTTP/1.1 2") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
 }
