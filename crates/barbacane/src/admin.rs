@@ -4,7 +4,6 @@
 //! separate from user traffic (ADR-0022).
 
 use std::convert::Infallible;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,17 +29,19 @@ pub struct AdminState {
     pub started_at: Instant,
 }
 
-/// Start the admin HTTP server.
+/// Start the admin HTTP server on an already-bound listener.
 ///
-/// Serves `/health`, `/metrics`, and `/provenance` on a dedicated port.
+/// Serves `/health`, `/metrics`, and `/provenance` on a dedicated port. The
+/// caller binds, so the port is known before this task is spawned, which is
+/// what makes `--admin-bind 127.0.0.1:0` usable.
 pub async fn start_admin_server(
-    addr: SocketAddr,
+    listener: TcpListener,
     state: Arc<AdminState>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<(), String> {
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("admin: failed to bind to {}: {}", addr, e))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| format!("admin: no local address: {}", e))?;
 
     // The admin endpoints (/health, /metrics, /provenance) are unauthenticated
     // by design (metrics scraping). /provenance and /metrics expose build and
