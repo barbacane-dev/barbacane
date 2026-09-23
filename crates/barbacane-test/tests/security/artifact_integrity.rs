@@ -27,12 +27,12 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 use barbacane_compiler::{compile_with_manifest, CompileOptions, ProjectManifest};
+use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT, LISTEN_HOST, STARTUP_TIMEOUT};
 use tempfile::TempDir;
 
 use crate::fixtures_dir;
@@ -122,14 +122,6 @@ fn tamper_artifact(dir: &Path, predicate: impl Fn(&str) -> bool) -> PathBuf {
     tampered
 }
 
-/// Free TCP port for the gateway under test.
-fn free_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
-    let p = l.local_addr().expect("local addr").port();
-    drop(l);
-    p
-}
-
 /// Locate the built `barbacane` data-plane binary.
 fn find_barbacane_binary() -> Option<PathBuf> {
     [
@@ -157,27 +149,30 @@ async fn gateway_loads_artifact(artifact: &Path) -> bool {
         return false;
     };
 
-    let port = free_port();
-    let admin_port = free_port();
-
-    let mut child = Command::new(&binary)
-        .arg("serve")
+    let mut cmd = Command::new(&binary);
+    cmd.arg("serve")
         .arg("--artifact")
         .arg(artifact)
         .arg("--listen")
-        .arg(format!("127.0.0.1:{}", port))
+        .arg(LISTEN_ANY_PORT)
         .arg("--admin-bind")
-        .arg(format!("127.0.0.1:{}", admin_port))
+        .arg(LISTEN_ANY_PORT)
         .arg("--dev")
         .arg("--allow-plaintext-upstream")
-        .env("BARBACANE_TRUSTED_PUBKEY", "") // no trusted key configured
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn barbacane serve");
+        .env("BARBACANE_TRUSTED_PUBKEY", ""); // no trusted key configured
+
+    let mut process = LoggedChild::spawn(&mut cmd).expect("spawn barbacane serve");
+
+    // A gateway that rejects the artifact exits without announcing a port, and
+    // `announced_port` returns the moment it does rather than waiting out the
+    // timeout. A port means it bound, which is already most of the answer.
+    let Some(port) = process.announced_port("listening on", STARTUP_TIMEOUT) else {
+        process.kill_and_reap();
+        return false;
+    };
 
     let client = reqwest::Client::new();
-    let health = format!("http://127.0.0.1:{}/__barbacane/health", port);
+    let health = format!("http://{LISTEN_HOST}:{port}/__barbacane/health");
 
     let mut healthy = false;
     for _ in 0..50 {
@@ -187,15 +182,10 @@ async fn gateway_loads_artifact(artifact: &Path) -> bool {
                 break;
             }
         }
-        if let Ok(Some(_)) = child.try_wait() {
-            // Process exited before becoming healthy → load rejected.
-            break;
-        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
+    process.kill_and_reap();
     healthy
 }
 

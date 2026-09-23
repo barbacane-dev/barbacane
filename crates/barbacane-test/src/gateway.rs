@@ -143,10 +143,8 @@ impl GatewayLog {
     pub fn wait_for_line(&self, needle: &str, limit: Duration) -> Option<String> {
         let deadline = std::time::Instant::now() + limit;
         loop {
-            if let Ok(lines) = self.lines.lock() {
-                if let Some(line) = lines.iter().find(|l| l.contains(needle)) {
-                    return Some(line.clone());
-                }
+            if let Some(line) = self.find_line(needle) {
+                return Some(line);
             }
             if std::time::Instant::now() >= deadline {
                 return None;
@@ -154,11 +152,111 @@ impl GatewayLog {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+
+    /// The first line containing `needle`, without waiting.
+    pub fn find_line(&self, needle: &str) -> Option<String> {
+        let lines = self.lines.lock().ok()?;
+        lines.iter().find(|l| l.contains(needle)).cloned()
+    }
 }
 
-/// The port from a `host:port` at the end of a startup line.
+/// The port a child announced on `needle`'s line.
+///
+/// Anchored on the loopback host rather than the last colon, because the line
+/// is not always the last thing on it: the control plane logs through `tracing`,
+/// which appends its own fields after the message.
 fn port_from_log_line(line: &str) -> Option<u16> {
-    line.rsplit(':').next()?.trim().parse().ok()
+    let after = line.rsplit_once(&format!("{LISTEN_HOST}:"))?.1;
+    let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+    match digits.parse().ok()? {
+        // What a child prints when it echoes the address it was asked for
+        // instead of the one it bound. Nothing listens there.
+        0 => None,
+        port => Some(port),
+    }
+}
+
+/// A spawned child whose output is drained and searchable.
+///
+/// Test children bind port 0 and announce what they got. Choosing a port in the
+/// test means binding a socket, reading its number and closing it before the
+/// child binds, which leaves the port unowned in between; a concurrent test
+/// handed the same one then talks to the wrong process.
+pub struct LoggedChild {
+    child: Child,
+    log: GatewayLog,
+}
+
+impl LoggedChild {
+    /// Spawn `cmd`, piping and draining both streams.
+    ///
+    /// A pipe nothing reads fills and blocks the writer, so draining is what
+    /// keeps the child running as much as it is what makes its output readable.
+    pub fn spawn(cmd: &mut Command) -> std::io::Result<Self> {
+        let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        let log = GatewayLog::default();
+        if let Some(stdout) = child.stdout.take() {
+            log.drain::<ChildStdout>(stdout, "stdout");
+        }
+        if let Some(stderr) = child.stderr.take() {
+            log.drain::<ChildStderr>(stderr, "stderr");
+        }
+        Ok(Self { child, log })
+    }
+
+    /// The port announced on the first line containing `needle`.
+    ///
+    /// Gives up as soon as the child exits, so a process that refuses to start
+    /// costs what it took to fail rather than the whole of `limit`.
+    pub fn announced_port(&mut self, needle: &str, limit: Duration) -> Option<u16> {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            if let Some(port) = self
+                .log
+                .find_line(needle)
+                .as_deref()
+                .and_then(port_from_log_line)
+            {
+                return Some(port);
+            }
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                // Exited, so the pipes reach EOF. Wait for the readers before
+                // the last look: the announcement may still be in their buffer.
+                self.log.join_readers();
+                return self
+                    .log
+                    .find_line(needle)
+                    .as_deref()
+                    .and_then(port_from_log_line);
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// What the child has written so far.
+    pub fn log(&self) -> &GatewayLog {
+        &self.log
+    }
+
+    /// Whether the child has already exited.
+    pub fn has_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// Stop the child and collect it, so no zombie outlives the test.
+    pub fn kill_and_reap(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        self.log.join_readers();
+    }
+
+    /// Hand over the child and its log, for a caller that owns them from here.
+    pub fn into_parts(self) -> (Child, GatewayLog) {
+        (self.child, self.log)
+    }
 }
 
 /// Generated TLS certificates for testing.
@@ -326,9 +424,7 @@ impl TestGateway {
             .env(
                 "BARBACANE_ALLOW_INTERNAL_EGRESS",
                 if allow_internal_egress { "1" } else { "0" },
-            )
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            );
 
         // Add TLS arguments if enabled
         if let Some(ref certs) = tls_certs {
@@ -348,51 +444,26 @@ impl TestGateway {
             cmd.env(key, value);
         }
 
-        // Start the gateway process
-        let mut child = cmd.spawn()?;
+        let mut process = LoggedChild::spawn(&mut cmd)?;
 
-        // Drain both pipes immediately. Until this runs the gateway can block
-        // writing to a full pipe, and anything it logs is lost when the child
-        // is killed.
-        let log = GatewayLog::default();
-        if let Some(stdout) = child.stdout.take() {
-            log.drain::<ChildStdout>(stdout, "stdout");
-        }
-        if let Some(stderr) = child.stderr.take() {
-            log.drain::<ChildStderr>(stderr, "stderr");
-        }
-
-        // Read back the ports the child bound. A gateway that dies before
-        // logging them leaves nothing to connect to, so report its output.
-        let port = log
-            .wait_for_line("listening on", STARTUP_TIMEOUT)
-            .as_deref()
-            .and_then(port_from_log_line)
-            .ok_or_else(|| {
-                let _ = child.kill();
-                let _ = child.wait();
-                log.join_readers();
-                TestError::StartupFailed(format!(
-                    "gateway did not report a listen port\n{}",
-                    log.text()
-                ))
-            })?;
-        // The gateway announces the admin API immediately after the listener, so
-        // this is a short wait. Absence is an error rather than a port of 0: a
-        // zero here would surface later as a confusing connection failure.
-        let admin_port = log
-            .wait_for_line("admin API on", Duration::from_secs(30))
-            .as_deref()
-            .and_then(port_from_log_line)
-            .ok_or_else(|| {
-                let _ = child.kill();
-                let _ = child.wait();
-                log.join_readers();
-                TestError::StartupFailed(format!(
-                    "gateway did not report an admin port\n{}",
-                    log.text()
-                ))
-            })?;
+        // Read back the ports the child bound. Absence is an error rather than a
+        // port of 0, which would surface later as a connection failure with
+        // nothing pointing at the cause.
+        let mut announced = |needle: &str| -> Result<u16, TestError> {
+            match process.announced_port(needle, STARTUP_TIMEOUT) {
+                Some(port) => Ok(port),
+                None => {
+                    process.kill_and_reap();
+                    Err(TestError::StartupFailed(format!(
+                        "gateway did not report {needle}\n{}",
+                        process.log().text()
+                    )))
+                }
+            }
+        };
+        let port = announced("listening on")?;
+        let admin_port = announced("admin API on")?;
+        let (child, log) = process.into_parts();
 
         // Create HTTP client (with custom TLS config if needed)
         let client = if let Some(ref certs) = tls_certs {
@@ -694,34 +765,47 @@ fn find_barbacane_binary() -> Result<String, TestError> {
     ))
 }
 
-/// What the gateway is told to bind. The OS picks the port and the child
-/// reports it, so no port is ever named here.
-const LISTEN_ANY_PORT: &str = "127.0.0.1:0";
+/// The host every test child binds. Ports are read back from output anchored on
+/// it, so a child told to bind elsewhere will not be understood.
+pub const LISTEN_HOST: &str = "127.0.0.1";
 
-/// How long a gateway may take to come up.
+/// What a test child is told to bind. The OS picks the port and the child
+/// reports it, so no port is ever named here.
+pub const LISTEN_ANY_PORT: &str = "127.0.0.1:0";
+
+/// How long a test child may take to come up.
 ///
 /// Larger WASM plugins (CEL is ~1.3 MB) need JIT compile time, and when the
 /// integration suite runs sharded in CI two CEL-heavy gateways can cold-boot
 /// simultaneously on a shared runner, so the loser of that CPU race needs a wide
 /// window. Both the port announcement and the health check are bounded by this,
 /// so neither can be the tighter of the two.
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[cfg(test)]
-mod port_tests {
+mod child_tests {
     use super::*;
+    use std::time::Instant;
+
+    /// A child that writes `script` to stderr, under `sh`.
+    fn sh(script: &str) -> LoggedChild {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(script);
+        LoggedChild::spawn(&mut cmd).expect("spawn sh")
+    }
 
     #[test]
     fn the_harness_never_names_a_port() {
-        assert!(
-            LISTEN_ANY_PORT.ends_with(":0"),
+        assert_eq!(
+            LISTEN_ANY_PORT,
+            format!("{LISTEN_HOST}:0"),
             "the child must bind an OS-assigned port; naming one here reopens \
              the window where the port belongs to nobody"
         );
     }
 
     #[test]
-    fn reads_the_port_off_a_startup_line() {
+    fn reads_the_port_a_gateway_announces() {
         assert_eq!(
             port_from_log_line("[stderr] barbacane: listening on http://127.0.0.1:52133"),
             Some(52133)
@@ -731,9 +815,162 @@ mod port_tests {
             Some(41999)
         );
         assert_eq!(
+            port_from_log_line("[stderr] barbacane dev: listening on http://127.0.0.1:8080"),
+            Some(8080)
+        );
+        assert_eq!(
             port_from_log_line("[stderr] barbacane: listening on https://127.0.0.1:8443"),
             Some(8443)
         );
+    }
+
+    #[test]
+    fn reads_the_port_the_control_plane_announces() {
+        // `tracing`'s formatter puts the target and fields after the message, so
+        // the port is not the last thing on the line.
+        assert_eq!(
+            port_from_log_line(
+                "[stdout] 2026-09-23T12:00:00.000000Z  INFO barbacane_control::server: \
+                 Control plane listening on 127.0.0.1:34567"
+            ),
+            Some(34567)
+        );
+        assert_eq!(
+            port_from_log_line(
+                r#"[stdout] {"timestamp":"2026-09-23T12:00:00Z","level":"INFO","#
+                    .to_string()
+                    .as_str()
+            ),
+            None
+        );
+        assert_eq!(
+            port_from_log_line(
+                r#"[stdout] {"message":"Control plane listening on 127.0.0.1:34567","target":"x"}"#
+            ),
+            Some(34567)
+        );
+    }
+
+    #[test]
+    fn a_port_of_zero_is_not_a_bound_port() {
+        // What a child prints when it echoes the address it was asked for. Taking
+        // it at face value produces a connection failure far from the cause.
+        assert_eq!(
+            port_from_log_line("[stderr] barbacane: listening on http://127.0.0.1:0"),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_lines_without_a_loopback_address() {
         assert_eq!(port_from_log_line("[stderr] no address here"), None);
+        assert_eq!(
+            port_from_log_line("[stderr] listening on 0.0.0.0:8080"),
+            None
+        );
+        assert_eq!(port_from_log_line("[stderr] listening on 127.0.0.1:"), None);
+        // Above u16, so not a port at all.
+        assert_eq!(
+            port_from_log_line("[stderr] listening on 127.0.0.1:70000"),
+            None
+        );
+        assert_eq!(
+            port_from_log_line("[stderr] listening on 127.0.0.1:65535"),
+            Some(65535)
+        );
+    }
+
+    #[test]
+    fn finds_the_port_a_child_announces() {
+        let mut child =
+            sh("echo 'barbacane: listening on http://127.0.0.1:51234' >&2; exec sleep 30");
+        let port = child.announced_port("listening on", Duration::from_secs(10));
+        child.kill_and_reap();
+        assert_eq!(port, Some(51234));
+    }
+
+    #[test]
+    fn waits_for_an_announcement_that_is_slow_to_arrive() {
+        let mut child =
+            sh("sleep 1; echo 'barbacane: listening on http://127.0.0.1:51235' >&2; exec sleep 30");
+        let port = child.announced_port("listening on", Duration::from_secs(10));
+        child.kill_and_reap();
+        assert_eq!(
+            port,
+            Some(51235),
+            "an announcement after a delay is still read"
+        );
+    }
+
+    #[test]
+    fn the_needle_chooses_between_two_announcements() {
+        let mut child = sh(
+            "echo 'barbacane: listening on http://127.0.0.1:51236' >&2; \
+             echo 'barbacane: admin API on http://127.0.0.1:51237' >&2; exec sleep 30",
+        );
+        let listen = child.announced_port("listening on", Duration::from_secs(10));
+        let admin = child.announced_port("admin API on", Duration::from_secs(10));
+        child.kill_and_reap();
+        assert_eq!((listen, admin), (Some(51236), Some(51237)));
+    }
+
+    #[test]
+    fn reads_an_announcement_the_child_made_before_exiting() {
+        let mut child = sh("echo 'barbacane: listening on http://127.0.0.1:51238' >&2");
+        let port = child.announced_port("listening on", Duration::from_secs(10));
+        child.kill_and_reap();
+        assert_eq!(port, Some(51238));
+    }
+
+    #[test]
+    fn a_backlog_of_output_does_not_hide_the_announcement() {
+        // The announcement sits behind more lines than the log keeps, and behind
+        // more bytes than a pipe buffer holds. Being last, it survives eviction,
+        // and the reader is still draining the backlog when the child exits.
+        let mut child = sh(
+            "i=0; while [ $i -lt 4000 ]; do echo padding-line-$i >&2; i=$((i+1)); done; \
+             echo 'barbacane: listening on http://127.0.0.1:51239' >&2",
+        );
+        let port = child.announced_port("listening on", Duration::from_secs(10));
+        child.kill_and_reap();
+        assert_eq!(port, Some(51239));
+    }
+
+    #[test]
+    fn gives_up_as_soon_as_a_child_exits_without_announcing() {
+        let mut child = sh("echo 'refusing to start' >&2; exit 3");
+        let started = Instant::now();
+        // A generous limit: the point is that it does not wait for it.
+        let port = child.announced_port("listening on", Duration::from_secs(60));
+        let elapsed = started.elapsed();
+        child.kill_and_reap();
+
+        assert_eq!(port, None);
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "returned after {elapsed:?}; a child that refuses to start must cost \
+             what it took to fail, not the whole timeout"
+        );
+    }
+
+    #[test]
+    fn gives_up_at_the_limit_when_a_live_child_never_announces() {
+        let mut child = sh("exec sleep 30");
+        let started = Instant::now();
+        let port = child.announced_port("listening on", Duration::from_millis(500));
+        let elapsed = started.elapsed();
+        child.kill_and_reap();
+
+        assert_eq!(port, None);
+        assert!(elapsed >= Duration::from_millis(500), "waited {elapsed:?}");
+        assert!(elapsed < Duration::from_secs(10), "waited {elapsed:?}");
+    }
+
+    #[test]
+    fn the_log_keeps_what_the_child_wrote_on_both_streams() {
+        let mut child = sh("echo to-stdout; echo to-stderr >&2");
+        assert!(child.log().wait_for("to-stdout", Duration::from_secs(10)));
+        assert!(child.log().wait_for("to-stderr", Duration::from_secs(10)));
+        child.kill_and_reap();
     }
 }

@@ -32,20 +32,21 @@
 //! against a running-but-unhardened control plane and GREEN once the fix lands.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
+
+use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT, LISTEN_HOST, STARTUP_TIMEOUT};
 
 /// A booted control-plane process for authz testing.
 struct TestControlPlane {
-    child: Child,
+    process: LoggedChild,
     base_url: String,
     client: reqwest::Client,
 }
 
 impl Drop for TestControlPlane {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.process.kill_and_reap();
     }
 }
 
@@ -57,18 +58,13 @@ impl TestControlPlane {
     async fn boot(admin_token: Option<&str>) -> Option<Self> {
         let database_url = std::env::var("DATABASE_URL").ok()?;
         let binary = find_control_binary()?;
-        let port = free_port()?;
-        let base_url = format!("http://127.0.0.1:{}", port);
-
         let mut cmd = Command::new(&binary);
         cmd.arg("serve")
             .arg("--listen")
-            .arg(format!("127.0.0.1:{}", port))
+            .arg(LISTEN_ANY_PORT)
             .arg("--database-url")
             .arg(&database_url)
-            .env("DATABASE_URL", &database_url)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .env("DATABASE_URL", &database_url);
 
         match admin_token {
             Some(tok) => {
@@ -79,13 +75,18 @@ impl TestControlPlane {
             }
         }
 
-        let child = cmd.spawn().ok()?;
-        let client = reqwest::Client::new();
+        let mut process = LoggedChild::spawn(&mut cmd).ok()?;
+
+        // The control plane announces the address it bound. Without a port
+        // there is nothing to poll, and a process that exits first says so at
+        // once rather than after the whole timeout.
+        let port = process.announced_port("Control plane listening on", STARTUP_TIMEOUT)?;
+        let base_url = format!("http://{LISTEN_HOST}:{port}");
 
         let mut cp = TestControlPlane {
-            child,
+            process,
             base_url,
-            client,
+            client: reqwest::Client::new(),
         };
 
         // Poll /health until ready (or give up → skip).
@@ -96,7 +97,7 @@ impl TestControlPlane {
                     return Some(cp);
                 }
             }
-            if let Ok(Some(_)) = cp.child.try_wait() {
+            if cp.process.has_exited() {
                 // Process exited before becoming healthy (e.g. fail-closed on a
                 // missing admin token, or no DB) — treat as skip.
                 return None;
@@ -125,14 +126,6 @@ fn find_control_binary() -> Option<PathBuf> {
         .iter()
         .map(PathBuf::from)
         .find(|p| Path::new(p).exists())
-}
-
-/// Grab an OS-assigned free TCP port.
-fn free_port() -> Option<u16> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
-    let port = listener.local_addr().ok()?.port();
-    drop(listener);
-    Some(port)
 }
 
 const ADMIN_TOKEN: &str = "test-admin-token-do-not-use-in-prod";
