@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **compiler**: a plugin configuration is validated against the JSON Schema the plugin publishes, and a configuration the schema rejects fails the compile (`E1023`). The code was specified in SPEC-001 and implemented nowhere, so a configuration the plugin itself refuses compiled cleanly and then failed at load: the plugin returned an error from `init` and the data plane answered 500 on every request through that operation. Validation is skipped for an operation that names no `config`, since the plugin applies its own defaults, and for a plugin bundled without its schema, which `E1071` already reports.
+
 ### Changed
 
 - **compiler**: schema definitions are held once per document instead of once per schema. Resolution already shared a definition between the references inside one schema, but each schema started a fresh set, so a definition many operations reach was copied into every one of them. Parsing Stripe's published document needed 5.67 GB for 7.7 MB of JSON: its `error` schema is referenced once per operation, 594 times, and reaches most of a 1454-component graph. It now needs 0.09 GB. The pool is stored once in `routes.json` and the data plane attaches to each schema only the definitions that schema reaches, so `ARTIFACT_VERSION` is 7 and an artifact must be recompiled for a gateway that reads it.

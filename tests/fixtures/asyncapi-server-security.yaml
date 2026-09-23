@@ -51,7 +51,7 @@ operations:
           header_name: X-API-Key
           keys:
             - key: "env://PUBLIC_API_KEY"
-              consumer: publisher
+              id: publisher
     x-barbacane-dispatch:
       name: mock
       config:
@@ -67,7 +67,7 @@ operations:
           header_name: X-Internal-Key
           keys:
             - key: "env://INTERNAL_API_KEY"
-              consumer: internal
+              id: internal
     x-barbacane-dispatch:
       name: mock
       config:
