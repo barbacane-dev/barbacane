@@ -14,15 +14,15 @@ reviews:
   changed_files_summary: true
 
   auto_review:
-    # Off, not filtered. `labels` reads like an allowlist and is not one: a pull
-    # request carrying none of them is still reviewed, which is what happened to
-    # #224. Reviews are rate limited to one an hour on the OSS plan, so the only
-    # dependable gate is to ask for one explicitly.
+    # No review on push. With `enabled: false`, a positive entry in `labels` is
+    # what opts a pull request in, so applying `deep-review` is the request.
     #
-    # The `deep-review` label does that, through `.github/workflows/deep-review.yml`,
-    # which comments `@coderabbitai review`. A local model reviews every push and
-    # does not compete for the quota.
+    # Reviews are rate limited to one an hour on the OSS plan, which is why they
+    # are asked for rather than automatic. A local model reviews every push and
+    # does not compete for that quota.
     enabled: false
+    labels:
+      - "deep-review"
     drafts: false
     base_branches:
       - "main"
