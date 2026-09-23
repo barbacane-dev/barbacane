@@ -877,16 +877,25 @@ fn compile_inner(
     // Validators for those same schemas, built once and reused for every
     // operation that names the plugin. A schema the validator cannot build is
     // the plugin's problem, not the spec's, so it is skipped rather than failing
-    // a compile the author cannot fix.
-    let plugin_validators: HashMap<&str, jsonschema::Validator> = plugin_schemas
-        .iter()
-        .filter_map(|(name, schema)| {
-            jsonschema::options()
-                .build(schema)
-                .ok()
-                .map(|validator| (*name, validator))
-        })
-        .collect();
+    // a compile the author cannot fix. Skipping silently would be worse: the
+    // configuration then goes unchecked and nothing says so, which is the
+    // failure this check exists to end.
+    let mut plugin_validators: HashMap<&str, jsonschema::Validator> = HashMap::new();
+    for (name, schema) in &plugin_schemas {
+        match jsonschema::options().build(schema) {
+            Ok(validator) => {
+                plugin_validators.insert(*name, validator);
+            }
+            Err(e) => warnings.push(CompileWarning {
+                code: "E1071".to_string(),
+                message: format!(
+                    "plugin '{name}' publishes a config schema the validator cannot build, so \
+                     its configuration is not checked: {e}"
+                ),
+                location: None,
+            }),
+        }
+    }
 
     // Plugins whose manifest puts them in the `authentication` family. Each
     // verifies a credential the client sends, and the security scheme is what
