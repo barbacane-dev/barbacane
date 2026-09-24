@@ -7,17 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-24
+
+Headline: the model 0.11.0 introduced, where a document declares the headers and security schemes an operation accepts, now covers AsyncAPI as well as OpenAPI and is checked against what the plugins in the chain actually read. Separately, a document's schema definitions are held once for the whole document rather than once per schema, so a published spec that needed gigabytes to parse now needs a fraction of that.
+
+> **Upgrade note (breaking):** **all pre-0.12 `.bca` artifacts must be recompiled.** Schema definitions move into a pool held once in `routes.json`, so the file changes shape and its checksum is bound into `artifact_hash`. The artifact format version is now **7** and the data plane compares it, so a stale artifact is refused by version, with a message naming the recompile rather than failing the integrity check. Recompile with 0.12.0 (`barbacane compile`); re-sign signed artifacts (`BARBACANE_SIGNING_KEY`).
+>
+> **A document that compiled under 0.11.0 can be refused.** Two new checks report a pairing that previously failed only once the gateway was running: a plugin configuration the plugin's own schema rejects (`E1023`), and an operation pairing an authentication plugin with a security requirement whose scheme types it does not read (`E1032`).
+>
+> **AsyncAPI documents are checked as OpenAPI ones already were.** An operation now inherits the security its servers declare, so `E1057` and `E1032` apply to AsyncAPI for the first time and can refuse a document that compiled before. Compile yours before upgrading a running gateway.
+>
+> **What reaches your upstream changes in two places.** An AsyncAPI operation forwards the credential its server declares, which was previously dropped at ingress, and every operation forwards the headers a browser sends unasked (`referer`, the `sec-fetch-*` set, the `sec-ch-ua*` client hints, `dnt`, `sec-gpc`, `priority`) without declaring them. Both are corrections, but an upstream that came to rely on their absence will see them.
+
 ### Added
 
 - **compiler**: a plugin configuration is validated against the JSON Schema the plugin publishes, and a configuration the schema rejects fails the compile (`E1023`). The code was specified in SPEC-001 and implemented nowhere, so a configuration the plugin itself refuses compiled cleanly and then failed at load: the plugin returned an error from `init` and the data plane answered 500 on every request through that operation. Validation is skipped for an operation that names no `config`, since the plugin applies its own defaults, and for a plugin bundled without its schema, which `E1071` already reports.
+- **compiler**: an authentication plugin declares the security scheme types it reads, as `implements` in its `plugin.toml` (`apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`). An operation pairing the plugin with a requirement naming none of them is refused (`E1032`). Schemes the connection carries take no part in the match, since no middleware reads one off a request. Both halves of such a pairing are valid on their own, so nothing caught it before and the first sign was a 401 on every call. A plugin declaring no list is exempt, so a third-party plugin compiles as before. The reverse case, an operation requiring a credential with no authentication plugin in its chain, is a warning (`E1033`): the credential is forwarded and the request reaches the upstream unauthenticated, though the upstream may be the one checking it.
 
 ### Changed
 
 - **compiler**: schema definitions are held once per document instead of once per schema. Resolution already shared a definition between the references inside one schema, but each schema started a fresh set, so a definition many operations reach was copied into every one of them. Parsing Stripe's published document needed 5.67 GB for 7.7 MB of JSON: its `error` schema is referenced once per operation, 594 times, and reaches most of a 1454-component graph. It now needs 0.09 GB. The pool is stored once in `routes.json` and the data plane attaches to each schema only the definitions that schema reaches, so `ARTIFACT_VERSION` is 7 and an artifact must be recompiled for a gateway that reads it.
-
-### Added
-
-- **compiler**: an authentication plugin declares the security scheme types it reads, as `implements` in its `plugin.toml` (`apiKey`, `http:<scheme>`, `oauth2`, `openIdConnect`). An operation pairing the plugin with a requirement naming none of them is refused (`E1032`). Schemes the connection carries take no part in the match, since no middleware reads one off a request. Both halves of such a pairing are valid on their own, so nothing caught it before and the first sign was a 401 on every call. A plugin declaring no list is exempt, so a third-party plugin compiles as before. The reverse case, an operation requiring a credential with no authentication plugin in its chain, is a warning (`E1033`): the credential is forwarded and the request reaches the upstream unauthenticated, though the upstream may be the one checking it.
 
 ### Fixed
 
@@ -25,10 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **test harness**: `TestGateway` drains the gateway's stdout and stderr as it runs and prints them when an assertion fails, so a failing test reports the cause the gateway logged rather than a status alone. The streams were piped and read only when the child had already exited during startup, so anything a running gateway logged sat in an undrained pipe until `Drop` killed the process and closed it. `TestGateway::log()` exposes the same output to a test that wants to assert on it.
 - **compiler**: an AsyncAPI operation inherits the security requirement its servers declare, so a credential the document names reaches the upstream instead of being dropped at ingress. AsyncAPI puts `security` on the server rather than the operation, and the parser read neither `servers` nor `channels.<name>.servers`, so every generated operation was anonymous and a `httpApiKey` header declared on a server contributed nothing to the allowlist. Each server's schemes are alternatives, a channel narrowed with `servers:` inherits only from those, and one that is not is reachable on all of them. A scheme declared inline on a server is registered under a synthesized name, since the allowlist is keyed on names. `E1057`, `E1032` and `E1072` now apply to AsyncAPI operations as they already did to OpenAPI ones.
 - **compiler**: `E1072` no longer fires when an operation offers several credential headers as alternatives and the plugin reads one of them. It compared the configured header against each scheme header in turn, so a requirement with more than one alternative warned about every header the plugin did not read, which is every AsyncAPI operation on a channel reached through more than one server.
-
 - **data plane**: the headers a browser sends unasked reach the upstream without being declared: `referer`, the `sec-fetch-*` set, the `sec-ch-ua*` client hints, `dnt`, `sec-gpc` and `priority`. They describe the request rather than the caller, which is why `user-agent`, `accept-language` and `origin` were already in the baseline. The fetch-metadata set is the one that mattered: an upstream uses it to reject cross-site requests, so dropping it silently removed a defence the upstream believed it had. It also made `serve --dev` unusable, naming eight headers on every browser request that no operation should ever declare, which buried the ones an author had to act on.
 - **data plane**: `barbacane serve` exits 0 on `SIGTERM` instead of panicking and exiting 101. The plugin host builds a NATS publisher, a Kafka publisher and an LDAP client whatever the artifact contains, each carrying its own tokio runtime, and dropping a runtime inside an async context is a panic. Every clean shutdown therefore looked like a crash to a supervisor: restart backoff, crash-loop counters and alerts fired on an ordinary stop. The same panic fired when startup failed after the artifact loaded, for instance on a taken port, burying the real cause and making a configuration error indistinguishable from a crash by exit code.
 - **compiler**: `compile` resolves a URL-sourced plugin instead of panicking. `reqwest::blocking` refuses to run inside a tokio runtime, on construction and on every request, and `compile` runs inside one, so a manifest with a remote plugin could not be compiled at all from a dev-profile build. The download now runs on a thread of its own.
+- **data plane**: `barbacane serve` and `barbacane dev` report the address they bound rather than the one they were asked for, and the control plane does the same. The two differ when the port is `0` and the operating system chooses: the line read `127.0.0.1:0`, which names nothing listening. The admin API is bound before it is announced, for the same reason.
 
 ## [0.11.0] - 2026-09-17
 
@@ -774,7 +783,13 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.6.1...v0.6.2
