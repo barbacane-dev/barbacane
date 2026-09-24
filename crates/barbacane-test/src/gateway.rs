@@ -1031,7 +1031,7 @@ mod child_tests {
     fn handing_the_child_over_leaves_it_running() {
         // `into_parts` gives the child to a caller that owns it from then on,
         // so dropping what is left must not kill a process still in use.
-        let mut child = sh("exec sleep 300");
+        let child = sh("exec sleep 300");
         let pid = child.id().expect("owned");
         let (mut handed, _log) = child.into_parts();
         assert!(still_running(pid), "the new owner's process was killed");
