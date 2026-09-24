@@ -183,7 +183,9 @@ fn port_from_log_line(line: &str) -> Option<u16> {
 /// child binds, which leaves the port unowned in between; a concurrent test
 /// handed the same one then talks to the wrong process.
 pub struct LoggedChild {
-    child: Child,
+    /// `None` once handed to a caller that owns the child from then on, which
+    /// is what stops `Drop` killing a process someone else is still using.
+    child: Option<Child>,
     log: GatewayLog,
 }
 
@@ -201,7 +203,10 @@ impl LoggedChild {
         if let Some(stderr) = child.stderr.take() {
             log.drain::<ChildStderr>(stderr, "stderr");
         }
-        Ok(Self { child, log })
+        Ok(Self {
+            child: Some(child),
+            log,
+        })
     }
 
     /// The port announced on the first line containing `needle`.
@@ -219,7 +224,7 @@ impl LoggedChild {
             {
                 return Some(port);
             }
-            if matches!(self.child.try_wait(), Ok(Some(_))) {
+            if self.has_exited() {
                 // Exited, so the pipes reach EOF. Wait for the readers before
                 // the last look: the announcement may still be in their buffer.
                 self.log.join_readers();
@@ -241,21 +246,50 @@ impl LoggedChild {
         &self.log
     }
 
+    /// The child's process id, while this still owns it.
+    pub fn id(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+
     /// Whether the child has already exited.
     pub fn has_exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)))
+        match self.child.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+            None => false,
+        }
     }
 
     /// Stop the child and collect it, so no zombie outlives the test.
     pub fn kill_and_reap(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let _ = child.kill();
+        let _ = child.wait();
         self.log.join_readers();
     }
 
     /// Hand over the child and its log, for a caller that owns them from here.
-    pub fn into_parts(self) -> (Child, GatewayLog) {
-        (self.child, self.log)
+    ///
+    /// Takes the child, so dropping what is left does not kill a process the
+    /// new owner is still using.
+    pub fn into_parts(mut self) -> (Child, GatewayLog) {
+        let child = self.child.take().expect("the child is handed over once");
+        (child, self.log.clone())
+    }
+}
+
+impl Drop for LoggedChild {
+    /// Stop the child if this still owns it.
+    ///
+    /// `Child` does not kill on drop, so any early return holding one of these
+    /// would otherwise leave the process running for the rest of the test
+    /// binary. A test that gives up part-way through starting something is
+    /// exactly where that happens.
+    fn drop(&mut self) {
+        if self.child.is_some() {
+            self.kill_and_reap();
+        }
     }
 }
 
@@ -964,6 +998,45 @@ mod child_tests {
         assert_eq!(port, None);
         assert!(elapsed >= Duration::from_millis(500), "waited {elapsed:?}");
         assert!(elapsed < Duration::from_secs(10), "waited {elapsed:?}");
+    }
+
+    /// Whether a process id is still live, asked of the OS rather than of us.
+    fn still_running(pid: u32) -> bool {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn dropping_a_child_stops_it() {
+        // `Child` does not kill on drop, so without an impl of our own an early
+        // return holding one leaves the process running for the rest of the
+        // test binary. `TestControlPlane::boot` returns exactly that way when
+        // the control plane never announces a port.
+        let pid = {
+            let child = sh("exec sleep 300");
+            child.id().expect("the child is owned here")
+        };
+        assert!(
+            !still_running(pid),
+            "pid {pid} outlived the LoggedChild that spawned it"
+        );
+    }
+
+    #[test]
+    fn handing_the_child_over_leaves_it_running() {
+        // `into_parts` gives the child to a caller that owns it from then on,
+        // so dropping what is left must not kill a process still in use.
+        let mut child = sh("exec sleep 300");
+        let pid = child.id().expect("owned");
+        let (mut handed, _log) = child.into_parts();
+        assert!(still_running(pid), "the new owner's process was killed");
+        let _ = handed.kill();
+        let _ = handed.wait();
     }
 
     #[test]
