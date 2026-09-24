@@ -1151,7 +1151,10 @@ fn compile_inner(
                 let Some(validator) = plugin_validators.get(key.as_str()) else {
                     continue;
                 };
-                if let Some(error) = validator.iter_errors(config).next() {
+                if let Some(error) = validator
+                    .iter_errors(config)
+                    .find(|e| !judges_a_runtime_reference(e))
+                {
                     return Err(CompileError::InvalidPluginConfig(
                         name.clone(),
                         format!("{location}: {error}"),
@@ -1823,6 +1826,34 @@ pub fn collect_writeonly_fields(schema: &serde_json::Value) -> std::collections:
     let mut out = std::collections::BTreeSet::new();
     walk(schema, &mut out);
     out
+}
+
+/// Prefixes of the config values the gateway resolves when it loads an artifact.
+/// Matches what the data plane's secret resolution accepts.
+const RUNTIME_REFERENCE_PREFIXES: &[&str] =
+    &["env://", "file://", "vault://", "aws-sm://", "k8s://"];
+
+/// True when a schema error only says a runtime reference, such as
+/// `env://UPSTREAM_URL`, does not look like the value it stands for. The value
+/// is unknown until the gateway starts, so its content cannot be checked here.
+/// A reference where the schema wants a number or an object is still an error:
+/// it resolves to a string.
+fn judges_a_runtime_reference(error: &jsonschema::ValidationError<'_>) -> bool {
+    use jsonschema::error::ValidationErrorKind as Kind;
+    let is_reference = error
+        .instance
+        .as_str()
+        .is_some_and(|s| RUNTIME_REFERENCE_PREFIXES.iter().any(|p| s.starts_with(p)));
+    is_reference
+        && matches!(
+            error.kind,
+            Kind::Pattern { .. }
+                | Kind::Format { .. }
+                | Kind::MinLength { .. }
+                | Kind::MaxLength { .. }
+                | Kind::Enum { .. }
+                | Kind::Constant { .. }
+        )
 }
 
 /// Recursively scan a plugin config for `secret_fields` (declared `writeOnly` in
@@ -6318,5 +6349,71 @@ SecMarker DONE
             result.manifest.artifact_hash,
             recompute_artifact_hash(&result.manifest)
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_reference_tests {
+    use super::judges_a_runtime_reference;
+    use serde_json::json;
+
+    /// The first error the E1023 check would report for `config`.
+    fn reported(schema: serde_json::Value, config: serde_json::Value) -> Option<String> {
+        let validator = jsonschema::options().build(&schema).expect("schema");
+        let found = validator
+            .iter_errors(&config)
+            .find(|e| !judges_a_runtime_reference(e))
+            .map(|e| e.to_string());
+        found
+    }
+
+    fn url_schema() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "pattern": "^wss?://", "minLength": 8 },
+                "mode": { "enum": ["fast", "safe"] },
+                "timeout": { "type": "number" }
+            }
+        })
+    }
+
+    #[test]
+    fn a_reference_is_not_held_to_the_shape_of_its_value() {
+        for reference in [
+            "env://UPSTREAM",
+            "file:///run/url",
+            "vault://kv/url",
+            "aws-sm://u",
+            "k8s://ns/s/k",
+        ] {
+            assert_eq!(
+                reported(url_schema(), json!({ "url": reference })),
+                None,
+                "{reference}"
+            );
+        }
+        assert_eq!(
+            reported(url_schema(), json!({ "mode": "env://MODE" })),
+            None
+        );
+    }
+
+    #[test]
+    fn a_literal_is_still_checked() {
+        let error = reported(url_schema(), json!({ "url": "http://upstream" })).expect("refused");
+        assert!(error.contains("^wss?://"), "{error}");
+        assert!(reported(url_schema(), json!({ "mode": "slow" })).is_some());
+    }
+
+    #[test]
+    fn a_reference_where_a_number_belongs_is_still_refused() {
+        assert!(reported(url_schema(), json!({ "timeout": "env://TIMEOUT" })).is_some());
+    }
+
+    #[test]
+    fn only_a_known_scheme_is_a_reference() {
+        assert!(reported(url_schema(), json!({ "url": "envx://UPSTREAM" })).is_some());
+        assert!(reported(url_schema(), json!({ "url": "ENV://UPSTREAM" })).is_some());
     }
 }

@@ -692,6 +692,73 @@ paths:
     compile(&spec_for(""), "current").expect("a valid config must still compile");
 }
 
+/// A config value given as a runtime reference compiles even when the plugin's
+/// schema constrains what the value looks like. `ws-upstream` requires a URL
+/// starting `ws://` or `wss://`, and a spec reads it from the environment.
+#[test]
+fn a_runtime_reference_satisfies_a_constrained_field() {
+    use barbacane_compiler::{compile_with_manifest, CompileOptions, ProjectManifest};
+
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repository root");
+    let wasm = repo.join("plugins/ws-upstream/ws-upstream.wasm");
+    if !wasm.exists() {
+        eprintln!("skipping: {} is not built", wasm.display());
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let manifest_path = dir.path().join("barbacane.yaml");
+    std::fs::write(
+        &manifest_path,
+        format!("plugins:\n  ws-upstream:\n    path: {}\n", wasm.display()),
+    )
+    .expect("write manifest");
+
+    let compile = |url: &str, out: &str| {
+        let spec = dir.path().join(format!("{out}.yaml"));
+        std::fs::write(
+            &spec,
+            format!(
+                r#"openapi: "3.1.0"
+info: {{ title: Socket, version: "1.0.0" }}
+paths:
+  /ws:
+    get:
+      operationId: socket
+      x-barbacane-dispatch:
+        name: ws-upstream
+        config:
+          url: "{url}"
+      responses:
+        "101": {{ description: switching }}
+"#
+            ),
+        )
+        .expect("write spec");
+        let manifest_text = std::fs::read_to_string(&manifest_path).expect("manifest");
+        let manifest = ProjectManifest::parse(&manifest_text, &manifest_path).expect("manifest");
+        compile_with_manifest(
+            &[spec.as_path()],
+            &manifest,
+            manifest_path.parent().expect("parent"),
+            &dir.path().join(format!("{out}.bca")),
+            &CompileOptions {
+                allow_plaintext: true,
+                ..Default::default()
+            },
+        )
+    };
+
+    compile("env://UPSTREAM_WS_URL", "reference").expect("a reference must compile");
+    compile("ws://upstream:3000/ws", "literal").expect("a valid literal must compile");
+    let err = compile("http://upstream:3000/ws", "wrong")
+        .expect_err("a literal the schema rejects must still be refused");
+    assert!(err.to_string().contains("E1023"), "{err}");
+}
+
 /// An operation that names no `config` is left alone: the plugin applies its own
 /// defaults, and a schema does not always restate them.
 #[test]
