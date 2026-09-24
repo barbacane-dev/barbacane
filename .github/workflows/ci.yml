@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, whatever it targets. Filtering on `branches: [main]`
+  # gives a pull request based on any other branch no checks at all, and its
+  # page shows the ones that did run rather than an empty list, so it reads as
+  # passing. Retargeting such a pull request to `main` does not start them
+  # either: that sends `edited`, which is not in the default activity types.
   pull_request:
-    branches: [main]
   issue_comment:
     types: [created]
 
