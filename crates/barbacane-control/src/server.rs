@@ -66,7 +66,10 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     // Bind and serve
     let listener = TcpListener::bind(config.listen_addr).await?;
-    tracing::info!("Control plane listening on {}", config.listen_addr);
+    // The bound address, not the requested one: with port 0 the OS picks, and
+    // this line is how the caller learns what it picked.
+    let bound = listener.local_addr().unwrap_or(config.listen_addr);
+    tracing::info!("Control plane listening on {}", bound);
 
     axum::serve(listener, app).await?;
 
