@@ -4283,7 +4283,10 @@ async fn run_dev(
         }
     };
 
-    eprintln!("barbacane dev: listening on http://{}", addr);
+    // The bound address, not the requested one: with port 0 the OS picks, and
+    // this line is how the caller learns what it picked.
+    let bound = listener.local_addr().unwrap_or(addr);
+    eprintln!("barbacane dev: listening on http://{}", bound);
 
     // Shutdown signal.
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -4320,15 +4323,28 @@ async fn run_dev(
             started_at: Instant::now(),
         });
 
+        // Bind before spawning, so the chosen port is known and can be logged.
+        let admin_listener = match TcpListener::bind(admin_addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!(
+                    "barbacane dev: failed to bind admin API to {}: {}",
+                    admin_addr, e
+                );
+                return ExitCode::from(1);
+            }
+        };
+        let admin_bound = admin_listener.local_addr().unwrap_or(admin_addr);
+
         let admin_shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                admin::start_admin_server(admin_addr, admin_state, admin_shutdown_rx).await
+                admin::start_admin_server(admin_listener, admin_state, admin_shutdown_rx).await
             {
                 tracing::error!(error = %e, "Admin server failed");
             }
         });
-        eprintln!("barbacane dev: admin API on http://{}", admin_addr);
+        eprintln!("barbacane dev: admin API on http://{}", admin_bound);
     }
 
     // File watcher.
@@ -4820,7 +4836,10 @@ async fn run_serve(
     } else {
         "http"
     };
-    eprintln!("barbacane: listening on {}://{}", protocol, addr);
+    // The bound address, not the requested one: with port 0 the OS picks, and
+    // this line is how the caller learns what it picked.
+    let bound = listener.local_addr().unwrap_or(addr);
+    eprintln!("barbacane: listening on {}://{}", protocol, bound);
 
     // Create shutdown signal channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -4891,15 +4910,26 @@ async fn run_serve(
             started_at: Instant::now(),
         });
 
+        // Bind before spawning, so the chosen port is known and can be logged.
+        let admin_listener = match TcpListener::bind(admin_addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("error: failed to bind admin API to {}: {}", admin_addr, e);
+                drop_off_runtime(gateway);
+                return ExitCode::from(1);
+            }
+        };
+        let admin_bound = admin_listener.local_addr().unwrap_or(admin_addr);
+
         let admin_shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                admin::start_admin_server(admin_addr, admin_state, admin_shutdown_rx).await
+                admin::start_admin_server(admin_listener, admin_state, admin_shutdown_rx).await
             {
                 tracing::error!(error = %e, "Admin server failed");
             }
         });
-        eprintln!("barbacane: admin API on http://{}", admin_addr);
+        eprintln!("barbacane: admin API on http://{}", admin_bound);
     }
 
     // MCP session eviction background task (runs every 5 minutes)

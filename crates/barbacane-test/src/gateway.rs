@@ -133,17 +133,32 @@ impl GatewayLog {
     /// The gateway writes asynchronously, so a test that reads immediately
     /// after the request races the reader thread.
     pub fn wait_for(&self, needle: &str, limit: Duration) -> bool {
+        self.wait_for_line(needle, limit).is_some()
+    }
+
+    /// Wait for a line containing `needle` and return it, up to `limit`.
+    ///
+    /// Startup lines carry values the caller needs, the bound ports above all,
+    /// so matching is not enough.
+    pub fn wait_for_line(&self, needle: &str, limit: Duration) -> Option<String> {
         let deadline = std::time::Instant::now() + limit;
         loop {
-            if self.contains(needle) {
-                return true;
+            if let Ok(lines) = self.lines.lock() {
+                if let Some(line) = lines.iter().find(|l| l.contains(needle)) {
+                    return Some(line.clone());
+                }
             }
             if std::time::Instant::now() >= deadline {
-                return false;
+                return None;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+/// The port from a `host:port` at the end of a startup line.
+fn port_from_log_line(line: &str) -> Option<u16> {
+    line.rsplit(':').next()?.trim().parse().ok()
 }
 
 /// Generated TLS certificates for testing.
@@ -283,10 +298,6 @@ impl TestGateway {
         // Find the barbacane binary
         let binary_path = find_barbacane_binary()?;
 
-        // Find available ports for main and admin
-        let port = find_available_port()?;
-        let admin_port = find_available_port()?;
-
         // Generate TLS certificates if needed
         let tls_certs = if tls_enabled {
             Some(generate_test_certificates(temp_dir.path())?)
@@ -296,13 +307,17 @@ impl TestGateway {
 
         // Build the gateway command
         let mut cmd = Command::new(&binary_path);
+        // Port 0, so the child binds whatever is free and reports it on startup.
+        // Choosing a port here and passing the number would mean closing the
+        // socket first, leaving the port unowned until the child binds it, and
+        // a concurrent test can be handed the same one in that window.
         cmd.arg("serve")
             .arg("--artifact")
             .arg(&artifact_path)
             .arg("--listen")
-            .arg(format!("127.0.0.1:{}", port))
+            .arg(LISTEN_ANY_PORT)
             .arg("--admin-bind")
-            .arg(format!("127.0.0.1:{}", admin_port))
+            .arg(LISTEN_ANY_PORT)
             .arg("--dev")
             .arg("--allow-plaintext-upstream") // Allow HTTP calls to test mock servers
             // Set egress policy explicitly so tests don't depend on the ambient
@@ -347,6 +362,38 @@ impl TestGateway {
             log.drain::<ChildStderr>(stderr, "stderr");
         }
 
+        // Read back the ports the child bound. A gateway that dies before
+        // logging them leaves nothing to connect to, so report its output.
+        let port = log
+            .wait_for_line("listening on", STARTUP_TIMEOUT)
+            .as_deref()
+            .and_then(port_from_log_line)
+            .ok_or_else(|| {
+                let _ = child.kill();
+                let _ = child.wait();
+                log.join_readers();
+                TestError::StartupFailed(format!(
+                    "gateway did not report a listen port\n{}",
+                    log.text()
+                ))
+            })?;
+        // The gateway announces the admin API immediately after the listener, so
+        // this is a short wait. Absence is an error rather than a port of 0: a
+        // zero here would surface later as a confusing connection failure.
+        let admin_port = log
+            .wait_for_line("admin API on", Duration::from_secs(30))
+            .as_deref()
+            .and_then(port_from_log_line)
+            .ok_or_else(|| {
+                let _ = child.kill();
+                let _ = child.wait();
+                log.join_readers();
+                TestError::StartupFailed(format!(
+                    "gateway did not report an admin port\n{}",
+                    log.text()
+                ))
+            })?;
+
         // Create HTTP client (with custom TLS config if needed)
         let client = if let Some(ref certs) = tls_certs {
             // Create a client that trusts our self-signed certificate
@@ -388,13 +435,9 @@ impl TestGateway {
     /// Wait for the gateway to be ready by polling the health endpoint.
     async fn wait_for_ready(&mut self) -> Result<(), TestError> {
         let health_url = format!("{}/__barbacane/health", self.base_url());
-        // 120-second timeout — larger WASM plugins (e.g. CEL ~1.3 MB) need more
-        // JIT compile time, and when the full integration suite runs in CI two
-        // CEL-heavy gateways can cold-boot simultaneously (--test-threads=2) on a
-        // shared runner, so the loser of that CPU race needs a wider window. A
-        // genuine boot hang still fails here rather than being masked.
-        let max_attempts = 1200;
+        // A genuine boot hang still fails here rather than being masked.
         let delay = Duration::from_millis(100);
+        let max_attempts = STARTUP_TIMEOUT.as_millis() / delay.as_millis();
 
         for _ in 0..max_attempts {
             if let Ok(resp) = self.client.get(&health_url).send().await {
@@ -651,11 +694,46 @@ fn find_barbacane_binary() -> Result<String, TestError> {
     ))
 }
 
-/// Find an available TCP port.
-fn find_available_port() -> Result<u16, TestError> {
-    // Bind to port 0 to get an OS-assigned port
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    Ok(port)
+/// What the gateway is told to bind. The OS picks the port and the child
+/// reports it, so no port is ever named here.
+const LISTEN_ANY_PORT: &str = "127.0.0.1:0";
+
+/// How long a gateway may take to come up.
+///
+/// Larger WASM plugins (CEL is ~1.3 MB) need JIT compile time, and when the
+/// integration suite runs sharded in CI two CEL-heavy gateways can cold-boot
+/// simultaneously on a shared runner, so the loser of that CPU race needs a wide
+/// window. Both the port announcement and the health check are bounded by this,
+/// so neither can be the tighter of the two.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[test]
+    fn the_harness_never_names_a_port() {
+        assert!(
+            LISTEN_ANY_PORT.ends_with(":0"),
+            "the child must bind an OS-assigned port; naming one here reopens \
+             the window where the port belongs to nobody"
+        );
+    }
+
+    #[test]
+    fn reads_the_port_off_a_startup_line() {
+        assert_eq!(
+            port_from_log_line("[stderr] barbacane: listening on http://127.0.0.1:52133"),
+            Some(52133)
+        );
+        assert_eq!(
+            port_from_log_line("[stderr] barbacane: admin API on http://127.0.0.1:41999"),
+            Some(41999)
+        );
+        assert_eq!(
+            port_from_log_line("[stderr] barbacane: listening on https://127.0.0.1:8443"),
+            Some(8443)
+        );
+        assert_eq!(port_from_log_line("[stderr] no address here"), None);
+    }
 }
