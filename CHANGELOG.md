@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **plugins**: a `hash` capability and host function, `host_sha256(data_ptr, data_len, out_ptr) -> i32`, computing the SHA-256 of a range of plugin memory on the host. The SDK wraps it as `hash::sha256` and `hash::sha256_hex`. Hashing in WASM costs fuel for every byte while a call's budget does not grow with the request body, so a plugin hashing a body of more than a few hundred kilobytes ran out of fuel.
+
 ### Fixed
 
+- **s3**: uploads larger than about 750 KB failed with 500. SigV4 signs the payload hash, which the dispatcher computed in WASM until the call ran out of fuel. The hash is now computed by the host, and uploads up to `--max-body-size` are signed and stored. The plugin declares the new `hash` capability, so this `s3.wasm` needs a gateway of this version or later.
+- **observability**: a request that fails inside the gateway (a plugin trap, a plugin that cannot be instantiated, output that does not parse) is logged at `error` with its cause. The cause was returned to the caller in dev mode and otherwise dropped, so a 500 outside dev mode left no trace. A dispatch failure names its plugin.
+- **plugins**: a trap reports its cause. Running out of fuel says so and states the budget, a missed deadline is reported as a timeout, and other traps keep wasmtime's full cause instead of only the backtrace header.
 - **images**: `barbacane compile` works inside the standalone and control images when the manifest fetches plugins by URL. Both images set `HOME` to a directory they never created, and the compiler caches downloaded plugins under it, so the compile failed with `failed to create plugin cache directory /home/barbacane/.barbacane/cache/plugins: Permission denied`. The bundled `/etc/barbacane/plugins.yaml` loads plugins from local paths and was not affected.
 
 ## [0.12.1] - 2026-09-25

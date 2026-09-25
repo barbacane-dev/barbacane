@@ -11,6 +11,7 @@ mod circuit_breaker;
 pub mod crypto;
 mod engine;
 mod error;
+pub mod hash;
 mod host;
 mod http_client;
 mod instance;

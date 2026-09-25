@@ -4,20 +4,22 @@ version = 4
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.7.0"
+version = "0.12.1"
 dependencies = [
+ "proc-macro2",
  "quote",
  "syn",
 ]
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.7.0"
+version = "0.12.1"
 dependencies = [
  "barbacane-plugin-macros",
  "base64",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -32,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-sigv4"
-version = "0.7.0"
+version = "0.12.1"
 dependencies = [
  "hex",
  "hmac",

@@ -108,8 +108,10 @@ impl S3Dispatcher {
         let (datetime, date) = sigv4::format_datetime(unix_secs);
 
         // ── Body hash ──────────────────────────────────────────────────────
+        // Hashed by the host: in WASM a large body would exhaust the call's
+        // fuel. The canonical request stays small and is hashed by sigv4.
         let body_bytes = body.unwrap_or(&[]);
-        let body_sha256 = sigv4::sha256_hex(body_bytes);
+        let body_sha256 = barbacane_plugin_sdk::hash::sha256_hex(body_bytes);
 
         // ── URL style + Host ───────────────────────────────────────────────
         let use_path_style = self.force_path_style || self.endpoint.is_some();
@@ -552,6 +554,73 @@ mod tests {
         // The real assertion is at the build_s3_request level below.
         let resp = d.dispatch(req);
         assert_eq!(resp.status, 502);
+    }
+
+    // ── Payload hash ─────────────────────────────────────────────────────
+
+    fn put(d: &S3Dispatcher, body: Option<&[u8]>) -> HttpRequest {
+        d.build_s3_request(
+            "bucket",
+            "key",
+            "PUT",
+            None,
+            body,
+            &BTreeMap::new(),
+            TEST_TS,
+        )
+    }
+
+    #[test]
+    fn test_payload_hash_is_the_bodys_at_every_size() {
+        let d = make_dispatcher(Some("bucket"), None);
+        // Around the 64-byte block boundaries, and far past the size at which
+        // hashing in WASM ran out of fuel.
+        for len in [1usize, 55, 56, 63, 64, 65, 1024, 1 << 20, 8 << 20] {
+            let body: Vec<u8> = (0..len).map(|i| (i * 7 % 256) as u8).collect();
+            let req = put(&d, Some(&body));
+            assert_eq!(
+                req.headers["x-amz-content-sha256"],
+                sigv4::sha256_hex(&body),
+                "{len} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_body_and_an_empty_body_sign_the_empty_hash() {
+        let d = make_dispatcher(Some("bucket"), None);
+        let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        assert_eq!(put(&d, None).headers["x-amz-content-sha256"], empty);
+        assert_eq!(put(&d, Some(b"")).headers["x-amz-content-sha256"], empty);
+    }
+
+    #[test]
+    fn test_payload_hash_matches_a_known_vector() {
+        let d = make_dispatcher(Some("bucket"), None);
+        assert_eq!(
+            put(&d, Some(b"abc")).headers["x-amz-content-sha256"],
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn test_the_signature_covers_the_payload() {
+        let d = make_dispatcher(Some("bucket"), None);
+        let signature = |body: &[u8]| put(&d, Some(body)).headers["authorization"].clone();
+        assert_eq!(
+            signature(b"same"),
+            signature(b"same"),
+            "signing is deterministic"
+        );
+        assert_ne!(signature(b"one body"), signature(b"another body"));
+        let mut flipped = vec![0u8; 1 << 20];
+        let original = signature(&flipped);
+        *flipped.last_mut().expect("non-empty") ^= 1;
+        assert_ne!(
+            original,
+            signature(&flipped),
+            "the last byte of a large body is signed"
+        );
     }
 
     #[test]
