@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **images**: `barbacane compile` works inside the standalone and control images when the manifest fetches plugins by URL. Both images set `HOME` to a directory they never created, and the compiler caches downloaded plugins under it, so the compile failed with `failed to create plugin cache directory /home/barbacane/.barbacane/cache/plugins: Permission denied`. The bundled `/etc/barbacane/plugins.yaml` loads plugins from local paths and was not affected.
+
 ## [0.12.1] - 2026-09-25
 
 A spec that reads a plugin setting from the environment compiles again. 0.12.0 began validating plugin configuration at compile time (`E1023`) and judged `env://` and `file://` references as if they were the values they stand for, so a `ws-upstream` URL given as `env://NAME` was refused. No artifact change: 0.12.0 artifacts load as they are.
