@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-25
+
+A spec that reads a plugin setting from the environment compiles again. 0.12.0 began validating plugin configuration at compile time (`E1023`) and judged `env://` and `file://` references as if they were the values they stand for, so a `ws-upstream` URL given as `env://NAME` was refused. No artifact change: 0.12.0 artifacts load as they are.
+
 ### Fixed
 
 - **compiler**: a plugin configuration value given as a runtime reference (`env://`, `file://`) is no longer refused by `E1023` for not looking like the value it stands for. The value is resolved when the gateway loads the artifact, so its content cannot be checked at compile time. A `ws-upstream` dispatch reading its `url` from `env://` failed the compile against the plugin's `^wss?://` pattern; an `http-upstream` one passed only because `env://NAME` happens to be a valid URI. A reference is still refused where the schema admits no string: a number or an object, or an `enum` or `const` of numbers. `vault://`, `aws-sm://` and `k8s://` get no exemption, since the gateway refuses them at startup.
@@ -787,7 +791,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.9.0...v0.10.0
