@@ -1828,32 +1828,38 @@ pub fn collect_writeonly_fields(schema: &serde_json::Value) -> std::collections:
     out
 }
 
-/// Prefixes of the config values the gateway resolves when it loads an artifact.
-/// Matches what the data plane's secret resolution accepts.
-const RUNTIME_REFERENCE_PREFIXES: &[&str] =
-    &["env://", "file://", "vault://", "aws-sm://", "k8s://"];
+/// Prefixes of the config values the gateway resolves when it loads an artifact:
+/// the schemes the data plane's secret resolution supports. It recognises
+/// `vault://`, `aws-sm://` and `k8s://` only to refuse them, so they are
+/// checked here like any other string.
+const RUNTIME_REFERENCE_PREFIXES: &[&str] = &["env://", "file://"];
 
 /// True when a schema error only says a runtime reference, such as
 /// `env://UPSTREAM_URL`, does not look like the value it stands for. The value
 /// is unknown until the gateway starts, so its content cannot be checked here.
-/// A reference where the schema wants a number or an object is still an error:
-/// it resolves to a string.
+/// A reference where the schema admits no string (a number, an object, an enum
+/// or const of numbers) is still an error: it resolves to a string.
 fn judges_a_runtime_reference(error: &jsonschema::ValidationError<'_>) -> bool {
     use jsonschema::error::ValidationErrorKind as Kind;
     let is_reference = error
         .instance
         .as_str()
         .is_some_and(|s| RUNTIME_REFERENCE_PREFIXES.iter().any(|p| s.starts_with(p)));
-    is_reference
-        && matches!(
-            error.kind,
-            Kind::Pattern { .. }
-                | Kind::Format { .. }
-                | Kind::MinLength { .. }
-                | Kind::MaxLength { .. }
-                | Kind::Enum { .. }
-                | Kind::Constant { .. }
-        )
+    if !is_reference {
+        return false;
+    }
+    match &error.kind {
+        Kind::Pattern { .. }
+        | Kind::Format { .. }
+        | Kind::MinLength { .. }
+        | Kind::MaxLength { .. } => true,
+        // A reference resolves to a string, so only a string can satisfy these.
+        Kind::Enum { options } => options
+            .as_array()
+            .is_some_and(|values| values.iter().any(serde_json::Value::is_string)),
+        Kind::Constant { expected_value } => expected_value.is_string(),
+        _ => false,
+    }
 }
 
 /// Recursively scan a plugin config for `secret_fields` (declared `writeOnly` in
@@ -6380,13 +6386,7 @@ mod runtime_reference_tests {
 
     #[test]
     fn a_reference_is_not_held_to_the_shape_of_its_value() {
-        for reference in [
-            "env://UPSTREAM",
-            "file:///run/url",
-            "vault://kv/url",
-            "aws-sm://u",
-            "k8s://ns/s/k",
-        ] {
+        for reference in ["env://UPSTREAM", "file:///run/url"] {
             assert_eq!(
                 reported(url_schema(), json!({ "url": reference })),
                 None,
@@ -6397,6 +6397,39 @@ mod runtime_reference_tests {
             reported(url_schema(), json!({ "mode": "env://MODE" })),
             None
         );
+    }
+
+    /// The gateway refuses these schemes at startup, so they get no exemption.
+    #[test]
+    fn a_scheme_the_gateway_cannot_resolve_is_checked_as_a_literal() {
+        for unsupported in ["vault://kv/url", "aws-sm://url", "k8s://ns/secret/url"] {
+            assert!(
+                reported(url_schema(), json!({ "url": unsupported })).is_some(),
+                "{unsupported}"
+            );
+        }
+    }
+
+    /// Without a `type`, a value outside an enum or const of numbers raises only
+    /// the enum or const error. A string can never satisfy either.
+    #[test]
+    fn a_reference_where_only_numbers_are_allowed_is_still_refused() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "level": { "enum": [1, 2, 3] },
+                "version": { "const": 2 },
+                "mixed": { "enum": [0, "auto"] },
+                "tag": { "const": "stable" }
+            }
+        });
+        assert!(reported(schema.clone(), json!({ "level": "env://LEVEL" })).is_some());
+        assert!(reported(schema.clone(), json!({ "version": "env://VERSION" })).is_some());
+        assert_eq!(
+            reported(schema.clone(), json!({ "mixed": "env://MODE" })),
+            None
+        );
+        assert_eq!(reported(schema, json!({ "tag": "env://TAG" })), None);
     }
 
     #[test]
