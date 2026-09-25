@@ -48,7 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/www/html/*
 
 # Create non-root user
-RUN groupadd -r barbacane && useradd -r -g barbacane barbacane
+# With a home directory: the compiler caches downloaded plugins under $HOME.
+RUN groupadd -r barbacane && useradd -r -m -g barbacane barbacane
 
 # Copy the binary from rust builder
 COPY --from=rust-builder /usr/local/bin/barbacane-control /usr/local/bin/barbacane-control
