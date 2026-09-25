@@ -471,6 +471,19 @@ pub struct PluginInstance {
     memory: Memory,
 }
 
+/// A failed call, naming its cause. wasmtime's own message for a trap is the
+/// backtrace header; the reason is underneath it, and budget exhaustion is
+/// reported against the budget the call had.
+fn call_error(error: wasmtime::Error, fuel: u64, deadline_ms: u64) -> WasmError {
+    match error.downcast_ref::<wasmtime::Trap>() {
+        Some(wasmtime::Trap::OutOfFuel) => WasmError::Trap(format!(
+            "out of fuel: the call used all {fuel} instructions of its budget"
+        )),
+        Some(wasmtime::Trap::Interrupt) => WasmError::Timeout(deadline_ms),
+        _ => WasmError::Trap(format!("{error:#}")),
+    }
+}
+
 impl PluginInstance {
     /// Create a new plugin instance from a compiled module.
     pub fn new(
@@ -684,9 +697,9 @@ impl PluginInstance {
             .set_epoch_deadline(self.limits.max_execution_ms.max(1));
 
         // Call init
-        let result = init_func
-            .call(&mut self.store, (ptr, len))
-            .map_err(|e| WasmError::Trap(e.to_string()))?;
+        let result = init_func.call(&mut self.store, (ptr, len)).map_err(|e| {
+            call_error(e, self.limits.max_fuel, self.limits.max_execution_ms.max(1))
+        })?;
 
         Ok(result)
     }
@@ -754,7 +767,7 @@ impl PluginInstance {
         // Call function
         let result = func
             .call(&mut self.store, (ptr, len))
-            .map_err(|e| WasmError::Trap(e.to_string()))?;
+            .map_err(|e| call_error(e, fuel, deadline))?;
 
         Ok(result)
     }
@@ -1063,6 +1076,39 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         .map_err(|e| {
             WasmError::Instantiation(format!("failed to add host_http_request_body_set: {}", e))
         })?;
+
+    // host_sha256 — SHA-256 of a range of plugin memory, 32 bytes written at
+    // out_ptr. Hashed natively, so a large input costs the plugin no fuel; see
+    // `crate::hash`. Returns 0, or -1 when a range is outside the memory.
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_sha256",
+            |mut caller: Caller<'_, PluginState>,
+             data_ptr: i32,
+             data_len: i32,
+             out_ptr: i32|
+             -> i32 {
+                let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
+                    return -1;
+                };
+                let result = crate::hash::sha256_into(
+                    memory.data_mut(&mut caller),
+                    data_ptr,
+                    data_len,
+                    out_ptr,
+                );
+                // A large input takes wall-clock time the plugin did not spend
+                // running; refresh the deadline as the blocking host calls do.
+                let deadline = caller.data().max_execution_ms.max(1);
+                caller.as_context_mut().set_epoch_deadline(deadline);
+                match result {
+                    Ok(()) => 0,
+                    Err(_) => -1,
+                }
+            },
+        )
+        .map_err(|e| WasmError::Instantiation(format!("failed to add host_sha256: {}", e)))?;
 
     // host_log
     linker

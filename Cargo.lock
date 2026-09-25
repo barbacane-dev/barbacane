@@ -493,6 +493,7 @@ dependencies = [
  "base64",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -525,9 +526,11 @@ version = "0.12.1"
 dependencies = [
  "assert_cmd",
  "barbacane-compiler",
+ "barbacane-sigv4",
  "base64",
  "flate2",
  "futures-util",
+ "hex",
  "libc",
  "p256",
  "predicates",
@@ -536,11 +539,13 @@ dependencies = [
  "rustls",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "wat",
  "wiremock",
 ]
 

@@ -259,6 +259,30 @@ mod tests {
     }
 
     #[test]
+    fn validate_imports_gates_hashing_behind_its_capability() {
+        let module = module_with_import("host_sha256");
+        for declared in [
+            vec![],
+            vec!["log".to_string()],
+            vec!["verify_signature".to_string()],
+        ] {
+            let err = validate_imports(&module, &declared).unwrap_err();
+            assert!(
+                matches!(err, WasmError::UndeclaredImport(ref name) if name == "host_sha256"),
+                "{declared:?} must not grant host_sha256: {err}"
+            );
+        }
+        assert!(validate_imports(&module, &["hash".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn the_hash_capability_grants_only_host_sha256() {
+        assert_eq!(capability_to_imports("hash"), &["host_sha256"]);
+        let module = module_with_import("host_verify_signature");
+        assert!(validate_imports(&module, &["hash".to_string()]).is_err());
+    }
+
+    #[test]
     fn validate_imports_allows_declared_capability_and_core_abi() {
         // host_log is covered by the declared `log` capability...
         assert!(validate_imports(&module_with_import("host_log"), &["log".to_string()]).is_ok());

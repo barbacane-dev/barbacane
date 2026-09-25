@@ -171,6 +171,7 @@ WASM plugin runtime built on wasmtime.
 - Spans: `host_span_start`/`host_span_end`/`host_span_set_attribute`
 - UUID: `host_uuid_generate`/`host_uuid_read_result`
 - Crypto: `host_verify_signature` - signature verification (e.g. RS256/384/512)
+- Hashing: `host_sha256` - SHA-256 of plugin memory, at a cost that does not grow with the input
 - WebSocket: `host_ws_upgrade`
 - Body access: `host_body_get`/`host_body_set`/`host_body_len`/`host_body_clear`
 

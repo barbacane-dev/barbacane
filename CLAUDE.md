@@ -103,6 +103,7 @@ host_functions = ["log", "context_get"]
 | `telemetry` | `host_metric_counter_inc`, `host_metric_histogram_observe`, `host_span_*` |
 | `generate_uuid` | `host_uuid_generate`, `host_uuid_read_result` |
 | `verify_signature` | `host_verify_signature` |
+| `hash` | `host_sha256` |
 | `rate_limit` | `host_rate_limit_check`, `host_rate_limit_read_result` |
 | `cache` | `host_cache_get`, `host_cache_set`, `host_cache_read_result` |
 | `body_access` | *(none — controls whether `on_request` receives the request body)* |

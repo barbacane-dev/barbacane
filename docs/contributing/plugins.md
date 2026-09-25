@@ -352,6 +352,25 @@ match http::call(&req, None) {
 }
 ```
 
+### Hashing
+
+```toml
+[capabilities]
+host_functions = ["hash"]
+```
+
+```rust
+use barbacane_plugin_sdk::hash;
+
+let digest: [u8; 32] = hash::sha256(body);
+let hex: String = hash::sha256_hex(body); // 64 lowercase hex digits
+```
+
+The host computes the digest. Hashing in WASM costs fuel for every byte, and a
+call's budget does not grow with the request body, so hash a body this way
+rather than with a crate compiled into the plugin. In a plugin's unit tests the
+same functions hash in-process.
+
 ### Error responses (RFC 9457 problem+json)
 
 Build consistent `application/problem+json` error responses with the shared builder:

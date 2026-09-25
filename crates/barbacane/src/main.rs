@@ -2295,9 +2295,9 @@ impl Gateway {
                 };
 
                 if let Err(e) = dispatch_result {
-                    return Err(
-                        self.dev_error_response(format_args!("plugin dispatch failed: {}", e))
-                    );
+                    return Err(self.dev_error_response(format_args!(
+                        "plugin '{plugin_name}' dispatch failed: {e}"
+                    )));
                 }
 
                 if output.is_empty() {
@@ -3254,12 +3254,12 @@ impl Gateway {
     }
 
     /// Build a 500 response with detail visible only in dev mode.
+    /// A 500 for a failure inside the gateway. The cause is always logged; it
+    /// reaches the caller only in dev mode.
     fn dev_error_response(&self, msg: impl std::fmt::Display) -> Response<Full<Bytes>> {
-        let detail = if self.dev_mode {
-            Some(msg.to_string())
-        } else {
-            None
-        };
+        let msg = msg.to_string();
+        tracing::error!(error = %msg, "request failed inside the gateway");
+        let detail = self.dev_mode.then_some(msg);
         self.internal_error_response(detail.as_deref())
     }
 
