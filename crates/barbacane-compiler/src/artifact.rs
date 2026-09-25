@@ -1151,7 +1151,10 @@ fn compile_inner(
                 let Some(validator) = plugin_validators.get(key.as_str()) else {
                     continue;
                 };
-                if let Some(error) = validator.iter_errors(config).next() {
+                if let Some(error) = validator
+                    .iter_errors(config)
+                    .find(|e| !judges_a_runtime_reference(e))
+                {
                     return Err(CompileError::InvalidPluginConfig(
                         name.clone(),
                         format!("{location}: {error}"),
@@ -1823,6 +1826,40 @@ pub fn collect_writeonly_fields(schema: &serde_json::Value) -> std::collections:
     let mut out = std::collections::BTreeSet::new();
     walk(schema, &mut out);
     out
+}
+
+/// Prefixes of the config values the gateway resolves when it loads an artifact:
+/// the schemes the data plane's secret resolution supports. It recognises
+/// `vault://`, `aws-sm://` and `k8s://` only to refuse them, so they are
+/// checked here like any other string.
+const RUNTIME_REFERENCE_PREFIXES: &[&str] = &["env://", "file://"];
+
+/// True when a schema error only says a runtime reference, such as
+/// `env://UPSTREAM_URL`, does not look like the value it stands for. The value
+/// is unknown until the gateway starts, so its content cannot be checked here.
+/// A reference where the schema admits no string (a number, an object, an enum
+/// or const of numbers) is still an error: it resolves to a string.
+fn judges_a_runtime_reference(error: &jsonschema::ValidationError<'_>) -> bool {
+    use jsonschema::error::ValidationErrorKind as Kind;
+    let is_reference = error
+        .instance
+        .as_str()
+        .is_some_and(|s| RUNTIME_REFERENCE_PREFIXES.iter().any(|p| s.starts_with(p)));
+    if !is_reference {
+        return false;
+    }
+    match &error.kind {
+        Kind::Pattern { .. }
+        | Kind::Format { .. }
+        | Kind::MinLength { .. }
+        | Kind::MaxLength { .. } => true,
+        // A reference resolves to a string, so only a string can satisfy these.
+        Kind::Enum { options } => options
+            .as_array()
+            .is_some_and(|values| values.iter().any(serde_json::Value::is_string)),
+        Kind::Constant { expected_value } => expected_value.is_string(),
+        _ => false,
+    }
 }
 
 /// Recursively scan a plugin config for `secret_fields` (declared `writeOnly` in
@@ -6318,5 +6355,98 @@ SecMarker DONE
             result.manifest.artifact_hash,
             recompute_artifact_hash(&result.manifest)
         );
+    }
+}
+
+#[cfg(test)]
+mod runtime_reference_tests {
+    use super::judges_a_runtime_reference;
+    use serde_json::json;
+
+    /// The first error the E1023 check would report for `config`.
+    fn reported(schema: serde_json::Value, config: serde_json::Value) -> Option<String> {
+        let validator = jsonschema::options().build(&schema).expect("schema");
+        let found = validator
+            .iter_errors(&config)
+            .find(|e| !judges_a_runtime_reference(e))
+            .map(|e| e.to_string());
+        found
+    }
+
+    fn url_schema() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "pattern": "^wss?://", "minLength": 8 },
+                "mode": { "enum": ["fast", "safe"] },
+                "timeout": { "type": "number" }
+            }
+        })
+    }
+
+    #[test]
+    fn a_reference_is_not_held_to_the_shape_of_its_value() {
+        for reference in ["env://UPSTREAM", "file:///run/url"] {
+            assert_eq!(
+                reported(url_schema(), json!({ "url": reference })),
+                None,
+                "{reference}"
+            );
+        }
+        assert_eq!(
+            reported(url_schema(), json!({ "mode": "env://MODE" })),
+            None
+        );
+    }
+
+    /// The gateway refuses these schemes at startup, so they get no exemption.
+    #[test]
+    fn a_scheme_the_gateway_cannot_resolve_is_checked_as_a_literal() {
+        for unsupported in ["vault://kv/url", "aws-sm://url", "k8s://ns/secret/url"] {
+            assert!(
+                reported(url_schema(), json!({ "url": unsupported })).is_some(),
+                "{unsupported}"
+            );
+        }
+    }
+
+    /// Without a `type`, a value outside an enum or const of numbers raises only
+    /// the enum or const error. A string can never satisfy either.
+    #[test]
+    fn a_reference_where_only_numbers_are_allowed_is_still_refused() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "level": { "enum": [1, 2, 3] },
+                "version": { "const": 2 },
+                "mixed": { "enum": [0, "auto"] },
+                "tag": { "const": "stable" }
+            }
+        });
+        assert!(reported(schema.clone(), json!({ "level": "env://LEVEL" })).is_some());
+        assert!(reported(schema.clone(), json!({ "version": "env://VERSION" })).is_some());
+        assert_eq!(
+            reported(schema.clone(), json!({ "mixed": "env://MODE" })),
+            None
+        );
+        assert_eq!(reported(schema, json!({ "tag": "env://TAG" })), None);
+    }
+
+    #[test]
+    fn a_literal_is_still_checked() {
+        let error = reported(url_schema(), json!({ "url": "http://upstream" })).expect("refused");
+        assert!(error.contains("^wss?://"), "{error}");
+        assert!(reported(url_schema(), json!({ "mode": "slow" })).is_some());
+    }
+
+    #[test]
+    fn a_reference_where_a_number_belongs_is_still_refused() {
+        assert!(reported(url_schema(), json!({ "timeout": "env://TIMEOUT" })).is_some());
+    }
+
+    #[test]
+    fn only_a_known_scheme_is_a_reference() {
+        assert!(reported(url_schema(), json!({ "url": "envx://UPSTREAM" })).is_some());
+        assert!(reported(url_schema(), json!({ "url": "ENV://UPSTREAM" })).is_some());
     }
 }

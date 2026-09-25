@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **compiler**: a plugin configuration value given as a runtime reference (`env://`, `file://`) is no longer refused by `E1023` for not looking like the value it stands for. The value is resolved when the gateway loads the artifact, so its content cannot be checked at compile time. A `ws-upstream` dispatch reading its `url` from `env://` failed the compile against the plugin's `^wss?://` pattern; an `http-upstream` one passed only because `env://NAME` happens to be a valid URI. A reference is still refused where the schema admits no string: a number or an object, or an `enum` or `const` of numbers. `vault://`, `aws-sm://` and `k8s://` get no exemption, since the gateway refuses them at startup.
+
 ## [0.12.0] - 2026-09-24
 
 Headline: the model 0.11.0 introduced, where a document declares the headers and security schemes an operation accepts, now covers AsyncAPI as well as OpenAPI and is checked against what the plugins in the chain actually read. Separately, a document's schema definitions are held once for the whole document rather than once per schema, so a published spec that needed gigabytes to parse now needs a fraction of that.
