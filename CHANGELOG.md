@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **cache**: a response to a request carrying `Authorization` is no longer stored unless it allows a shared cache to reuse it (`public`, `s-maxage` or `must-revalidate`, per RFC 9111 §3.5), or the middleware varies on `authorization`. An upstream returning a user-specific response without `Cache-Control` could have it served to other users. `Cache-Control` directives are now matched by name, so an extension such as `x-private-hint` no longer prevents caching. The caching guide now describes what the middleware does: `max-age` and `no-cache` are not interpreted, and the query string is part of the key.
+
 ## [0.12.2] - 2026-09-28
 
 Uploads through the `s3` dispatcher larger than about 750 KB are stored instead of failing with 500: plugins can now hash request bodies on the host, where it costs no fuel. A request that fails inside the gateway is now logged with its cause and its request ID, outside dev mode too. `barbacane compile` inside the standalone and control images can fetch plugins by URL. No artifact change: 0.12.x artifacts load as they are. The new `s3.wasm` declares the `hash` capability, so it needs a 0.12.2 gateway; an older `s3.wasm` keeps working on this one.

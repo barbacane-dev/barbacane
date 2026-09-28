@@ -35,6 +35,10 @@ pub struct Cache {
     /// Whether the current request is cacheable.
     #[serde(skip)]
     is_cacheable: bool,
+
+    /// Whether the current request carried an `authorization` header.
+    #[serde(skip)]
+    request_authorized: bool,
 }
 
 fn default_ttl() -> u32 {
@@ -68,6 +72,8 @@ struct CacheEntry {
 impl Cache {
     /// Handle incoming request - check cache for hit.
     pub fn on_request(&mut self, req: Request) -> Action<Request> {
+        self.request_authorized = req.headers.contains_key("authorization");
+
         // Check if this request method is cacheable
         if !self
             .methods
@@ -129,12 +135,21 @@ impl Cache {
             return resp;
         }
 
-        // Check Cache-Control header for no-store/private
-        if let Some(cc) = resp.headers.get("cache-control") {
-            let cc_lower = cc.to_lowercase();
-            if cc_lower.contains("no-store") || cc_lower.contains("private") {
-                return resp;
-            }
+        let directives = cache_control_directives(resp.headers.get("cache-control"));
+        if directives.iter().any(|d| d == "no-store" || d == "private") {
+            return resp;
+        }
+
+        // RFC 9111 §3.5: a shared cache must not reuse a response to an
+        // authorized request unless the response explicitly allows it. Varying
+        // on `authorization` keys each entry to its credential, which is safe.
+        if self.request_authorized
+            && !self.varies_on_authorization()
+            && !directives
+                .iter()
+                .any(|d| matches!(d.as_str(), "public" | "s-maxage" | "must-revalidate"))
+        {
+            return resp;
         }
 
         // Store in cache
@@ -154,6 +169,13 @@ impl Cache {
             .headers
             .insert("x-cache".to_string(), "MISS".to_string());
         modified_resp
+    }
+
+    /// Whether `authorization` is one of the headers the cache key varies on.
+    fn varies_on_authorization(&self) -> bool {
+        self.vary
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case("authorization"))
     }
 
     /// Build cache key from request.
@@ -202,6 +224,25 @@ impl Cache {
 
         call_cache_set(key, &entry_json, self.ttl) == 0
     }
+}
+
+/// Lowercased directive names of a `Cache-Control` value, without their arguments.
+fn cache_control_directives(value: Option<&String>) -> Vec<String> {
+    value
+        .map(|v| {
+            v.split(',')
+                .filter_map(|d| {
+                    let name = d
+                        .split('=')
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_ascii_lowercase();
+                    (!name.is_empty()).then_some(name)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Call host_cache_get with a string key.
@@ -352,6 +393,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: None,
             is_cacheable: false,
+            request_authorized: false,
         };
 
         let req = create_test_request("GET", "/api/users");
@@ -369,6 +411,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: None,
             is_cacheable: false,
+            request_authorized: false,
         };
 
         let mut req = create_test_request("GET", "/api/users");
@@ -387,6 +430,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: None,
             is_cacheable: false,
+            request_authorized: false,
         };
 
         let mut req = create_test_request("GET", "/api/users");
@@ -424,6 +468,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: None,
             is_cacheable: false,
+            request_authorized: false,
         };
 
         let req = create_test_request("POST", "/api/users");
@@ -451,6 +496,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: None,
             is_cacheable: false,
+            request_authorized: false,
         };
 
         let req = create_test_request("GET", "/api/users");
@@ -492,6 +538,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: None,
             is_cacheable: false,
+            request_authorized: false,
         };
 
         let req = create_test_request("GET", "/api/users");
@@ -521,6 +568,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: Some("GET:/api/users".to_string()),
             is_cacheable: true,
+            request_authorized: false,
         };
 
         let resp = Response {
@@ -553,6 +601,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: Some("GET:/api/users".to_string()),
             is_cacheable: true,
+            request_authorized: false,
         };
 
         let resp = Response {
@@ -584,6 +633,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: Some("GET:/api/users".to_string()),
             is_cacheable: true,
+            request_authorized: false,
         };
 
         let resp = Response {
@@ -619,6 +669,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: Some("GET:/api/users".to_string()),
             is_cacheable: true,
+            request_authorized: false,
         };
 
         let resp = Response {
@@ -650,6 +701,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: Some("POST:/api/users".to_string()),
             is_cacheable: false,
+            request_authorized: false,
         };
 
         let resp = Response {
@@ -681,6 +733,7 @@ mod tests {
             cacheable_status: default_cacheable_status(),
             current_cache_key: None,
             is_cacheable: true,
+            request_authorized: false,
         };
 
         let resp = Response {
@@ -730,6 +783,7 @@ mod tests {
                 cacheable_status: default_cacheable_status(),
                 current_cache_key: Some(format!("GET:/api/test/{}", status)),
                 is_cacheable: true,
+                request_authorized: false,
             };
 
             let resp = Response {
@@ -746,5 +800,120 @@ mod tests {
                 assert!(!result.headers.contains_key("x-cache"));
             }
         }
+    }
+
+    fn authorized_request(token: &str) -> Request {
+        let mut req = create_test_request("GET", "/api/me");
+        req.headers
+            .insert("authorization".to_string(), format!("Bearer {token}"));
+        req
+    }
+
+    fn response_with_cache_control(value: Option<&str>) -> Response {
+        let mut headers = BTreeMap::new();
+        if let Some(value) = value {
+            headers.insert("cache-control".to_string(), value.to_string());
+        }
+        Response {
+            status: 200,
+            headers,
+            body: Some(br#"{"user":"alice"}"#.to_vec()),
+        }
+    }
+
+    fn cache_varying_on(vary: &[&str]) -> Cache {
+        Cache {
+            ttl: 300,
+            vary: vary.iter().map(|h| h.to_string()).collect(),
+            methods: default_methods(),
+            cacheable_status: default_cacheable_status(),
+            current_cache_key: None,
+            is_cacheable: false,
+            request_authorized: false,
+        }
+    }
+
+    /// Runs one request through the cache and reports whether it was a hit.
+    fn is_hit(cache: &mut Cache, req: Request) -> bool {
+        matches!(cache.on_request(req), Action::ShortCircuit(_))
+    }
+
+    #[test]
+    fn test_authorized_response_without_explicit_directive_is_not_stored() {
+        setup();
+        let mut cache = cache_varying_on(&[]);
+
+        assert!(!is_hit(&mut cache, authorized_request("alice")));
+        let resp = cache.on_response(response_with_cache_control(None));
+        assert!(!resp.headers.contains_key("x-cache"));
+
+        assert!(
+            !is_hit(&mut cache, authorized_request("bob")),
+            "a response to alice's authorized request was served to bob"
+        );
+    }
+
+    #[test]
+    fn test_authorized_response_with_max_age_only_is_not_stored() {
+        setup();
+        let mut cache = cache_varying_on(&[]);
+
+        assert!(!is_hit(&mut cache, authorized_request("alice")));
+        cache.on_response(response_with_cache_control(Some("max-age=3600")));
+
+        assert!(!is_hit(&mut cache, authorized_request("bob")));
+    }
+
+    #[test]
+    fn test_authorized_response_explicitly_shareable_is_stored() {
+        for directive in [
+            "public, max-age=60",
+            "s-maxage=60",
+            "max-age=60, must-revalidate",
+        ] {
+            setup();
+            let mut cache = cache_varying_on(&[]);
+
+            assert!(!is_hit(&mut cache, authorized_request("alice")));
+            cache.on_response(response_with_cache_control(Some(directive)));
+
+            assert!(
+                is_hit(&mut cache, authorized_request("bob")),
+                "`{directive}` allows a shared cache to reuse the response"
+            );
+        }
+    }
+
+    #[test]
+    fn test_authorized_response_varying_on_authorization_is_stored_per_credential() {
+        setup();
+        let mut cache = cache_varying_on(&["Authorization"]);
+
+        assert!(!is_hit(&mut cache, authorized_request("alice")));
+        cache.on_response(response_with_cache_control(None));
+
+        assert!(!is_hit(&mut cache, authorized_request("bob")));
+        assert!(is_hit(&mut cache, authorized_request("alice")));
+    }
+
+    #[test]
+    fn test_unauthorized_response_without_directive_is_still_stored() {
+        setup();
+        let mut cache = cache_varying_on(&[]);
+
+        assert!(!is_hit(&mut cache, create_test_request("GET", "/api/me")));
+        cache.on_response(response_with_cache_control(None));
+
+        assert!(is_hit(&mut cache, create_test_request("GET", "/api/me")));
+    }
+
+    #[test]
+    fn test_cache_control_directives_are_matched_by_name() {
+        let value = "Public, max-age=60, S-MaxAge=30, x-private-hint".to_string();
+        assert_eq!(
+            cache_control_directives(Some(&value)),
+            vec!["public", "max-age", "s-maxage", "x-private-hint"]
+        );
+        assert!(cache_control_directives(None).is_empty());
     }
 }
