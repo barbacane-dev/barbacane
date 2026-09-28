@@ -41,6 +41,7 @@ use rustls::ServerConfig;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
+use tracing::Instrument;
 use uuid::Uuid;
 
 /// Server version for the Server header.
@@ -1118,18 +1119,15 @@ impl Gateway {
         response
     }
 
-    /// Handle an incoming HTTP request.
+    /// Handle an incoming HTTP request, inside a span carrying its request and
+    /// trace IDs so every log line of the request can be matched to its response.
+    /// The span is at ERROR level so it is enabled whenever any log line is.
     async fn handle_request(
         &self,
         req: Request<Incoming>,
         client_addr: Option<SocketAddr>,
     ) -> Result<Response<AnyBody>, Infallible> {
         let start_time = Instant::now();
-        let uri_string = req.uri().to_string();
-        let path = req.uri().path().to_string();
-        let query_string = req.uri().query().map(|s| s.to_string());
-        let method = req.method().clone();
-        let method_str = method.as_str().to_string();
 
         // Generate or extract request ID (from incoming header or new UUID).
         // Only accept a client-supplied id if it is a legal, non-empty header
@@ -1157,6 +1155,26 @@ impl Gateway {
                 }
             })
             .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+
+        let span = tracing::error_span!("request", request_id = %request_id, trace_id = %trace_id);
+        self.handle_request_in_span(req, client_addr, start_time, request_id, trace_id)
+            .instrument(span)
+            .await
+    }
+
+    async fn handle_request_in_span(
+        &self,
+        req: Request<Incoming>,
+        client_addr: Option<SocketAddr>,
+        start_time: Instant,
+        request_id: String,
+        trace_id: String,
+    ) -> Result<Response<AnyBody>, Infallible> {
+        let uri_string = req.uri().to_string();
+        let path = req.uri().path().to_string();
+        let query_string = req.uri().query().map(|s| s.to_string());
+        let method = req.method().clone();
+        let method_str = method.as_str().to_string();
 
         // Check URI length limit early
         if let Err(e) = self.limits.validate_uri(&uri_string) {
@@ -3253,7 +3271,6 @@ impl Gateway {
             .expect("valid response")
     }
 
-    /// Build a 500 response with detail visible only in dev mode.
     /// A 500 for a failure inside the gateway. The cause is always logged; it
     /// reaches the caller only in dev mode.
     fn dev_error_response(&self, msg: impl std::fmt::Display) -> Response<Full<Bytes>> {

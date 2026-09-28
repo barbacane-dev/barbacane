@@ -1,5 +1,5 @@
 //! A plugin that fails mid-request: the caller gets a 500, and the gateway
-//! logs why, naming the plugin.
+//! logs why, naming the plugin and the request.
 //!
 //! Run with: `cargo test -p barbacane-test --test plugin_failures`
 
@@ -73,6 +73,12 @@ async fn a_trapping_plugin_is_answered_with_500_and_logged_with_its_name() {
 
     let response = gateway.get("/fails").await.expect("request");
     assert_eq!(response.status(), 500);
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .expect("the response carries a request ID")
+        .to_string();
 
     let log = gateway.log();
     assert!(
@@ -88,4 +94,52 @@ async fn a_trapping_plugin_is_answered_with_500_and_logged_with_its_name() {
         "names the plugin: {line}"
     );
     assert!(line.contains("unreachable"), "names the trap: {line}");
+    assert!(
+        line.contains(&request_id),
+        "carries the request ID the caller got back ({request_id}): {line}"
+    );
+}
+
+/// Sends a request with its own request and trace IDs, and checks both reach
+/// the failure log.
+async fn assert_failure_log_carries_callers_ids(env: &[(&str, &str)]) {
+    let (_dir, spec) = spec_with_trapping_plugin();
+    let gateway = TestGateway::from_spec_with_env(spec.to_str().expect("utf-8"), env)
+        .await
+        .expect("starts");
+
+    let request_id = "caller-chosen-request-id-4711";
+    let trace_id = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let response = gateway
+        .request_builder(reqwest::Method::GET, "/fails")
+        .header("x-request-id", request_id)
+        .header("traceparent", format!("00-{trace_id}-00f067aa0ba902b7-01"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 500);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok()),
+        Some(request_id)
+    );
+
+    let log = gateway.log();
+    let line = log
+        .wait_for_line("request failed inside the gateway", Duration::from_secs(5))
+        .unwrap_or_else(|| panic!("the failure is logged: {}", log.text()));
+    assert!(line.contains(request_id), "carries the request ID: {line}");
+    assert!(line.contains(trace_id), "carries the trace ID: {line}");
+}
+
+#[tokio::test]
+async fn the_failure_log_carries_the_callers_request_and_trace_ids() {
+    assert_failure_log_carries_callers_ids(&[]).await;
+}
+
+#[tokio::test]
+async fn the_ids_stay_on_the_failure_log_when_only_errors_are_logged() {
+    assert_failure_log_carries_callers_ids(&[("RUST_LOG", "error")]).await;
 }
