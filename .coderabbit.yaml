@@ -18,8 +18,8 @@ reviews:
     # what opts a pull request in, so applying `deep-review` is the request.
     #
     # Reviews are rate limited to one an hour on the OSS plan, which is why they
-    # are asked for rather than automatic. A local model reviews every push and
-    # does not compete for that quota.
+    # are asked for rather than automatic. A local model reviews each push to a
+    # pull request labelled `ready-for-review` and does not compete for that quota.
     enabled: false
     labels:
       - "deep-review"
