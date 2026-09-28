@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-28
+
+Uploads through the `s3` dispatcher larger than about 750 KB work again: plugins can now hash request bodies on the host, where it costs no fuel. A request that fails inside the gateway is now logged with its cause and its request ID, outside dev mode too. `barbacane compile` inside the standalone and control images can fetch plugins by URL again. No artifact change: 0.12.x artifacts load as they are. The new `s3.wasm` declares the `hash` capability, so it needs a 0.12.2 gateway; an older `s3.wasm` keeps working on this one.
+
 ### Added
 
 - **plugins**: a `hash` capability and host function, `host_sha256(data_ptr, data_len, out_ptr) -> i32`, computing the SHA-256 of a range of plugin memory on the host. The SDK wraps it as `hash::sha256` and `hash::sha256_hex`. Hashing in WASM costs fuel for every byte while a call's budget does not grow with the request body, so a plugin hashing a body of more than a few hundred kilobytes ran out of fuel.
@@ -802,7 +806,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.10.0...v0.11.0
