@@ -365,6 +365,26 @@ pub mod verify_signature {
     pub const FUNCTION_NAME: &str = "host_verify_signature";
 }
 
+/// Host function for SHA-256 hashing of plugin memory.
+///
+/// ```text
+/// host_sha256(data_ptr: i32, data_len: i32, out_ptr: i32) -> i32
+/// ```
+///
+/// Hashes `data_len` bytes at `data_ptr` and writes the 32-byte digest at
+/// `out_ptr`. The ranges may overlap. Hashing runs on the host, so the cost to
+/// the plugin does not grow with the input.
+///
+/// Returns: 0 (digest written), -1 (a range is negative or outside the
+/// plugin's memory; nothing is written)
+pub mod hash {
+    /// The capability name.
+    pub const CAPABILITY: &str = "hash";
+
+    /// The function name in the barbacane namespace.
+    pub const FUNCTION_NAME: &str = "host_sha256";
+}
+
 /// Host functions for UUID generation.
 ///
 /// ```text

@@ -154,6 +154,7 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "telemetry",
     "generate_uuid",
     "verify_signature",
+    "hash",
     "ws_upgrade",
     "cache",
     "rate_limit",
@@ -201,6 +202,7 @@ pub fn capability_to_imports(capability: &str) -> &'static [&'static str] {
         ],
         "generate_uuid" => &["host_uuid_generate", "host_uuid_read_result"],
         "verify_signature" => &["host_verify_signature"],
+        "hash" => &["host_sha256"],
         "ws_upgrade" => &["host_ws_upgrade", "host_http_read_result"],
         _ => &[],
     }
@@ -281,6 +283,25 @@ host_functions = []
         let result = PluginManifest::from_toml(manifest_str);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("semver"));
+    }
+
+    #[test]
+    fn accepts_the_hash_capability() {
+        let manifest_str = r#"
+[plugin]
+name = "signer"
+version = "1.0.0"
+type = "dispatcher"
+wasm = "signer.wasm"
+
+[capabilities]
+host_functions = ["http_call", "hash"]
+"#;
+        let manifest = PluginManifest::from_toml(manifest_str).expect("hash is a known capability");
+        assert!(manifest
+            .capabilities
+            .host_functions
+            .contains(&"hash".to_string()));
     }
 
     #[test]
