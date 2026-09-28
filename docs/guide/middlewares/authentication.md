@@ -164,7 +164,7 @@ x-barbacane-middlewares:
 | `issuer_url` | string | **required** | OIDC issuer URL (e.g., `https://accounts.google.com`) |
 | `audience` | string | - | Expected `aud` claim. If set, tokens must match |
 | `required_scopes` | string | - | Space-separated required scopes |
-| `issuer_override` | string | - | Override expected `iss` claim (for split-network setups like Docker) |
+| `issuer_override` | string | - | Override expected `iss` claim (for split-network setups like Docker). Empty means unset, so an `env://` reference to an empty variable falls back to the discovery issuer |
 | `clock_skew_seconds` | integer | `60` | Clock skew tolerance for `exp`/`nbf` validation |
 | `jwks_refresh_seconds` | integer | `300` | How often to refresh JWKS keys (seconds) |
 | `timeout` | float | `5.0` | HTTP timeout for discovery and JWKS calls (seconds) |

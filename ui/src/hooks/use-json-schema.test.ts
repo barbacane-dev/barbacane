@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { validateJsonSchema, generateSkeletonFromSchema, generateSkeletonWithComments } from './use-json-schema'
+import oidcAuthSchema from '../../../plugins/oidc-auth/config-schema.json'
 
 describe('validateJsonSchema', () => {
   describe('with empty or no schema', () => {
@@ -520,5 +521,22 @@ describe('generateSkeletonWithComments', () => {
     }
     const result = generateSkeletonWithComments(schema)
     expect(result).toContain('options: GET | POST')
+  })
+})
+
+describe('the oidc-auth config schema', () => {
+  const schema = oidcAuthSchema as Record<string, unknown>
+  const config = (issuer_override: string) => ({ issuer_url: 'https://auth.example.com', issuer_override })
+
+  it('accepts an empty issuer_override, which the plugin reads as unset', () => {
+    expect(validateJsonSchema(config(''), schema).valid).toBe(true)
+  })
+
+  it('accepts an issuer_override that is a URI', () => {
+    expect(validateJsonSchema(config('http://localhost:9099/realm'), schema).valid).toBe(true)
+  })
+
+  it('refuses an issuer_override that is neither empty nor a URI', () => {
+    expect(validateJsonSchema(config('not a uri'), schema).valid).toBe(false)
   })
 })
