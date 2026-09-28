@@ -35,14 +35,15 @@ x-barbacane-middlewares:
 
 ### Cache key
 
-Cache key is computed from:
+The cache key is computed from:
 - HTTP method
-- Request path
-- Vary header values (if configured)
+- Request path and query string
+- Values of the headers listed in `vary`
 
-### Cache-Control respect
+### Storage rules
 
-The middleware respects `Cache-Control` response headers:
-- `no-store` — Response not cached
-- `no-cache` — Cache but revalidate
-- `max-age=N` — Use specified TTL instead of config
+A response is stored only when its status is in `cacheable_status`, and never when its `Cache-Control` carries `no-store` or `private`.
+
+A response to a request carrying `Authorization` is stored only when it explicitly allows a shared cache to reuse it, through `public`, `s-maxage` or `must-revalidate` ([RFC 9111 §3.5](https://www.rfc-editor.org/rfc/rfc9111#section-3.5)), or when `vary` lists `authorization`, which keys each entry to its credential. Without either, one user's response could be served to another.
+
+Entries expire after `ttl` seconds. `max-age` and `no-cache` in the response are not interpreted.
