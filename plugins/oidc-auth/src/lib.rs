@@ -36,8 +36,9 @@ pub struct OidcAuth {
 
     /// Override the expected issuer claim. Useful when the provider's
     /// internal URL differs from its external URL (e.g., Docker networking).
-    /// If not set, the issuer from the discovery document is used.
-    #[serde(default)]
+    /// If not set, or set to an empty string, the issuer from the discovery
+    /// document is used.
+    #[serde(default, deserialize_with = "empty_as_none")]
     issuer_override: Option<String>,
 
     /// HTTP timeout for discovery/JWKS calls (seconds).
@@ -82,6 +83,16 @@ fn default_jwks_refresh() -> u64 {
 
 fn default_timeout() -> f64 {
     5.0
+}
+
+/// An optional string where an empty value means unset, as a reference such as
+/// `env://NAME` resolves to when the variable is set but empty.
+fn empty_as_none<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.filter(|s| !s.is_empty()))
 }
 
 /// Minimal percent-decoding for query parameter values (RFC 3986).
@@ -1451,6 +1462,61 @@ mod tests {
         assert_eq!(config.clock_skew_seconds, 120);
         assert_eq!(config.jwks_refresh_seconds, 600);
         assert_eq!(config.timeout, 10.0);
+    }
+
+    #[test]
+    fn config_empty_issuer_override_is_unset() {
+        let json = r#"{"issuer_url": "https://auth.example.com", "issuer_override": ""}"#;
+        let config: OidcAuth = serde_json::from_str(json).unwrap();
+        assert!(config.issuer_override.is_none());
+    }
+
+    #[test]
+    fn config_null_or_missing_issuer_override_is_unset() {
+        for json in [
+            r#"{"issuer_url": "https://auth.example.com", "issuer_override": null}"#,
+            r#"{"issuer_url": "https://auth.example.com"}"#,
+        ] {
+            let config: OidcAuth = serde_json::from_str(json).unwrap();
+            assert!(config.issuer_override.is_none(), "{json}");
+        }
+    }
+
+    #[test]
+    fn config_issuer_override_is_kept() {
+        let json = r#"{"issuer_url": "https://auth.example.com", "issuer_override": "http://localhost:9099/x"}"#;
+        let config: OidcAuth = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.issuer_override.as_deref(),
+            Some("http://localhost:9099/x")
+        );
+    }
+
+    #[test]
+    fn empty_issuer_override_checks_the_discovery_issuer() {
+        mock_time::set_mock_timestamp(1000);
+        let json = r#"{"issuer_url": "http://idp/realm", "issuer_override": ""}"#;
+        let mut config: OidcAuth = serde_json::from_str(json).unwrap();
+        config.discovery = Some(DiscoveryDoc {
+            issuer: "http://idp/realm".to_string(),
+            jwks_uri: "http://idp/realm/jwks".to_string(),
+        });
+        let claims = |iss: &str| JwtClaims {
+            sub: Some("user123".to_string()),
+            iss: Some(iss.to_string()),
+            aud: None,
+            exp: Some(2000),
+            nbf: None,
+            iat: None,
+            jti: None,
+            scope: None,
+            extra: BTreeMap::new(),
+        };
+        assert!(config.validate_claims(&claims("http://idp/realm")).is_ok());
+        assert!(matches!(
+            config.validate_claims(&claims("http://elsewhere/realm")),
+            Err(OidcError::InvalidIssuer)
+        ));
     }
 
     #[test]
