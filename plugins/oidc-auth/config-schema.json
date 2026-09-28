@@ -22,7 +22,10 @@
     "issuer_override": {
       "type": "string",
       "description": "Override the expected issuer (iss) claim. Useful when the provider's internal URL differs from its external URL (e.g., Docker networking). An empty value means unset: the discovery document's issuer is expected.",
-      "format": "uri"
+      "anyOf": [
+        { "const": "" },
+        { "format": "uri" }
+      ]
     },
     "clock_skew_seconds": {
       "type": "integer",
