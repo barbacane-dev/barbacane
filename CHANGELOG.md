@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **rate-limit**: allowed responses carry the `X-RateLimit-Policy`, `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers, as documented. They were set only on the request forwarded to the upstream, so clients never received them. With stacked instances, the response reports the policy with the fewest requests remaining. The plugin now declares the `context_set` capability.
 - **cache**: a response to a request carrying `Authorization` is no longer stored unless it allows a shared cache to reuse it (`public`, `s-maxage` or `must-revalidate`, per RFC 9111 §3.5), or the middleware varies on `authorization`. An upstream returning a user-specific response without `Cache-Control` could have it served to other users. `Cache-Control` directives are now matched by name, so an extension such as `x-private-hint` no longer prevents caching. The caching guide now describes what the middleware does: `max-age` and `no-cache` are not interpreted, and the query string is part of the key.
 - **oidc-auth**: an empty `issuer_override` means unset, so the issuer from the discovery document is expected. It was taken as the expected issuer itself, so every token was refused with `invalid_token`. An `env://` reference to a variable set but empty resolves to exactly that.
 

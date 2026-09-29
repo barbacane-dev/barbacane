@@ -48,6 +48,8 @@ On allowed requests:
 - `X-RateLimit-Remaining` — Remaining requests
 - `X-RateLimit-Reset` — Unix timestamp when window resets
 
+The same four headers are also set on the request forwarded to the upstream. When instances are stacked, the response reports the policy with the fewest requests remaining.
+
 On rate-limited requests (429):
 - `RateLimit-Policy` — IETF draft header
 - `RateLimit` — IETF draft combined header

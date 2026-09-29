@@ -40,6 +40,24 @@ pub struct RateLimit {
     fail_open: bool,
 }
 
+/// Headers set on an allowed request and copied onto its response. The
+/// values travel from `on_request` to `on_response` in the request context,
+/// under `rate-limit.<header>`.
+const RESPONSE_HEADERS: &[&str] = &[
+    "x-ratelimit-policy",
+    "x-ratelimit-limit",
+    "x-ratelimit-remaining",
+    "x-ratelimit-reset",
+];
+
+/// Whether `remaining` is lower than that of any stacked instance already
+/// recorded for this request, so the response reports the tightest policy.
+fn is_tightest(remaining: u32) -> bool {
+    context::get("rate-limit.x-ratelimit-remaining")
+        .and_then(|v| v.parse::<u32>().ok())
+        .is_none_or(|recorded| remaining < recorded)
+}
+
 fn default_policy_name() -> String {
     "default".to_string()
 }
@@ -105,6 +123,13 @@ impl RateLimit {
             modified_req
                 .headers
                 .insert("x-ratelimit-limit".to_string(), result.limit.to_string());
+            if is_tightest(result.remaining) {
+                for header in RESPONSE_HEADERS {
+                    if let Some(value) = modified_req.headers.get(*header) {
+                        context::set(&format!("rate-limit.{header}"), value);
+                    }
+                }
+            }
             Action::Continue(modified_req)
         } else {
             // Request blocked - return 429
@@ -112,9 +137,16 @@ impl RateLimit {
         }
     }
 
-    /// Pass through responses unchanged.
+    /// Add the `X-RateLimit-*` headers recorded by `on_request` to the
+    /// response. A request that was not counted (fail-open) gets none.
     pub fn on_response(&mut self, resp: Response) -> Response {
-        resp
+        let mut modified_resp = resp;
+        for header in RESPONSE_HEADERS {
+            if let Some(value) = context::get(&format!("rate-limit.{header}")) {
+                modified_resp.headers.insert((*header).to_string(), value);
+            }
+        }
+        modified_resp
     }
 
     /// Extract the partition key from the request.
@@ -271,6 +303,7 @@ mod mock_host {
     #[cfg(test)]
     pub fn reset() {
         RATE_LIMIT_RESULT.with(|r| *r.borrow_mut() = None);
+        barbacane_plugin_sdk::context::clear();
     }
 }
 
@@ -851,6 +884,7 @@ mod tests {
 
     #[test]
     fn test_on_response_passthrough() {
+        mock_host::reset();
         let mut rate_limit = RateLimit {
             quota: 10,
             window: 60,
@@ -874,5 +908,132 @@ mod tests {
         assert_eq!(result.status, 200);
         assert_eq!(result.headers, headers);
         assert_eq!(result.body.unwrap(), br#"{"message":"ok"}"#);
+    }
+
+    fn allowed_request() -> Request {
+        Request {
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            headers: BTreeMap::new(),
+            body: None,
+            query: None,
+            path_params: BTreeMap::new(),
+            client_ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_allowed_request_headers_reach_the_response() {
+        mock_host::reset();
+        mock_host::set_rate_limit_result(
+            r#"{"allowed": true, "remaining": 5, "reset": 1234567890, "limit": 10}"#,
+        );
+        let mut rate_limit = RateLimit {
+            quota: 10,
+            window: 60,
+            policy_name: "test-policy".to_string(),
+            partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
+        };
+
+        assert!(matches!(
+            rate_limit.on_request(allowed_request()),
+            Action::Continue(_)
+        ));
+        let resp = rate_limit.on_response(Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: None,
+        });
+
+        assert_eq!(
+            resp.headers.get("x-ratelimit-policy").unwrap(),
+            "test-policy;q=10;w=60"
+        );
+        assert_eq!(resp.headers.get("x-ratelimit-limit").unwrap(), "10");
+        assert_eq!(resp.headers.get("x-ratelimit-remaining").unwrap(), "5");
+        assert_eq!(resp.headers.get("x-ratelimit-reset").unwrap(), "1234567890");
+    }
+
+    #[test]
+    fn test_fail_open_response_has_no_rate_limit_headers() {
+        mock_host::reset();
+        let mut rate_limit = RateLimit {
+            quota: 10,
+            window: 60,
+            policy_name: "default".to_string(),
+            partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: true,
+        };
+
+        assert!(matches!(
+            rate_limit.on_request(allowed_request()),
+            Action::Continue(_)
+        ));
+        let resp = rate_limit.on_response(Response {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: None,
+        });
+
+        assert!(resp.headers.keys().all(|k| !k.starts_with("x-ratelimit-")));
+    }
+
+    fn stacked(policy_name: &str, quota: u32) -> RateLimit {
+        RateLimit {
+            quota,
+            window: 60,
+            policy_name: policy_name.to_string(),
+            partition_key: "client_ip".to_string(),
+            trusted_proxies: vec![],
+            fail_open: false,
+        }
+    }
+
+    #[test]
+    fn test_stacked_instances_report_the_tightest_policy() {
+        // Chain order must not matter: the policy with the fewest requests
+        // remaining is reported, whichever instance runs first.
+        for burst_first in [true, false] {
+            mock_host::reset();
+            let mut burst = stacked("burst", 10);
+            let mut daily = stacked("daily", 1000);
+            let burst_result = r#"{"allowed": true, "remaining": 4, "reset": 1000, "limit": 10}"#;
+            let daily_result =
+                r#"{"allowed": true, "remaining": 900, "reset": 2000, "limit": 1000}"#;
+
+            let order: [(&mut RateLimit, &str); 2] = if burst_first {
+                [(&mut burst, burst_result), (&mut daily, daily_result)]
+            } else {
+                [(&mut daily, daily_result), (&mut burst, burst_result)]
+            };
+            let mut instances = Vec::new();
+            for (instance, result) in order {
+                mock_host::set_rate_limit_result(result);
+                assert!(matches!(
+                    instance.on_request(allowed_request()),
+                    Action::Continue(_)
+                ));
+                instances.push(instance);
+            }
+            let mut resp = Response {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: None,
+            };
+            for instance in instances.into_iter().rev() {
+                resp = instance.on_response(resp);
+            }
+
+            assert_eq!(
+                resp.headers.get("x-ratelimit-policy").unwrap(),
+                "burst;q=10;w=60"
+            );
+            assert_eq!(resp.headers.get("x-ratelimit-remaining").unwrap(), "4");
+            assert_eq!(resp.headers.get("x-ratelimit-limit").unwrap(), "10");
+            assert_eq!(resp.headers.get("x-ratelimit-reset").unwrap(), "1000");
+        }
     }
 }
