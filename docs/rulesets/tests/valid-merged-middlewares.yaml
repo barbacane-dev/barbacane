@@ -1,0 +1,37 @@
+openapi: "3.1.0"
+info:
+  title: Operation Middlewares Merged With Global Auth
+  version: "1.0.0"
+  description: >-
+    Operation middlewares are merged with the global ones, so an operation that
+    adds only an ACL still runs the global jwt-auth. No auth finding is expected.
+
+servers:
+  - url: https://api.example.com
+
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: "https://auth.example.com"
+      audience: "my-api"
+
+paths:
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      summary: List users (admin)
+      description: Admin-only list of users.
+      tags: [admin]
+      x-barbacane-middlewares:
+        - name: acl
+          config:
+            allow:
+              - admin
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"items":[]}'
+      responses:
+        "200":
+          description: User list

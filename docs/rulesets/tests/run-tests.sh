@@ -66,6 +66,9 @@ assert_zero_violations "$ROOT_DIR/tests/fixtures/rate-limit.yaml" "fixtures/rate
 assert_zero_violations "$ROOT_DIR/tests/fixtures/cors.yaml" "fixtures/cors"
 assert_zero_violations "$ROOT_DIR/tests/fixtures/http-upstream.yaml" "fixtures/http-upstream"
 assert_zero_violations "$SCRIPT_DIR/valid-wildcard-paths.yaml" "valid-wildcard-paths"
+# Operation middlewares merge with the global ones, so an operation adding only
+# acl keeps the global auth and must not be reported as dropping it.
+assert_zero_violations "$SCRIPT_DIR/valid-merged-middlewares.yaml" "valid-merged-middlewares"
 echo ""
 
 # Invalid specs should produce violations
