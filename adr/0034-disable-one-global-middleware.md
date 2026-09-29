@@ -86,7 +86,7 @@ SPEC-001 §3.1, the spec configuration guide ("Middleware Merging") and the vacu
 - A public endpoint keeps the global middlewares it needs (rate limiting, CORS, logging) while dropping authentication, and follows later changes to the global chain.
 - Removals are explicit in the spec: `enabled: false` is searchable, and the info rule lists every operation that disables authentication.
 - The artifact format and the data plane do not change. The resolved chain is computed at compile time, so artifacts from a compiler with this change run on current gateways.
-- Matching by the unversioned name changes the chain of a spec that names the same plugin with and without a version at the two levels: both entries ran, and now the operation entry replaces the global one. The CHANGELOG records this.
+- Matching by the unversioned name changes the chain of a spec that names the same plugin with and without a version at the two levels: both entries run today, and the operation entry will replace the global one. The implementation records this in the CHANGELOG.
 - An operation cannot yet disable one of several stacked instances of a plugin.
 
 ## Alternatives considered

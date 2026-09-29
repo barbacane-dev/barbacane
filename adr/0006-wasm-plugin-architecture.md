@@ -1,6 +1,6 @@
 # ADR-0006: WASM Plugin Architecture
 
-**Status:** Accepted. The "Per-route override" section does not describe the compiler, which merges the operation chain with the global one ([SPEC-001 §3.1](../specs/SPEC-001-compilation.md)); [ADR-0034](0034-disable-one-global-middleware.md) supersedes it.
+**Status:** Accepted. The "Per-route override" section does not describe the compiler, which merges the operation chain with the global one ([SPEC-001 §3.1](../specs/SPEC-001-compilation.md)); [ADR-0034](0034-disable-one-global-middleware.md), proposed, would supersede it.
 **Date:** 2026-01-28
 **Updated:** 2026-01-30
 
