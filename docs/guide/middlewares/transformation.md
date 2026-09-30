@@ -121,6 +121,7 @@ A known variable whose value is absent (a missing header, cookie, query or path 
 
 By default an `add` or `set` is written even when its variables resolve to empty, so `Bearer $cookie.sso_token` becomes `Bearer ` for a request without the cookie. With `skip_if_empty: true`, an `add` or `set` whose value references a variable that resolves to an empty string (absent, or present with an empty value such as `sso_token=`) is skipped:
 
+- one empty variable is enough: with `a=1` and no `b` cookie, `$cookie.a-$cookie.b` is skipped rather than written as `1-`;
 - a skipped `set` leaves the header absent;
 - a skipped `add` leaves the header, query parameter or body field as it was, neither overwritten nor removed;
 - a value with no variables, an empty literal included, is always written.
