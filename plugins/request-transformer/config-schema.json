@@ -101,6 +101,11 @@
           "description": "Rename JSON fields (old-pointer → new-pointer). Only works on JSON bodies."
         }
       }
+    },
+    "skip_if_empty": {
+      "type": "boolean",
+      "default": false,
+      "description": "Skip an add or set (headers, query, body) when a variable its value references resolves to an empty string, missing values included. Literal values are always written."
     }
   },
   "additionalProperties": false

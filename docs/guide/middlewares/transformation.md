@@ -54,6 +54,10 @@ x-barbacane-middlewares:
 
 ### Configuration
 
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `skip_if_empty` | boolean | `false` | Skip an `add` or `set` (headers, query parameters, body) when a variable its value references resolves to an empty string. See [Empty variables](#empty-variables) |
+
 #### headers
 
 | Property | Type | Default | Description |
@@ -107,30 +111,49 @@ Values in `add`, `set`, and body `add` support variable templates:
 | `$cookie.<name>` | Cookie value from the `Cookie` header (name case-sensitive) | `$cookie.sso_token` |
 | `context:<key>` | Request context value (set by other middlewares) | `context:auth.sub` |
 
-The `$`-variables resolve wherever they appear, so they can be embedded in a larger value. For example, to derive a bearer token from an SSO cookie only when the request has no `Authorization` header yet:
-
-```yaml
-- name: request-transformer
-  config:
-    headers:
-      set:                                  # set = only when absent
-        Authorization: "Bearer $cookie.sso_token"
-```
-
-(`context:<key>` is the exception: it resolves only as a whole value, not embedded.)
+The `$`-variables resolve wherever they appear, so they can be embedded in a larger value, such as `Bearer $cookie.sso_token`. `context:<key>` is the exception: it resolves only as a whole value, not embedded.
 
 Variables always resolve against the **original** incoming request, regardless of transformations applied by earlier sections. This means a query parameter removed in `querystring.remove` is still available via `$query.<name>` in `body.add`.
 
 A known variable whose value is absent (a missing header, cookie, query or path parameter) resolves to an empty string. A `$` expression that is not a known variable (for example `$unknown.thing`, or a literal `$5`) is left unchanged.
 
+### Empty variables
+
+By default an `add` or `set` is written even when its variables resolve to empty, so `Bearer $cookie.sso_token` becomes `Bearer ` for a request without the cookie. With `skip_if_empty: true`, an `add` or `set` whose value references a variable that resolves to an empty string (absent, or present with an empty value such as `sso_token=`) is skipped:
+
+- a skipped `set` leaves the header absent;
+- a skipped `add` leaves the header, query parameter or body field as it was, neither overwritten nor removed;
+- a value with no variables, an empty literal included, is always written.
+
+For example, to send the SSO cookie as a bearer token when the request has no `Authorization` header, and no `Authorization` at all when it has neither:
+
+```yaml
+- name: request-transformer
+  config:
+    skip_if_empty: true
+    headers:
+      set:                                  # set = only when absent
+        Authorization: "Bearer $cookie.sso_token"
+```
+
+| `Authorization` in | `Cookie` in | `Authorization` out |
+|--------------------|-------------|---------------------|
+| - | - | - |
+| `Bearer tok` | any | `Bearer tok` |
+| - | `sso_token=ck` | `Bearer ck` |
+| - | `sso_token=` | - |
+| - | `other=ck` | - |
+
+`set` fills only an absent header, so an incoming `Authorization` is kept whatever its value.
+
 ### Transformation order
 
 Transformations are applied in this order:
 
-1. **Path** — strip prefix, add prefix, regex replace
-2. **Headers** — add, set, remove, rename
-3. **Query parameters** — add, remove, rename
-4. **Body** — add, remove, rename
+1. **Path**: strip prefix, add prefix, regex replace
+2. **Headers**: remove, rename, set, add
+3. **Query parameters**: remove, rename, add
+4. **Body**: remove, rename, add
 
 ### Use cases
 
