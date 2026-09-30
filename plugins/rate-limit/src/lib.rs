@@ -58,6 +58,11 @@ fn is_tightest(remaining: u32) -> bool {
         .is_none_or(|recorded| remaining < recorded)
 }
 
+/// A `429` built by this plugin, recognised by its `RateLimit` header.
+fn is_rate_limit_rejection(resp: &Response) -> bool {
+    resp.status == 429 && resp.headers.contains_key("ratelimit")
+}
+
 fn default_policy_name() -> String {
     "default".to_string()
 }
@@ -139,8 +144,15 @@ impl RateLimit {
 
     /// Add the `X-RateLimit-*` headers recorded by `on_request` to the
     /// response. A request that was not counted (fail-open) gets none.
+    ///
+    /// A rejection by a stacked instance later in the chain also passes
+    /// through here; it carries that instance's `RateLimit` headers, so the
+    /// quota recorded for an allowed policy is not added to it.
     pub fn on_response(&mut self, resp: Response) -> Response {
         let mut modified_resp = resp;
+        if is_rate_limit_rejection(&modified_resp) {
+            return modified_resp;
+        }
         for header in RESPONSE_HEADERS {
             if let Some(value) = context::get(&format!("rate-limit.{header}")) {
                 modified_resp.headers.insert((*header).to_string(), value);
@@ -1035,5 +1047,128 @@ mod tests {
             assert_eq!(resp.headers.get("x-ratelimit-limit").unwrap(), "10");
             assert_eq!(resp.headers.get("x-ratelimit-reset").unwrap(), "1000");
         }
+    }
+
+    fn response_with(status: u16, headers: &[(&str, &str)]) -> Response {
+        Response {
+            status,
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            body: None,
+        }
+    }
+
+    /// Records an allowed request for `instance`, as its `on_request` would.
+    fn allow(instance: &mut RateLimit, remaining: u32) {
+        mock_host::set_rate_limit_result(&format!(
+            r#"{{"allowed": true, "remaining": {remaining}, "reset": 1000, "limit": 10}}"#
+        ));
+        assert!(matches!(
+            instance.on_request(allowed_request()),
+            Action::Continue(_)
+        ));
+    }
+
+    #[test]
+    fn test_stacked_rejection_gets_no_allowed_policy_headers() {
+        mock_host::reset();
+        let mut burst = stacked("burst", 10);
+        let mut daily = stacked("daily", 1000);
+        allow(&mut burst, 4);
+
+        mock_host::set_rate_limit_result(
+            r#"{"allowed": false, "remaining": 0, "reset": 2000, "limit": 1000, "retry_after": 30}"#,
+        );
+        let rejection = match daily.on_request(allowed_request()) {
+            Action::ShortCircuit(resp) => resp,
+            _ => panic!("the daily policy rejects"),
+        };
+
+        // The host runs on_response of the instances before the rejecting one.
+        let resp = burst.on_response(rejection);
+        assert_eq!(resp.status, 429);
+        assert!(resp.headers.keys().all(|k| !k.starts_with("x-ratelimit-")));
+        assert_eq!(
+            resp.headers.get("ratelimit-policy").map(String::as_str),
+            Some("daily;q=1000;w=60"),
+            "the rejecting policy's headers are kept"
+        );
+        assert_eq!(
+            resp.headers.get("retry-after").map(String::as_str),
+            Some("30")
+        );
+    }
+
+    #[test]
+    fn test_upstream_429_without_ratelimit_header_gets_the_headers() {
+        mock_host::reset();
+        let mut rate_limit = stacked("default", 10);
+        allow(&mut rate_limit, 7);
+        let resp = rate_limit.on_response(response_with(429, &[("retry-after", "5")]));
+        assert_eq!(
+            resp.headers
+                .get("x-ratelimit-remaining")
+                .map(String::as_str),
+            Some("7")
+        );
+        assert_eq!(
+            resp.headers.get("retry-after").map(String::as_str),
+            Some("5")
+        );
+    }
+
+    #[test]
+    fn test_upstream_429_with_its_own_ratelimit_header_is_left_alone() {
+        mock_host::reset();
+        let mut rate_limit = stacked("default", 10);
+        allow(&mut rate_limit, 7);
+        let resp = rate_limit.on_response(response_with(
+            429,
+            &[("ratelimit", "limit=5, remaining=0, reset=9")],
+        ));
+        assert!(resp.headers.keys().all(|k| !k.starts_with("x-ratelimit-")));
+        assert_eq!(
+            resp.headers.get("ratelimit").map(String::as_str),
+            Some("limit=5, remaining=0, reset=9")
+        );
+    }
+
+    #[test]
+    fn test_non_429_with_ratelimit_header_gets_the_headers() {
+        mock_host::reset();
+        let mut rate_limit = stacked("default", 10);
+        allow(&mut rate_limit, 7);
+        let resp = rate_limit.on_response(response_with(
+            200,
+            &[("ratelimit", "limit=5, remaining=4, reset=9")],
+        ));
+        assert_eq!(
+            resp.headers
+                .get("x-ratelimit-remaining")
+                .map(String::as_str),
+            Some("7")
+        );
+    }
+
+    #[test]
+    fn test_later_middleware_rejection_gets_the_headers() {
+        // A 403 from a middleware after this one is a counted request.
+        mock_host::reset();
+        let mut rate_limit = stacked("default", 10);
+        allow(&mut rate_limit, 7);
+        let resp = rate_limit.on_response(response_with(403, &[]));
+        assert_eq!(resp.status, 403);
+        assert_eq!(
+            resp.headers
+                .get("x-ratelimit-remaining")
+                .map(String::as_str),
+            Some("7")
+        );
+        assert_eq!(
+            resp.headers.get("x-ratelimit-limit").map(String::as_str),
+            Some("10")
+        );
     }
 }

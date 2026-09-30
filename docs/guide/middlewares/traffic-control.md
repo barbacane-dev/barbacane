@@ -48,7 +48,7 @@ On allowed requests:
 - `X-RateLimit-Remaining` — Remaining requests
 - `X-RateLimit-Reset` — Unix timestamp when window resets
 
-The same four headers are also set on the request forwarded to the upstream. When instances are stacked, the response reports the policy with the fewest requests remaining.
+The same four headers are also set on the request forwarded to the upstream. When instances are stacked, the response reports the policy with the fewest requests remaining, and a `429` from one of them carries only that policy's `RateLimit` headers below, not the `X-RateLimit-*` of the policies that allowed the request.
 
 On rate-limited requests (429):
 - `RateLimit-Policy` — IETF draft header
