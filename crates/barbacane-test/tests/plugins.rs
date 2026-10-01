@@ -1016,6 +1016,45 @@ async fn test_request_transformer_variable_interpolation() {
     assert_eq!(body["interpolated"], "values");
 }
 
+/// With `skip_if_empty`, the cookie fills an absent `Authorization`, an
+/// incoming one wins, and without a usable cookie no header is sent. The mock
+/// echoes `{{headers.authorization}}` and keeps the placeholder when the header
+/// is absent.
+#[tokio::test]
+async fn test_request_transformer_skip_if_empty_bearer_from_cookie() {
+    let gateway = TestGateway::from_spec(&fixture("request-transformer.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let cases: [(Option<&str>, Option<&str>, &str); 5] = [
+        (None, None, "{{headers.authorization}}"),
+        (None, Some("sso_token=ck"), "Bearer ck"),
+        (None, Some("sso_token="), "{{headers.authorization}}"),
+        (None, Some("other=ck"), "{{headers.authorization}}"),
+        (Some("Bearer tok"), Some("sso_token=ck"), "Bearer tok"),
+    ];
+    for (authorization, cookie, expected) in cases {
+        let mut req = gateway.request_builder(reqwest::Method::GET, "/cookie-bearer");
+        if let Some(value) = authorization {
+            req = req.header("Authorization", value);
+        }
+        if let Some(value) = cookie {
+            req = req.header("Cookie", value);
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(
+            resp.status(),
+            200,
+            "authorization {authorization:?}, cookie {cookie:?}"
+        );
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(
+            body["authorization"], expected,
+            "authorization {authorization:?}, cookie {cookie:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_request_transformer_query_to_body() {
     let gateway = TestGateway::from_spec(&fixture("request-transformer.yaml"))

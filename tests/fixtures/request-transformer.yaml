@@ -173,6 +173,38 @@ paths:
         "200":
           description: Success
 
+  /cookie-bearer:
+    get:
+      operationId: cookieBearer
+      summary: Bearer token from a cookie, skipped when the cookie is empty
+      parameters:
+        - name: sso_token
+          in: cookie
+          required: false
+          schema:
+            type: string
+        - name: Authorization
+          in: header
+          required: false
+          schema:
+            type: string
+      x-barbacane-middlewares:
+        - name: request-transformer
+          config:
+            skip_if_empty: true
+            headers:
+              set:
+                Authorization: "Bearer $cookie.sso_token"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"authorization":"{{headers.authorization}}"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+
   /query-to-body:
     post:
       operationId: queryToBody

@@ -11,12 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **wasm runtime**: Wasmtime is upgraded from 47.0.4 to 48.0.3 for RUSTSEC-2026-0315 (GHSA-m63x-6p34-q65x). With fuel metering and Cranelift, both of which the gateway uses, a plugin containing `call_ref` or `try_table` could drop the fuel its callees consumed and run for exponential time on linear fuel. RUSTSEC-2026-0316, in the component-model `Val` API, is fixed by the same release; the gateway loads core modules and does not use that API.
 
+### Added
+
+- **request-transformer**: `skip_if_empty: true` skips an `add` or `set` (headers, query parameters, body) whose value references a variable that resolves to an empty string, absent values included. `Authorization: "Bearer $cookie.sso_token"` under `set` then sends no header for a request without the cookie, instead of `Bearer `. Values without variables are always written, and the option is off by default.
+
 ### Changed
 
 - **MSRV**: the minimum supported Rust version is 1.95, required by Wasmtime 48. The Docker images build with `rust:1.95`.
 
 ### Fixed
 
+- **docs**: the transformation guide gives the order request-transformer applies header operations in (remove, rename, set, add; query and body: remove, rename, add). It listed add first.
 - **cache**: a response to a request carrying `Authorization` is no longer stored unless it allows a shared cache to reuse it (`public`, `s-maxage` or `must-revalidate`, per RFC 9111 §3.5), or the middleware varies on `authorization`. An upstream returning a user-specific response without `Cache-Control` could have it served to other users. `Cache-Control` directives are now matched by name, so an extension such as `x-private-hint` no longer prevents caching. The caching guide now describes what the middleware does: `max-age` and `no-cache` are not interpreted, and the query string is part of the key.
 - **oidc-auth**: an empty `issuer_override` means unset, so the issuer from the discovery document is expected. It was taken as the expected issuer itself, so every token was refused with `invalid_token`. An `env://` reference to a variable set but empty resolves to exactly that.
 
