@@ -6,6 +6,7 @@
   "properties": {
     "headers": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Header transformations",
       "properties": {
         "add": {
@@ -33,6 +34,7 @@
     },
     "querystring": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Query parameter transformations",
       "properties": {
         "add": {
@@ -54,6 +56,7 @@
     },
     "path": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Path rewriting operations",
       "properties": {
         "strip_prefix": {
@@ -66,6 +69,7 @@
         },
         "replace": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "pattern": {
               "type": "string",
@@ -83,6 +87,7 @@
     },
     "body": {
       "type": "object",
+      "additionalProperties": false,
       "description": "JSON body transformations using JSON Pointer (RFC 6901)",
       "properties": {
         "add": {

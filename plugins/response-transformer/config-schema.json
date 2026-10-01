@@ -11,6 +11,7 @@
     },
     "headers": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Response header transformations",
       "properties": {
         "add": {
@@ -37,6 +38,7 @@
     },
     "body": {
       "type": "object",
+      "additionalProperties": false,
       "description": "JSON body transformations using JSON Pointer (RFC 6901)",
       "properties": {
         "add": {
