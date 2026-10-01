@@ -348,11 +348,14 @@ paths:
 paths:
   /admin:
     get:
+      security:
+        - bearerAuth: []
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            scopes: ["admin:read"]
+            issuer_url: "https://auth.example.com"
+            audience: "my-api"
+            required_scopes: "admin:read"
       x-barbacane-dispatch:
         name: http-upstream
         config:
@@ -392,13 +395,17 @@ paths:
 ```yaml
 - name: jwt-auth
   config:
-    required: true
-    header: Authorization
-    scheme: Bearer
     issuer: https://auth.example.com
     audience: my-api
-    scopes: ["read"]
+    groups_claim: roles      # Optional: claim to read consumer groups from
+    public_key_jwk:          # Key that verifies the token signature
+      kty: RSA
+      alg: RS256
+      n: "0vx7agoebGcQSuu..." # base64url modulus
+      e: AQAB
 ```
+
+Reads the bearer token from `Authorization`. For keys published at a JWKS URL, use `oidc-auth`.
 
 ### rate-limit
 

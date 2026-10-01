@@ -165,16 +165,21 @@ Apply to a specific operation (runs after global middlewares):
 paths:
   /admin/users:
     get:
+      security:
+        - bearerAuth: []
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
-            scopes: ["admin:read"]
+            issuer_url: "https://auth.example.com"
+            audience: "my-api"
+            required_scopes: "admin:read"
       x-barbacane-dispatch:
         name: http-upstream
         config:
           url: "https://api.example.com"
 ```
+
+An operation that runs an authentication middleware needs a `security` requirement naming a scheme from `components.securitySchemes`; without one the compiler stops with `E1057`. The [complete example](#complete-example) below declares `bearerAuth`.
 
 ### Middleware Merging
 
@@ -269,10 +274,13 @@ paths:
   /orders:
     post:
       operationId: createOrder
+      security:
+        - bearerAuth: []
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
+            issuer_url: "https://auth.shop.example.com"
+            audience: "shop-api"
       x-barbacane-dispatch:
         name: http-upstream
         config:
@@ -285,10 +293,14 @@ paths:
   /orders/{orderId}/pay:
     post:
       operationId: payOrder
+      security:
+        - bearerAuth: []
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            required: true
+            issuer_url: "https://auth.shop.example.com"
+            audience: "shop-api"
+            required_scopes: "orders:pay"
       x-barbacane-dispatch:
         name: http-upstream
         config:
@@ -298,6 +310,12 @@ paths:
       responses:
         "200":
           description: Payment processed
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
 ```
 
 ## AsyncAPI Support
@@ -392,10 +410,12 @@ operations:
     action: send
     channel:
       $ref: '#/channels/events'
+    # Authenticated through the security scheme the server declares.
     x-barbacane-middlewares:
-      - name: jwt-auth
+      - name: oidc-auth
         config:
-          required: true
+          issuer_url: "https://auth.example.com"
+          audience: "events-api"
     x-barbacane-dispatch:
       name: kafka
       config:
