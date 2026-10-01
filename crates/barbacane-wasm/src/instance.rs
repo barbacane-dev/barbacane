@@ -628,9 +628,10 @@ impl PluginInstance {
         if let Some(alloc_func) = self.alloc_func.clone() {
             // Allocate via the plugin's own allocator — dlmalloc tracks this
             // region and will not hand it out again during deserialization.
+            let fuel = self.store.get_fuel().unwrap_or(self.limits.max_fuel);
             let ptr = alloc_func
                 .call(&mut self.store, data.len() as i32)
-                .map_err(|e| WasmError::Trap(format!("alloc failed: {}", e)))?;
+                .map_err(|e| call_error(e, fuel, self.limits.max_execution_ms.max(1)))?;
 
             if ptr == 0 {
                 let current_size = self.memory.data_size(&self.store);
@@ -677,6 +678,15 @@ impl PluginInstance {
         }
     }
 
+    /// Reset fuel and the wall-clock deadline to one call's budget.
+    fn reset_budget(&mut self) {
+        if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
+            tracing::warn!(error = %e, "failed to reset WASM fuel");
+        }
+        self.store
+            .set_epoch_deadline(self.limits.max_execution_ms.max(1));
+    }
+
     /// Call the init function with the given config.
     pub fn init(&mut self, config_json: &[u8]) -> Result<i32, WasmError> {
         let init_func = self
@@ -684,17 +694,13 @@ impl PluginInstance {
             .clone()
             .ok_or_else(|| WasmError::MissingExport("init".into()))?;
 
-        // Write config to memory
+        // `alloc` runs plugin code: give it a fresh budget rather than what
+        // instantiation left over.
+        self.reset_budget();
         let ptr = self.write_to_memory(config_json)?;
         let len = config_json.len() as i32;
 
-        // Reset fuel for this call
-        if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
-            tracing::warn!(error = %e, "failed to reset WASM fuel");
-        }
-        // Reset the wall-clock deadline for this call.
-        self.store
-            .set_epoch_deadline(self.limits.max_execution_ms.max(1));
+        self.reset_budget();
 
         // Call init
         let result = init_func.call(&mut self.store, (ptr, len)).map_err(|e| {
@@ -2576,6 +2582,66 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin with `memory`, an `init` that returns 0, and the given `alloc`
+    /// body (`(param i32) (result i32)`).
+    fn plugin_with_alloc(alloc_body: &str) -> (crate::WasmEngine, PluginInstance) {
+        let limits = PluginLimits {
+            max_fuel: 100_000,
+            max_execution_ms: 10_000,
+            ..PluginLimits::default()
+        };
+        let engine = crate::WasmEngine::with_limits(limits.clone()).expect("engine");
+        let wat = format!(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "alloc") (param i32) (result i32) {alloc_body})
+                (func (export "init") (param i32 i32) (result i32) (i32.const 0)))"#
+        );
+        let wasm = wat::parse_str(&wat).expect("valid wat");
+        let module = engine
+            .compile(&wasm, "test".into(), "0.0.0".into(), false)
+            .expect("compiles");
+        let instance = PluginInstance::new(engine.engine(), &module, limits).expect("instantiates");
+        (engine, instance)
+    }
+
+    #[test]
+    fn init_alloc_runs_on_a_fresh_fuel_budget() {
+        // Instantiation can spend the store's initial fuel; writing the config
+        // through `alloc` must not inherit what is left.
+        let (_engine, mut instance) = plugin_with_alloc("(i32.const 1024)");
+        instance.store.set_fuel(0).expect("fuel is enabled");
+        assert_eq!(instance.init(b"{}").expect("init succeeds"), 0);
+    }
+
+    #[test]
+    fn init_alloc_runs_on_a_fresh_deadline() {
+        let (_engine, mut instance) = plugin_with_alloc("(i32.const 1024)");
+        instance.store.set_epoch_deadline(1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(instance.init(b"{}").expect("init succeeds"), 0);
+    }
+
+    #[test]
+    fn a_runaway_alloc_is_reported_as_out_of_fuel() {
+        let (_engine, mut instance) = plugin_with_alloc("(loop $spin (br $spin)) (i32.const 0)");
+        let err = instance.init(b"{}").expect_err("alloc never returns");
+        assert!(
+            err.to_string().contains("out of fuel"),
+            "the cause is named: {err}"
+        );
+    }
+
+    #[test]
+    fn an_alloc_trap_keeps_its_cause() {
+        let (_engine, mut instance) = plugin_with_alloc("(unreachable)");
+        let err = instance.init(b"{}").expect_err("alloc traps");
+        assert!(
+            err.to_string().contains("unreachable"),
+            "the cause is named: {err}"
+        );
+    }
 
     #[test]
     fn request_context_new() {
