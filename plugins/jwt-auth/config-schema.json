@@ -39,6 +39,7 @@
     },
     "public_key_jwk": {
       "type": "object",
+      "additionalProperties": true,
       "description": "Inline public key as a JWK, used to verify the token signature (RSA RS256/384/512, EC ES256/384). When set, every token must carry a valid signature under this key.",
       "properties": {
         "kty": { "type": "string", "enum": ["RSA", "EC"] },

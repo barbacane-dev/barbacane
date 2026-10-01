@@ -16,6 +16,7 @@
     },
     "ack_response": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Custom 202 Accepted response",
       "properties": {
         "body": {

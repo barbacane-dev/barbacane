@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **plugin config**: the nested objects of `request-transformer` (`headers`, `querystring`, `path`, `path.replace`, `body`), `response-transformer` (`headers`, `body`) and the `kafka` and `nats` `ack_response` reject unknown keys, so a key in the wrong place (such as `skip_if_empty` under `headers`) fails compilation with `E1023` instead of being ignored. A test requires every object schema in a plugin's `config-schema.json` to state `additionalProperties`; `jwt-auth`'s `public_key_jwk` stays open, as a JWK may carry other members.
 - **MSRV**: the minimum supported Rust version is 1.95, required by Wasmtime 48. The Docker images build with `rust:1.95`.
 
 ### Fixed
