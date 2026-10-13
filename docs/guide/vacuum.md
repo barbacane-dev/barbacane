@@ -22,7 +22,7 @@ Several rules use custom JavaScript functions (config schema validation, duplica
 ```bash
 mkdir -p .barbacane/rulesets/functions .barbacane/rulesets/schemas
 curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
-for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
+for f in barbacane-disabled-middlewares barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
          barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
          barbacane-validate-ai-regex barbacane-validate-dispatch-config \
          barbacane-validate-middleware-config; do
@@ -69,9 +69,22 @@ The `no unknown fields` clause is what catches `model:` on `ai-proxy` configs. A
 | `barbacane-middleware-has-name` | error | Each middleware entry must include a `name` field |
 | `barbacane-middleware-known-plugin` | warn | Name must be a known middleware plugin |
 | `barbacane-middleware-config-valid` | error | Config must validate against the plugin's JSON Schema |
-| `barbacane-middleware-no-duplicate` | warn | No duplicate middleware names in a chain |
 
 The same rules apply to operation-level middlewares (`barbacane-op-middleware-*`).
+
+### Disabling a Global Middleware
+
+An operation entry with `enabled: false` removes the global entries of that plugin from the operation's chain ([spec configuration guide](spec-configuration.md#middleware-merging)). The first three rules fail where compilation does; the last two point at authentication changes worth a review.
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| `barbacane-global-middleware-disabled` | error | A global entry cannot set `enabled: false` (mirrors compiler error E1014) |
+| `barbacane-middleware-disabled-with-config` | error | An entry with `enabled: false` takes no `config` (mirrors E1012) |
+| `barbacane-middleware-disabled-unmatched` | error | An operation entry with `enabled: false` must name a plugin of the global chain (mirrors E1013) |
+| `barbacane-global-auth-disabled` | info | Lists every operation that disables a global authentication plugin |
+| `barbacane-auth-plugins-stacked` | warn | An operation adds an authentication plugin and keeps a different global one: both run, so a request needs both credentials. Add `enabled: false` for the global plugin if the operation's replaces it |
+
+Authentication plugins are those whose `plugin.toml` declares `category = "authentication"`; `generate.mjs` writes the list into `barbacane-disabled-middlewares.js`.
 
 ### Path Parameter Validation
 
@@ -133,7 +146,7 @@ rules:
   run: |
     mkdir -p .barbacane/rulesets/functions
     curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
-    for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
+    for f in barbacane-disabled-middlewares barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
              barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
              barbacane-validate-ai-regex barbacane-validate-dispatch-config \
              barbacane-validate-middleware-config; do

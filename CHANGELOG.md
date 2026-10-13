@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares, and the UI shows the resolved chain and marks such entries. The artifact format does not change.
+- **vacuum ruleset**: five rules for `enabled: false` on middleware entries. Three fail where compilation does (`barbacane-global-middleware-disabled`, `barbacane-middleware-disabled-with-config`, `barbacane-middleware-disabled-unmatched`, mirroring `E1014`, `E1012`, `E1013`). `barbacane-global-auth-disabled` (info) lists every operation that disables a global authentication plugin, and `barbacane-auth-plugins-stacked` (warn) flags an operation that adds an authentication plugin while a different global one keeps running, so a request needs both credentials. The download commands in the vacuum guide include the new `barbacane-disabled-middlewares.js`.
 
 ### Changed
 
