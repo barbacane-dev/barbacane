@@ -5,7 +5,7 @@
 //!
 //! Invariant: the parser must never panic, overflow the stack, or run away on
 //! hostile input — it must always return `Ok`/`Err` for any UTF-8 string.
-//! `parse_spec` runs serde_yaml + recursive path/channel walking, so deeply
+//! `parse_spec` runs yaml_serde + recursive path/channel walking, so deeply
 //! nested YAML, huge anchor expansions, and malformed extension blocks are the
 //! interesting cases.
 //!

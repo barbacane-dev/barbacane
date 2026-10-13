@@ -160,8 +160,8 @@ pub async fn patch_spec_operations(
         ProblemDetails::internal_error_with_detail("Spec content is not valid UTF-8")
     })?;
 
-    // Parse into serde_yaml::Value for tree manipulation
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(&content_str).map_err(|e| {
+    // Parse into yaml_serde::Value for tree manipulation
+    let mut doc: yaml_serde::Value = yaml_serde::from_str(&content_str).map_err(|e| {
         ProblemDetails::internal_error_with_detail(format!("Failed to parse YAML: {e}"))
     })?;
 
@@ -171,11 +171,11 @@ pub async fn patch_spec_operations(
 
     // --- Apply global middleware changes ---
     if let Some(ref global_mws) = request.global_middlewares {
-        let key = serde_yaml::Value::String("x-barbacane-middlewares".into());
+        let key = yaml_serde::Value::String("x-barbacane-middlewares".into());
         if global_mws.is_empty() {
             root.remove(&key);
         } else {
-            let value = serde_yaml::to_value(global_mws).map_err(|e| {
+            let value = yaml_serde::to_value(global_mws).map_err(|e| {
                 ProblemDetails::internal_error_with_detail(format!(
                     "Failed to serialize middlewares: {e}"
                 ))
@@ -187,14 +187,14 @@ pub async fn patch_spec_operations(
     // --- Apply per-operation changes ---
     if let Some(ref op_patches) = request.operations {
         // Determine the container key (OpenAPI: "paths", AsyncAPI: "channels")
-        let paths_key = serde_yaml::Value::String("paths".into());
+        let paths_key = yaml_serde::Value::String("paths".into());
         let paths = root
             .get_mut(&paths_key)
             .and_then(|v| v.as_mapping_mut())
             .ok_or_else(|| ProblemDetails::bad_request("Spec has no 'paths' mapping"))?;
 
         for patch in op_patches {
-            let path_key = serde_yaml::Value::String(patch.path.clone());
+            let path_key = yaml_serde::Value::String(patch.path.clone());
             let path_item = paths
                 .get_mut(&path_key)
                 .and_then(|v| v.as_mapping_mut())
@@ -202,7 +202,7 @@ pub async fn patch_spec_operations(
                     ProblemDetails::bad_request(format!("Path '{}' not found in spec", patch.path))
                 })?;
 
-            let method_key = serde_yaml::Value::String(patch.method.to_lowercase());
+            let method_key = yaml_serde::Value::String(patch.method.to_lowercase());
             let operation = path_item
                 .get_mut(&method_key)
                 .and_then(|v| v.as_mapping_mut())
@@ -219,7 +219,7 @@ pub async fn patch_spec_operations(
     }
 
     // Serialize back to YAML
-    let new_content_str = serde_yaml::to_string(&doc).map_err(|e| {
+    let new_content_str = yaml_serde::to_string(&doc).map_err(|e| {
         ProblemDetails::internal_error_with_detail(format!("Failed to serialize YAML: {e}"))
     })?;
 
@@ -313,20 +313,20 @@ fn build_spec_operations(
 /// Apply dispatch changes to an operation YAML mapping.
 #[allow(clippy::result_large_err)]
 fn apply_dispatch_patch(
-    operation: &mut serde_yaml::Mapping,
+    operation: &mut yaml_serde::Mapping,
     dispatch: &Option<Option<DispatchBinding>>,
 ) -> Result<(), ProblemDetails> {
     let Some(ref dispatch_opt) = dispatch else {
         return Ok(());
     };
 
-    let key = serde_yaml::Value::String("x-barbacane-dispatch".into());
+    let key = yaml_serde::Value::String("x-barbacane-dispatch".into());
     match dispatch_opt {
         None => {
             operation.remove(&key);
         }
         Some(d) => {
-            let value = serde_yaml::to_value(d).map_err(|e| {
+            let value = yaml_serde::to_value(d).map_err(|e| {
                 ProblemDetails::internal_error_with_detail(format!(
                     "Failed to serialize dispatch: {e}"
                 ))
@@ -340,14 +340,14 @@ fn apply_dispatch_patch(
 /// Apply middleware changes to an operation YAML mapping.
 #[allow(clippy::result_large_err)]
 fn apply_middlewares_patch(
-    operation: &mut serde_yaml::Mapping,
+    operation: &mut yaml_serde::Mapping,
     middlewares: &Option<Option<Vec<MiddlewareBinding>>>,
 ) -> Result<(), ProblemDetails> {
     let Some(ref mw_opt) = middlewares else {
         return Ok(());
     };
 
-    let key = serde_yaml::Value::String("x-barbacane-middlewares".into());
+    let key = yaml_serde::Value::String("x-barbacane-middlewares".into());
     match mw_opt {
         None => {
             // Revert to global: remove the operation-level override
@@ -355,10 +355,10 @@ fn apply_middlewares_patch(
         }
         Some(mws) if mws.is_empty() => {
             // Explicit opt-out: empty array
-            operation.insert(key, serde_yaml::Value::Sequence(vec![]));
+            operation.insert(key, yaml_serde::Value::Sequence(vec![]));
         }
         Some(mws) => {
-            let value = serde_yaml::to_value(mws).map_err(|e| {
+            let value = yaml_serde::to_value(mws).map_err(|e| {
                 ProblemDetails::internal_error_with_detail(format!(
                     "Failed to serialize middlewares: {e}"
                 ))
@@ -399,15 +399,15 @@ mod tests {
 
     #[test]
     fn middlewares_patch_keeps_a_disabled_entry() {
-        let mut operation = serde_yaml::Mapping::new();
+        let mut operation = yaml_serde::Mapping::new();
         apply_middlewares_patch(
             &mut operation,
             &Some(Some(vec![binding("auth", false), binding("cors", true)])),
         )
         .unwrap();
 
-        let written = serde_yaml::to_string(&operation).unwrap();
-        let reparsed: serde_json::Value = serde_yaml::from_str(&written).unwrap();
+        let written = yaml_serde::to_string(&operation).unwrap();
+        let reparsed: serde_json::Value = yaml_serde::from_str(&written).unwrap();
         assert_eq!(
             reparsed["x-barbacane-middlewares"],
             serde_json::json!([{"name": "auth", "enabled": false}, {"name": "cors"}])

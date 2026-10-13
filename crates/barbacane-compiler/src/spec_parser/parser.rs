@@ -551,7 +551,7 @@ const HTTP_METHODS: &[&str] = &[
 pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     // Parse YAML (also handles JSON since JSON is valid YAML)
     let root: Value =
-        serde_yaml::from_str(input).map_err(|e| ParseError::ParseError(e.to_string()))?;
+        yaml_serde::from_str(input).map_err(|e| ParseError::ParseError(e.to_string()))?;
 
     let root_obj = root
         .as_object()

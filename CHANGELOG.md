@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
 - **middlewares**: operation and global entries match by plugin name without the `@version` suffix. A spec naming `rate-limit@0.1.0` globally and `rate-limit` on an operation ran both; the operation entry now replaces the global one.
 
 ## [0.12.3] - 2026-10-13
