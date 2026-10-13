@@ -866,6 +866,38 @@ jobs:
           platforms: linux/amd64
           push: false
 
+  # The cargo-fuzz targets in fuzz/, built (not run) on stable. fuzz/ is a
+  # workspace of its own; the job copies the root Cargo.lock into it first, so
+  # the targets build against the dependency versions the workspace ships.
+  fuzz-build:
+    name: Fuzz Targets
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target
+          key: ${{ runner.os }}-fuzz-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-
+
+      - name: Build the fuzz targets
+        run: |
+          cp Cargo.lock fuzz/Cargo.lock
+          cd fuzz && cargo build --bins
+
   # Single required status check. Aggregates every gating job into one stable
   # context, so branch protection needs just "CI" regardless of matrix sharding
   # or which jobs a given change skips. Passes when every needed job succeeded
@@ -896,6 +928,7 @@ jobs:
       - ui-e2e
       - ui-image
       - images
+      - fuzz-build
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any needed job failed or was cancelled
