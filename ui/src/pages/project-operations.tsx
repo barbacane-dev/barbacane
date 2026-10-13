@@ -29,6 +29,7 @@ import type {
 } from '@/lib/api'
 import { Button, Card, CardContent, Badge, EmptyState } from '@/components/ui'
 import { cn } from '@/lib/utils'
+import { pluginKey, resolveMiddlewareChain } from '@/lib/middleware-chain'
 import { useJsonSchema, generateSkeletonFromSchema, useHistory } from '@/hooks'
 
 // ============================================================================
@@ -401,15 +402,10 @@ function OperationRow({
   const [showPreview, setShowPreview] = useState(false)
   const hasGlobalMiddlewares = globalMiddlewares.length > 0
 
-  const resolvedChain: MiddlewareBinding[] = useMemo(() => {
-    if (operation.middlewares === null) return globalMiddlewares
-    if (operation.middlewares.length === 0) return []
-    // Merge: globals not overridden by name are preserved, then operation middlewares
-    // override or append
-    const opNames = new Set(operation.middlewares.map((m) => m.name))
-    const preserved = globalMiddlewares.filter((g) => !opNames.has(g.name))
-    return [...preserved, ...operation.middlewares]
-  }, [operation.middlewares, globalMiddlewares])
+  const resolvedChain: MiddlewareBinding[] = useMemo(
+    () => resolveMiddlewareChain(globalMiddlewares, operation.middlewares),
+    [operation.middlewares, globalMiddlewares],
+  )
 
   const chainMode = operation.middlewares === null
     ? 'inherit'
@@ -567,7 +563,12 @@ function OperationRow({
                   >
                     <Shield className="h-3.5 w-3.5 text-blue-500 mt-0.5 shrink-0" />
                     <div className="min-w-0">
-                      <span className="font-medium">{mw.name}</span>
+                      <span className={cn('font-medium', mw.enabled === false && 'line-through text-muted-foreground')}>
+                        {mw.name}
+                      </span>
+                      {mw.enabled === false && (
+                        <span className="ml-2 text-muted-foreground">global entries disabled</span>
+                      )}
                       {mw.config && Object.keys(mw.config).length > 0 && (
                         <pre className="mt-1 text-muted-foreground overflow-x-auto">
                           {JSON.stringify(mw.config, null, 2)}
@@ -1236,21 +1237,31 @@ function EditOperationDialog({
                       >
                         <Shield className="h-4 w-4 text-blue-500 shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <span className="text-sm font-medium">{mw.name}</span>
-                          {mw.config && Object.keys(mw.config).length > 0 && (
-                            <p className="text-xs text-muted-foreground truncate">
-                              {Object.keys(mw.config).join(', ')}
+                          <span className={cn('text-sm font-medium', mw.enabled === false && 'line-through text-muted-foreground')}>
+                            {mw.name}
+                          </span>
+                          {mw.enabled === false ? (
+                            <p className="text-xs text-muted-foreground">
+                              Removes the global {pluginKey(mw.name)} entries from this operation
                             </p>
+                          ) : (
+                            mw.config && Object.keys(mw.config).length > 0 && (
+                              <p className="text-xs text-muted-foreground truncate">
+                                {Object.keys(mw.config).join(', ')}
+                              </p>
+                            )
                           )}
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 px-2"
-                          onClick={() => handleOpenConfig(i)}
-                        >
-                          <Settings2 className="h-3.5 w-3.5" />
-                        </Button>
+                        {mw.enabled !== false && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2"
+                            onClick={() => handleOpenConfig(i)}
+                          >
+                            <Settings2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"

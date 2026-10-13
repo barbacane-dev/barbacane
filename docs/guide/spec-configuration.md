@@ -183,7 +183,7 @@ An operation that runs an authentication middleware needs a `security` requireme
 
 ### Middleware Merging
 
-Operation middlewares are **merged** with global ones. If an operation middleware has the same name as a global one, the operation config overrides it. Non-overridden globals are preserved.
+Operation middlewares are **merged** with global ones. Entries match by plugin name without the `@version` suffix: an operation entry replaces every global entry of its plugin, and the other globals are preserved.
 
 ```yaml
 # Global: rate limit 100/min + cors
@@ -207,6 +207,25 @@ paths:
             window: 60
       # Resolved chain: cors (global) → rate-limit (operation override)
 ```
+
+To drop one global middleware and keep the rest, give its name with `enabled: false`. A public endpoint under global authentication keeps rate limiting and CORS this way:
+
+```yaml
+x-barbacane-middlewares:            # global
+  - name: oidc-auth
+    config: { issuer_url: "env://OIDC_ISSUER_URL", audience: "my-api" }
+  - name: rate-limit
+    config: { quota: 300, window: 60, partition_key: client_ip }
+
+paths:
+  /webhooks/{webhookId}:
+    post:
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          enabled: false            # resolved chain: rate-limit
+```
+
+`enabled: false` removes every global entry of that plugin, including stacked instances. It takes no `config` (`E1012`), it must match a global entry (`E1013`), and it is refused at the global level (`E1014`).
 
 Use an empty array to explicitly disable all middlewares for an operation:
 

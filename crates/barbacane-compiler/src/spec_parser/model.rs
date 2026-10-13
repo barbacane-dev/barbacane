@@ -254,6 +254,20 @@ pub struct MiddlewareConfig {
     /// Plugin-specific configuration.
     #[serde(default)]
     pub config: serde_json::Value,
+    /// `false` on an operation entry removes the global entries of this plugin
+    /// from the operation's chain and adds nothing (ADR-0034). Omitted from the
+    /// serialized form when `true`, so a resolved chain in the artifact carries
+    /// only `name` and `config`.
+    #[serde(default = "enabled_default", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
+}
+
+fn enabled_default() -> bool {
+    true
+}
+
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 /// Request body definition from `requestBody`.

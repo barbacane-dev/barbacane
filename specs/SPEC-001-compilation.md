@@ -49,11 +49,14 @@ All gateway-specific configuration lives under `x-barbacane-*` vendor extensions
 x-barbacane-middlewares:
   - name: <string>              # required — plugin name (or name@version)
     config: <object>            # optional — plugin-specific config, validated against plugin schema
+    enabled: <boolean>          # optional, default true; false only at operation level, see below
 ```
 
 **Behavior:**
 - Global middlewares apply to all operations in order.
-- Per-operation `x-barbacane-middlewares` is **merged** with the global chain. Global middlewares not overridden by name are preserved; operation middlewares with the same name replace the global entry's config.
+- Per-operation `x-barbacane-middlewares` is **merged** with the global chain. Entries match by plugin name without the `@version` suffix, so `rate-limit@0.1.0` and `rate-limit` match. Every global entry that matches an operation entry is removed, then the operation entries are appended in order, except those with `enabled: false`, which add nothing. An operation entry therefore replaces the global entries of its plugin, and `enabled: false` removes them ([ADR-0034](../adr/0034-disable-one-global-middleware.md)).
+- Matching applies to every instance of a plugin: overriding or disabling `rate-limit` on an operation affects all global `rate-limit` entries.
+- `enabled: false` is refused with a `config` (`E1012`), on an operation entry that matches no global entry (`E1013`), and on a global entry (`E1014`).
 - An empty array (`x-barbacane-middlewares: []`) explicitly disables all middlewares for that operation.
 - An operation with no `x-barbacane-middlewares` inherits the full global chain.
 
@@ -102,6 +105,9 @@ The compiler performs validation in order. Compilation stops at the first catego
 |------|-----------|
 | `E1010` | Routing conflict: same path + method declared in multiple specs |
 | `E1011` | `x-barbacane-middlewares` entry missing `name` |
+| `E1012` | A middleware entry with `enabled: false` also sets `config` |
+| `E1013` | An operation middleware entry with `enabled: false` matches no global entry |
+| `E1014` | A global middleware entry sets `enabled: false` |
 | `E1015` | Unknown `x-barbacane-*` extension key (warning, not error) |
 
 ### 4.3 Plugin resolution

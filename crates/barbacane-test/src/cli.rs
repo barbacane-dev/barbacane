@@ -81,6 +81,26 @@ fn validate_routing_conflict_exits_one() {
 }
 
 #[test]
+fn validate_accepts_an_operation_disabling_a_global_middleware() {
+    barbacane()
+        .args(["validate", "--spec"])
+        .arg(fixtures().join("disabled-global-middleware.yaml"))
+        .assert()
+        .success();
+}
+
+#[test]
+fn validate_disabled_middleware_matching_no_global_exits_one() {
+    barbacane()
+        .args(["validate", "--spec"])
+        .arg(fixtures().join("invalid-disabled-middleware.yaml"))
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("E1013"));
+}
+
+#[test]
 fn validate_json_format_outputs_valid_json() {
     let output = barbacane()
         .args(["validate", "--spec"])

@@ -329,6 +329,9 @@ function runRule(input) {
 
   if (!pluginName) return [];
 
+  // An entry with `enabled: false` runs no plugin, so it has no config to check.
+  if (input.enabled === false) return [];
+
   const schema = schemas[pluginName];
   if (!schema) return []; // unknown plugin handled by enumeration rule
 

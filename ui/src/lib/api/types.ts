@@ -242,6 +242,8 @@ export interface SpecOperations {
 export interface MiddlewareBinding {
   name: string
   config?: Record<string, unknown>
+  /** `false` on an operation entry removes the global entries of this plugin (ADR-0034). */
+  enabled?: boolean
 }
 
 export interface DispatchBinding {
