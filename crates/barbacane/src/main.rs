@@ -3461,6 +3461,18 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     }
                 }
 
+                // Entries that disable a global middleware (E1012, E1013, E1014)
+                for err in barbacane_compiler::check_disabled_middlewares(&spec) {
+                    let text = err.to_string();
+                    let (code, message) = text.split_once(": ").unwrap_or(("E1000", &text));
+                    errors.push(ValidationIssue {
+                        code: code.to_string(),
+                        message: message.to_string(),
+                        location: Some(spec_path.clone()),
+                    });
+                    has_errors = true;
+                }
+
                 // Note: E1015 (unknown x-barbacane-* extension) checking is done during compile,
                 // not validate, to avoid false positives on non-barbacane extensions.
 

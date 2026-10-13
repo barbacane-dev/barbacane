@@ -817,10 +817,12 @@ fn parse_specs(spec_paths: &[&Path]) -> Result<Vec<(ApiSpec, String, String)>, C
     Ok(specs)
 }
 
-/// Resolve middleware chain for an operation:
+/// Resolve middleware chain for an operation (SPEC-001 §3.1, ADR-0034):
 /// - None: use global middlewares only
 /// - Some([]): explicit opt-out, no middlewares at all
-/// - Some([items]): global middlewares (excluding any overridden by name) + operation-level
+/// - Some([items]): the global entries whose plugin matches no operation entry,
+///   then the operation entries not set to `enabled: false`. Entries match by
+///   plugin name without its `@version` suffix.
 fn resolve_middlewares(
     global: &[MiddlewareConfig],
     operation: &Option<Vec<MiddlewareConfig>>,
@@ -829,16 +831,71 @@ fn resolve_middlewares(
         None => global.to_vec(),
         Some(op_mw) if op_mw.is_empty() => Vec::new(),
         Some(op_mw) => {
-            let op_names: HashSet<_> = op_mw.iter().map(|m| m.name.as_str()).collect();
+            let op_keys: HashSet<String> = op_mw
+                .iter()
+                .map(|m| crate::manifest::normalize_plugin_name(&m.name))
+                .collect();
             let mut merged: Vec<_> = global
                 .iter()
-                .filter(|m| !op_names.contains(m.name.as_str()))
+                .filter(|m| !op_keys.contains(&crate::manifest::normalize_plugin_name(&m.name)))
                 .cloned()
                 .collect();
-            merged.extend(op_mw.clone());
+            merged.extend(op_mw.iter().filter(|m| m.enabled).cloned());
             merged
         }
     }
+}
+
+/// Check the middleware entries of a spec that set `enabled: false`
+/// (ADR-0034): E1012 when such an entry also sets `config`, E1013 when an
+/// operation entry matches no global entry, E1014 when a global entry sets it.
+/// Shared by compilation, which stops at the first, and `barbacane validate`,
+/// which reports them all.
+pub fn check_disabled_middlewares(spec: &ApiSpec) -> Vec<CompileError> {
+    let spec_file = spec.filename.as_deref().unwrap_or("unknown");
+    let mut errors = Vec::new();
+
+    let global_location = format!("x-barbacane-middlewares in '{}'", spec_file);
+    for mw in spec.global_middlewares.iter().filter(|m| !m.enabled) {
+        errors.push(CompileError::GlobalMiddlewareDisabled(
+            mw.name.clone(),
+            global_location.clone(),
+        ));
+        if !mw.config.is_null() {
+            errors.push(CompileError::DisabledMiddlewareWithConfig(
+                mw.name.clone(),
+                global_location.clone(),
+            ));
+        }
+    }
+
+    let global_keys: HashSet<String> = spec
+        .global_middlewares
+        .iter()
+        .map(|m| crate::manifest::normalize_plugin_name(&m.name))
+        .collect();
+    for op in &spec.operations {
+        let Some(entries) = &op.middlewares else {
+            continue;
+        };
+        let location = format!("{} {} in '{}'", op.method, op.path, spec_file);
+        for mw in entries.iter().filter(|m| !m.enabled) {
+            if !mw.config.is_null() {
+                errors.push(CompileError::DisabledMiddlewareWithConfig(
+                    mw.name.clone(),
+                    location.clone(),
+                ));
+            }
+            if !global_keys.contains(&crate::manifest::normalize_plugin_name(&mw.name)) {
+                errors.push(CompileError::DisabledMiddlewareMatchesNoGlobal(
+                    mw.name.clone(),
+                    location.clone(),
+                ));
+            }
+        }
+    }
+
+    errors
 }
 
 /// Shared compilation core: validates specs, builds operations, and writes the .bca archive.
@@ -953,6 +1010,11 @@ fn compile_inner(
                     spec_file
                 )));
             }
+        }
+
+        // Entries that disable a global middleware (E1012, E1013, E1014)
+        if let Some(err) = check_disabled_middlewares(spec).into_iter().next() {
+            return Err(err);
         }
 
         // Check for unknown extensions at spec level (E1015 - warning)
@@ -5130,6 +5192,253 @@ paths:
         assert_eq!(op.middlewares.len(), 1);
         assert_eq!(op.middlewares[0].name, "rate-limit");
         assert_eq!(result.manifest.plugins.len(), 0);
+    }
+
+    /// Compile one spec and return its routes, or the compile error.
+    fn compile_middleware_spec(spec_content: &str) -> Result<CompiledRoutes, CompileError> {
+        let temp = TempDir::new().unwrap();
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+        compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )?;
+        Ok(load_routes(&output_path).unwrap())
+    }
+
+    fn chain_names(routes: &CompiledRoutes) -> Vec<&str> {
+        routes.operations[0]
+            .middlewares
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn compile_disabled_middleware_removes_only_that_global() {
+        let routes = compile_middleware_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: auth
+    config:
+      audience: my-api
+  - name: rate-limit
+    config:
+      quota: 300
+paths:
+  /webhooks:
+    post:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: auth
+          enabled: false
+"#,
+        )
+        .unwrap();
+        assert_eq!(chain_names(&routes), ["rate-limit"]);
+    }
+
+    #[test]
+    fn compile_disabled_middleware_removes_every_stacked_instance() {
+        let routes = compile_middleware_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: rate-limit
+    config:
+      policy_name: per-second
+  - name: cors
+    config:
+      allow_origin: "*"
+  - name: rate-limit
+    config:
+      policy_name: per-day
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: rate-limit
+          enabled: false
+"#,
+        )
+        .unwrap();
+        assert_eq!(chain_names(&routes), ["cors"]);
+    }
+
+    #[test]
+    fn compile_operation_entry_matches_global_without_version() {
+        let routes = compile_middleware_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: rate-limit@0.1.0
+    config:
+      quota: 60
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 1000
+"#,
+        )
+        .unwrap();
+        let chain = &routes.operations[0].middlewares;
+        assert_eq!(chain_names(&routes), ["rate-limit"]);
+        assert_eq!(chain[0].config["quota"], 1000);
+    }
+
+    #[test]
+    fn compile_resolved_middleware_serializes_without_enabled() {
+        let routes = compile_middleware_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: auth
+  - name: cors
+paths:
+  /public:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: auth
+          enabled: false
+"#,
+        )
+        .unwrap();
+        let entry = serde_json::to_value(&routes.operations[0].middlewares[0]).unwrap();
+        assert_eq!(entry["name"], "cors");
+        assert!(entry.get("enabled").is_none());
+    }
+
+    #[test]
+    fn compile_rejects_disabled_middleware_with_config() {
+        let result = compile_middleware_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: auth
+paths:
+  /public:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: auth
+          enabled: false
+          config:
+            audience: unused
+"#,
+        );
+        assert!(matches!(
+            result,
+            Err(CompileError::DisabledMiddlewareWithConfig(ref name, _)) if name == "auth"
+        ));
+    }
+
+    #[test]
+    fn compile_rejects_disabled_middleware_matching_no_global() {
+        let result = compile_middleware_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: auth
+paths:
+  /public:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: cors
+          enabled: false
+"#,
+        );
+        assert!(matches!(
+            result,
+            Err(CompileError::DisabledMiddlewareMatchesNoGlobal(ref name, _)) if name == "cors"
+        ));
+    }
+
+    #[test]
+    fn compile_rejects_disabled_global_middleware() {
+        let result = compile_middleware_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: auth
+    enabled: false
+paths:
+  /users:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#,
+        );
+        assert!(matches!(
+            result,
+            Err(CompileError::GlobalMiddlewareDisabled(ref name, _)) if name == "auth"
+        ));
+    }
+
+    #[test]
+    fn check_disabled_middlewares_reports_every_problem() {
+        let spec = crate::spec_parser::parse_spec(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: auth
+    enabled: false
+paths:
+  /a:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+      x-barbacane-middlewares:
+        - name: cors
+          enabled: false
+          config: {}
+"#,
+        )
+        .unwrap();
+        let codes: Vec<String> = check_disabled_middlewares(&spec)
+            .iter()
+            .map(|e| e.to_string()[..5].to_string())
+            .collect();
+        assert_eq!(codes, ["E1014", "E1012", "E1013"]);
     }
 
     #[test]

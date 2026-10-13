@@ -11,11 +11,12 @@ pub mod manifest;
 pub mod spec_parser;
 
 pub use artifact::{
-    compile, compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs,
-    recompute_artifact_hash, verify_artifact_hash, verify_artifact_signature,
-    verify_plugin_checksum, BundledPlugin, CompileOptions, CompileResult, CompiledOperation,
-    CompiledRoutes, IntegrityError, LoadedPlugin, Manifest, McpConfig, PluginBundle,
-    PluginCapabilities, Provenance, SourceSpec, ARTIFACT_VERSION, COMPILER_VERSION,
+    check_disabled_middlewares, compile, compile_with_manifest, load_manifest, load_plugins,
+    load_routes, load_specs, recompute_artifact_hash, verify_artifact_hash,
+    verify_artifact_signature, verify_plugin_checksum, BundledPlugin, CompileOptions,
+    CompileResult, CompiledOperation, CompiledRoutes, IntegrityError, LoadedPlugin, Manifest,
+    McpConfig, PluginBundle, PluginCapabilities, Provenance, SourceSpec, ARTIFACT_VERSION,
+    COMPILER_VERSION,
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{

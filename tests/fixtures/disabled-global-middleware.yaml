@@ -1,0 +1,23 @@
+openapi: "3.1.0"
+info:
+  title: Disabled Global Middleware
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: correlation-id
+  - name: cors
+    config:
+      allowed_origins: ["*"]
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      x-barbacane-middlewares:
+        - name: cors
+          enabled: false
+      responses:
+        "200":
+          description: OK

@@ -605,7 +605,7 @@ pub fn extract_plugin_names(specs: &[ApiSpec]) -> HashSet<String> {
 
     for spec in specs {
         // Global middlewares
-        for mw in &spec.global_middlewares {
+        for mw in spec.global_middlewares.iter().filter(|m| m.enabled) {
             plugins.insert(normalize_plugin_name(&mw.name));
         }
 
@@ -618,7 +618,8 @@ pub fn extract_plugin_names(specs: &[ApiSpec]) -> HashSet<String> {
 
             // Operation-level middlewares
             if let Some(middlewares) = &op.middlewares {
-                for mw in middlewares {
+                // An entry with `enabled: false` runs no plugin.
+                for mw in middlewares.iter().filter(|m| m.enabled) {
                     plugins.insert(normalize_plugin_name(&mw.name));
                 }
             }
@@ -930,6 +931,7 @@ plugins:
             global_middlewares: vec![MiddlewareConfig {
                 name: "rate-limit".to_string(),
                 config: serde_json::json!({}),
+                enabled: true,
             }],
             extensions: BTreeMap::new(),
             operations: vec![
@@ -969,6 +971,7 @@ plugins:
                     middlewares: Some(vec![MiddlewareConfig {
                         name: "jwt-auth@1.0.0".to_string(),
                         config: serde_json::json!({}),
+                        enabled: true,
                     }]),
                     deprecated: false,
                     sunset: None,
