@@ -10,9 +10,6 @@ ignore = [
 
     # instant crate unmaintained — pinned by notify 7.x (transitive via notify-types), no safe upgrade
     "RUSTSEC-2024-0384",
-
-    # unsafe-libyaml unmaintained — pulled in by serde_yaml 0.9, the spec parser; no safe upgrade
-    "RUSTSEC-2024-0449",
 ]
 
 [licenses]
