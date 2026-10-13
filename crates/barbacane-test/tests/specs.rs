@@ -72,7 +72,7 @@ async fn test_specs_merged_openapi() {
 
     // Parse the YAML response
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse merged spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse merged spec");
 
     // Check it's a valid OpenAPI spec
     assert!(
@@ -114,7 +114,7 @@ async fn test_specs_merged_openapi_strips_extensions() {
     assert_eq!(resp.status(), 200);
 
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse merged spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse merged spec");
 
     // Check that x-barbacane-dispatch is NOT in the merged spec
     let spec_str = serde_json::to_string(&spec).unwrap();
@@ -138,7 +138,7 @@ async fn test_specs_individual_file() {
     assert_eq!(resp.status(), 200);
 
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse spec");
 
     // Check it's the users spec
     assert_eq!(
@@ -189,7 +189,7 @@ async fn test_specs_preserves_sunset_extension() {
     assert_eq!(resp.status(), 200);
 
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse spec");
 
     // x-sunset should be preserved (it's a standard extension per RFC 8594)
     let spec_str = serde_json::to_string(&spec).unwrap();

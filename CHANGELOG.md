@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
+
 ### Fixed
 
 - **AsyncAPI**: an operation's `summary` and `description` are read. Both were dropped for every AsyncAPI operation, so an MCP tool generated from one had no description, and `E1061` warned that an MCP-enabled operation had neither while the document gave one.
