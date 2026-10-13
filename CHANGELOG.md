@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **wasm runtime**: Wasmtime is upgraded from 47.0.4 to 48.0.3 for RUSTSEC-2026-0315 (GHSA-m63x-6p34-q65x). With fuel metering and Cranelift, both of which the gateway uses, a plugin containing `call_ref` or `try_table` could drop the fuel its callees consumed and run for exponential time on linear fuel. RUSTSEC-2026-0316, in the component-model `Val` API, is fixed by the same release; the gateway loads core modules and does not use that API.
+- **wasm runtime**: Wasmtime is upgraded from 47.0.4 to 48.0.5 for RUSTSEC-2026-0315 (GHSA-m63x-6p34-q65x). With fuel metering and Cranelift, both of which the gateway uses, a plugin containing `call_ref` or `try_table` could drop the fuel its callees consumed and run for exponential time on linear fuel. RUSTSEC-2026-0316, in the component-model `Val` API, is fixed by the same release; the gateway loads core modules and does not use that API.
+- **wasm runtime**: the same upgrade fixes RUSTSEC-2026-0326 (GHSA-hw8m-q44c-ggrf). A GC reference live across a `try_call` could be left unrooted, so a plugin using GC references and exceptions, both enabled by default since Wasmtime 47, could corrupt the GC heap and execute incorrectly. RUSTSEC-2026-0325 and RUSTSEC-2026-0327, fixed by the same release, are in component validation and the component-model async ABI; the gateway loads core modules.
 
 ### Added
 
