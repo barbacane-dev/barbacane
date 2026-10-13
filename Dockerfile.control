@@ -7,8 +7,6 @@ WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
 COPY ui/ ./
-# `tsc -b` type-checks the UI tests, which import this plugin schema by relative path.
-COPY plugins/oidc-auth/config-schema.json /plugins/oidc-auth/config-schema.json
 RUN npm run build
 
 # Rust build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor)
