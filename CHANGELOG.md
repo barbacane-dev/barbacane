@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-10-13
+
+Wasmtime moves to 48.0.5 for five advisories. Two reach the gateway: a plugin could run past its fuel budget, or corrupt the GC heap using GC references and exceptions. A response to a request carrying `Authorization` is no longer cached unless the upstream allows a shared cache to reuse it, and responses `rate-limit` lets through now carry the documented `X-RateLimit-*` headers. A plugin configuration with an unknown key inside a nested object, such as `request-transformer`'s `headers`, now fails compilation with `E1023` instead of being ignored, so a spec that compiled under 0.12.2 can be refused: compile yours before upgrading a running gateway. The MSRV is 1.95. No artifact change: 0.12.x artifacts load as they are.
+
 ### Security
 
 - **wasm runtime**: Wasmtime is upgraded from 47.0.4 to 48.0.5 for RUSTSEC-2026-0315 (GHSA-m63x-6p34-q65x). With fuel metering and Cranelift, both of which the gateway uses, a plugin containing `call_ref` or `try_table` could drop the fuel its callees consumed and run for exponential time on linear fuel. RUSTSEC-2026-0316, in the component-model `Val` API, is fixed by the same release; the gateway loads core modules and does not use that API.
@@ -829,7 +833,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/barbacane-dev/Barbacane/compare/v0.11.0...v0.12.0
