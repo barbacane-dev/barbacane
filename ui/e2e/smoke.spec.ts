@@ -18,14 +18,14 @@ test.describe('Smoke tests', () => {
     await login(page)
     await mockApi(page)
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible()
   })
 
   test('navigate to Projects page', async ({ page }) => {
     await login(page)
     await mockApi(page)
     await page.goto('/projects')
-    await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
     // Fixture project should appear
     await expect(page.getByText('Pet Store API')).toBeVisible()
   })
@@ -34,7 +34,7 @@ test.describe('Smoke tests', () => {
     await login(page)
     await mockApi(page)
     await page.goto('/specs')
-    await expect(page.getByRole('heading', { name: 'API Specs' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'API Specs', exact: true })).toBeVisible()
     await expect(page.getByText('petstore.yaml')).toBeVisible()
   })
 
@@ -42,7 +42,7 @@ test.describe('Smoke tests', () => {
     await login(page)
     await mockApi(page)
     await page.goto('/plugin-registry')
-    await expect(page.getByRole('heading', { name: 'Plugin Registry' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Plugin Registry', exact: true })).toBeVisible()
     await expect(page.getByText('rate-limit')).toBeVisible()
   })
 
@@ -53,15 +53,15 @@ test.describe('Smoke tests', () => {
 
     // Specs tab (default)
     await page.goto(`/projects/${projectId}/specs`)
-    await expect(page.getByRole('heading', { name: 'API Specifications' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'API Specifications', exact: true })).toBeVisible()
 
     // Operations tab
     await page.goto(`/projects/${projectId}/operations`)
-    await expect(page.getByRole('heading', { name: 'Operations' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Operations', exact: true })).toBeVisible()
 
     // Builds tab
     await page.goto(`/projects/${projectId}/builds`)
-    await expect(page.getByRole('heading', { name: 'Builds' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Builds', exact: true })).toBeVisible()
 
     // Deploy tab
     await page.goto(`/projects/${projectId}/deploy`)
