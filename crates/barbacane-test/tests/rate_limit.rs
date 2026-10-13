@@ -31,8 +31,19 @@ async fn test_rate_limit_allows_within_quota() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Check rate limit headers in response (added to request, passed through)
-    // The mock dispatcher returns our configured response
+    let header = |name: &str| {
+        resp.headers()
+            .get(name)
+            .unwrap_or_else(|| panic!("response should carry {name}"))
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(header("x-ratelimit-policy"), "test-policy;q=3;w=60");
+    assert_eq!(header("x-ratelimit-limit"), "3");
+    assert_eq!(header("x-ratelimit-remaining"), "2");
+    assert!(header("x-ratelimit-reset").parse::<u64>().is_ok());
+
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["message"], "ok");
 }

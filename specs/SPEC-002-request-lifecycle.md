@@ -205,7 +205,7 @@ A middleware can:
 - **Continue** — pass the request (possibly modified) to the next middleware
 - **Short-circuit** — return a response immediately (e.g., `401`, `403`, `429`)
 
-If a middleware short-circuits, no further middlewares or dispatch runs. The response is returned directly (skipping the response phase of earlier middlewares too — the short-circuit response is final).
+If a middleware short-circuits, no further middlewares or dispatch runs. The `on_response` of the middlewares that ran before it then runs on the short-circuit response, last to first, as in §4.8; the short-circuiting middleware's own `on_response` does not run. They can change the status and headers; the body stays the one the short-circuiting middleware produced.
 
 ### 4.7 Dispatch
 
