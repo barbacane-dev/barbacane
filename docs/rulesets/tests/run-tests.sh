@@ -69,6 +69,7 @@ assert_zero_violations "$SCRIPT_DIR/valid-wildcard-paths.yaml" "valid-wildcard-p
 # Operation middlewares merge with the global ones, so an operation adding only
 # acl keeps the global auth and must not be reported as dropping it.
 assert_zero_violations "$SCRIPT_DIR/valid-merged-middlewares.yaml" "valid-merged-middlewares"
+assert_zero_violations "$ROOT_DIR/tests/fixtures/disabled-global-middleware.yaml" "fixtures/disabled-global-middleware"
 echo ""
 
 # Invalid specs should produce violations
