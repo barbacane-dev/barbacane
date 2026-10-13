@@ -179,6 +179,64 @@ rules:
       function: barbacane-validate-middleware-config
 
   # ---------------------------------------------------------------------------
+  # enabled: false on middleware entries (ADR-0034, SPEC-001 §3.1)
+  # ---------------------------------------------------------------------------
+  # The first three fail the way compilation does (E1014, E1012, E1013). The
+  # last two point at authentication changes worth a review.
+
+  barbacane-global-middleware-disabled:
+    description: "A global middleware entry cannot set enabled: false; only an operation entry can disable a global middleware (E1014)."
+    documentationUrl: https://docs.barbacane.dev/guide/spec-configuration.html#middleware-merging
+    severity: error
+    given: "$['x-barbacane-middlewares'][*]"
+    then:
+      function: barbacane-disabled-middlewares
+      functionOptions:
+        check: global-disabled
+
+  barbacane-middleware-disabled-with-config:
+    description: "A middleware entry with enabled: false runs no plugin and takes no config (E1012)."
+    documentationUrl: https://docs.barbacane.dev/guide/spec-configuration.html#middleware-merging
+    severity: error
+    given:
+      - "$['x-barbacane-middlewares'][*]"
+      - "$.paths[*][*]['x-barbacane-middlewares'][*]"
+    then:
+      function: barbacane-disabled-middlewares
+      functionOptions:
+        check: disabled-with-config
+
+  barbacane-middleware-disabled-unmatched:
+    description: "An operation entry with enabled: false must name a plugin of the global chain, or it removes nothing (E1013)."
+    documentationUrl: https://docs.barbacane.dev/guide/spec-configuration.html#middleware-merging
+    severity: error
+    given: "$.paths[*][*]"
+    then:
+      function: barbacane-disabled-middlewares
+      functionOptions:
+        check: disabled-unmatched
+
+  barbacane-global-auth-disabled:
+    description: "Lists the operations that disable a global authentication plugin with enabled: false, for review."
+    documentationUrl: https://docs.barbacane.dev/guide/spec-configuration.html#middleware-merging
+    severity: info
+    given: "$.paths[*][*]"
+    then:
+      function: barbacane-disabled-middlewares
+      functionOptions:
+        check: global-auth-disabled
+
+  barbacane-auth-plugins-stacked:
+    description: "An operation adds an authentication plugin and keeps a different global one, so both run and a request needs both credentials."
+    documentationUrl: https://docs.barbacane.dev/guide/spec-configuration.html#middleware-merging
+    severity: warn
+    given: "$.paths[*][*]"
+    then:
+      function: barbacane-disabled-middlewares
+      functionOptions:
+        check: auth-plugins-stacked
+
+  # ---------------------------------------------------------------------------
   # AI middleware regex validation (shift-left)
   # ---------------------------------------------------------------------------
   # Rust `regex` is close enough to JavaScript for the class of mistakes

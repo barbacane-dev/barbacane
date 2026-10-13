@@ -1,0 +1,46 @@
+openapi: "3.1.0"
+info:
+  title: Invalid enabled false
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: oidc-auth
+    config:
+      issuer_url: "https://auth.example.com/realms/demo"
+  - name: correlation-id
+    enabled: false
+paths:
+  /public:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: "{}"
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          enabled: false
+          config:
+            issuer_url: "https://auth.example.com/realms/demo"
+        - name: cors
+          enabled: false
+      responses:
+        "200":
+          description: OK
+  /partners:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: "{}"
+      x-barbacane-middlewares:
+        - name: apikey-auth
+          config:
+            key_location: header
+            header_name: X-API-Key
+            keys:
+              - key: "env://PARTNER_API_KEY"
+                id: partner
+      responses:
+        "200":
+          description: OK

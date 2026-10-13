@@ -54,6 +54,25 @@ assert_has_violations() {
   fi
 }
 
+# Assert the exact set of barbacane-* rule codes a spec reports (each once,
+# sorted, comma-separated), so a rule that must stay silent is checked too.
+assert_codes() {
+  local spec="$1"
+  local label="$2"
+  local expected="$3"
+  local actual
+  actual=$(vacuum spectral-report -r "$RULESET" --functions "$FUNCTIONS_DIR" -o "$spec" 2>/dev/null \
+    | sed -n '/^\[/,$p' \
+    | jq -r '[.[] | select(.code | startswith("barbacane-")) | .code] | unique | join(",")' 2>/dev/null)
+  if [ "${actual:-}" = "$expected" ]; then
+    echo "  PASS  $label ($expected)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL  $label: expected [$expected], got [${actual:-}]"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 echo "Running Barbacane vacuum ruleset tests..."
 echo ""
 
@@ -93,6 +112,12 @@ assert_has_violations "$SCRIPT_DIR/invalid-plaintext-secret.yaml" "invalid-plain
 # declare one. Three parameters (operation, path item, components) and one
 # apiKey scheme, each mirroring compiler error E1056.
 assert_has_violations "$SCRIPT_DIR/invalid-reserved-headers.yaml" "invalid-reserved-headers" 4
+echo ""
+
+echo "--- enabled: false (exact rule codes) ---"
+assert_codes "$SCRIPT_DIR/invalid-disabled-middlewares.yaml" "invalid-disabled-middlewares" \
+  "barbacane-auth-plugins-stacked,barbacane-global-auth-disabled,barbacane-global-middleware-disabled,barbacane-middleware-disabled-unmatched,barbacane-middleware-disabled-with-config"
+assert_codes "$SCRIPT_DIR/valid-auth-replaced.yaml" "valid-auth-replaced" "barbacane-global-auth-disabled"
 echo ""
 
 echo "Results: $PASS passed, $FAIL failed"
