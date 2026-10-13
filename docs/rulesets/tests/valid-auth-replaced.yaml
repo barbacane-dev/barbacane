@@ -1,0 +1,28 @@
+openapi: "3.1.0"
+info:
+  title: Operation replacing the global authentication
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: oidc-auth
+    config:
+      issuer_url: "https://auth.example.com/realms/demo"
+  - name: correlation-id
+paths:
+  /partners:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: "{}"
+      x-barbacane-middlewares:
+        - name: oidc-auth
+          enabled: false
+        - name: apikey-auth
+          config:
+            keys:
+              - key: "env://PARTNER_API_KEY"
+                id: partner
+      responses:
+        "200":
+          description: OK

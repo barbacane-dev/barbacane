@@ -180,6 +180,7 @@ const FUNCTIONS = join(dirname(fileURLToPath(import.meta.url)), "functions");
 
 const dispatchers = {};
 const middlewares = {};
+const authPlugins = [];
 
 for (const name of readdirSync(PLUGINS).sort()) {
   const dir = join(PLUGINS, name);
@@ -191,6 +192,7 @@ for (const name of readdirSync(PLUGINS).sort()) {
 
   const type = toml.match(/^type\s*=\s*"(\w+)"/m)?.[1];
   if (!type) continue;
+  if (/^category\s*=\s*"authentication"/m.test(toml)) authPlugins.push(name);
 
   const simplified = {
     required: schema.required || [],
@@ -230,6 +232,14 @@ const middlewareJS = buildValidatorJS(
 writeFileSync(join(FUNCTIONS, "barbacane-validate-dispatch-config.js"), dispatchJS);
 writeFileSync(join(FUNCTIONS, "barbacane-validate-middleware-config.js"), middlewareJS);
 
+// The authentication plugins the enabled: false rules know, from each plugin.toml's category.
+const disabledFn = join(FUNCTIONS, "barbacane-disabled-middlewares.js");
+const disabledJS = readFileSync(disabledFn, "utf8").replace(
+  /(\/\/ BEGIN GENERATED AUTH PLUGINS\n)[\s\S]*?(\/\/ END GENERATED AUTH PLUGINS)/,
+  `$1const AUTH_PLUGINS = ${JSON.stringify(authPlugins)};\n$2`,
+);
+writeFileSync(disabledFn, disabledJS);
+
 // ---------------------------------------------------------------------------
 // Update barbacane.yaml enums
 // ---------------------------------------------------------------------------
@@ -254,3 +264,4 @@ writeFileSync(join(dirname(fileURLToPath(import.meta.url)), "barbacane.yaml"), r
 console.log(`Generated dispatch validator (${dispatchNames.length} dispatchers: ${dispatchList})`);
 console.log(`Generated middleware validator (${middlewareNames.length} middlewares: ${middlewareNames.join(", ")})`);
 console.log("Updated barbacane.yaml enums");
+console.log(`Updated authentication plugins (${authPlugins.join(", ")})`);
