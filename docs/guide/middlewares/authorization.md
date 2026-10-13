@@ -93,10 +93,10 @@ Policy-based access control via [Open Policy Agent](https://www.openpolicyagent.
 
 ```yaml
 x-barbacane-middlewares:
-  - name: jwt-auth
+  - name: oidc-auth
     config:
-      issuer: "https://auth.example.com"
-      skip_signature_validation: true
+      issuer_url: "https://auth.example.com"
+      audience: "my-api"
   - name: opa-authz
     config:
       opa_url: "http://opa:8181/v1/data/authz/allow"
@@ -205,9 +205,10 @@ Two modes:
 
 ```yaml
 x-barbacane-middlewares:
-  - name: jwt-auth
+  - name: oidc-auth
     config:
-      issuer: "https://auth.example.com"
+      issuer_url: "https://auth.example.com"
+      audience: "my-api"
   - name: cel
     config:
       expression: >
@@ -330,9 +331,10 @@ The `on_match.deny` action turns `cel` into a fully programmable gate — useful
 
 ```yaml
 x-barbacane-middlewares:
-  - name: jwt-auth
+  - name: oidc-auth
     config:
-      issuer: "https://auth.example.com"
+      issuer_url: "https://auth.example.com"
+      audience: "my-api"
   - name: cel
     config:
       expression: >

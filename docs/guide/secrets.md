@@ -22,6 +22,7 @@ Use `env://` to reference environment variables:
 x-barbacane-middlewares:
   - name: oauth2-auth
     config:
+      introspection_endpoint: https://auth.example.com/introspect
       client_id: my-client
       client_secret: "env://OAUTH2_CLIENT_SECRET"
 ```
@@ -34,9 +35,11 @@ Use `file://` to read secrets from files:
 
 ```yaml
 x-barbacane-middlewares:
-  - name: jwt-auth
+  - name: oauth2-auth
     config:
-      secret: "file:///etc/secrets/jwt-signing-key"
+      introspection_endpoint: https://auth.example.com/introspect
+      client_id: my-api-client
+      client_secret: "file:///etc/secrets/oauth2-client-secret"
 ```
 
 The gateway reads the file content, trims whitespace, and uses the result. This works well with:
@@ -75,15 +78,16 @@ x-barbacane-dispatch:
       Authorization: "Bearer env://UPSTREAM_API_KEY"
 ```
 
-### JWT Auth with File-based Key
+### S3 with Mounted Credentials
 
 ```yaml
-x-barbacane-middlewares:
-  - name: jwt-auth
-    config:
-      public_key: "file:///var/run/secrets/jwt-public-key.pem"
-      issuer: https://auth.example.com
-      audience: my-api
+x-barbacane-dispatch:
+  name: s3
+  config:
+    region: eu-west-1
+    bucket: assets
+    access_key_id: "env://AWS_ACCESS_KEY_ID"
+    secret_access_key: "file:///var/run/secrets/aws/secret-access-key"
 ```
 
 ### Multiple Secrets

@@ -53,10 +53,13 @@ The dispatcher owns *provider routing* and *catalog policy*. Layer middlewares o
 paths:
   /v1/chat/completions:
     post:
+      security:
+        - bearerAuth: []
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            issuer: "https://auth.example.com"
+            issuer_url: "https://auth.example.com"
+            audience: "my-api"
 
         # Per-tier model gating using request body + claims (cel body_json)
         - name: cel

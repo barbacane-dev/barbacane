@@ -2,17 +2,17 @@
 
 All authentication middlewares set the standard [consumer identity headers](index.md#consumer-identity-headers) — `x-auth-consumer` and `x-auth-consumer-groups` — so downstream authorization plugins (notably [`acl`](authorization.md#acl)) don't need to know which auth plugin produced them.
 
-- [`jwt-auth`](#jwt-auth) — JWT Bearer tokens with RS256/HS256 signatures
-- [`apikey-auth`](#apikey-auth) — API keys from header or query parameter
-- [`oauth2-auth`](#oauth2-auth) — Bearer tokens via RFC 7662 token introspection
-- [`oidc-auth`](#oidc-auth) — OpenID Connect discovery + JWKS
+- [`jwt-auth`](#jwt-auth): JWT bearer tokens verified against an inline public key (RSA or EC)
+- [`apikey-auth`](#apikey-auth): API keys from header or query parameter
+- [`oauth2-auth`](#oauth2-auth): Bearer tokens via RFC 7662 token introspection
+- [`oidc-auth`](#oidc-auth): OpenID Connect discovery + JWKS
 - [`basic-auth`](#basic-auth) — HTTP Basic per RFC 7617
 
 ---
 
 ## jwt-auth
 
-Validates JWT tokens with RS256/HS256 signatures.
+Validates JWT bearer tokens against a public key given inline as a JWK.
 
 ```yaml
 x-barbacane-middlewares:
@@ -21,22 +21,28 @@ x-barbacane-middlewares:
       issuer: "https://auth.example.com"  # Optional: validate iss claim
       audience: "my-api"                  # Optional: validate aud claim
       groups_claim: "roles"               # Optional: claim name for consumer groups
-      skip_signature_validation: true     # Required until JWKS support is implemented
+      public_key_jwk:                     # Key that verifies the signature
+        kty: RSA
+        alg: RS256
+        n: "0vx7agoebGcQSuu..."           # base64url modulus
+        e: AQAB
 ```
 
-Accepted algorithms: RS256, RS384, RS512, ES256, ES384, ES512. HS256/HS512 and `none` are rejected.
+Every token must carry a valid signature under `public_key_jwk`: without the key, tokens are rejected with `401` at the signature step. RSA keys verify `RS256`, `RS384` and `RS512`; EC keys (`crv`, `x`, `y`) verify `ES256` and `ES384`. `HS256`/`HS384`/`HS512` and `none` are rejected. When the key sets `alg` or `use`, the token must match them.
 
-**Note:** Cryptographic signature validation is not yet implemented. Set `skip_signature_validation: true` in production until JWKS support lands. Without it, all tokens are rejected with 401 at the signature step.
+To verify against keys an identity provider publishes at a JWKS URL, with rotation, use [`oidc-auth`](#oidc-auth).
 
 ### Configuration
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
+| `public_key_jwk` | object | - | Public key as a JWK (RFC 7517) that verifies the token signature. Required for any token to be accepted |
 | `issuer` | string | - | Expected `iss` claim. Tokens not matching are rejected |
-| `audience` | string | - | Expected `aud` claim. Tokens not matching are rejected |
+| `audience` | string | - | Expected `aud` claim. Tokens not matching are rejected. Strongly recommended |
 | `clock_skew_seconds` | integer | `60` | Tolerance in seconds for `exp`/`nbf` validation |
 | `groups_claim` | string | - | Claim name to extract consumer groups from (e.g., `"roles"`, `"groups"`). Value is set as `x-auth-consumer-groups` |
-| `skip_signature_validation` | boolean | `false` | Skip cryptographic signature check. Required until JWKS support is implemented |
+| `skip_signature_validation` | boolean | `false` | Test only: ignored by the compiled plugin, so it cannot disable verification |
+| `jwks_url`, `public_key_pem` | string | - | Accepted but not used by `jwt-auth`; use `oidc-auth` for JWKS, or supply `public_key_jwk` |
 
 ### Context headers
 

@@ -632,12 +632,13 @@ paths:
       parameters:
         - { name: bucket, in: path, required: true, schema: { type: string } }
         - { name: key, in: path, required: true, allowReserved: true, schema: { type: string } }
+      security:
+        - bearerAuth: []
       x-barbacane-middlewares:
         - name: oidc-auth
           config:
-            issuer: https://auth.example.com
+            issuer_url: https://auth.example.com
             audience: my-api
-            required: true
       x-barbacane-dispatch:
         name: s3
         config:
@@ -1197,10 +1198,14 @@ Client: GET /ws/echo?token=abc → Upstream: ws://echo.internal:8080/?token=abc
         required: true
         schema:
           type: string
+    security:
+      - bearerAuth: []
     x-barbacane-middlewares:
-      - name: jwt-auth
+      - name: oidc-auth
         config:
-          required: true
+          issuer_url: "https://auth.example.com"
+          audience: "chat"
+          allow_query_token: true  # browsers cannot set headers on a WebSocket
     x-barbacane-dispatch:
       name: ws-upstream
       config:

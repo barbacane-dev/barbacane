@@ -63,15 +63,18 @@ x-barbacane-middlewares:
 paths:
   /admin/users:
     get:
+      security:
+        - bearerAuth: []
       x-barbacane-middlewares:
-        - name: jwt-auth
+        - name: oidc-auth
           config:
-            issuer: "https://auth.example.com"
+            issuer_url: "https://auth.example.com"
+            audience: "my-api"
       x-barbacane-dispatch:
         name: http-upstream
         config:
           url: "https://api.internal"
-# Resolved chain: correlation-id → cors → jwt-auth
+# Resolved chain: correlation-id → cors → oidc-auth
 ```
 
 **Name-based override.** When an operation entry has the same `name` as an entry in the global chain, **all** global entries with that name are dropped and the operation entries are appended in their declared order.
@@ -134,8 +137,8 @@ Middlewares can write and read a per-request key-value context. The chain's orde
 
 ```yaml
 x-barbacane-middlewares:
-  - name: jwt-auth          # writes context:auth.sub
-    config: { issuer: "https://auth.example.com" }
+  - name: oidc-auth         # writes context:auth.sub
+    config: { issuer_url: "https://auth.example.com", audience: "my-api" }
   - name: rate-limit        # reads context:auth.sub
     config:
       quota: 100

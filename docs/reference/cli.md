@@ -680,6 +680,8 @@ Example config with secrets:
 x-barbacane-middlewares:
   - name: oauth2-auth
     config:
+      introspection_endpoint: https://auth.example.com/introspect
+      client_id: my-api-client
       client_secret: "env://OAUTH2_SECRET"
 ```
 
