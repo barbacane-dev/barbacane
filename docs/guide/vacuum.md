@@ -22,7 +22,7 @@ Several rules use custom JavaScript functions (config schema validation, duplica
 ```bash
 mkdir -p .barbacane/rulesets/functions .barbacane/rulesets/schemas
 curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
-for f in barbacane-auth-opt-out barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
+for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
          barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
          barbacane-validate-ai-regex barbacane-validate-dispatch-config \
          barbacane-validate-middleware-config; do
@@ -99,7 +99,6 @@ The same rules apply to operation-level middlewares (`barbacane-op-middleware-*`
 
 | Rule | Severity | Description |
 |------|----------|-------------|
-| `barbacane-auth-opt-out-explicit` | info | When global auth is set, operations that override middlewares without auth should use `x-barbacane-middlewares: []` to explicitly opt out |
 | `barbacane-reserved-header-parameter` | error | An `in: header` parameter cannot be named `x-auth-*`; that namespace carries the identity auth plugins establish (mirrors compiler error E1056) |
 | `barbacane-reserved-header-scheme` | error | An `apiKey` security scheme in a header cannot be named `x-auth-*`, for the same reason |
 
@@ -134,9 +133,10 @@ rules:
   run: |
     mkdir -p .barbacane/rulesets/functions
     curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
-    for f in barbacane-auth-opt-out barbacane-no-duplicate-middlewares barbacane-no-plaintext-upstream \
+    for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
              barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
-             barbacane-validate-dispatch-config barbacane-validate-middleware-config; do
+             barbacane-validate-ai-regex barbacane-validate-dispatch-config \
+             barbacane-validate-middleware-config; do
       curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
     done
 
