@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares, and the UI shows the resolved chain and marks such entries. The artifact format does not change.
+
+### Changed
+
+- **middlewares**: operation and global entries match by plugin name without the `@version` suffix. A spec naming `rate-limit@0.1.0` globally and `rate-limit` on an operation ran both; the operation entry now replaces the global one.
+
 ## [0.12.3] - 2026-10-13
 
 Wasmtime moves to 48.0.5 for five advisories. Two reach the gateway: a plugin could run past its fuel budget, or corrupt the GC heap using GC references and exceptions. A response to a request carrying `Authorization` is no longer cached unless the upstream allows a shared cache to reuse it, and responses `rate-limit` lets through now carry the documented `X-RateLimit-*` headers. A plugin configuration with an unknown key inside a nested object, such as `request-transformer`'s `headers`, now fails compilation with `E1023` instead of being ignored, so a spec that compiled under 0.12.2 can be refused: compile yours before upgrading a running gateway. The MSRV is 1.95. No artifact change: 0.12.x artifacts load as they are.

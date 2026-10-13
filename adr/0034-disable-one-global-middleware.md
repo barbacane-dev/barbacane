@@ -1,6 +1,6 @@
 # ADR-0034: Disabling One Global Middleware per Operation
 
-**Status:** Proposed (supersedes the "Per-route override" section of [ADR-0006](0006-wasm-plugin-architecture.md))
+**Status:** Accepted (supersedes the "Per-route override" section of [ADR-0006](0006-wasm-plugin-architecture.md))
 **Date:** 2026-09-29
 
 ## Context

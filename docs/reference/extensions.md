@@ -299,6 +299,7 @@ Defines a middleware chain.
 x-barbacane-middlewares:
   - name: string    # Required. Middleware name
     config: object  # Optional. Middleware-specific configuration
+    enabled: bool   # Optional, default true. false at operation level removes the global entries of this plugin
 ```
 
 ### Properties
@@ -307,10 +308,11 @@ x-barbacane-middlewares:
 |----------|------|----------|-------------|
 | `name` | string | Yes | Name of the middleware plugin |
 | `config` | object | No | Configuration passed to the middleware |
+| `enabled` | boolean | No | `false` on an operation entry removes the global entries of this plugin from the operation's chain and adds nothing. Default `true`. |
 
 ### Middleware Merging
 
-Operation middlewares are merged with the global chain. Global middlewares not overridden by name are preserved. When an operation defines a middleware with the same name as a global one, the operation config overrides the global config for that entry. An empty array (`x-barbacane-middlewares: []`) disables all middlewares for that operation.
+Operation middlewares are merged with the global chain. Entries match by plugin name without the `@version` suffix. Every global entry that matches an operation entry is removed, then the operation entries are appended, except those with `enabled: false`, which add nothing. So an operation entry replaces the global entries of its plugin, and `enabled: false` removes them while keeping the rest of the global chain. An empty array (`x-barbacane-middlewares: []`) disables all middlewares for that operation.
 
 ### Examples
 
