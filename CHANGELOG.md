@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ldap host function**: `host_ldap_bind` refuses an empty password as `invalid_credentials` without contacting the directory. A DN with an empty password is an unauthenticated bind (RFC 4513 §5.1.2), which a directory may accept without checking the DN. `ldap-auth` already refused it; the host now does for every plugin.
 - **auth plugins and acl**: a group name containing a comma, such as an LDAP DN or a single-group claim value, stays one group. In `x-auth-consumer-groups` and `auth.groups` a name's `,` is written `%2C` and its `%` is written `%25`, and `acl` decodes them, so its rules match whole group names. Names without either character are unchanged. An upstream that reads `x-auth-consumer-groups` and has groups with commas must decode the two escapes.
 - **control plane**: revoking a data-plane API key ends the WebSocket sessions registered with it: each receives `disconnect` and the socket closes. Sessions also recheck their key at the heartbeat interval, so an expired key, or one revoked through another control-plane instance, ends them as well.
+- **AsyncAPI**: an operation's `summary` and `description` are read. Both were dropped for every AsyncAPI operation, so an MCP tool generated from one had no description, and `E1061` warned that an MCP-enabled operation had neither while the document gave one.
 
 ### Security
 
