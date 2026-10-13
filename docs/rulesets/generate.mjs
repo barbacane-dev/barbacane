@@ -57,7 +57,10 @@ function runRule(input) {
   const config = input.config;
 
   if (!pluginName) return [];
-
+${kind === "Middleware" ? `
+  // An entry with \`enabled: false\` runs no plugin, so it has no config to check.
+  if (input.enabled === false) return [];
+` : ""}
   const schema = schemas[pluginName];
   if (!schema) return []; // unknown plugin handled by enumeration rule
 
