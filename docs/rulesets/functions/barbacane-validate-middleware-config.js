@@ -297,6 +297,7 @@ const schemas = {
       querystring: { type: "object" },
       path: { type: "object" },
       body: { type: "object" },
+      skip_if_empty: { type: "boolean" },
     },
     additionalProperties: false,
   },
