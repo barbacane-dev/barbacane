@@ -74,7 +74,7 @@ fn parse_document(text: &str) -> Result<Value, String> {
     if let Ok(v) = serde_json::from_str::<Value>(text) {
         return Ok(v);
     }
-    serde_yaml::from_str::<Value>(text).map_err(|e| e.to_string())
+    yaml_serde::from_str::<Value>(text).map_err(|e| e.to_string())
 }
 
 fn raw_of(path: &Path) -> Value {

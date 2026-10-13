@@ -22,7 +22,7 @@ ring = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+yaml_serde = { workspace = true }
 sha2 = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
@@ -43,7 +43,7 @@ serde_json = { workspace = true }
 # a jsonschema::Validator from it.
 jsonschema = { workspace = true }
 # The corpus test reads specs and computes what it expects from them itself.
-serde_yaml = { workspace = true }
+yaml_serde = { workspace = true }
 
 [[bench]]
 name = "compilation"
