@@ -314,7 +314,8 @@ fn normalize_plugin_name(name: &str) -> String {
 fn extract_plugin_usages(spec: &barbacane_compiler::ApiSpec) -> Vec<PluginUsage> {
     let mut usages = Vec::new();
 
-    for mw in &spec.global_middlewares {
+    // An entry with `enabled: false` runs no plugin, so it has no usage to check.
+    for mw in spec.global_middlewares.iter().filter(|m| m.enabled) {
         usages.push(PluginUsage {
             name: normalize_plugin_name(&mw.name),
             used_as: "middleware",
@@ -336,7 +337,7 @@ fn extract_plugin_usages(spec: &barbacane_compiler::ApiSpec) -> Vec<PluginUsage>
         }
 
         if let Some(middlewares) = &op.middlewares {
-            for mw in middlewares {
+            for mw in middlewares.iter().filter(|m| m.enabled) {
                 usages.push(PluginUsage {
                     name: normalize_plugin_name(&mw.name),
                     used_as: "middleware",
@@ -548,10 +549,12 @@ mod tests {
             MiddlewareConfig {
                 name: "cors".to_string(),
                 config: serde_json::json!({"origins": ["*"]}),
+                enabled: true,
             },
             MiddlewareConfig {
                 name: "rate-limit@1.0.0".to_string(),
                 config: serde_json::json!({"quota": 60}),
+                enabled: true,
             },
         ];
 
@@ -587,6 +590,7 @@ mod tests {
         op.middlewares = Some(vec![MiddlewareConfig {
             name: "auth".to_string(),
             config: serde_json::json!({}),
+            enabled: true,
         }]);
         spec.operations.push(op);
 
@@ -598,11 +602,33 @@ mod tests {
     }
 
     #[test]
+    fn extract_usages_skips_disabled_middlewares() {
+        let mut spec = empty_spec();
+        spec.global_middlewares = vec![MiddlewareConfig {
+            name: "auth".to_string(),
+            config: serde_json::json!({"audience": "api"}),
+            enabled: true,
+        }];
+        let mut op = test_operation("GET", "/health");
+        op.middlewares = Some(vec![MiddlewareConfig {
+            name: "auth".to_string(),
+            config: serde_json::Value::Null,
+            enabled: false,
+        }]);
+        spec.operations.push(op);
+
+        let usages = extract_plugin_usages(&spec);
+        assert_eq!(usages.len(), 1);
+        assert_eq!(usages[0].location, "global middlewares");
+    }
+
+    #[test]
     fn extract_usages_combined() {
         let mut spec = empty_spec();
         spec.global_middlewares = vec![MiddlewareConfig {
             name: "cors".to_string(),
             config: serde_json::json!({}),
+            enabled: true,
         }];
 
         let mut op = test_operation("GET", "/stations");
@@ -613,6 +639,7 @@ mod tests {
         op.middlewares = Some(vec![MiddlewareConfig {
             name: "cache".to_string(),
             config: serde_json::json!({"ttl": 300}),
+            enabled: true,
         }]);
         spec.operations.push(op);
 

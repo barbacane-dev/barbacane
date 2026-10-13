@@ -36,6 +36,18 @@ pub struct MiddlewareBinding {
     pub name: String,
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub config: serde_json::Value,
+    /// `false` on an operation entry removes the global entries of this plugin
+    /// from the operation's chain (ADR-0034). Written only when `false`.
+    #[serde(default = "enabled_default", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
+}
+
+fn enabled_default() -> bool {
+    true
+}
+
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +273,7 @@ fn build_spec_operations(
         .map(|m| MiddlewareBinding {
             name: m.name.clone(),
             config: m.config.clone(),
+            enabled: m.enabled,
         })
         .collect();
 
@@ -280,6 +293,7 @@ fn build_spec_operations(
                     .map(|m| MiddlewareBinding {
                         name: m.name.clone(),
                         config: m.config.clone(),
+                        enabled: m.enabled,
                     })
                     .collect()
             }),
@@ -353,4 +367,50 @@ fn apply_middlewares_patch(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding(name: &str, enabled: bool) -> MiddlewareBinding {
+        MiddlewareBinding {
+            name: name.to_string(),
+            config: serde_json::Value::Null,
+            enabled,
+        }
+    }
+
+    #[test]
+    fn binding_writes_enabled_only_when_false() {
+        let disabled = serde_json::to_value(binding("auth", false)).unwrap();
+        assert_eq!(disabled["enabled"], false);
+
+        let enabled = serde_json::to_value(binding("auth", true)).unwrap();
+        assert!(enabled.get("enabled").is_none());
+    }
+
+    #[test]
+    fn binding_without_enabled_reads_as_enabled() {
+        let parsed: MiddlewareBinding =
+            serde_json::from_value(serde_json::json!({"name": "auth"})).unwrap();
+        assert!(parsed.enabled);
+    }
+
+    #[test]
+    fn middlewares_patch_keeps_a_disabled_entry() {
+        let mut operation = serde_yaml::Mapping::new();
+        apply_middlewares_patch(
+            &mut operation,
+            &Some(Some(vec![binding("auth", false), binding("cors", true)])),
+        )
+        .unwrap();
+
+        let written = serde_yaml::to_string(&operation).unwrap();
+        let reparsed: serde_json::Value = serde_yaml::from_str(&written).unwrap();
+        assert_eq!(
+            reparsed["x-barbacane-middlewares"],
+            serde_json::json!([{"name": "auth", "enabled": false}, {"name": "cors"}])
+        );
+    }
 }
