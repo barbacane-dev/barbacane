@@ -818,7 +818,20 @@ jobs:
           context: .
           file: ./Dockerfile.control
           target: ui-builder
+          load: true
+          tags: barbacane-control-ui:ci
           push: false
+
+      # The runtime stage copies these paths out of ui-builder; read them from
+      # the Dockerfile so the check follows it.
+      - name: Check the stage holds what the runtime stage copies
+        run: |
+          srcs=$(sed -n 's/^COPY --from=ui-builder \([^ ]*\) .*/\1/p' Dockerfile.control)
+          test -n "$srcs"
+          for src in $srcs; do
+            docker run --rm barbacane-control-ui:ci test -e "$src"
+            echo "ui-builder has $src"
+          done
 
   # The three release images, built for linux/amd64 and not pushed, from the
   # same Dockerfiles and context the release workflow uses.
