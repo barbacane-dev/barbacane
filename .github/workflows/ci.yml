@@ -30,6 +30,8 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       plugins: ${{ steps.filter.outputs.plugins }}
       ui: ${{ steps.filter.outputs.ui }}
+      ui_image: ${{ steps.filter.outputs.ui_image }}
+      images: ${{ steps.filter.outputs.images }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -50,6 +52,18 @@ jobs:
               - 'crates/barbacane-plugin-macros/**'
             ui:
               - 'ui/**'
+              - '.github/workflows/ci.yml'
+            ui_image:
+              - 'ui/**'
+              - 'Dockerfile.control'
+              - '.dockerignore'
+              - 'plugins/*/config-schema.json'
+              - '.github/workflows/ci.yml'
+            images:
+              - 'Dockerfile*'
+              - 'docker/**'
+              - '.dockerignore'
+              - 'Cargo.toml'
               - '.github/workflows/ci.yml'
 
   # Fast checks first (format, clippy) for quick feedback
@@ -783,6 +797,62 @@ jobs:
           path: ui/playwright-report/
           retention-days: 7
 
+  # The ui-builder stage of Dockerfile.control. Its `npm run build` sees only
+  # the files the stage copies, whereas `ui-tests` runs in the full checkout.
+  ui-image:
+    name: Control Image UI Stage
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.ui_image == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build the ui-builder stage
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile.control
+          target: ui-builder
+          push: false
+
+  # The three release images, built for linux/amd64 and not pushed, from the
+  # same Dockerfiles and context the release workflow uses.
+  images:
+    name: Image (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.images == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: barbacane
+            file: Dockerfile
+          - image: barbacane-control
+            file: Dockerfile.control
+          - image: barbacane-standalone
+            file: Dockerfile.standalone
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./${{ matrix.file }}
+          platforms: linux/amd64
+          push: false
+
   # Single required status check. Aggregates every gating job into one stable
   # context, so branch protection needs just "CI" regardless of matrix sharding
   # or which jobs a given change skips. Passes when every needed job succeeded
@@ -811,6 +881,8 @@ jobs:
       - security-suite
       - ui-tests
       - ui-e2e
+      - ui-image
+      - images
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any needed job failed or was cancelled
