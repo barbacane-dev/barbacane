@@ -9,7 +9,8 @@
 //! Supports variable interpolation: `$client_ip`, `$path.<name>`, `$header.<name>`,
 //! `$query.<name>`, `$cookie.<name>`, `context:<key>`. The `$`-variables resolve
 //! wherever they appear, so they can be embedded in a larger value (e.g.
-//! `Bearer $cookie.sso_token`).
+//! `Bearer $cookie.sso_token`). With `skip_if_empty`, an `add` or `set` whose
+//! value references a variable that resolves to empty is skipped.
 
 use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
@@ -102,6 +103,11 @@ pub struct RequestTransformer {
     #[serde(default)]
     body: Option<BodyConfig>,
 
+    /// Skip an `add` or `set` (headers, query, body) when a variable its value
+    /// references resolves to an empty string, missing values included.
+    #[serde(default)]
+    skip_if_empty: bool,
+
     /// Compiled regex for path replacement (lazy-initialized on first request).
     #[serde(skip)]
     compiled_replace: Option<Regex>,
@@ -149,15 +155,20 @@ impl RequestTransformer {
         }
 
         if let Some(header_config) = &self.headers {
-            transform_headers(&mut req.headers, header_config, &original);
+            transform_headers(
+                &mut req.headers,
+                header_config,
+                &original,
+                self.skip_if_empty,
+            );
         }
 
         if let Some(query_config) = &self.querystring {
-            req.query = transform_query(&req.query, query_config, &original);
+            req.query = transform_query(&req.query, query_config, &original, self.skip_if_empty);
         }
 
         if let Some(body_config) = &self.body {
-            req.body = transform_body(&req.body, body_config, &original);
+            req.body = transform_body(&req.body, body_config, &original, self.skip_if_empty);
         }
 
         Action::Continue(req)
@@ -173,28 +184,47 @@ impl RequestTransformer {
 // Variable interpolation
 // ---------------------------------------------------------------------------
 
+/// The result of interpolating a template.
+struct Interpolated {
+    value: String,
+    /// At least one variable in the template resolved to an empty string.
+    has_empty_variable: bool,
+}
+
 /// Interpolate variables in a template. `$`-variables (`$client_ip`,
 /// `$path.<name>`, `$header.<name>`, `$query.<name>`, `$cookie.<name>`) are
 /// resolved wherever they appear, so they can be embedded in a larger string
 /// (e.g. `Bearer $cookie.sso_token`). An unresolved variable becomes an empty
 /// string; a `$` that does not begin a known variable stays literal.
-fn interpolate_value(template: &str, req: &Request) -> String {
+///
+/// Also records whether any variable resolved to empty. Literal text, a literal
+/// empty template included, never counts as empty.
+fn interpolate(template: &str, req: &Request) -> Interpolated {
     // context:<key> has no delimiter, so it is resolved only as a whole value.
     if let Some(context_key) = template.strip_prefix("context:") {
-        return context::get(context_key).unwrap_or_default();
+        let value = context::get(context_key).unwrap_or_default();
+        return Interpolated {
+            has_empty_variable: value.is_empty(),
+            value,
+        };
     }
 
     if !template.contains('$') {
-        return template.to_string();
+        return Interpolated {
+            value: template.to_string(),
+            has_empty_variable: false,
+        };
     }
 
     let mut out = String::with_capacity(template.len());
+    let mut has_empty_variable = false;
     let mut rest = template;
     while let Some(pos) = rest.find('$') {
         out.push_str(&rest[..pos]);
         let at_var = &rest[pos..];
         match resolve_variable(at_var, req) {
             Some((value, consumed)) => {
+                has_empty_variable |= value.is_empty();
                 out.push_str(&value);
                 rest = &at_var[consumed..];
             }
@@ -205,7 +235,21 @@ fn interpolate_value(template: &str, req: &Request) -> String {
         }
     }
     out.push_str(rest);
-    out
+    Interpolated {
+        value: out,
+        has_empty_variable,
+    }
+}
+
+/// Interpolate `template`, or `None` when `skip_if_empty` is set and a
+/// variable in it resolved to empty.
+fn interpolate_unless_empty(template: &str, req: &Request, skip_if_empty: bool) -> Option<String> {
+    let interpolated = interpolate(template, req);
+    if skip_if_empty && interpolated.has_empty_variable {
+        None
+    } else {
+        Some(interpolated.value)
+    }
 }
 
 /// Resolve the `$`-variable at the start of `s` (which begins with `$`),
@@ -328,6 +372,7 @@ fn transform_headers(
     headers: &mut BTreeMap<String, String>,
     config: &HeaderConfig,
     original: &Request,
+    skip_if_empty: bool,
 ) {
     for header_name in &config.remove {
         headers.remove(&header_name.to_lowercase());
@@ -340,16 +385,19 @@ fn transform_headers(
     }
 
     for (header_name, value_template) in &config.set {
-        headers
-            .entry(header_name.to_lowercase())
-            .or_insert_with(|| interpolate_value(value_template, original));
+        let name = header_name.to_lowercase();
+        if headers.contains_key(&name) {
+            continue;
+        }
+        if let Some(value) = interpolate_unless_empty(value_template, original, skip_if_empty) {
+            headers.insert(name, value);
+        }
     }
 
     for (header_name, value_template) in &config.add {
-        headers.insert(
-            header_name.to_lowercase(),
-            interpolate_value(value_template, original),
-        );
+        if let Some(value) = interpolate_unless_empty(value_template, original, skip_if_empty) {
+            headers.insert(header_name.to_lowercase(), value);
+        }
     }
 }
 
@@ -362,6 +410,7 @@ fn transform_query(
     query: &Option<String>,
     config: &QueryConfig,
     original: &Request,
+    skip_if_empty: bool,
 ) -> Option<String> {
     let mut params = parse_query_params(query);
 
@@ -378,7 +427,9 @@ fn transform_query(
     }
 
     for (param_name, value_template) in &config.add {
-        let value = interpolate_value(value_template, original);
+        let Some(value) = interpolate_unless_empty(value_template, original, skip_if_empty) else {
+            continue;
+        };
         params.retain(|(k, _)| k != param_name);
         params.push((param_name.clone(), value));
     }
@@ -464,6 +515,7 @@ fn transform_body(
     body: &Option<Vec<u8>>,
     config: &BodyConfig,
     original: &Request,
+    skip_if_empty: bool,
 ) -> Option<Vec<u8>> {
     let body_bytes = match body {
         Some(b) if !b.is_empty() => b,
@@ -534,7 +586,10 @@ fn transform_body(
     }
 
     for (pointer_str, value_template) in &config.add {
-        let interpolated = interpolate_value(value_template, original);
+        let Some(interpolated) = interpolate_unless_empty(value_template, original, skip_if_empty)
+        else {
+            continue;
+        };
         // When the value was interpolated from a variable ($query.page → "2"),
         // try to preserve the JSON type (number, bool). For literal config
         // values ("1.0" as a version string), keep as string.
@@ -602,6 +657,10 @@ mod mock_host {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn interpolate_value(template: &str, req: &Request) -> String {
+        interpolate(template, req).value
+    }
 
     fn create_test_request() -> Request {
         let mut headers = BTreeMap::new();
@@ -775,7 +834,7 @@ mod tests {
             .add
             .insert("x-client-ip".to_string(), "$client_ip".to_string());
 
-        transform_headers(&mut headers, &config, &req);
+        transform_headers(&mut headers, &config, &req, false);
 
         assert_eq!(headers.get("x-gateway"), Some(&"barbacane".to_string()));
         assert_eq!(headers.get("x-client-ip"), Some(&"192.168.1.1".to_string()));
@@ -792,7 +851,7 @@ mod tests {
             .add
             .insert("x-test".to_string(), "new-value".to_string());
 
-        transform_headers(&mut headers, &config, &req);
+        transform_headers(&mut headers, &config, &req, false);
 
         assert_eq!(headers.get("x-test"), Some(&"new-value".to_string()));
     }
@@ -808,7 +867,7 @@ mod tests {
             .set
             .insert("host".to_string(), "should-not-overwrite".to_string());
 
-        transform_headers(&mut headers, &config, &req);
+        transform_headers(&mut headers, &config, &req, false);
 
         assert_eq!(headers.get("x-new"), Some(&"value".to_string()));
         assert_eq!(headers.get("host"), Some(&"api.example.com".to_string()));
@@ -824,7 +883,7 @@ mod tests {
         config.remove.push("x-to-remove".to_string());
         config.remove.push("host".to_string());
 
-        transform_headers(&mut headers, &config, &req);
+        transform_headers(&mut headers, &config, &req, false);
 
         assert_eq!(headers.get("x-to-remove"), None);
         assert_eq!(headers.get("host"), None);
@@ -841,7 +900,7 @@ mod tests {
             .rename
             .insert("x-old-name".to_string(), "x-new-name".to_string());
 
-        transform_headers(&mut headers, &config, &req);
+        transform_headers(&mut headers, &config, &req, false);
 
         assert_eq!(headers.get("x-old-name"), None);
         assert_eq!(headers.get("x-new-name"), Some(&"value".to_string()));
@@ -863,7 +922,7 @@ mod tests {
             .add
             .insert("x-original-host".to_string(), "$header.host".to_string());
 
-        transform_headers(&mut headers, &config, &req);
+        transform_headers(&mut headers, &config, &req, false);
 
         assert_eq!(headers.get("x-user-id"), Some(&"123".to_string()));
         assert_eq!(headers.get("x-page"), Some(&"2".to_string()));
@@ -891,7 +950,7 @@ mod tests {
             .add
             .insert("x-add".to_string(), "add-value".to_string());
 
-        transform_headers(&mut headers, &config, &req);
+        transform_headers(&mut headers, &config, &req, false);
 
         assert_eq!(headers.get("host"), None);
         assert_eq!(headers.get("renamed"), Some(&"value".to_string()));
@@ -912,7 +971,7 @@ mod tests {
             .insert("new_param".to_string(), "new_value".to_string());
         config.add.insert("id".to_string(), "$path.id".to_string());
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         let result_str = result.expect("should have query string");
 
         assert!(result_str.contains("existing=value"));
@@ -928,7 +987,7 @@ mod tests {
         let mut config = QueryConfig::default();
         config.add.insert("page".to_string(), "5".to_string());
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         let result_str = result.expect("should have query string");
 
         assert!(result_str.contains("page=5"));
@@ -945,7 +1004,7 @@ mod tests {
         config.remove.push("filter".to_string());
         config.remove.push("nonexistent".to_string());
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         let result_str = result.expect("should have query string");
 
         assert!(result_str.contains("page=2"));
@@ -962,7 +1021,7 @@ mod tests {
         config.remove.push("page".to_string());
         config.remove.push("limit".to_string());
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         assert_eq!(result, None);
     }
 
@@ -976,7 +1035,7 @@ mod tests {
             .rename
             .insert("old_name".to_string(), "new_name".to_string());
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         let result_str = result.expect("should have query string");
 
         assert!(result_str.contains("new_name=value"));
@@ -993,7 +1052,7 @@ mod tests {
             .add
             .insert("new_param".to_string(), "value".to_string());
 
-        let result = transform_query(&None, &config, &req);
+        let result = transform_query(&None, &config, &req, false);
         assert_eq!(result, Some("new_param=value".to_string()));
     }
 
@@ -1010,7 +1069,7 @@ mod tests {
             .add
             .insert("client".to_string(), "$client_ip".to_string());
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         let result_str = result.expect("should have query string");
 
         assert!(result_str.contains("user_id=123"));
@@ -1032,7 +1091,7 @@ mod tests {
             .insert("to_overwrite".to_string(), "new".to_string());
         config.add.insert("added".to_string(), "value".to_string());
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         let result_str = result.expect("should have query string");
 
         assert!(!result_str.contains("to_remove"));
@@ -1048,7 +1107,7 @@ mod tests {
 
         let config = QueryConfig::default();
 
-        let result = transform_query(&query, &config, &req);
+        let result = transform_query(&query, &config, &req, false);
         let result_str = result.expect("should have query string");
 
         assert!(
@@ -1241,7 +1300,7 @@ mod tests {
             .add
             .insert("/gateway".to_string(), "barbacane".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1262,7 +1321,7 @@ mod tests {
             .add
             .insert("/metadata/version".to_string(), "1.0".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1287,7 +1346,7 @@ mod tests {
             .add
             .insert("/page".to_string(), "$query.page".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1305,7 +1364,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.remove.push("/password".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1322,7 +1381,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.remove.push("/metadata/internal".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1341,7 +1400,7 @@ mod tests {
             .rename
             .insert("/userName".to_string(), "/user_name".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1361,7 +1420,7 @@ mod tests {
             "/metadata/newName".to_string(),
         );
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1379,7 +1438,7 @@ mod tests {
             .rename
             .insert("/field".to_string(), "/field".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1398,7 +1457,7 @@ mod tests {
             .rename
             .insert("/items/0/oldKey".to_string(), "/items/0/newKey".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1423,7 +1482,7 @@ mod tests {
             .insert("/toOverwrite".to_string(), "new".to_string());
         config.add.insert("/added".to_string(), "value".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1441,7 +1500,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.add.insert("/field".to_string(), "value".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         assert_eq!(result, Some(b"not json".to_vec()));
     }
 
@@ -1453,7 +1512,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.add.insert("/field".to_string(), "value".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         assert_eq!(result, None);
     }
 
@@ -1465,7 +1524,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.remove.push("/nonexistent/deeply/nested".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         assert!(result.is_some());
     }
 
@@ -1479,7 +1538,7 @@ mod tests {
             .add
             .insert("/items/0/gateway".to_string(), "barbacane".to_string());
 
-        let result = transform_body(&body, &config, &req);
+        let result = transform_body(&body, &config, &req, false);
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -1536,6 +1595,7 @@ mod tests {
                 remove: vec![],
                 rename: BTreeMap::new(),
             }),
+            skip_if_empty: false,
             compiled_replace: None,
         };
 
@@ -1579,6 +1639,7 @@ mod tests {
                 }),
             }),
             body: None,
+            skip_if_empty: false,
             compiled_replace: None,
         };
 
@@ -1650,5 +1711,412 @@ mod tests {
         assert_eq!(h.set.get("x-default"), Some(&"value".to_string()));
         assert_eq!(h.remove, vec!["authorization"]);
         assert_eq!(h.rename.get("x-old"), Some(&"x-new".to_string()));
+    }
+
+    // -- skip_if_empty ------------------------------------------------------
+
+    /// A request with only the given headers (names lowercased, as the host
+    /// delivers them) and query string.
+    fn request_with(headers: &[(&str, &str)], query: Option<&str>) -> Request {
+        Request {
+            method: "GET".to_string(),
+            path: "/items".to_string(),
+            query: query.map(str::to_string),
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            body: None,
+            client_ip: "10.0.0.1".to_string(),
+            path_params: BTreeMap::new(),
+        }
+    }
+
+    fn has_empty(template: &str, req: &Request) -> bool {
+        interpolate(template, req).has_empty_variable
+    }
+
+    fn transformer(config: &str) -> RequestTransformer {
+        serde_json::from_str(config).expect("valid config")
+    }
+
+    fn headers_after(t: &mut RequestTransformer, req: Request) -> BTreeMap<String, String> {
+        match t.on_request(req) {
+            Action::Continue(r) => r.headers,
+            _ => panic!("request-transformer always continues"),
+        }
+    }
+
+    #[test]
+    fn test_empty_flag_literals_never_count() {
+        let req = request_with(&[], None);
+        assert!(!has_empty("static", &req));
+        assert!(!has_empty("", &req), "a literal empty value is intentional");
+        assert!(!has_empty("price: $5", &req), "`$5` is not a variable");
+        assert!(
+            !has_empty("$unknown.thing", &req),
+            "unknown variables stay literal"
+        );
+        assert!(!has_empty("Bearer $", &req), "a trailing `$` is literal");
+        assert!(!has_empty("$$", &req));
+    }
+
+    #[test]
+    fn test_empty_flag_missing_variables() {
+        let req = request_with(&[], None);
+        for template in [
+            "$cookie.sso_token",
+            "$header.x-user",
+            "$query.page",
+            "$path.id",
+            "Bearer $cookie.sso_token",
+        ] {
+            assert!(has_empty(template, &req), "{template} is missing");
+        }
+    }
+
+    #[test]
+    fn test_empty_flag_present_but_empty_values() {
+        let req = request_with(
+            &[("x-user", ""), ("cookie", "a=; b= ; c=\"\"")],
+            Some("page=&flag"),
+        );
+        assert!(
+            has_empty("$header.x-user", &req),
+            "header with an empty value"
+        );
+        assert!(has_empty("$cookie.a", &req), "cookie `a=`");
+        assert!(has_empty("$cookie.b", &req), "cookie value is trimmed");
+        assert!(has_empty("$cookie.c", &req), "quoted empty cookie");
+        assert!(has_empty("$query.page", &req), "`page=`");
+        assert!(has_empty("$query.flag", &req), "`flag` without `=`");
+    }
+
+    #[test]
+    fn test_empty_flag_values_that_are_not_empty() {
+        let req = request_with(
+            &[("cookie", "zero=0; space=\" \""), ("x-false", "false")],
+            Some("n=0"),
+        );
+        assert!(!has_empty("$cookie.zero", &req), "`0` is a value");
+        assert!(
+            !has_empty("$cookie.space", &req),
+            "a quoted space is a value"
+        );
+        assert!(!has_empty("$header.x-false", &req));
+        assert!(!has_empty("$query.n", &req));
+        assert!(!has_empty("$client_ip", &req));
+    }
+
+    #[test]
+    fn test_empty_flag_cookie_name_is_case_sensitive() {
+        let req = request_with(&[("cookie", "SSO_TOKEN=abc")], None);
+        assert!(has_empty("$cookie.sso_token", &req));
+        assert!(!has_empty("$cookie.SSO_TOKEN", &req));
+    }
+
+    #[test]
+    fn test_empty_flag_any_empty_variable_counts() {
+        let req = request_with(&[("cookie", "a=1")], None);
+        assert!(
+            has_empty("$cookie.a-$cookie.b", &req),
+            "one of two is empty"
+        );
+        assert!(has_empty("$cookie.b$cookie.a", &req), "adjacent variables");
+        assert!(!has_empty("$cookie.a/$cookie.a", &req));
+    }
+
+    #[test]
+    fn test_empty_flag_client_ip() {
+        let mut req = request_with(&[], None);
+        req.client_ip = String::new();
+        assert!(has_empty("$client_ip", &req));
+    }
+
+    #[test]
+    fn test_empty_flag_context() {
+        mock_host::reset();
+        mock_host::context_set("auth.sub", "user-42");
+        mock_host::context_set("auth.blank", "");
+        let req = request_with(&[], None);
+        assert!(!has_empty("context:auth.sub", &req));
+        assert!(has_empty("context:auth.blank", &req));
+        assert!(has_empty("context:missing", &req));
+        mock_host::reset();
+    }
+
+    /// Request headers in, and the `Authorization` the upstream receives.
+    type MatrixCase<'a> = (&'a [(&'a str, &'a str)], Option<&'a str>);
+
+    /// Bearer from a cookie: an incoming `Authorization` wins, the SSO cookie is
+    /// the fallback, and without either no header is sent.
+    #[test]
+    fn test_skip_if_empty_bearer_from_cookie_matrix() {
+        let config = r#"{
+            "skip_if_empty": true,
+            "headers": {"set": {"Authorization": "Bearer $cookie.sso_token"}}
+        }"#;
+        let cases: [MatrixCase; 7] = [
+            (&[], None),
+            (&[("authorization", "Bearer tok")], Some("Bearer tok")),
+            (
+                &[("authorization", "Bearer tok"), ("cookie", "sso_token=ck")],
+                Some("Bearer tok"),
+            ),
+            (&[("cookie", "sso_token=ck")], Some("Bearer ck")),
+            (&[("cookie", "sso_token=")], None),
+            (&[("cookie", "other=ck")], None),
+            (
+                &[("cookie", "other=x; sso_token=ck; last=y")],
+                Some("Bearer ck"),
+            ),
+        ];
+        for (headers, expected) in cases {
+            let mut t = transformer(config);
+            let out = headers_after(&mut t, request_with(headers, None));
+            assert_eq!(
+                out.get("authorization").map(String::as_str),
+                expected,
+                "headers in: {headers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_skip_if_empty_keeps_a_present_but_malformed_authorization() {
+        // `set` only fills an absent header, so an incoming value is kept
+        // whatever it is; replacing a malformed one needs a conditional.
+        let mut t = transformer(
+            r#"{"skip_if_empty": true,
+                "headers": {"set": {"Authorization": "Bearer $cookie.sso_token"}}}"#,
+        );
+        let out = headers_after(
+            &mut t,
+            request_with(
+                &[("authorization", "Bearer "), ("cookie", "sso_token=ck")],
+                None,
+            ),
+        );
+        assert_eq!(
+            out.get("authorization").map(String::as_str),
+            Some("Bearer ")
+        );
+    }
+
+    #[test]
+    fn test_skip_if_empty_off_keeps_writing_empty_values() {
+        let mut t =
+            transformer(r#"{"headers": {"set": {"Authorization": "Bearer $cookie.sso_token"}}}"#);
+        let out = headers_after(&mut t, request_with(&[], None));
+        assert_eq!(
+            out.get("authorization").map(String::as_str),
+            Some("Bearer ")
+        );
+
+        let mut t = transformer(
+            r#"{"skip_if_empty": false,
+                "headers": {"add": {"X-User": "$header.x-missing"}}}"#,
+        );
+        let out = headers_after(&mut t, request_with(&[], None));
+        assert_eq!(out.get("x-user").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn test_skip_if_empty_add_leaves_the_existing_header() {
+        let mut t = transformer(
+            r#"{"skip_if_empty": true,
+                "headers": {"add": {"X-User": "$header.x-source"}}}"#,
+        );
+        // The empty `add` neither overwrites nor removes what is there.
+        let out = headers_after(&mut t, request_with(&[("x-user", "kept")], None));
+        assert_eq!(out.get("x-user").map(String::as_str), Some("kept"));
+
+        let out = headers_after(&mut t, request_with(&[], None));
+        assert!(!out.contains_key("x-user"));
+
+        let out = headers_after(
+            &mut t,
+            request_with(&[("x-user", "old"), ("x-source", "new")], None),
+        );
+        assert_eq!(out.get("x-user").map(String::as_str), Some("new"));
+    }
+
+    #[test]
+    fn test_skip_if_empty_is_per_entry() {
+        let mut t = transformer(
+            r#"{"skip_if_empty": true,
+                "headers": {
+                    "set": {"X-Has": "$cookie.a", "X-Missing": "$cookie.b", "X-Literal": "static"},
+                    "add": {"X-Empty-Literal": ""}
+                }}"#,
+        );
+        let out = headers_after(&mut t, request_with(&[("cookie", "a=1")], None));
+        assert_eq!(out.get("x-has").map(String::as_str), Some("1"));
+        assert!(!out.contains_key("x-missing"));
+        assert_eq!(out.get("x-literal").map(String::as_str), Some("static"));
+        assert_eq!(
+            out.get("x-empty-literal").map(String::as_str),
+            Some(""),
+            "a literal empty value is written"
+        );
+    }
+
+    #[test]
+    fn test_skip_if_empty_after_remove_leaves_the_header_absent() {
+        // remove runs before set, and variables read the original request, so
+        // removing a header and setting it from an empty variable drops it.
+        let mut t = transformer(
+            r#"{"skip_if_empty": true,
+                "headers": {
+                    "remove": ["Authorization"],
+                    "set": {"Authorization": "Bearer $cookie.sso_token"}
+                }}"#,
+        );
+        let out = headers_after(
+            &mut t,
+            request_with(&[("authorization", "Bearer old")], None),
+        );
+        assert!(!out.contains_key("authorization"));
+
+        let out = headers_after(
+            &mut t,
+            request_with(
+                &[("authorization", "Bearer old"), ("cookie", "sso_token=ck")],
+                None,
+            ),
+        );
+        assert_eq!(
+            out.get("authorization").map(String::as_str),
+            Some("Bearer ck")
+        );
+    }
+
+    #[test]
+    fn test_skip_if_empty_reads_the_original_request_after_rename() {
+        // `$header.x-token` resolves against the original request, so it still
+        // finds the header that rename moved away.
+        let mut t = transformer(
+            r#"{"skip_if_empty": true,
+                "headers": {
+                    "rename": {"X-Token": "X-Moved"},
+                    "set": {"Authorization": "Bearer $header.x-token"}
+                }}"#,
+        );
+        let out = headers_after(&mut t, request_with(&[("x-token", "abc")], None));
+        assert_eq!(out.get("x-moved").map(String::as_str), Some("abc"));
+        assert_eq!(
+            out.get("authorization").map(String::as_str),
+            Some("Bearer abc")
+        );
+    }
+
+    #[test]
+    fn test_skip_if_empty_set_name_is_case_insensitive() {
+        let mut t = transformer(
+            r#"{"skip_if_empty": true,
+                "headers": {"set": {"AUTHORIZATION": "Bearer $cookie.sso_token"}}}"#,
+        );
+        let out = headers_after(
+            &mut t,
+            request_with(
+                &[("authorization", "Bearer tok"), ("cookie", "sso_token=ck")],
+                None,
+            ),
+        );
+        assert_eq!(
+            out.get("authorization").map(String::as_str),
+            Some("Bearer tok")
+        );
+        assert_eq!(out.len(), 2, "no second, differently cased header");
+    }
+
+    #[test]
+    fn test_skip_if_empty_query_add() {
+        let req = request_with(&[], Some("tenant=keep&page=2"));
+        let config = QueryConfig {
+            add: [
+                ("tenant".to_string(), "$header.x-tenant".to_string()),
+                ("size".to_string(), "$query.page".to_string()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+
+        let skipped = transform_query(&req.query, &config, &req, true).expect("query");
+        let params = parse_query_params(&Some(skipped));
+        assert!(
+            params.contains(&("tenant".to_string(), "keep".to_string())),
+            "not removed"
+        );
+        assert!(params.contains(&("size".to_string(), "2".to_string())));
+
+        let written = transform_query(&req.query, &config, &req, false).expect("query");
+        let params = parse_query_params(&Some(written));
+        assert!(params.contains(&("tenant".to_string(), String::new())));
+    }
+
+    #[test]
+    fn test_skip_if_empty_query_add_to_an_absent_query() {
+        let req = request_with(&[], None);
+        let config = QueryConfig {
+            add: [("tenant".to_string(), "$header.x-tenant".to_string())].into(),
+            ..Default::default()
+        };
+        assert_eq!(transform_query(&None, &config, &req, true), None);
+        assert_eq!(
+            transform_query(&None, &config, &req, false).as_deref(),
+            Some("tenant=")
+        );
+    }
+
+    #[test]
+    fn test_skip_if_empty_body_add() {
+        let req = request_with(&[("cookie", "a=1")], Some("page=3"));
+        let body = Some(br#"{"user":"kept"}"#.to_vec());
+        let config = BodyConfig {
+            add: [
+                ("/user".to_string(), "$header.x-user".to_string()),
+                ("/missing".to_string(), "$cookie.b".to_string()),
+                ("/page".to_string(), "$query.page".to_string()),
+                ("/source".to_string(), "gateway".to_string()),
+            ]
+            .into(),
+            ..Default::default()
+        };
+
+        let skipped = transform_body(&body, &config, &req, true).expect("body");
+        let json: Value = serde_json::from_slice(&skipped).expect("json");
+        assert_eq!(json["user"], "kept", "the existing field is untouched");
+        assert!(json.get("missing").is_none());
+        assert_eq!(json["page"], 3);
+        assert_eq!(json["source"], "gateway");
+
+        let written = transform_body(&body, &config, &req, false).expect("body");
+        let json: Value = serde_json::from_slice(&written).expect("json");
+        assert_eq!(json["user"], "");
+        assert_eq!(json["missing"], "");
+    }
+
+    #[test]
+    fn test_skip_if_empty_body_add_embedded_variable() {
+        let req = request_with(&[], None);
+        let body = Some(br#"{}"#.to_vec());
+        let config = BodyConfig {
+            add: [("/auth".to_string(), "Bearer $cookie.sso_token".to_string())].into(),
+            ..Default::default()
+        };
+        let skipped = transform_body(&body, &config, &req, true).expect("body");
+        assert_eq!(skipped, b"{}");
+    }
+
+    #[test]
+    fn test_skip_if_empty_config() {
+        assert!(!transformer("{}").skip_if_empty, "off by default");
+        assert!(transformer(r#"{"skip_if_empty": true}"#).skip_if_empty);
+        assert!(!transformer(r#"{"skip_if_empty": false}"#).skip_if_empty);
+        assert!(
+            serde_json::from_str::<RequestTransformer>(r#"{"skip_if_empty": "yes"}"#).is_err(),
+            "only a boolean"
+        );
     }
 }

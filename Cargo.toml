@@ -21,9 +21,9 @@ resolver = "2"
 [workspace.package]
 version = "0.12.2"
 edition = "2021"
-# Minimum supported Rust version, set by the dependency floor: wasmtime 47
-# requires rustc 1.94. Enforced by the `msrv` CI job.
-rust-version = "1.94"
+# Minimum supported Rust version, set by the dependency floor: wasmtime 48
+# requires rustc 1.95. Enforced by the `msrv` CI job.
+rust-version = "1.95"
 license = "AGPL-3.0-only"
 repository = "https://github.com/barbacane-dev/Barbacane"
 homepage = "https://github.com/barbacane-dev/Barbacane"
@@ -105,8 +105,8 @@ jsonschema = "0.26"
 parapet = { package = "barbacane-waf", version = "0.1.1", features = ["serde"] }
 
 # WASM runtime
-wasmtime = { version = "47", features = ["cranelift", "pooling-allocator"] }
-wasmtime-wasi = { version = "47" }
+wasmtime = { version = "48", features = ["cranelift", "pooling-allocator"] }
+wasmtime-wasi = { version = "48" }
 
 # Plugin manifest
 toml = "0.8"
