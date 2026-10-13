@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
 
+### Fixed
+
+- **AsyncAPI**: an operation's `summary` and `description` are read. Both were dropped for every AsyncAPI operation, so an MCP tool generated from one had no description, and `E1061` warned that an MCP-enabled operation had neither while the document gave one.
+
 ## [0.12.3] - 2026-10-13
 
 Wasmtime moves to 48.0.5 for five advisories. Two reach the gateway: a plugin could run past its fuel budget, or corrupt the GC heap using GC references and exceptions. A response to a request carrying `Authorization` is no longer cached unless the upstream allows a shared cache to reuse it, and responses `rate-limit` lets through now carry the documented `X-RateLimit-*` headers. A plugin configuration with an unknown key inside a nested object, such as `request-transformer`'s `headers`, now fails compilation with `E1023` instead of being ignored, so a spec that compiled under 0.12.2 can be refused: compile yours before upgrading a running gateway. The MSRV is 1.95. No artifact change: 0.12.x artifacts load as they are.
