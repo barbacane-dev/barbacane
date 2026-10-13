@@ -444,7 +444,7 @@ impl ProjectManifest {
 
     /// Parse a manifest from YAML content.
     pub fn parse(content: &str, path: &Path) -> Result<Self, CompileError> {
-        serde_yaml::from_str(content).map_err(|e| {
+        yaml_serde::from_str(content).map_err(|e| {
             CompileError::ManifestError(format!("failed to parse {}: {}", path.display(), e))
         })
     }

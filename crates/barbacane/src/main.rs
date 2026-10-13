@@ -114,7 +114,7 @@ enum SpecType {
 /// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
 fn detect_spec_type(content: &str) -> SpecType {
     // Try to parse as YAML (also handles JSON)
-    let parsed: Result<serde_json::Value, _> = serde_yaml::from_str(content);
+    let parsed: Result<serde_json::Value, _> = yaml_serde::from_str(content);
     match parsed {
         Ok(value) => {
             if value.get("openapi").is_some() {
@@ -152,7 +152,7 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
     let mut titles = Vec::new();
 
     for (filename, content) in specs {
-        let parsed: Option<serde_json::Value> = serde_yaml::from_str(content).ok();
+        let parsed: Option<serde_json::Value> = yaml_serde::from_str(content).ok();
         if let Some(mut spec) = parsed {
             // Strip barbacane extensions
             strip_barbacane_keys_recursive(&mut spec);
@@ -289,7 +289,7 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
     let mut titles = Vec::new();
 
     for (filename, content) in specs {
-        let parsed: Option<serde_json::Value> = serde_yaml::from_str(content).ok();
+        let parsed: Option<serde_json::Value> = yaml_serde::from_str(content).ok();
         if let Some(mut spec) = parsed {
             // Strip barbacane extensions
             strip_barbacane_keys_recursive(&mut spec);
@@ -2853,7 +2853,7 @@ impl Gateway {
             )
         } else {
             (
-                serde_yaml::to_string(value).unwrap_or_default(),
+                yaml_serde::to_string(value).unwrap_or_default(),
                 "text/yaml",
             )
         };
@@ -2874,7 +2874,7 @@ impl Gateway {
             let parsed: Option<serde_json::Value> = if is_source_json {
                 serde_json::from_str(content).ok()
             } else {
-                serde_yaml::from_str(content).ok()
+                yaml_serde::from_str(content).ok()
             };
 
             match parsed {
