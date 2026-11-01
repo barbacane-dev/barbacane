@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
 
+### Security
+
+- **wasm runtime**: Wasmtime is upgraded from 48.0.5 to 48.0.8. RUSTSEC-2026-0379: on aarch64, Cranelift compiled a large `br_table` so that a plugin could make the host jump to arbitrary code; the `linux/arm64` images and the aarch64 binaries were exposed to any plugin they loaded. RUSTSEC-2026-0364 (exception tags left host data unaligned) and RUSTSEC-2026-0359 (stack overflow dropping a long chain of recursive GC types) concern features the gateway leaves on, exceptions and GC. The other advisories fixed by these releases are in the component model, which the gateway does not load, or need `i31`/`nullref` arguments on host-to-guest calls, which it does not make.
+- **TLS**: rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11. They fix `Debug` output exposing session secrets, unauthenticated ServerHello downgrading later connections to classical key exchange, up to 1 GiB allocated for Brotli certificate decompression before authentication, data sent to the outer server after an ECH rejection, and certificate verification accepting distrusted intermediates (RUSTSEC-2026-0346 to -0349, -0381, -0382).
+- **tokio**: 1.54.1, for `AsyncFd` constructors violating I/O safety (RUSTSEC-2026-0386).
+- **zstd**: zstd-sys 2.1.2 (RUSTSEC-2026-0410). RUSTSEC-2026-0391, -0398 and -0403, in zstd 0.13 and zstd-safe 7, are ignored in `deny.toml`: rskafka and Wasmtime's cache still require zstd 0.13, and the gateway reaches none of the affected code (Kafka records are produced uncompressed and never consumed, the Wasmtime cache is off, and zstd-safe is built without `seekable`).
+- **tests**: p256 0.14 in the test crate, so crypto-bigint 0.7 replaces 0.5 (RUSTSEC-2026-0387). The gateway does not use it.
+
 ## [0.12.3] - 2026-10-13
 
 Wasmtime moves to 48.0.5 for five advisories. Two reach the gateway: a plugin could run past its fuel budget, or corrupt the GC heap using GC references and exceptions. A response to a request carrying `Authorization` is no longer cached unless the upstream allows a shared cache to reuse it, and responses `rate-limit` lets through now carry the documented `X-RateLimit-*` headers. A plugin configuration with an unknown key inside a nested object, such as `request-transformer`'s `headers`, now fails compilation with `E1023` instead of being ignored, so a spec that compiled under 0.12.2 can be refused: compile yours before upgrading a running gateway. The MSRV is 1.95. No artifact change: 0.12.x artifacts load as they are.
