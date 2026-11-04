@@ -23,7 +23,7 @@ base64 = { workspace = true }
 # ES256 signing of test JWTs. The jwt-auth plugin enforces real signatures in
 # the production WASM (skip_signature_validation is honored only under cfg(test)
 # of the plugin's own unit tests), so integration tests must sign properly.
-p256 = { version = "0.13", features = ["ecdsa"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
 wiremock = "0.6"
 barbacane-sigv4 = { workspace = true }
 sha2 = { workspace = true }
