@@ -10,6 +10,14 @@ ignore = [
 
     # instant crate unmaintained — pinned by notify 7.x (transitive via notify-types), no safe upgrade
     "RUSTSEC-2024-0384",
+
+    # zstd 0.13 and zstd-safe 7, required by rskafka 0.6 and wasmtime's cache; no release of
+    # either requires zstd 0.14 yet. Unreachable: Kafka records are produced with
+    # Compression::NoCompression and never consumed, the wasmtime cache is not enabled, and
+    # zstd-safe is built without the `seekable` feature.
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
 ]
 
 [licenses]
