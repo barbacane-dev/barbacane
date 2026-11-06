@@ -181,12 +181,33 @@ fn is_openapi_30(root: &Value) -> bool {
         .is_some_and(|v| v.starts_with("3.0"))
 }
 
+/// `true` when keywords beside a schema's `$ref` apply, as in JSON Schema
+/// 2020-12 (OpenAPI 3.1 and later). OpenAPI 3.0 and AsyncAPI ignore them.
+fn ref_siblings_apply(root: &Value) -> bool {
+    root.get("openapi")
+        .and_then(Value::as_str)
+        .is_some_and(|v| !v.starts_with("3.0"))
+}
+
+/// Keywords whose value is instance data, never a schema.
+const INSTANCE_KEYWORDS: [&str; 5] = ["const", "default", "enum", "example", "examples"];
+
+/// Keywords whose value maps names to schemas, so its keys are not keywords.
+const SCHEMA_MAP_KEYWORDS: [&str; 5] = [
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "dependencies",
+    "definitions",
+];
+
 /// Resolve a schema's `$ref` pointers into a self-contained schema.
 ///
 /// Every referenced definition is carried in `$defs` and pointed at, so the
 /// schema resolves against itself once it is separated from the document.
 fn resolve_schema(value: &Value, root: &Value, defs: &mut SchemaDefs) -> Result<Value, ParseError> {
-    let mut resolved = resolve_schema_refs(value, root, defs, &BTreeMap::new())?;
+    let siblings = ref_siblings_apply(root);
+    let mut resolved = resolve_schema_refs(value, root, defs, &BTreeMap::new(), siblings)?;
     if is_openapi_30(root) {
         convert_draft4_exclusive_bounds(&mut resolved);
     }
@@ -229,78 +250,69 @@ fn resolve_schema_refs(
     root: &Value,
     defs: &mut SchemaDefs,
     scope: &BTreeMap<String, String>,
+    siblings: bool,
 ) -> Result<Value, ParseError> {
     match value {
         Value::Object(obj) => {
-            if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
-                // A pointer into definitions the source schema declared. Those
-                // are hoisted and renamed, so it points at the new name.
-                // Only the first token names the definition. Anything after it
-                // addresses a place inside that definition and is carried over
-                // unchanged, so a pointer such as `#/$defs/Money/properties/amount`
-                // follows the definition to its new name instead of resolving
-                // against whichever definition kept the old one.
-                if let Some(suffix) = ref_str.strip_prefix("#/$defs/") {
-                    let (first, rest) = match suffix.split_once('/') {
-                        Some((first, rest)) => (first, Some(rest)),
-                        None => (suffix, None),
-                    };
-                    return Ok(match scope.get(&pointer_unescape(first)) {
-                        Some(hoisted) => {
-                            let mut pointer = format!("#/$defs/{}", pointer_escape(hoisted));
-                            if let Some(rest) = rest {
-                                pointer.push('/');
-                                pointer.push_str(rest);
-                            }
-                            pointer_ref(&pointer)
-                        }
-                        None => value.clone(),
-                    });
+            let pointer = match obj.get("$ref").and_then(|v| v.as_str()) {
+                Some(ref_str) => Some(rewrite_ref(ref_str, root, defs, scope, siblings)?),
+                None => None,
+            };
+            if let Some(pointer) = &pointer {
+                if !siblings || obj.len() == 1 {
+                    return Ok(pointer_ref(pointer));
                 }
-                // An already-known pointer needs no second resolution, which is
-                // also what stops a cycle: the body is in flight above us.
-                if let Some(name) = defs.names.get(ref_str).cloned() {
-                    return Ok(local_ref(&name));
-                }
-                let name = defs.name_for(ref_str);
-                let target = resolve_ref(root, ref_str)
-                    .ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
-                let resolved = resolve_schema_refs(target, root, defs, scope)?;
-                defs.bodies.insert(name.clone(), Some(resolved));
-                Ok(local_ref(&name))
-            } else {
-                // Definitions the schema declares itself are lifted to the one
-                // set the schema ends up carrying, under a name reserved there,
-                // so a pointer at them still resolves once the schema is
-                // detached from its document.
-                let mut scope = scope.clone();
-                if let Some(Value::Object(local_defs)) = obj.get("$defs") {
-                    for name in local_defs.keys() {
-                        let hoisted = defs.reserve(name);
-                        scope.insert(name.clone(), hoisted);
-                    }
-                    for (name, body) in local_defs {
-                        let hoisted = scope.get(name).cloned().unwrap_or_else(|| name.clone());
-                        let resolved = resolve_schema_refs(body, root, defs, &scope)?;
-                        defs.bodies.insert(hoisted, Some(resolved));
-                    }
-                }
-
-                let mut new_obj = serde_json::Map::with_capacity(obj.len());
-                for (key, val) in obj {
-                    // Its definitions now live in the schema's own set.
-                    if key == "$defs" {
-                        continue;
-                    }
-                    new_obj.insert(key.clone(), resolve_schema_refs(val, root, defs, &scope)?);
-                }
-                Ok(Value::Object(new_obj))
             }
+
+            // Definitions the schema declares itself are lifted to the one
+            // set the schema ends up carrying, under a name reserved there,
+            // so a pointer at them still resolves once the schema is
+            // detached from its document.
+            let mut scope = scope.clone();
+            if let Some(Value::Object(local_defs)) = obj.get("$defs") {
+                for name in local_defs.keys() {
+                    let hoisted = defs.reserve(name);
+                    scope.insert(name.clone(), hoisted);
+                }
+                for (name, body) in local_defs {
+                    let hoisted = scope.get(name).cloned().unwrap_or_else(|| name.clone());
+                    let resolved = resolve_schema_refs(body, root, defs, &scope, siblings)?;
+                    defs.bodies.insert(hoisted, Some(resolved));
+                }
+            }
+
+            let mut new_obj = serde_json::Map::with_capacity(obj.len());
+            for (key, val) in obj {
+                let resolved = match key.as_str() {
+                    // Its definitions now live in the schema's own set.
+                    "$defs" => continue,
+                    "$ref" => match &pointer {
+                        Some(pointer) => Value::String(pointer.clone()),
+                        None => val.clone(),
+                    },
+                    k if INSTANCE_KEYWORDS.contains(&k) => val.clone(),
+                    k if SCHEMA_MAP_KEYWORDS.contains(&k) => match val {
+                        Value::Object(schemas) => {
+                            let mut map = serde_json::Map::with_capacity(schemas.len());
+                            for (name, schema) in schemas {
+                                let schema =
+                                    resolve_schema_refs(schema, root, defs, &scope, siblings)?;
+                                map.insert(name.clone(), schema);
+                            }
+                            Value::Object(map)
+                        }
+                        other => resolve_schema_refs(other, root, defs, &scope, siblings)?,
+                    },
+                    _ => resolve_schema_refs(val, root, defs, &scope, siblings)?,
+                };
+                new_obj.insert(key.clone(), resolved);
+            }
+            Ok(Value::Object(new_obj))
         }
         Value::Array(arr) => {
             let items: Result<Vec<_>, _> = arr
                 .iter()
-                .map(|v| resolve_schema_refs(v, root, defs, scope))
+                .map(|v| resolve_schema_refs(v, root, defs, scope, siblings))
                 .collect();
             Ok(Value::Array(items?))
         }
@@ -308,9 +320,55 @@ fn resolve_schema_refs(
     }
 }
 
-/// A reference to a definition carried by the schema itself.
-fn local_ref(name: &str) -> Value {
-    pointer_ref(&format!("#/$defs/{}", pointer_escape(name)))
+/// The pointer a schema's `$ref` becomes once the schema is detached from its
+/// document.
+fn rewrite_ref(
+    ref_str: &str,
+    root: &Value,
+    defs: &mut SchemaDefs,
+    scope: &BTreeMap<String, String>,
+    siblings: bool,
+) -> Result<String, ParseError> {
+    // A pointer into definitions the source schema declared. Those
+    // are hoisted and renamed, so it points at the new name.
+    // Only the first token names the definition. Anything after it
+    // addresses a place inside that definition and is carried over
+    // unchanged, so a pointer such as `#/$defs/Money/properties/amount`
+    // follows the definition to its new name instead of resolving
+    // against whichever definition kept the old one.
+    if let Some(suffix) = ref_str.strip_prefix("#/$defs/") {
+        let (first, rest) = match suffix.split_once('/') {
+            Some((first, rest)) => (first, Some(rest)),
+            None => (suffix, None),
+        };
+        return Ok(match scope.get(&pointer_unescape(first)) {
+            Some(hoisted) => {
+                let mut pointer = format!("#/$defs/{}", pointer_escape(hoisted));
+                if let Some(rest) = rest {
+                    pointer.push('/');
+                    pointer.push_str(rest);
+                }
+                pointer
+            }
+            None => ref_str.to_string(),
+        });
+    }
+    // An already-known pointer needs no second resolution, which is
+    // also what stops a cycle: the body is in flight above us.
+    if let Some(name) = defs.names.get(ref_str).cloned() {
+        return Ok(local_pointer(&name));
+    }
+    let name = defs.name_for(ref_str);
+    let target =
+        resolve_ref(root, ref_str).ok_or_else(|| ParseError::UnresolvedRef(ref_str.to_string()))?;
+    let resolved = resolve_schema_refs(target, root, defs, scope, siblings)?;
+    defs.bodies.insert(name.clone(), Some(resolved));
+    Ok(local_pointer(&name))
+}
+
+/// A pointer to a definition carried by the schema itself.
+fn local_pointer(name: &str) -> String {
+    format!("#/$defs/{}", pointer_escape(name))
 }
 
 /// A `$ref` node holding `pointer`.
@@ -943,7 +1001,13 @@ fn parse_request_body(
     spec_root: &Value,
     defs: &mut SchemaDefs,
 ) -> Result<Option<RequestBody>, ParseError> {
-    let Some(body) = obj.get("requestBody").and_then(|v| v.as_object()) else {
+    let Some(body) = obj.get("requestBody") else {
+        return Ok(None);
+    };
+    let mut visited = HashSet::new();
+    let Some(body) =
+        resolve_component_ref(body, spec_root, &mut visited)?.and_then(Value::as_object)
+    else {
         return Ok(None);
     };
 
@@ -1408,9 +1472,11 @@ fn build_channel_lookup(
     };
 
     for (name, channel_value) in channels {
-        let channel_obj = match channel_value.as_object() {
-            Some(o) => o,
-            None => continue,
+        let mut visited = HashSet::new();
+        let Some(channel_obj) = resolve_component_ref(channel_value, spec_root, &mut visited)?
+            .and_then(Value::as_object)
+        else {
+            continue;
         };
 
         // Extract address (defaults to channel name if not specified)
@@ -1456,38 +1522,54 @@ fn parse_channel_messages(
 
     let mut messages = Vec::with_capacity(messages_obj.len());
     for (name, msg_value) in messages_obj {
-        let Some(msg_obj) = msg_value.as_object() else {
-            continue;
-        };
-
-        let payload = msg_obj
-            .get("payload")
-            .map(|p| resolve_schema(p, spec_root, defs))
-            .transpose()?;
-
-        let content_type = msg_obj
-            .get("contentType")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let bindings = msg_obj
-            .get("bindings")
-            .and_then(|v| v.as_object())
-            .map(|b| {
-                b.iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
-
-        messages.push(Message {
-            name: name.clone(),
-            payload,
-            content_type,
-            bindings,
-        });
+        if let Some(message) = parse_message(name.clone(), msg_value, spec_root, defs)? {
+            messages.push(message);
+        }
     }
     Ok(messages)
+}
+
+/// Parse one message, following a Reference Object to the message it names.
+/// Returns `None` for an entry that is not an object.
+fn parse_message(
+    name: String,
+    value: &Value,
+    spec_root: &Value,
+    defs: &mut SchemaDefs,
+) -> Result<Option<Message>, ParseError> {
+    let mut visited = HashSet::new();
+    let Some(msg_obj) =
+        resolve_component_ref(value, spec_root, &mut visited)?.and_then(Value::as_object)
+    else {
+        return Ok(None);
+    };
+
+    let payload = msg_obj
+        .get("payload")
+        .map(|p| resolve_schema(p, spec_root, defs))
+        .transpose()?;
+
+    let content_type = msg_obj
+        .get("contentType")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let bindings = msg_obj
+        .get("bindings")
+        .and_then(|v| v.as_object())
+        .map(|b| {
+            b.iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    Ok(Some(Message {
+        name,
+        payload,
+        content_type,
+        bindings,
+    }))
 }
 
 /// Parse parameters from a channel definition (for templated addresses).
@@ -1503,12 +1585,16 @@ fn parse_channel_parameters(
 
     let mut result = Vec::with_capacity(params.len());
     for (name, param_value) in params {
-        let raw_schema = param_value
-            .as_object()
-            .and_then(|o| o.get("schema").cloned());
-        let schema = raw_schema
-            .map(|s| resolve_schema(&s, spec_root, defs))
-            .transpose()?;
+        let mut visited = HashSet::new();
+        let param =
+            resolve_component_ref(param_value, spec_root, &mut visited)?.and_then(Value::as_object);
+        // AsyncAPI 3 restricts a parameter with `enum`; 2.x gave it a `schema`.
+        let schema = match param.and_then(|p| p.get("schema")) {
+            Some(s) => Some(resolve_schema(s, spec_root, defs)?),
+            None => param
+                .and_then(|p| p.get("enum"))
+                .map(|values| serde_json::json!({ "type": "string", "enum": values })),
+        };
 
         // In AsyncAPI, channel parameters are always required
         result.push(Parameter {
@@ -1596,50 +1682,19 @@ fn parse_operation_messages(
         let Some(obj) = msg.as_object() else {
             continue;
         };
-
-        if let Some(ref_str) = obj.get("$ref").and_then(|v| v.as_str()) {
-            // Reference to channel message
-            // Format: "#/channels/channelName/messages/messageName"
-            let parts: Vec<&str> = ref_str.split('/').collect();
-            if parts.len() >= 5 && parts[3] == "messages" {
-                let msg_name = parts[4];
-                if let Some(m) = channel_messages.iter().find(|m| m.name == msg_name) {
-                    result.push(m.clone());
-                }
-            }
-            continue;
+        // A reference, usually `#/channels/<channel>/messages/<message>`, is
+        // named after its last token; an inline message after its `name`.
+        let name = match obj.get("$ref").and_then(|v| v.as_str()) {
+            Some(ref_str) => pointer_unescape(ref_str.rsplit('/').next().unwrap_or_default()),
+            None => obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string(),
+        };
+        if let Some(message) = parse_message(name, msg, spec_root, defs)? {
+            result.push(message);
         }
-
-        // Inline message definition
-        let name = obj
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string();
-        let payload = obj
-            .get("payload")
-            .map(|p| resolve_schema(p, spec_root, defs))
-            .transpose()?;
-        let content_type = obj
-            .get("contentType")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let bindings = obj
-            .get("bindings")
-            .and_then(|v| v.as_object())
-            .map(|b| {
-                b.iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
-
-        result.push(Message {
-            name,
-            payload,
-            content_type,
-            bindings,
-        });
     }
     Ok(result)
 }
@@ -4549,5 +4604,342 @@ paths:
         // header allowlist depends on.
         let post = by("/orders", "POST");
         assert_eq!(loc(post, "cookie"), 1);
+    }
+}
+
+/// A Reference Object stands for the object it names: the policy that object
+/// declares is enforced as if it were written inline.
+#[cfg(test)]
+mod reference_objects {
+    use super::*;
+    use serde_json::json;
+
+    /// Whether the request-body schema of the operation at `path` accepts `body`.
+    fn body_accepts(spec: &ApiSpec, path: &str, body: Value) -> bool {
+        let op = spec
+            .operations
+            .iter()
+            .find(|op| op.path == path)
+            .unwrap_or_else(|| panic!("an operation at {path}"));
+        let request_body = op.request_body.as_ref().expect("a request body");
+        let (_, content) = request_body.content.iter().next().expect("a media type");
+        let schema = spec.self_contained(content.schema.as_ref().expect("a schema"));
+        jsonschema::options()
+            .build(&schema)
+            .expect("the schema compiles")
+            .is_valid(&body)
+    }
+
+    fn openapi_with_status_beside_ref(version: &str) -> String {
+        format!(
+            r##"
+openapi: "{version}"
+info: {{ title: Test, version: "1.0.0" }}
+components:
+  schemas:
+    Status: {{ type: string }}
+paths:
+  /orders:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  $ref: "#/components/schemas/Status"
+                  enum: [open, closed]
+      x-barbacane-dispatch: {{ name: mock }}
+      responses:
+        "200": {{ description: ok }}
+"##
+        )
+    }
+
+    #[test]
+    fn a_keyword_beside_a_ref_applies_in_openapi_31() {
+        for version in ["3.1.0", "3.2.0"] {
+            let spec = parse_spec(&openapi_with_status_beside_ref(version)).expect("parses");
+            assert!(body_accepts(&spec, "/orders", json!({ "status": "open" })));
+            assert!(
+                !body_accepts(&spec, "/orders", json!({ "status": "deleted" })),
+                "{version}: the enum beside the $ref is enforced"
+            );
+            assert!(!body_accepts(&spec, "/orders", json!({ "status": 1 })));
+        }
+    }
+
+    /// OpenAPI 3.0 says a Reference Object's other properties are ignored.
+    #[test]
+    fn a_keyword_beside_a_ref_is_ignored_in_openapi_30() {
+        let spec = parse_spec(&openapi_with_status_beside_ref("3.0.3")).expect("parses");
+        assert!(body_accepts(
+            &spec,
+            "/orders",
+            json!({ "status": "deleted" })
+        ));
+        assert!(!body_accepts(&spec, "/orders", json!({ "status": 1 })));
+    }
+
+    #[test]
+    fn instance_data_holding_a_ref_key_is_not_resolved() {
+        let yaml = r##"
+openapi: "3.1.0"
+info: { title: Test, version: "1.0.0" }
+paths:
+  /pointers:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              const: { $ref: "#/components/schemas/Missing" }
+              default: { $ref: "#/nowhere" }
+              examples: [{ $ref: "#/nowhere" }]
+      x-barbacane-dispatch: { name: mock }
+      responses:
+        "200": { description: ok }
+"##;
+        let spec = parse_spec(yaml).expect("instance data is not a schema");
+        assert!(body_accepts(
+            &spec,
+            "/pointers",
+            json!({ "$ref": "#/components/schemas/Missing" })
+        ));
+        assert!(!body_accepts(
+            &spec,
+            "/pointers",
+            json!({ "$ref": "#/$defs/Missing" })
+        ));
+    }
+
+    #[test]
+    fn a_property_named_like_a_keyword_is_still_a_schema() {
+        let yaml = r##"
+openapi: "3.1.0"
+info: { title: Test, version: "1.0.0" }
+components:
+  schemas:
+    Choice: { type: string, maxLength: 3 }
+paths:
+  /forms:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enum: { $ref: "#/components/schemas/Choice" }
+                default: { $ref: "#/components/schemas/Choice" }
+      x-barbacane-dispatch: { name: mock }
+      responses:
+        "200": { description: ok }
+"##;
+        let spec = parse_spec(yaml).expect("parses");
+        assert!(body_accepts(
+            &spec,
+            "/forms",
+            json!({ "enum": "a", "default": "b" })
+        ));
+        assert!(!body_accepts(&spec, "/forms", json!({ "enum": "toolong" })));
+        assert!(!body_accepts(
+            &spec,
+            "/forms",
+            json!({ "default": "toolong" })
+        ));
+    }
+
+    #[test]
+    fn a_request_body_ref_is_resolved() {
+        let yaml = r##"
+openapi: "3.1.0"
+info: { title: Test, version: "1.0.0" }
+components:
+  requestBodies:
+    CreateUser:
+      $ref: "#/components/requestBodies/CreateUserBody"
+    CreateUserBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name]
+            properties: { name: { type: string } }
+paths:
+  /users:
+    post:
+      requestBody:
+        $ref: "#/components/requestBodies/CreateUser"
+      x-barbacane-dispatch: { name: mock }
+      responses:
+        "200": { description: ok }
+"##;
+        let spec = parse_spec(yaml).expect("parses");
+        let body = spec.operations[0]
+            .request_body
+            .as_ref()
+            .expect("a request body");
+        assert!(body.required);
+        assert!(body_accepts(&spec, "/users", json!({ "name": "ada" })));
+        assert!(!body_accepts(&spec, "/users", json!({})));
+    }
+
+    #[test]
+    fn a_request_body_ref_that_does_not_resolve_is_an_error() {
+        let yaml = r##"
+openapi: "3.1.0"
+info: { title: Test, version: "1.0.0" }
+paths:
+  /users:
+    post:
+      requestBody:
+        $ref: "#/components/requestBodies/Missing"
+      x-barbacane-dispatch: { name: mock }
+      responses:
+        "200": { description: ok }
+"##;
+        assert!(matches!(
+            parse_spec(yaml),
+            Err(ParseError::UnresolvedRef(_))
+        ));
+    }
+
+    const ASYNCAPI_COMPONENTS: &str = r##"
+components:
+  channels:
+    signups:
+      address: user/signedup
+      messages:
+        UserSignedUp:
+          $ref: "#/components/messages/UserSignedUp"
+  messages:
+    UserSignedUp:
+      contentType: application/json
+      payload:
+        type: object
+        required: [userId]
+        properties: { userId: { type: string } }
+"##;
+
+    fn asyncapi(channels_and_operations: &str) -> ApiSpec {
+        let yaml = format!(
+            "asyncapi: \"3.0.0\"\ninfo: {{ title: Test, version: \"1.0.0\" }}\n{ASYNCAPI_COMPONENTS}{channels_and_operations}"
+        );
+        parse_spec(&yaml).expect("parses")
+    }
+
+    #[test]
+    fn a_channel_message_ref_is_resolved() {
+        let spec = asyncapi(
+            r##"
+channels:
+  signups:
+    address: user/signedup
+    messages:
+      UserSignedUp:
+        $ref: "#/components/messages/UserSignedUp"
+operations:
+  publishSignup:
+    action: send
+    channel: { $ref: "#/channels/signups" }
+"##,
+        );
+        assert!(body_accepts(
+            &spec,
+            "user/signedup",
+            json!({ "userId": "u1" })
+        ));
+        assert!(!body_accepts(&spec, "user/signedup", json!({})));
+    }
+
+    #[test]
+    fn a_channel_ref_is_resolved() {
+        let spec = asyncapi(
+            r##"
+channels:
+  signups:
+    $ref: "#/components/channels/signups"
+operations:
+  publishSignup:
+    action: send
+    channel: { $ref: "#/channels/signups" }
+"##,
+        );
+        assert!(!body_accepts(&spec, "user/signedup", json!({})));
+    }
+
+    #[test]
+    fn an_operation_message_ref_is_resolved_through_the_channel() {
+        let spec = asyncapi(
+            r##"
+channels:
+  signups:
+    address: user/signedup
+    messages:
+      UserSignedUp:
+        $ref: "#/components/messages/UserSignedUp"
+operations:
+  publishSignup:
+    action: send
+    channel: { $ref: "#/channels/signups" }
+    messages:
+      - $ref: "#/channels/signups/messages/UserSignedUp"
+"##,
+        );
+        assert!(!body_accepts(&spec, "user/signedup", json!({})));
+    }
+
+    #[test]
+    fn an_operation_message_ref_that_does_not_resolve_is_an_error() {
+        let yaml = format!(
+            "asyncapi: \"3.0.0\"\ninfo: {{ title: Test, version: \"1.0.0\" }}\n{ASYNCAPI_COMPONENTS}{}",
+            r##"
+channels:
+  signups:
+    address: user/signedup
+operations:
+  publishSignup:
+    action: send
+    channel: { $ref: "#/channels/signups" }
+    messages:
+      - $ref: "#/channels/signups/messages/Missing"
+"##
+        );
+        assert!(matches!(
+            parse_spec(&yaml),
+            Err(ParseError::UnresolvedRef(_))
+        ));
+    }
+
+    #[test]
+    fn a_channel_parameter_ref_and_its_enum_are_enforced() {
+        let yaml = format!(
+            "asyncapi: \"3.0.0\"\ninfo: {{ title: Test, version: \"1.0.0\" }}\n{ASYNCAPI_COMPONENTS}{}",
+            r##"  parameters:
+    region:
+      enum: [eu, us]
+channels:
+  regional:
+    address: "events/{region}"
+    parameters:
+      region:
+        $ref: "#/components/parameters/region"
+operations:
+  publishRegional:
+    action: send
+    channel: { $ref: "#/channels/regional" }
+"##
+        );
+        let spec = parse_spec(&yaml).expect("parses");
+        let param = &spec.operations[0].parameters[0];
+        assert_eq!(param.name, "region");
+        let schema = jsonschema::options()
+            .build(param.schema.as_ref().expect("a schema from the enum"))
+            .expect("compiles");
+        assert!(schema.is_valid(&json!("eu")));
+        assert!(!schema.is_valid(&json!("mars")));
     }
 }

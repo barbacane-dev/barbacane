@@ -389,22 +389,22 @@ operations:
 
 ### Channel Parameters
 
-AsyncAPI channels can have parameters (like path params in OpenAPI):
+AsyncAPI channels can have parameters (like path params in OpenAPI). AsyncAPI 3 restricts a parameter's values with `enum`, which is enforced:
 
 ```yaml
 channels:
   orderEvents:
-    address: /events/orders/{orderId}
+    address: /events/{region}/orders
     parameters:
-      orderId:
-        schema:
-          type: string
-          format: uuid
+      region:
+        enum: [eu, us]
     messages:
       OrderPlaced:
         payload:
           type: object
 ```
+
+A parameter with a `schema`, as AsyncAPI 2 writes it, is validated against that schema.
 
 ### Message Validation
 
@@ -516,6 +516,12 @@ Errors you might see:
 | E1020 | Missing `x-barbacane-dispatch` on operation |
 | E1031 | Plaintext `http://` upstream URL (use HTTPS or `--allow-plaintext` at compile time) |
 | E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards) |
+
+### References
+
+A `$ref` stands for the object it names wherever the spec allows one: schemas, parameters, request bodies, responses and path items, and AsyncAPI channels, messages and parameters. Only references within the document (`#/...`) are followed, and one that does not resolve is an error (`E1003`).
+
+In OpenAPI 3.1 and later, keywords written beside a schema's `$ref` apply too, as JSON Schema 2020-12 defines. OpenAPI 3.0 and AsyncAPI ignore them.
 
 ## Next Steps
 
