@@ -274,6 +274,8 @@ Response:
 
 **Note:** The API key is only shown once at creation time. Store it securely.
 
+Revoking a key (`DELETE /projects/{id}/api-keys/{key_id}`) ends the data plane sessions registered with it: each receives a `disconnect` message and the socket closes. Every session also rechecks its key at the heartbeat interval (30 seconds), so an expired key, or one revoked through another control-plane instance, ends the session too.
+
 ### List Connected Data Planes
 
 ```bash
