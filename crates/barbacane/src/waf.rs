@@ -10,9 +10,7 @@
 //! The rule set arrives already parsed and validated from the artifact, so
 //! this module compiles it once at startup and evaluates it per request.
 
-use std::path::Path;
-
-use barbacane_compiler::artifact::{AuditEngine, Manifest, WafMode};
+use barbacane_compiler::artifact::{AuditEngine, Manifest, SealedRuleSet, WafMode};
 use parapet::transaction::EngineMode;
 use parapet::{RuleSet, Transaction, Verdict};
 use serde::Serialize;
@@ -83,30 +81,23 @@ pub enum WafDecision {
 }
 
 impl WafStage {
-    /// Build the stage from an artifact, if it carries a rule set.
+    /// Build the stage from a verified artifact's rule set, if the manifest
+    /// enables the WAF.
     ///
     /// Compiles the rule set once. This is the cost the compile-time design
     /// buys down: without it the automata would be rebuilt per request.
-    pub fn from_artifact(
-        artifact_path: &Path,
+    pub fn from_rules(
         manifest: &Manifest,
+        sealed: Option<SealedRuleSet>,
     ) -> Result<Option<Self>, String> {
         if !manifest.waf.enabled {
             return Ok(None);
         }
-        let sealed = barbacane_compiler::artifact::load_waf_rules(artifact_path)
-            .map_err(|e| format!("cannot read the WAF rule set from the artifact: {e}"))?;
         let Some(sealed) = sealed else {
             return Err(
                 "the manifest enables the WAF but the artifact carries no rule set".to_string(),
             );
         };
-
-        // The manifest is authenticated by this point, but the archive
-        // members are not: check the extracted bytes against the checksums
-        // before compiling them, exactly as plugin WASM is checked.
-        barbacane_compiler::artifact::verify_waf_rules(manifest, &sealed)
-            .map_err(|e| format!("WAF rule set integrity check failed: {e}"))?;
 
         // The sealed rule set is its own data loader: `@pmFromFile` phrase
         // lists travel in the artifact beside the rules, so the gateway needs

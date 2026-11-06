@@ -1,11 +1,10 @@
 //! Fuzz the `.bca` artifact load path (gzip + tar decompression).
 //!
-//! Targets the loader functions in
-//! `crates/barbacane-compiler/src/artifact.rs`:
+//! Targets the loaders in `crates/barbacane-compiler/src/artifact.rs`:
+//!   * `ArtifactArchive::read(&Path)` and `ArtifactArchive::verify`, the path
+//!     the data plane loads artifacts through
 //!   * `load_manifest(&Path)`
 //!   * `load_routes(&Path)`
-//!   * `load_specs(&Path)`
-//!   * `load_plugins(&Path)`
 //!
 //! Each opens the file, wraps it in `flate2::read::GzDecoder` + `tar::Archive`,
 //! and walks entries. Hostile input we care about: decompression bombs
@@ -42,10 +41,9 @@ fuzz_target!(|data: &[u8]| {
     }
     let path = tmp.path();
 
-    // All four loaders share the gzip+tar walk; fuzz each so manifest/routes/
-    // specs/plugins-specific JSON handling is also exercised.
+    // The loaders share the gzip+tar walk; fuzz each so the manifest and
+    // routes JSON handling and the member verification are all exercised.
+    let _ = barbacane_compiler::ArtifactArchive::read(path).and_then(|a| a.verify());
     let _ = barbacane_compiler::load_manifest(path);
     let _ = barbacane_compiler::load_routes(path);
-    let _ = barbacane_compiler::load_specs(path);
-    let _ = barbacane_compiler::load_plugins(path);
 });
