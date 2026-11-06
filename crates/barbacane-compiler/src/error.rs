@@ -47,6 +47,24 @@ pub enum CompileError {
     #[error("E1011: middleware missing 'name': {0}")]
     MissingMiddlewareName(String),
 
+    /// E1012: A middleware entry with `enabled: false` also sets `config`.
+    #[error(
+        "E1012: middleware entry '{0}' sets enabled: false and a config that would never be used: {1}"
+    )]
+    DisabledMiddlewareWithConfig(String, String),
+
+    /// E1013: An operation entry with `enabled: false` matches no global entry.
+    #[error(
+        "E1013: middleware entry '{0}' sets enabled: false but no global middleware entry matches it, so it removes nothing: {1}"
+    )]
+    DisabledMiddlewareMatchesNoGlobal(String, String),
+
+    /// E1014: A global middleware entry sets `enabled: false`.
+    #[error(
+        "E1014: global middleware entry '{0}' sets enabled: false; only an operation entry can disable a global middleware: {1}"
+    )]
+    GlobalMiddlewareDisabled(String, String),
+
     /// E1050: Ambiguous route - paths are structurally equivalent but differ in parameter names.
     #[error("E1050: ambiguous route: {0}")]
     AmbiguousRoute(String),

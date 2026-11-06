@@ -247,6 +247,9 @@ plugins and builds an artifact.
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
 | E1010 | Extension | Routing conflict (same path+method in multiple specs) |
 | E1011 | Extension | Middleware entry missing `name` |
+| E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
+| E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
+| E1014 | Extension | Global middleware entry sets `enabled: false` |
 | E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 | E1031 | Extension | Plaintext HTTP URL not allowed (use `--allow-plaintext` to override) |
@@ -296,6 +299,9 @@ no artifact, so it reports only the codes that need neither.
 | E1003 | Spec validity | Unresolved `$ref` reference |
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
 | E1011 | Extension | Middleware entry missing `name` |
+| E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
+| E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
+| E1014 | Extension | Global middleware entry sets `enabled: false` |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 
 Every other code is reported by `barbacane compile`, whose table lists them all.

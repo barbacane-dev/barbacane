@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares. The artifact format does not change.
+- **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares, and the UI shows the resolved chain and marks such entries. The artifact format does not change.
+- **vacuum ruleset**: five rules for `enabled: false` on middleware entries. Three fail where compilation does (`barbacane-global-middleware-disabled`, `barbacane-middleware-disabled-with-config`, `barbacane-middleware-disabled-unmatched`, mirroring `E1014`, `E1012`, `E1013`). `barbacane-global-auth-disabled` (info) lists every operation that disables a global authentication plugin, and `barbacane-auth-plugins-stacked` (warn) flags an operation that adds an authentication plugin while a different global one keeps running, so a request needs both credentials. The download commands in the vacuum guide include the new `barbacane-disabled-middlewares.js`.
+
 ### Changed
 
 - **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
@@ -14,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **control-plane image**: `barbacane-control` runs the API alone, as the non-root `barbacane` user, and exposes only port 9090. Port 80 and its `/api/` prefix are gone: clients call the API on port 9090.
 - **artifacts**: the data plane reads a `.bca` once and checks every member (routes, specs, plugins, WAF rules) against the checksums `artifact_hash` covers before using any of it. A duplicate, unlisted or missing member is refused, and a plugin is read only from `plugins/<name>.wasm` under its recorded checksum. The compiler refuses two specs with the same file name (E1058), since the artifact stores specs by file name.
 - **control plane**: compilations read each plugin's capabilities from the manifest embedded in its WASM and mark the artifact capability-enforced, so the data plane checks control-plane builds the same way as `barbacane compile` builds. A plugin without an embedded manifest is refused (E1041). Secret config fields from the embedded schema now produce the plaintext-secret warning (E1070) in control-plane builds too.
+- **middlewares**: operation and global entries match by plugin name without the `@version` suffix. A spec naming `rate-limit@0.1.0` globally and `rate-limit` on an operation ran both; the operation entry now replaces the global one.
 
 ### Removed
 
