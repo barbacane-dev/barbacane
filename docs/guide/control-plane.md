@@ -317,35 +317,6 @@ Response:
 
 The control plane notifies all connected data planes, which download the new artifact, verify its checksum, and perform a hot-reload.
 
-## Web UI
-
-The control plane includes a web-based management interface at `http://localhost:5173` (once the dev server is running locally).
-
-### Starting the web UI dev server
-
-```bash
-# Using Makefile
-make ui
-
-# Or manually
-cd ui && npm run dev
-```
-
-The UI provides:
-
-- **Dashboard** - Overview of specs, artifacts, and data planes
-- **Specs Management** - Upload, view, and delete API specifications
-- **Plugin Registry** - Browse registered plugins with their schemas
-- **Projects** - Create projects and configure plugins
-- **Artifacts** - View compiled artifacts and download them
-
-### Plugin Configuration
-
-When adding plugins to a project, the UI:
-- Shows the plugin's JSON Schema (if available)
-- Pre-fills a skeleton configuration based on required fields
-- Validates configuration in real-time before saving
-
 ## Interactive API Documentation
 
 The control plane includes interactive API documentation powered by Scalar:
@@ -442,7 +413,7 @@ Options:
 Official container images are available from Docker Hub:
 
 ```bash
-# Control plane (includes web UI)
+# Control plane
 docker pull barbacane/barbacane-control:latest
 
 # Data plane
@@ -482,8 +453,8 @@ services:
     image: ghcr.io/barbacane-dev/barbacane-control:latest
     environment:
       DATABASE_URL: postgres://postgres:barbacane@postgres/barbacane
+      BARBACANE_CONTROL_ADMIN_TOKEN: ${BARBACANE_CONTROL_ADMIN_TOKEN}
     ports:
-      - "80:80"      # Web UI
       - "9090:9090"  # API
     depends_on:
       - postgres

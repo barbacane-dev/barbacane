@@ -28,12 +28,7 @@ make seed-plugins
 
 # Start the control plane (port 9090)
 make control-plane
-
-# In another terminal, start the UI (port 5173)
-make ui
 ```
-
-Then open http://localhost:5173 in your browser.
 
 ### Makefile Targets
 
@@ -59,9 +54,7 @@ Then open http://localhost:5173 in your browser.
 | `make coverage-lcov` | Coverage as `lcov.info` |
 | **Development** | |
 | `make control-plane` | Start control plane server (port 9090) |
-| `make ui` | Start UI dev server (port 5173) |
-| `make dev` | Show instructions to start both |
-| `make dev-tmux` | Start both in tmux session |
+| `make dev` | Show instructions to start the database and control plane |
 | **Docker** | |
 | `make docker-build` | Build both Docker images |
 | `make docker-build-gateway` | Build data plane image |
@@ -425,83 +418,6 @@ paths:
         name: mock
         config:
           status: 200
-```
-
-## UI Development
-
-The web interface is a React application in the `ui/` directory.
-
-### Setup
-
-```bash
-cd ui
-npm install
-```
-
-### Development Server
-
-```bash
-# Using Makefile (from project root)
-make ui
-
-# Or manually
-cd ui && npm run dev
-```
-
-The UI runs at http://localhost:5173 and proxies API requests to the control plane at http://localhost:9090.
-
-### Testing
-
-```bash
-cd ui
-npm run test        # Run tests once
-npm run test:watch  # Watch mode
-```
-
-### Key Directories
-
-```
-ui/src/
-├── pages/         # Page components (ProjectPluginsPage, etc.)
-├── components/    # Reusable UI components
-│   └── ui/        # Base components (Button, Card, Badge)
-├── hooks/         # Custom hooks (useJsonSchema, usePlugins)
-├── lib/
-│   ├── api/       # API client (types, requests)
-│   └── utils.ts   # Utilities (cn, formatters)
-└── App.tsx        # Main app with routing
-```
-
-### Adding a New Page
-
-1. Create page component in `src/pages/`:
-   ```tsx
-   // src/pages/my-feature.tsx
-   export function MyFeaturePage() {
-     return <div>...</div>
-   }
-   ```
-
-2. Add route in `src/App.tsx`:
-   ```tsx
-   <Route path="/my-feature" element={<MyFeaturePage />} />
-   ```
-
-### API Client
-
-Use the typed API client from `@/lib/api`:
-
-```tsx
-import { useQuery } from '@tanstack/react-query'
-import { listPlugins } from '@/lib/api'
-
-function MyComponent() {
-  const { data: plugins, isLoading } = useQuery({
-    queryKey: ['plugins'],
-    queryFn: () => listPlugins(),
-  })
-  // ...
-}
 ```
 
 ## Debugging

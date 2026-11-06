@@ -4,7 +4,6 @@
 #
 # Quick reference:
 #   make              Run checks and tests (default)
-#   make dev-tmux     Start control plane + UI in tmux
 #   make help         Show all targets
 #
 # =============================================================================
@@ -148,27 +147,15 @@ fmt-check:
 # Development (native)
 # -----------------------------------------------------------------------------
 
-.PHONY: control-plane ui dev dev-tmux
+.PHONY: control-plane dev
 
 control-plane:
 	cargo run -p barbacane-control -- serve --database-url $(DATABASE_URL)
 
-ui:
-	cd ui && npm run dev
-
 dev:
-	@echo "Run in separate terminals:"
+	@echo "Run in order:"
 	@echo "  make db-up          # Start PostgreSQL"
 	@echo "  make control-plane  # Start API (port 9090)"
-	@echo "  make ui             # Start UI (port 5173)"
-	@echo ""
-	@echo "Or use: make dev-tmux"
-
-dev-tmux:
-	@command -v tmux >/dev/null 2>&1 || { echo "tmux is required but not installed."; exit 1; }
-	tmux new-session -d -s barbacane 'make control-plane' \; \
-		split-window -h 'make ui' \; \
-		attach
 
 # -----------------------------------------------------------------------------
 # Database
@@ -250,9 +237,7 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make control-plane  Start API server (port 9090)"
-	@echo "  make ui             Start UI dev server (port 5173)"
 	@echo "  make dev            Show dev instructions"
-	@echo "  make dev-tmux       Start both in tmux"
 	@echo ""
 	@echo "Database:"
 	@echo "  make db-up          Start PostgreSQL"

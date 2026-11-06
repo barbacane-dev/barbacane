@@ -43,7 +43,7 @@ This security policy applies to:
 
 - The Barbacane gateway (all crates in the `crates/` directory)
 - Official plugins in the `plugins/` directory
-- The control plane and web UI
+- The control plane
 
 ### Out of Scope
 
