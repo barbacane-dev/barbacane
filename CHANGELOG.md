@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
 
+### Fixed
+
+- **WAF**: the libinjection classifiers follow libinjection 4.0.1 ([`barbacane-libinjection`](https://crates.io/crates/barbacane-libinjection) 0.1.2). `@detectSQLi` flags a number with an empty exponent, as in `1' or 1.e(1)`, which MySQL ignores, and reads `LIKE (` after an operand as an operator rather than a function call. `@detectXSS` checks attributes after a 0xFF byte, which had ended tokenizing, and uses upstream's list of 432 event-handler attributes (145 added, 11 removed). The OWASP CRS v4.9.0 regression results are unchanged.
+
 ### Security
 
 - **wasm runtime**: Wasmtime is upgraded from 48.0.5 to 48.0.8. RUSTSEC-2026-0379: on aarch64, Cranelift compiled a large `br_table` so that a plugin could make the host jump to arbitrary code; the `linux/arm64` images and the aarch64 binaries were exposed to any plugin they loaded. RUSTSEC-2026-0364 (exception tags left host data unaligned) and RUSTSEC-2026-0359 (stack overflow dropping a long chain of recursive GC types) concern features the gateway leaves on, exceptions and GC. The other advisories fixed by these releases are in the component model, which the gateway does not load, or need `i31`/`nullref` arguments on host-to-guest calls, which it does not make.
