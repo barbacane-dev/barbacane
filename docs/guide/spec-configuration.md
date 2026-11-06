@@ -523,6 +523,10 @@ A `$ref` stands for the object it names wherever the spec allows one: schemas, p
 
 In OpenAPI 3.1 and later, keywords written beside a schema's `$ref` apply too, as JSON Schema 2020-12 defines. OpenAPI 3.0 and AsyncAPI ignore them.
 
+### YAML aliases
+
+A YAML anchor can be repeated with aliases. A spec whose aliases make it stand for a value more than 16 times its own size (plus 1 MiB) is refused as a parse error (`E1002`).
+
 ## Next Steps
 
 - [Dispatchers](dispatchers.md) - All dispatcher types and options

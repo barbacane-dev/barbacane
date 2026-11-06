@@ -114,7 +114,7 @@ enum SpecType {
 /// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
 fn detect_spec_type(content: &str) -> SpecType {
     // Try to parse as YAML (also handles JSON)
-    let parsed: Result<serde_json::Value, _> = yaml_serde::from_str(content);
+    let parsed: Result<serde_json::Value, _> = barbacane_compiler::yaml::from_str(content);
     match parsed {
         Ok(value) => {
             if value.get("openapi").is_some() {
@@ -152,7 +152,7 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
     let mut titles = Vec::new();
 
     for (filename, content) in specs {
-        let parsed: Option<serde_json::Value> = yaml_serde::from_str(content).ok();
+        let parsed: Option<serde_json::Value> = barbacane_compiler::yaml::from_str(content).ok();
         if let Some(mut spec) = parsed {
             // Strip barbacane extensions
             strip_barbacane_keys_recursive(&mut spec);
@@ -289,7 +289,7 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
     let mut titles = Vec::new();
 
     for (filename, content) in specs {
-        let parsed: Option<serde_json::Value> = yaml_serde::from_str(content).ok();
+        let parsed: Option<serde_json::Value> = barbacane_compiler::yaml::from_str(content).ok();
         if let Some(mut spec) = parsed {
             // Strip barbacane extensions
             strip_barbacane_keys_recursive(&mut spec);
@@ -2600,7 +2600,7 @@ impl Gateway {
         let Some(content) = self.specs.get(filename) else {
             return self.not_found_response();
         };
-        match yaml_serde::from_str::<serde_json::Value>(content) {
+        match barbacane_compiler::yaml::from_str::<serde_json::Value>(content) {
             Ok(mut value) => {
                 strip_barbacane_keys_recursive(&mut value);
                 self.serve_spec_content(&value, format)
@@ -3711,18 +3711,21 @@ async fn perform_hot_reload(
         "Starting hot-reload"
     );
 
-    // Create HTTP client for download
-    let http_client = reqwest::Client::new();
-
     // Step 1: Download and verify artifact
-    let artifact_path = match hot_reload::download_artifact(
-        &http_client,
-        &notification.download_url,
-        &notification.sha256,
-        artifact_dir,
-    )
-    .await
-    {
+    let download = match hot_reload::download_client() {
+        Ok(client) => {
+            hot_reload::download_artifact(
+                &client,
+                &notification.download_url,
+                &notification.sha256,
+                artifact_dir,
+                barbacane_compiler::MAX_ARTIFACT_BYTES,
+            )
+            .await
+        }
+        Err(e) => Err(e),
+    };
+    let artifact_path = match download {
         Ok(path) => path,
         Err(e) => {
             tracing::error!(

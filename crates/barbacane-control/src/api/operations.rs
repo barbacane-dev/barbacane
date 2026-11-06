@@ -161,9 +161,10 @@ pub async fn patch_spec_operations(
     })?;
 
     // Parse into yaml_serde::Value for tree manipulation
-    let mut doc: yaml_serde::Value = yaml_serde::from_str(&content_str).map_err(|e| {
-        ProblemDetails::internal_error_with_detail(format!("Failed to parse YAML: {e}"))
-    })?;
+    let mut doc: yaml_serde::Value =
+        barbacane_compiler::yaml::from_str(&content_str).map_err(|e| {
+            ProblemDetails::internal_error_with_detail(format!("Failed to parse YAML: {e}"))
+        })?;
 
     let root = doc
         .as_mapping_mut()

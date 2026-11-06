@@ -47,6 +47,41 @@ use crate::manifest::ProjectManifest;
 /// capability `host_functions` in the manifest.
 pub const ARTIFACT_VERSION: u32 = 8;
 
+/// The most an artifact may expand to when decompressed, archive headers
+/// included. Reading stops with an error past it, before anything is verified.
+pub const MAX_ARTIFACT_BYTES: u64 = 256 << 20;
+
+/// Open an artifact as a tar archive, decompressed through a reader that fails
+/// once it has yielded more than `limit` bytes.
+fn open_artifact(
+    artifact_path: &Path,
+    limit: u64,
+) -> std::io::Result<tar::Archive<Bounded<flate2::read::GzDecoder<File>>>> {
+    let file = File::open(artifact_path)?;
+    Ok(tar::Archive::new(Bounded {
+        inner: flate2::read::GzDecoder::new(file),
+        remaining: limit,
+        limit,
+    }))
+}
+
+/// A reader that fails once it has yielded more than `limit` bytes.
+struct Bounded<R> {
+    inner: R,
+    remaining: u64,
+    limit: u64,
+}
+
+impl<R: Read> Read for Bounded<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.remaining = self.remaining.checked_sub(n as u64).ok_or_else(|| {
+            std::io::Error::other(format!("the artifact expands beyond {} bytes", self.limit))
+        })?;
+        Ok(n)
+    }
+}
+
 /// Options for compilation.
 #[derive(Debug, Clone)]
 pub struct CompileOptions {
@@ -606,9 +641,7 @@ pub fn compile_with_manifest(
 
 /// Load a manifest from a .bca artifact.
 pub fn load_manifest(artifact_path: &Path) -> Result<Manifest, CompileError> {
-    let file = File::open(artifact_path)?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
+    let mut archive = open_artifact(artifact_path, MAX_ARTIFACT_BYTES)?;
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -651,9 +684,7 @@ impl parapet::DataLoader for SealedRuleSet {
 
 /// Load compiled routes from a .bca artifact.
 pub fn load_routes(artifact_path: &Path) -> Result<CompiledRoutes, CompileError> {
-    let file = File::open(artifact_path)?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
+    let mut archive = open_artifact(artifact_path, MAX_ARTIFACT_BYTES)?;
 
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -698,12 +729,16 @@ pub struct VerifiedArtifact {
 impl ArtifactArchive {
     /// Read every member of the artifact at `artifact_path`. Two members with
     /// the same path are refused, so the bytes that are verified are the bytes
-    /// that are used.
+    /// that are used, and an artifact expanding beyond [`MAX_ARTIFACT_BYTES`]
+    /// is refused.
     pub fn read(artifact_path: &Path) -> Result<Self, IntegrityError> {
+        Self::read_within(artifact_path, MAX_ARTIFACT_BYTES)
+    }
+
+    /// [`Self::read`], with the expansion limit given.
+    fn read_within(artifact_path: &Path, limit: u64) -> Result<Self, IntegrityError> {
         let unreadable = |e: std::io::Error| IntegrityError::Unreadable(e.to_string());
-        let file = File::open(artifact_path).map_err(unreadable)?;
-        let decoder = flate2::read::GzDecoder::new(file);
-        let mut archive = tar::Archive::new(decoder);
+        let mut archive = open_artifact(artifact_path, limit).map_err(unreadable)?;
 
         let mut members = BTreeMap::new();
         for entry in archive.entries().map_err(unreadable)? {
@@ -6638,6 +6673,52 @@ fn write_members(path: &Path, members: &[(String, Vec<u8>)]) {
 mod archive_verification_tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// An artifact whose `specs/padding` member expands to 2 MiB of zeros.
+    fn padded_artifact(dir: &TempDir) -> PathBuf {
+        let path = dir.path().join("padded.bca");
+        write_members(
+            &path,
+            &[
+                ("specs/padding".to_string(), vec![0u8; 2 << 20]),
+                ("manifest.json".to_string(), b"{}".to_vec()),
+            ],
+        );
+        path
+    }
+
+    #[test]
+    fn an_artifact_expanding_beyond_the_limit_is_refused() {
+        let dir = TempDir::new().unwrap();
+        let path = padded_artifact(&dir);
+        assert!(std::fs::metadata(&path).unwrap().len() < 64 << 10);
+
+        match ArtifactArchive::read_within(&path, 1 << 20) {
+            Err(IntegrityError::Unreadable(reason)) => {
+                assert!(reason.contains("expands beyond"), "{reason}")
+            }
+            Err(other) => panic!("refused for another reason: {other}"),
+            Ok(_) => panic!("read past the limit"),
+        }
+        // Within a larger limit the same artifact is read to the end.
+        assert!(!matches!(
+            ArtifactArchive::read_within(&path, 4 << 20),
+            Err(IntegrityError::Unreadable(_))
+        ));
+    }
+
+    #[test]
+    fn skipped_members_count_towards_the_limit() {
+        let dir = TempDir::new().unwrap();
+        let path = padded_artifact(&dir);
+        let mut archive = open_artifact(&path, 1 << 20).unwrap();
+        let walked: std::io::Result<Vec<_>> = archive
+            .entries()
+            .unwrap()
+            .map(|entry| entry.map(|e| e.header().size().unwrap()))
+            .collect();
+        assert!(walked.is_err(), "walked the members without reading them");
+    }
 
     const SPEC: &str = r#"
 openapi: "3.1.0"

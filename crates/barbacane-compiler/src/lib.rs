@@ -9,6 +9,7 @@ pub(crate) mod download;
 pub mod error;
 pub mod manifest;
 pub mod spec_parser;
+pub mod yaml;
 
 pub use artifact::compile_with_capabilities;
 pub use artifact::{
@@ -16,7 +17,7 @@ pub use artifact::{
     recompute_artifact_hash, verify_artifact_hash, verify_artifact_signature, ArtifactArchive,
     BundledPlugin, CompileOptions, CompileResult, CompiledOperation, CompiledRoutes,
     IntegrityError, LoadedPlugin, Manifest, PluginBundle, PluginCapabilities, Provenance,
-    SourceSpec, VerifiedArtifact, ARTIFACT_VERSION, COMPILER_VERSION,
+    SourceSpec, VerifiedArtifact, ARTIFACT_VERSION, COMPILER_VERSION, MAX_ARTIFACT_BYTES,
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{

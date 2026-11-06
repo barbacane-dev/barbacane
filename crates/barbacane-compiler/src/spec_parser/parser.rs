@@ -608,8 +608,7 @@ const HTTP_METHODS: &[&str] = &[
 /// Parse an OpenAPI or AsyncAPI spec from a YAML/JSON string.
 pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     // Parse YAML (also handles JSON since JSON is valid YAML)
-    let root: Value =
-        yaml_serde::from_str(input).map_err(|e| ParseError::ParseError(e.to_string()))?;
+    let root: Value = crate::yaml::from_str(input).map_err(ParseError::ParseError)?;
 
     let root_obj = root
         .as_object()
