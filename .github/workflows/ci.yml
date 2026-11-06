@@ -29,8 +29,6 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       plugins: ${{ steps.filter.outputs.plugins }}
-      ui: ${{ steps.filter.outputs.ui }}
-      ui_image: ${{ steps.filter.outputs.ui_image }}
       images: ${{ steps.filter.outputs.images }}
     steps:
       - uses: actions/checkout@v6
@@ -50,15 +48,6 @@ jobs:
               - 'plugins/**'
               - 'crates/barbacane-plugin-sdk/**'
               - 'crates/barbacane-plugin-macros/**'
-            ui:
-              - 'ui/**'
-              - '.github/workflows/ci.yml'
-            ui_image:
-              - 'ui/**'
-              - 'Dockerfile.control'
-              - '.dockerignore'
-              - 'plugins/*/config-schema.json'
-              - '.github/workflows/ci.yml'
             images:
               - 'Dockerfile*'
               - 'docker/**'
@@ -730,109 +719,6 @@ jobs:
             echo "::warning::$regressed benchmark(s) regressed — see job summary for details"
           fi
 
-  # UI unit tests (build + vitest)
-  ui-tests:
-    name: UI Tests
-    runs-on: ubuntu-latest
-    needs: [changes]
-    if: needs.changes.outputs.ui == 'true'
-    defaults:
-      run:
-        working-directory: ui
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type check & build
-        run: npm run build
-
-      - name: Run unit tests
-        run: npm test
-
-  # UI E2E tests (Playwright)
-  ui-e2e:
-    name: UI E2E Tests
-    runs-on: ubuntu-latest
-    needs: [changes, ui-tests]
-    if: needs.changes.outputs.ui == 'true'
-    defaults:
-      run:
-        working-directory: ui
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run E2E tests
-        run: npx playwright test --project=chromium
-
-      - name: Upload test report
-        uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: playwright-report
-          path: ui/playwright-report/
-          retention-days: 7
-
-  # The ui-builder stage of Dockerfile.control. Its `npm run build` sees only
-  # the files the stage copies, whereas `ui-tests` runs in the full checkout.
-  ui-image:
-    name: Control Image UI Stage
-    runs-on: ubuntu-latest
-    needs: [changes]
-    if: needs.changes.outputs.ui_image == 'true'
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-
-      - name: Build the ui-builder stage
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: ./Dockerfile.control
-          target: ui-builder
-          load: true
-          tags: barbacane-control-ui:ci
-          push: false
-
-      # The runtime stage copies these paths out of ui-builder; read them from
-      # the Dockerfile so the check follows it.
-      - name: Check the stage holds what the runtime stage copies
-        run: |
-          srcs=$(sed -n 's/^COPY --from=ui-builder \([^ ]*\) .*/\1/p' Dockerfile.control)
-          test -n "$srcs"
-          for src in $srcs; do
-            docker run --rm barbacane-control-ui:ci test -e "$src"
-            echo "ui-builder has $src"
-          done
-
   # The three release images, built for linux/amd64 and not pushed, from the
   # same Dockerfiles and context the release workflow uses.
   images:
@@ -892,9 +778,6 @@ jobs:
       - integration-tests
       - coverage
       - security-suite
-      - ui-tests
-      - ui-e2e
-      - ui-image
       - images
     runs-on: ubuntu-latest
     steps:

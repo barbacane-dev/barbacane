@@ -18,7 +18,6 @@
 - [Web application firewall](guide/waf.md)
 - [Observability](guide/observability.md)
 - [Control plane (REST API)](guide/control-plane.md)
-- [Web UI](guide/web-ui.md)
 - [Linting with Vacuum](guide/vacuum.md)
 - [FIPS 140-3 Compliance](guide/fips.md)
 

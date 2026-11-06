@@ -13,8 +13,6 @@
   <img src="https://img.shields.io/badge/plugin%20tests-861%20passing-brightgreen" alt="Plugin Tests">
   <img src="https://img.shields.io/badge/integration%20tests-294%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/cli%20tests-23%20passing-brightgreen" alt="CLI Tests">
-  <img src="https://img.shields.io/badge/ui%20tests-44%20passing-brightgreen" alt="UI Tests">
-  <img src="https://img.shields.io/badge/e2e%20tests-11%20passing-brightgreen" alt="E2E Tests">
   <img src="https://img.shields.io/badge/rust-1.95%2B-orange" alt="Rust Version">
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-AGPLv3-blue" alt="License"></a>
 </p>
@@ -104,7 +102,7 @@ Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane
 - **Middlewares** — grouped by concern:
   - [Authentication](https://docs.barbacane.dev/guide/middlewares/authentication.html) · [Authorization](https://docs.barbacane.dev/guide/middlewares/authorization.html) · [Traffic control](https://docs.barbacane.dev/guide/middlewares/traffic-control.html)
   - [Caching](https://docs.barbacane.dev/guide/middlewares/caching.html) · [Transformation](https://docs.barbacane.dev/guide/middlewares/transformation.html) · [Observability](https://docs.barbacane.dev/guide/middlewares/observability.html)
-- [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) · [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Manage specs, artifacts, and data planes
+- [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) — Manage specs, artifacts, and data planes
 - [WAF](https://docs.barbacane.dev/guide/waf.html) — Native ModSecurity/CRS-compatible web application firewall
 - [Secrets](https://docs.barbacane.dev/guide/secrets.html) · [Vacuum linting](https://docs.barbacane.dev/guide/vacuum.html) · [FIPS](https://docs.barbacane.dev/guide/fips.html)
 - [Extensions reference](https://docs.barbacane.dev/reference/extensions.html) · [CLI reference](https://docs.barbacane.dev/reference/cli.html) · [Artifact format](https://docs.barbacane.dev/reference/artifact.html)
@@ -122,7 +120,6 @@ docker-compose up -d
 
 # Gateway: http://localhost:8080
 # Grafana: http://localhost:3000 (admin/admin)
-# Control Plane: http://localhost:3001
 ```
 
 The playground includes a Train Travel API demo with WireMock backend, full observability stack (Prometheus, Loki, Tempo, Grafana), and the control plane UI. See [barbacane-dev/playground](https://github.com/barbacane-dev/playground) for details.

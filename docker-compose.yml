@@ -33,8 +33,8 @@ services:
       dockerfile: Dockerfile.control
     environment:
       DATABASE_URL: postgres://barbacane:barbacane@postgres:5432/barbacane
+      BARBACANE_CONTROL_ADMIN_TOKEN: ${BARBACANE_CONTROL_ADMIN_TOKEN:?set BARBACANE_CONTROL_ADMIN_TOKEN to a random secret}
     ports:
-      - "3000:80"    # Web UI (nginx)
       - "9090:9090"  # API
     depends_on:
       postgres:

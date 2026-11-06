@@ -57,15 +57,7 @@ echo -e "  Integration tests: ${bold}${INTEGRATION}${reset}"
 CLI=$(count_rust_tests "$ROOT/crates/barbacane-test/src/")
 echo -e "  CLI tests:         ${bold}${CLI}${reset}"
 
-# 5. UI unit tests (vitest — count `it(` and `test(` in .test.* files)
-UI=$(grep -rh '^\s*\(it\|test\)(' "$ROOT/ui/src/" --include='*.test.*' 2>/dev/null | wc -l | tr -d ' ')
-echo -e "  UI tests:          ${bold}${UI}${reset}"
-
-# 6. E2E tests (Playwright — count `test(` in .spec.ts files)
-E2E=$(grep -rh '^\s*test(' "$ROOT"/ui/e2e/*.spec.ts 2>/dev/null | wc -l | tr -d ' ')
-echo -e "  E2E tests:         ${bold}${E2E}${reset}"
-
-TOTAL=$((UNIT + PLUGIN_TOTAL + INTEGRATION + CLI + UI + E2E))
+TOTAL=$((UNIT + PLUGIN_TOTAL + INTEGRATION + CLI))
 echo ""
 echo -e "${bold}Total:               ${TOTAL}${reset}"
 
@@ -78,8 +70,6 @@ if [ "$UPDATE_README" = true ]; then
     -e "s/plugin%20tests-[0-9]*%20passing/plugin%20tests-${PLUGIN_TOTAL}%20passing/" \
     -e "s/integration%20tests-[0-9]*%20passing/integration%20tests-${INTEGRATION}%20passing/" \
     -e "s/cli%20tests-[0-9]*%20passing/cli%20tests-${CLI}%20passing/" \
-    -e "s/ui%20tests-[0-9]*%20passing/ui%20tests-${UI}%20passing/" \
-    -e "s/e2e%20tests-[0-9]*%20passing/e2e%20tests-${E2E}%20passing/" \
     "$ROOT/README.md"
   echo "  README.md updated."
 fi

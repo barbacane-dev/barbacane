@@ -4,9 +4,6 @@ target/
 *.bca
 plugins/**/*.wasm
 
-# Dependencies
-ui/node_modules/
-
 # IDE and editor
 .idea/
 .vscode/
