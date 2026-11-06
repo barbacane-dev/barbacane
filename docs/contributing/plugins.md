@@ -421,7 +421,10 @@ host_functions = ["ldap"]
 ```
 
 `host_ldap_bind(req_ptr, req_len) -> i32` verifies a DN and password with a
-simple bind on a fresh connection; `host_ldap_search(req_ptr, req_len) -> i32`
+simple bind on a fresh connection. An empty password is refused as
+`invalid_credentials` without contacting the directory, since a DN with an
+empty password is an unauthenticated bind (RFC 4513 §5.1.2) that proves
+nothing; `host_ldap_search(req_ptr, req_len) -> i32`
 runs a search on a pooled connection bound as the service account named in the
 request. Both take a JSON request carrying `url`, `bind_dn`, `password`,
 `starttls`, `allow_plaintext` and `timeout_ms` (search adds `base_dn`, `scope`,
