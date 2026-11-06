@@ -967,7 +967,7 @@ The server exposes a REST API for managing specs, plugins, artifacts, and projec
 | **API Keys** | |
 | `POST /projects/{id}/api-keys` | Create API key for data plane auth |
 | `GET /projects/{id}/api-keys` | List API keys |
-| `DELETE /projects/{id}/api-keys/{key_id}` | Revoke API key |
+| `DELETE /projects/{id}/api-keys/{key_id}` | Revoke API key, ending the data plane sessions registered with it |
 
 ### Interactive API Documentation
 
