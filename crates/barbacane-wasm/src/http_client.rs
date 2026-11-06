@@ -73,6 +73,8 @@ pub enum TlsConfigError {
     ParseIdentity(#[source] reqwest::Error),
     #[error("failed to parse CA certificate: {0}")]
     ParseCaCert(#[source] reqwest::Error),
+    #[error("TLS file {path}: {reason}")]
+    Path { path: String, reason: String },
 }
 
 /// Cache key for TLS-configured clients.
@@ -176,9 +178,23 @@ impl HttpClient {
                 allow_internal: self.base_config.allow_internal_egress,
             }));
 
+        // Every file is read from under BARBACANE_SECRETS_DIR, as a `file://`
+        // secret is: a plugin config cannot name an arbitrary file.
+        let confine = |path: &PathBuf| {
+            let shown = path.display().to_string();
+            crate::secrets::confine_secret_path(&shown).map_err(|e| {
+                HttpClientError::TlsConfig(TlsConfigError::Path {
+                    path: shown,
+                    reason: e.to_string(),
+                })
+            })
+        };
+
         // Add client certificate (mTLS)
         if let (Some(cert_path), Some(key_path)) = (&tls_config.client_cert, &tls_config.client_key)
         {
+            let cert_path = confine(cert_path)?;
+            let key_path = confine(key_path)?;
             let cert_pem = std::fs::read(cert_path)
                 .map_err(|e| HttpClientError::TlsConfig(TlsConfigError::ReadCertificate(e)))?;
             let key_pem = std::fs::read(key_path)
@@ -194,15 +210,19 @@ impl HttpClient {
             builder = builder.identity(identity);
         }
 
-        // Add custom CA certificate
+        // A configured CA is the only one the upstream's certificate is
+        // verified against: the built-in roots are not trusted alongside it.
         if let Some(ca_path) = &tls_config.ca {
+            let ca_path = confine(ca_path)?;
             let ca_pem = std::fs::read(ca_path)
                 .map_err(|e| HttpClientError::TlsConfig(TlsConfigError::ReadCa(e)))?;
 
             let ca_cert = Certificate::from_pem(&ca_pem)
                 .map_err(|e| HttpClientError::TlsConfig(TlsConfigError::ParseCaCert(e)))?;
 
-            builder = builder.add_root_certificate(ca_cert);
+            builder = builder
+                .tls_built_in_root_certs(false)
+                .add_root_certificate(ca_cert);
         }
 
         builder.build().map_err(HttpClientError::BuildError)
@@ -224,6 +244,7 @@ impl HttpClient {
     pub async fn stream_raw(
         &self,
         request: HttpRequest,
+        tls_config: Option<&TlsConfig>,
     ) -> Result<reqwest::Response, HttpClientError> {
         let url = request
             .url
@@ -254,7 +275,11 @@ impl HttpClient {
 
         let timeout = request.timeout.unwrap_or(self.default_timeout);
 
-        let mut req_builder = self.client.request(method, url).timeout(timeout);
+        let client = match tls_config {
+            Some(tls) if tls.is_configured() => self.get_or_create_tls_client(tls)?,
+            _ => self.client.clone(),
+        };
+        let mut req_builder = client.request(method, url).timeout(timeout);
 
         for (key, value) in &request.headers {
             req_builder = req_builder.header(key.as_str(), value.as_str());
@@ -1064,7 +1089,7 @@ mod tests {
             timeout: None,
         };
         assert!(matches!(
-            client.stream_raw(req).await,
+            client.stream_raw(req, None).await,
             Err(HttpClientError::InvalidUrl(_))
         ));
     }
@@ -1084,7 +1109,7 @@ mod tests {
             timeout: None,
         };
         assert!(matches!(
-            client.stream_raw(req).await,
+            client.stream_raw(req, None).await,
             Err(HttpClientError::PlaintextNotAllowed)
         ));
     }
@@ -1105,7 +1130,7 @@ mod tests {
             timeout: None,
         };
         assert!(matches!(
-            client.stream_raw(req).await,
+            client.stream_raw(req, None).await,
             Err(HttpClientError::InvalidMethod(_))
         ));
     }
@@ -1125,7 +1150,7 @@ mod tests {
             body: None,
             timeout: None,
         };
-        let err = client.stream_raw(req).await.unwrap_err();
+        let err = client.stream_raw(req, None).await.unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1156,7 +1181,7 @@ mod tests {
             body: None,
             timeout: Some(Duration::from_millis(50)),
         };
-        let err = client.stream_raw(req).await.unwrap_err();
+        let err = client.stream_raw(req, None).await.unwrap_err();
         assert!(
             matches!(err, HttpClientError::Timeout),
             "expected Timeout, got: {err:?}"
@@ -1197,7 +1222,7 @@ mod tests {
             timeout: None,
         };
         let resp = client
-            .stream_raw(req)
+            .stream_raw(req, None)
             .await
             .expect("stream_raw should succeed");
         assert_eq!(resp.status(), 200);

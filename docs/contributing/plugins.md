@@ -351,6 +351,12 @@ match http::call(&req, None) {
 }
 ```
 
+`.tls(http::TlsSettings { client_cert, client_key, ca })` sets a client
+certificate for mutual TLS and a CA the server must chain to. Each is a path to
+a PEM file, which the host reads only from under `BARBACANE_SECRETS_DIR`; with
+`ca`, the built-in roots are not trusted. `HttpRequest` implements `Default`, so
+a struct literal can end with `..Default::default()`.
+
 ### Hashing
 
 ```toml

@@ -18,6 +18,7 @@ const schemas = {
       url: { type: "string" },
       path: { type: "string" },
       timeout: { type: "number", minimum: 0 },
+      tls: { type: "object" },
     },
     additionalProperties: false,
   },

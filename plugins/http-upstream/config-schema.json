@@ -20,6 +20,32 @@
       "description": "Request timeout in seconds",
       "default": 30,
       "minimum": 0
+    },
+    "tls": {
+      "type": "object",
+      "description": "TLS settings for the upstream connection. Paths are PEM files under BARBACANE_SECRETS_DIR.",
+      "properties": {
+        "client_cert": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client certificate for mutual TLS. Requires client_key."
+        },
+        "client_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Private key of the client certificate. Requires client_cert."
+        },
+        "ca": {
+          "type": "string",
+          "minLength": 1,
+          "description": "CA certificate the upstream's certificate is verified against, in place of the system roots."
+        }
+      },
+      "dependentRequired": {
+        "client_cert": ["client_key"],
+        "client_key": ["client_cert"]
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
