@@ -229,15 +229,6 @@ jobs:
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Extract version components
-        id: version
-        run: |
-          VERSION=${{ steps.tag.outputs.version }}
-          MAJOR=$(echo $VERSION | cut -d. -f1)
-          MINOR=$(echo $VERSION | cut -d. -f1-2)
-          echo "major=$MAJOR" >> $GITHUB_OUTPUT
-          echo "minor=$MINOR" >> $GITHUB_OUTPUT
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
@@ -251,65 +242,31 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create GHCR data plane manifest
+      # A pre-release (a version with a `-`, such as 1.0.0-rc.1) is published
+      # under its own tag only, so latest, x.y and x stay on the last stable
+      # release.
+      - name: Create multi-arch manifests
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane:latest \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.minor }} \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.major }} \
-            ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION-amd64 \
-            ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION-arm64
-
-      - name: Create GHCR control plane manifest
-        run: |
-          VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-control:latest \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.minor }} \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.major }} \
-            ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION-amd64 \
-            ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION-arm64
-
-      - name: Create Docker Hub data plane manifest
-        run: |
-          VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t docker.io/barbacane/barbacane:latest \
-            -t docker.io/barbacane/barbacane:$VERSION \
-            -t docker.io/barbacane/barbacane:${{ steps.version.outputs.minor }} \
-            -t docker.io/barbacane/barbacane:${{ steps.version.outputs.major }} \
-            docker.io/barbacane/barbacane:$VERSION-amd64 \
-            docker.io/barbacane/barbacane:$VERSION-arm64
-
-      - name: Create Docker Hub control plane manifest
-        run: |
-          VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t docker.io/barbacane/barbacane-control:latest \
-            -t docker.io/barbacane/barbacane-control:$VERSION \
-            -t docker.io/barbacane/barbacane-control:${{ steps.version.outputs.minor }} \
-            -t docker.io/barbacane/barbacane-control:${{ steps.version.outputs.major }} \
-            docker.io/barbacane/barbacane-control:$VERSION-amd64 \
-            docker.io/barbacane/barbacane-control:$VERSION-arm64
-
-      - name: Create GHCR standalone manifest
-        run: |
-          VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:latest \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.version.outputs.minor }} \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.version.outputs.major }} \
-            ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION-amd64 \
-            ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION-arm64
-
-      - name: Create Docker Hub standalone manifest
-        run: |
-          VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t docker.io/barbacane/barbacane-standalone:latest \
-            -t docker.io/barbacane/barbacane-standalone:$VERSION \
-            -t docker.io/barbacane/barbacane-standalone:${{ steps.version.outputs.minor }} \
-            -t docker.io/barbacane/barbacane-standalone:${{ steps.version.outputs.major }} \
-            docker.io/barbacane/barbacane-standalone:$VERSION-amd64 \
-            docker.io/barbacane/barbacane-standalone:$VERSION-arm64
+          set -euo pipefail
+          case "$VERSION" in
+            *-*) aliases="" ;;
+            *) aliases="latest ${VERSION%.*} ${VERSION%%.*}" ;;
+          esac
+          for registry in "ghcr.io/$OWNER" docker.io/barbacane; do
+            for image in barbacane barbacane-control barbacane-standalone; do
+              tags=(-t "$registry/$image:$VERSION")
+              for alias in $aliases; do
+                tags+=(-t "$registry/$image:$alias")
+              done
+              echo "$registry/$image: $VERSION $aliases"
+              docker buildx imagetools create "${tags[@]}" \
+                "$registry/$image:$VERSION-amd64" \
+                "$registry/$image:$VERSION-arm64"
+            done
+          done
 
   # Keyless (Sigstore) signing + CycloneDX SBOM attestation of the release images.
   sign-and-sbom:
