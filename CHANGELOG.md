@@ -7,13 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.12.4] - 2026-11-06
 
-- **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
-
-### Fixed
-
-- **WAF**: the libinjection classifiers follow libinjection 4.0.1 ([`barbacane-libinjection`](https://crates.io/crates/barbacane-libinjection) 0.1.2). `@detectSQLi` flags a number with an empty exponent, as in `1' or 1.e(1)`, which MySQL ignores, and reads `LIKE (` after an operand as an operator rather than a function call. `@detectXSS` checks attributes after a 0xFF byte, which had ended tokenizing, and uses upstream's list of 432 event-handler attributes (145 added, 11 removed). The OWASP CRS v4.9.0 regression results are unchanged.
+Security fixes and dependency updates. Wasmtime moves to 48.0.8: on aarch64, a plugin could make the host jump to arbitrary code (RUSTSEC-2026-0379). A `.bca` is read once and every member is checked against its manifest before use, and the control plane checks plugin capabilities the way `barbacane compile` does. Auth plugins and `acl` keep group names containing commas whole, which changes how `x-auth-consumer-groups` writes `,` and `%`. `response-transformer` refuses a response whose fields cannot be removed, and its body pointers must start with `/`, so a spec that compiled under 0.12.3 can be refused: compile yours before upgrading a running gateway. The artifact format version does not change.
 
 ### Security
 
@@ -22,6 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **tokio**: 1.54.1, for `AsyncFd` constructors violating I/O safety (RUSTSEC-2026-0386).
 - **zstd**: zstd-sys 2.1.2 (RUSTSEC-2026-0410). RUSTSEC-2026-0391, -0398 and -0403, in zstd 0.13 and zstd-safe 7, are ignored in `deny.toml`: rskafka and Wasmtime's cache still require zstd 0.13, and the gateway reaches none of the affected code (Kafka records are produced uncompressed and never consumed, the Wasmtime cache is off, and zstd-safe is built without `seekable`).
 - **tests**: p256 0.14 in the test crate, so crypto-bigint 0.7 replaces 0.5 (RUSTSEC-2026-0387). The gateway does not use it.
+
+### Changed
+
+- **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
+- **artifacts**: the data plane reads a `.bca` once and checks every member (routes, specs, plugins, WAF rules) against the checksums `artifact_hash` covers before using any of it. A duplicate, unlisted or missing member is refused, and a plugin is read only from `plugins/<name>.wasm` under its recorded checksum. The compiler refuses two specs with the same file name (E1058), since the artifact stores specs by file name.
+- **control plane**: compilations read each plugin's capabilities from the manifest embedded in its WASM and mark the artifact capability-enforced, so the data plane checks control-plane builds the same way as `barbacane compile` builds. A plugin without an embedded manifest is refused (E1041). Secret config fields from the embedded schema now produce the plaintext-secret warning (E1070) in control-plane builds too.
+- **response-transformer**: with `body.remove` configured, a response whose body is not JSON, or a `remove` pointer that does not parse, is answered `502` (problem+json, type `urn:barbacane:error:response-transform-failed`). `body.allow_non_json: true` passes a body that is not JSON through unchanged, for upstreams that also return other content types. Every body pointer (`add` and `rename` keys, `rename` targets, `remove` items) must start with `/`, so a config with one that does not fails compilation with `E1023`.
+- **metrics**: counter names no longer carry a doubled `_total` suffix. Every counter was registered with an explicit `_total`, and the OpenMetrics encoder appends `_total` to counters, so they were exported as `barbacane_*_total_total` (for example `barbacane_requests_total_total`, `barbacane_waf_blocked_total_total`). They now export the correct single-suffix names (`barbacane_requests_total`, `barbacane_waf_blocked_total`, and so on).
+
+### Fixed
+
+- **WAF**: the libinjection classifiers follow libinjection 4.0.1 ([`barbacane-libinjection`](https://crates.io/crates/barbacane-libinjection) 0.1.2). `@detectSQLi` flags a number with an empty exponent, as in `1' or 1.e(1)`, which MySQL ignores, and reads `LIKE (` after an operand as an operator rather than a function call. `@detectXSS` checks attributes after a 0xFF byte, which had ended tokenizing, and uses upstream's list of 432 event-handler attributes (145 added, 11 removed). The OWASP CRS v4.9.0 regression results are unchanged.
+- **ldap host function**: `host_ldap_bind` refuses an empty password as `invalid_credentials` without contacting the directory. A DN with an empty password is an unauthenticated bind (RFC 4513 §5.1.2), which a directory may accept without checking the DN. `ldap-auth` already refused it; the host now does for every plugin.
+- **auth plugins and acl**: a group name containing a comma, such as an LDAP DN or a single-group claim value, stays one group. In `x-auth-consumer-groups` and `auth.groups` a name's `,` is written `%2C` and its `%` is written `%25`, and `acl` decodes them, so its rules match whole group names. Names without either character are unchanged. An upstream that reads `x-auth-consumer-groups` and has groups with commas must decode the two escapes.
+- **control plane**: revoking a data-plane API key ends the WebSocket sessions registered with it: each receives `disconnect` and the socket closes. Sessions also recheck their key at the heartbeat interval, so an expired key, or one revoked through another control-plane instance, ends them as well.
+- **spec endpoint**: `/__barbacane/specs/{file}` reads a spec with the compiler's parser, so YAML and JSON are accepted whatever the file name, and strips the `x-barbacane-*` extensions. A spec that cannot be parsed is answered `500` and logged.
+- **mock**: placeholder values are encoded for the configured `content_type`: as the inside of a JSON string for `application/json` and `+json` types, as HTML text for any other type.
 
 ## [0.12.3] - 2026-10-13
 
@@ -849,7 +862,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.3...HEAD
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.4...HEAD
+[0.12.4]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.0...v0.12.1
