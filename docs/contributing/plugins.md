@@ -120,9 +120,8 @@ host_functions = ["log"]
 `category` is the plugin's family. It groups the plugin in the middleware guide,
 and `authentication` additionally tells the compiler that the plugin verifies a
 client credential. Current values: `authentication`, `authorization`, `caching`,
-`observability`, `traffic-control`, `transformation`, `ai-gateway` for
-middleware; `proxy`, `messaging`, `cloud`, `testing`, `ai-gateway` for
-dispatchers.
+`observability`, `traffic-control`, `transformation` for middleware;
+`proxy`, `messaging`, `cloud`, `testing` for dispatchers.
 
 ### 5. Create config-schema.json
 

@@ -105,7 +105,6 @@ fuzz/
   fuzz_targets/
     spec_parser.rs       # barbacane_compiler::parse_spec  — hostile OpenAPI/AsyncAPI
     artifact_loader.rs   # .bca gzip/tar loaders — decompression bombs / malformed archives
-    jsonrpc.rs           # MCP JsonRpcRequest deserialization
     validator.rs         # OperationValidator::validate_request (+ percent-decoder)
     wasm_host_memory.rs  # guest-slice bounds — BLOCKED, see below
 ```
@@ -120,7 +119,6 @@ cargo install cargo-fuzz
 cd fuzz
 cargo +nightly fuzz run spec_parser
 cargo +nightly fuzz run artifact_loader
-cargo +nightly fuzz run jsonrpc
 cargo +nightly fuzz run validator
 # cargo +nightly fuzz run wasm_host_memory   # currently inert — see below
 ```

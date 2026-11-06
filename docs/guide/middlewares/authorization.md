@@ -228,14 +228,14 @@ x-barbacane-middlewares:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| *(map)* | `string → string` | Key-value pairs written into the request context when the expression is true. The `ai-proxy` dispatcher reads `ai.target`; the [AI gateway middlewares](ai-gateway.md) read `ai.policy` |
+| *(map)* | `string → string` | Key-value pairs written into the request context when the expression is true. Later middlewares read them through `context:<key>` sources, such as `rate-limit`'s `partition_key` and `request-transformer`'s header values |
 
 #### `on_match.deny`
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `status` | integer | `403` | HTTP status code. Must be 4xx — a `cel` denial returning 5xx would mask a policy decision as a server fault. Out-of-range values fall back to `403` |
-| `code` | string | *(required)* | Machine-readable error code, `snake_case`. Becomes the URN suffix on the `type` field and the `code` field on the response body — the convention `ai-proxy` uses for `model_not_permitted` and similar |
+| `code` | string | *(required)* | Machine-readable error code, `snake_case`. Becomes the URN suffix on the `type` field and the `code` field on the response body |
 | `message` | string | falls back to `code` | Human-readable `detail` message returned in the problem+json body |
 
 ### Request context
@@ -315,19 +315,19 @@ request.method in ['GET', 'HEAD', 'OPTIONS']
 
 ```json
 {
-  "type": "urn:barbacane:error:model_not_permitted",
+  "type": "urn:barbacane:error:format_not_permitted_for_tier",
   "title": "Forbidden",
   "status": 403,
-  "code": "model_not_permitted",
-  "detail": "gpt-4* is restricted to the premium tier"
+  "code": "format_not_permitted_for_tier",
+  "detail": "Parquet exports are restricted to the premium tier"
 }
 ```
 
 The URN type, response `code`, and (optionally) `title` are derived from `on_match.deny.code` + `status`; `detail` is the configured `message` or, if absent, the `code` itself.
 
-### Match-and-deny: per-tier model gating
+### Match-and-deny: per-tier gating
 
-The `on_match.deny` action turns `cel` into a fully programmable gate — useful when access depends on a combination of caller attributes *and* request body that the dispatcher's static `allow`/`deny` lists can't express. The canonical case is "block expensive models for the free tier":
+The `on_match.deny` action turns `cel` into a programmable gate, useful when access depends on a combination of caller attributes *and* the request body. For example, reserving one export format for the premium tier:
 
 ```yaml
 x-barbacane-middlewares:
@@ -338,63 +338,68 @@ x-barbacane-middlewares:
   - name: cel
     config:
       expression: >
-        request.body_json.model.startsWith('gpt-4')
-        && request.claims.tier != 'premium'
+        has(request.body_json.format)
+        && request.body_json.format == 'parquet'
+        && (!has(request.claims.tier) || request.claims.tier != 'premium')
       on_match:
         deny:
           status: 403
-          code: model_not_permitted_for_tier
-          message: "gpt-4* is restricted to the premium tier"
+          code: format_not_permitted_for_tier
+          message: "Parquet exports are restricted to the premium tier"
 ```
 
-The expression sees both the parsed JSON body and the JWT claims, so a single rule covers what would otherwise need two layers (a custom auth filter plus a separate routing config). Pair with [`ai-proxy`'s `routes`](../dispatchers.md#ai-proxy) for static catalog policy and reach for `cel` only when the rule depends on caller context.
+The expression sees both the parsed JSON body and the JWT claims, so a single rule covers what would otherwise need two layers (a custom auth filter plus a body check).
+
+Reading a key that `request.body_json` or `request.claims` does not have is an evaluation error, which returns a 500, so guard optional fields with `has()`. Here a request without a `format` continues, and a token without a `tier` claim counts as not premium.
 
 ### Policy-driven routing (cel stacking)
 
-CEL in routing mode is the building block for declarative policy routing. **Stack one entry per rule** — each writes a distinct set of context keys. Downstream plugins (notably [`ai-proxy`](../dispatchers.md#ai-proxy) via `ai.target`, and all [AI Gateway](ai-gateway.md) middlewares via `ai.policy`) read the written keys to pick their active behavior.
+CEL in routing mode is the building block for declarative policy routing. **Stack one entry per rule**, each writing a distinct set of context keys. Later plugins read the written keys through `context:<key>` sources: `rate-limit` can partition on them, and `request-transformer` can forward them to the upstream as headers.
 
 ```yaml
 x-barbacane-middlewares:
-  - name: cel
+  - name: oidc-auth
     config:
-      expression: "request.claims.tier == 'premium'"
-      on_match:
-        set_context:
-          ai.policy: premium
-          ai.target: premium
+      issuer_url: "https://auth.example.com"
+      audience: "my-api"
 
   - name: cel
     config:
-      expression: "'ai:premium' in request.claims.scopes"
+      expression: "has(request.claims.tier) && request.claims.tier == 'premium'"
       on_match:
         set_context:
-          ai.policy: premium
-          ai.target: premium
+          plan.tier: premium
 
   - name: cel
     config:
-      expression: "request.headers['x-ai-model-tier'] == 'best'"
+      expression: "has(request.claims.roles) && 'premium' in request.claims.roles"
       on_match:
         set_context:
-          ai.policy: premium
-          ai.target: premium
+          plan.tier: premium
+
+  - name: request-transformer
+    config:
+      skip_if_empty: true
+      headers:
+        add:
+          X-Plan-Tier: "context:plan.tier"
 ```
 
 Each entry is evaluated in order. On a `true` match, the context keys are written (the last match wins when keys collide); on `false`, the entry is a no-op. No request is ever denied by a routing-mode cel — it's pure data-plane policy, not access control.
 
-> **A computed header name needs declaring.** An operation carries only the headers it admits. The compiler reads a literal subscript such as `request.headers['x-ai-model-tier']` and admits that header, so an ordinary condition works as written. A name the expression builds at evaluation time is invisible to it, and so is anything an `opa-authz` policy reads, since that policy lives in OPA. Declare those as an `in: header` parameter on the operation, or the expression sees nothing and evaluates as though the header were absent:
+Derive these keys from authenticated claims rather than from request headers. A client chooses its own headers, so a context key set from one is a value the client picked, and a limit or route keyed on it is one the client can switch.
+
+> **A computed header name needs declaring.** An operation carries only the headers it admits. The compiler reads a literal subscript such as `request.headers['x-region']` and admits that header, so an ordinary condition works as written. A name the expression builds at evaluation time is invisible to it, and so is anything an `opa-authz` policy reads, since that policy lives in OPA. Declare those as an `in: header` parameter on the operation, or the expression sees nothing and evaluates as though the header were absent:
 >
 > ```yaml
 >     parameters:
->       - name: x-ai-model-tier
+>       - name: x-region
 >         in: header
 >         required: false
 >         schema:
 >           type: string
 > ```
 
-
-See [ADR-0024 §Policy-Driven Model Routing](../../../adr/0024-ai-gateway-plugin.md) for the full design.
 
 ### cel vs OPA
 

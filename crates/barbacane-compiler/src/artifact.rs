@@ -21,6 +21,10 @@ use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
 ///
+/// v8 has no MCP configuration: the manifest, `artifact_hash` and operations
+/// carry no `mcp` fields. A v7 artifact's hash covers that configuration, so
+/// it is refused by version rather than failing the integrity check.
+///
 /// v7 moves schema definitions out of the individual schemas and into one
 /// `schema_defs` pool on `routes.json`, which every schema points into. A
 /// definition many operations reach is held once instead of once per operation.
@@ -41,7 +45,7 @@ use crate::manifest::ProjectManifest;
 ///
 /// v4 added Ed25519 signing fields and recorded each plugin's declared
 /// capability `host_functions` in the manifest.
-pub const ARTIFACT_VERSION: u32 = 7;
+pub const ARTIFACT_VERSION: u32 = 8;
 
 /// Options for compilation.
 #[derive(Debug, Clone)]
@@ -92,7 +96,6 @@ pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const KNOWN_EXTENSIONS: &[&str] = &[
     "x-barbacane-dispatch",    // Operation level - dispatcher config (required)
     "x-barbacane-middlewares", // Root or operation level - middleware chain
-    "x-barbacane-mcp",         // Root or operation level - MCP server config
     "x-barbacane-waf",         // Root level - WAF rule set and policy
 ];
 
@@ -121,9 +124,6 @@ pub struct Manifest {
     pub artifact_hash: String,
     /// Build provenance metadata (git commit, CI source, etc.).
     pub provenance: Provenance,
-    /// MCP server configuration (from root-level x-barbacane-mcp).
-    #[serde(default)]
-    pub mcp: McpConfig,
     /// WAF configuration (from root-level x-barbacane-waf).
     #[serde(default)]
     pub waf: WafConfig,
@@ -140,19 +140,6 @@ pub struct Manifest {
     /// load only when this is true (WA-1).
     #[serde(default)]
     pub capabilities_enforced: bool,
-}
-
-/// MCP server configuration extracted from `x-barbacane-mcp`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct McpConfig {
-    /// Whether MCP is enabled globally.
-    pub enabled: bool,
-    /// MCP server name (defaults to info.title).
-    #[serde(default)]
-    pub server_name: Option<String>,
-    /// MCP server version (defaults to info.version).
-    #[serde(default)]
-    pub server_version: Option<String>,
 }
 
 /// What a matching WAF rule does.
@@ -498,12 +485,6 @@ pub struct CompiledOperation {
     /// Response definitions keyed by status code.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub responses: BTreeMap<String, ResponseContent>,
-    /// Whether this operation is exposed as an MCP tool.
-    #[serde(default)]
-    pub mcp_enabled: Option<bool>,
-    /// MCP-specific tool description override.
-    #[serde(default)]
-    pub mcp_description: Option<String>,
     /// Request headers this operation accepts on top of the data plane's
     /// baseline, lowercased and sorted. Derived from the header and cookie
     /// parameters it declares and the security schemes its requirement applies.
@@ -932,9 +913,6 @@ fn compile_inner(
     let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
     let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
 
-    // Extract root-level MCP config from first spec that has it
-    let root_mcp_config = extract_root_mcp_config(specs);
-
     for (spec_index, (spec, _, _)) in specs.iter().enumerate() {
         let spec_file = spec.filename.as_deref().unwrap_or("unknown");
 
@@ -1108,31 +1086,6 @@ fn compile_inner(
                 }
             }
 
-            // Resolve MCP enabled state for this operation
-            let (mcp_enabled, mcp_description) =
-                resolve_mcp_config(&root_mcp_config, op.extensions.get("x-barbacane-mcp"));
-
-            // MCP warnings
-            if mcp_enabled == Some(true) {
-                if op.operation_id.is_none() {
-                    warnings.push(CompileWarning {
-                        code: "E1060".to_string(),
-                        message: "operation without operationId cannot be exposed as MCP tool"
-                            .to_string(),
-                        location: Some(location.clone()),
-                    });
-                }
-                if op.summary.is_none() && op.description.is_none() {
-                    warnings.push(CompileWarning {
-                        code: "E1061".to_string(),
-                        message:
-                            "MCP-enabled operation has no summary or description for tool metadata"
-                                .to_string(),
-                        location: Some(location.clone()),
-                    });
-                }
-            }
-
             // A configuration the plugin's own schema rejects is refused here
             // (E1023). The plugin refuses it at init, which reaches a caller as
             // a 500 on every request through that operation, so a compile is
@@ -1281,8 +1234,6 @@ fn compile_inner(
                 messages: op.messages.clone(),
                 bindings: op.bindings.clone(),
                 responses: op.responses.clone(),
-                mcp_enabled,
-                mcp_description,
                 allowed_request_headers,
             });
 
@@ -1364,20 +1315,6 @@ fn compile_inner(
         source: options.provenance_source.clone(),
     };
 
-    // Build MCP config for manifest, defaulting server_name/server_version from spec info
-    let mcp = {
-        let mut cfg = root_mcp_config.clone();
-        if cfg.enabled {
-            if cfg.server_name.is_none() {
-                cfg.server_name = specs.first().map(|(s, _, _)| s.title.clone());
-            }
-            if cfg.server_version.is_none() {
-                cfg.server_version = specs.first().map(|(s, _, _)| s.api_version.clone());
-            }
-        }
-        cfg
-    };
-
     // Validate and seal the WAF rule set. Done before the hash so the rule
     // set is bound by it, and therefore by the signature: an operator can
     // prove which rules a running gateway carries.
@@ -1414,13 +1351,12 @@ fn compile_inner(
     }
 
     // Compute the artifact hash after every hashed input is final (specs,
-    // checksums, plugin capability surface, capabilities_enforced, mcp, waf).
+    // checksums, plugin capability surface, capabilities_enforced, waf).
     let artifact_hash = compute_artifact_hash(
         &source_specs,
         &checksums,
         &bundled_plugins,
         capabilities_authoritative,
-        &mcp,
         &waf,
     );
 
@@ -1434,7 +1370,6 @@ fn compile_inner(
         plugins: bundled_plugins,
         artifact_hash,
         provenance,
-        mcp,
         waf,
         signature: None,
         signing_public_key: None,
@@ -1444,7 +1379,7 @@ fn compile_inner(
     // AR-1: sign the artifact when a signing key is configured. The signature
     // covers `artifact_hash`, which binds every spec, route, and plugin WASM
     // hash as well as the capability-enforcement surface (capabilities_enforced,
-    // per-plugin host_functions/body_access, MCP config), so a tampered artifact
+    // per-plugin host_functions/body_access), so a tampered artifact
     // fails verification on load (H3).
     sign_manifest_from_env(&mut manifest)?;
 
@@ -1508,17 +1443,16 @@ fn compute_sha256(content: &[u8]) -> String {
 ///
 /// The hash also binds the security-critical capability surface the data plane
 /// trusts at load time: the `capabilities_enforced` flag, each plugin's
-/// `plugin_type`/`version`/`body_access`/declared `host_functions`, and the MCP
-/// config. These are NOT covered by the spec/route/wasm checksums, so without
-/// them a tampered-but-still-signature-verifying `.bca` could flip
-/// `capabilities_enforced=false` (or widen a plugin's host functions, or enable
-/// the MCP surface) and disable the sandbox while passing verification (H3).
+/// `plugin_type`/`version`/`body_access`/declared `host_functions`. These are
+/// NOT covered by the spec/route/wasm checksums, so without them a
+/// tampered-but-still-signature-verifying `.bca` could flip
+/// `capabilities_enforced=false` (or widen a plugin's host functions) and
+/// disable the sandbox while passing verification (H3).
 fn compute_artifact_hash(
     source_specs: &[SourceSpec],
     checksums: &BTreeMap<String, String>,
     plugins: &[BundledPlugin],
     capabilities_enforced: bool,
-    mcp: &McpConfig,
     waf: &WafConfig,
 ) -> String {
     let mut hasher = Sha256::new();
@@ -1548,17 +1482,6 @@ fn compute_artifact_hash(
             .as_bytes(),
         );
     }
-    // MCP surface: gates the MCP endpoint/tooling at runtime, read from the
-    // manifest (not re-derived from the spec) on load.
-    hasher.update(
-        format!(
-            "mcp:enabled={}\tserver_name={}\tserver_version={}\n",
-            mcp.enabled,
-            mcp.server_name.as_deref().unwrap_or(""),
-            mcp.server_version.as_deref().unwrap_or(""),
-        )
-        .as_bytes(),
-    );
     // WAF policy surface. The rule set itself is already bound through
     // `checksums`, but these decide what the rules do, so a change to any of
     // them must change the hash.
@@ -1638,7 +1561,6 @@ pub fn recompute_artifact_hash(manifest: &Manifest) -> String {
         &manifest.checksums,
         &manifest.plugins,
         manifest.capabilities_enforced,
-        &manifest.mcp,
         &manifest.waf,
     )
 }
@@ -1784,7 +1706,7 @@ fn now_utc_iso8601() -> String {
 /// secret via the standard JSON Schema `writeOnly: true` keyword. Walks the
 /// whole schema (properties, array `items`, `additionalProperties`, and the
 /// `$defs`/`allOf`/`anyOf`/`oneOf` combinators) so nested shapes such as
-/// ai-proxy's `routes[].api_key` and `targets{}.api_key` are covered.
+/// `routes[].api_key` and `targets{}.api_key` are covered.
 pub fn collect_writeonly_fields(schema: &serde_json::Value) -> std::collections::BTreeSet<String> {
     fn walk(node: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
         match node {
@@ -3001,53 +2923,6 @@ fn rule_id_of(error: &parapet::CompileError) -> Option<u32> {
     }
 }
 
-/// Extract root-level `x-barbacane-mcp` config from the first spec that defines it.
-fn extract_root_mcp_config(specs: &[(ApiSpec, String, String)]) -> McpConfig {
-    for (spec, _, _) in specs {
-        if let Some(mcp_value) = spec.extensions.get("x-barbacane-mcp") {
-            let enabled = mcp_value
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let server_name = mcp_value
-                .get("server_name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let server_version = mcp_value
-                .get("server_version")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            return McpConfig {
-                enabled,
-                server_name,
-                server_version,
-            };
-        }
-    }
-    McpConfig::default()
-}
-
-/// Resolve MCP enabled/description for a single operation from root + operation-level config.
-fn resolve_mcp_config(
-    root: &McpConfig,
-    op_extension: Option<&serde_json::Value>,
-) -> (Option<bool>, Option<String>) {
-    if let Some(ext) = op_extension {
-        let enabled = ext.get("enabled").and_then(|v| v.as_bool());
-        let description = ext
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        // Operation-level enabled wins; if not set, inherit from root
-        let resolved_enabled = enabled.or(if root.enabled { Some(true) } else { None });
-        (resolved_enabled, description)
-    } else if root.enabled {
-        (Some(true), None)
-    } else {
-        (None, None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3858,7 +3733,7 @@ mod tests {
 
     #[test]
     fn collect_writeonly_fields_finds_nested_secrets() {
-        // Mirrors ai-proxy: writeOnly api_key at top level, in routes[].items,
+        // writeOnly api_key at top level, in routes[].items,
         // and in targets{}.additionalProperties. `base_url` is not writeOnly.
         let schema = serde_json::json!({
             "type": "object",
@@ -3897,7 +3772,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        // Nested shape like ai-proxy: routes[] and targets{}.
+        // Nested shape: routes[] and targets{}.
         let config = serde_json::json!({
             "routes": [
                 { "provider": "openai", "api_key": "sk-live-plaintext" },
@@ -3912,7 +3787,7 @@ mod tests {
         let mut warnings = Vec::new();
         scan_plaintext_secrets(
             &config,
-            "ai-proxy",
+            "example-plugin",
             &secret_fields,
             "GET /v1 in 'api.yaml'",
             &mut warnings,
@@ -3934,7 +3809,13 @@ mod tests {
             "api_key": "",
         });
         let mut warnings = Vec::new();
-        scan_plaintext_secrets(&config, "ai-proxy", &secret_fields, "loc", &mut warnings);
+        scan_plaintext_secrets(
+            &config,
+            "example-plugin",
+            &secret_fields,
+            "loc",
+            &mut warnings,
+        );
         assert!(warnings.is_empty(), "got: {warnings:?}");
     }
 
@@ -5152,22 +5033,10 @@ paths:
         checksums.insert("routes.json".to_string(), "ccc".to_string());
         checksums.insert("plugins/mock.wasm".to_string(), "ddd".to_string());
 
-        let hash1 = compute_artifact_hash(
-            &source_specs,
-            &checksums,
-            &[],
-            false,
-            &McpConfig::default(),
-            &WafConfig::default(),
-        );
-        let hash2 = compute_artifact_hash(
-            &source_specs,
-            &checksums,
-            &[],
-            false,
-            &McpConfig::default(),
-            &WafConfig::default(),
-        );
+        let hash1 =
+            compute_artifact_hash(&source_specs, &checksums, &[], false, &WafConfig::default());
+        let hash2 =
+            compute_artifact_hash(&source_specs, &checksums, &[], false, &WafConfig::default());
 
         assert_eq!(hash1, hash2, "Same inputs must produce same hash");
         assert!(
@@ -5192,22 +5061,8 @@ paths:
         }];
         let checksums = BTreeMap::new();
 
-        let hash_a = compute_artifact_hash(
-            &specs_a,
-            &checksums,
-            &[],
-            false,
-            &McpConfig::default(),
-            &WafConfig::default(),
-        );
-        let hash_b = compute_artifact_hash(
-            &specs_b,
-            &checksums,
-            &[],
-            false,
-            &McpConfig::default(),
-            &WafConfig::default(),
-        );
+        let hash_a = compute_artifact_hash(&specs_a, &checksums, &[], false, &WafConfig::default());
+        let hash_b = compute_artifact_hash(&specs_b, &checksums, &[], false, &WafConfig::default());
 
         assert_ne!(
             hash_a, hash_b,
@@ -5228,22 +5083,8 @@ paths:
         let mut checksums_b = BTreeMap::new();
         checksums_b.insert("routes.json".to_string(), "v2".to_string());
 
-        let hash_a = compute_artifact_hash(
-            &specs,
-            &checksums_a,
-            &[],
-            false,
-            &McpConfig::default(),
-            &WafConfig::default(),
-        );
-        let hash_b = compute_artifact_hash(
-            &specs,
-            &checksums_b,
-            &[],
-            false,
-            &McpConfig::default(),
-            &WafConfig::default(),
-        );
+        let hash_a = compute_artifact_hash(&specs, &checksums_a, &[], false, &WafConfig::default());
+        let hash_b = compute_artifact_hash(&specs, &checksums_b, &[], false, &WafConfig::default());
 
         assert_ne!(
             hash_a, hash_b,
@@ -5502,107 +5343,6 @@ paths:
         );
     }
 
-    // --- MCP config tests ---
-
-    #[test]
-    fn extract_root_mcp_config_enabled() {
-        let spec = ApiSpec {
-            filename: None,
-            schema_defs: None,
-            format: SpecFormat::OpenApi,
-            version: "3.1.0".to_string(),
-            title: "My API".to_string(),
-            api_version: "2.0.0".to_string(),
-            operations: vec![],
-            global_middlewares: vec![],
-            extensions: BTreeMap::from([(
-                "x-barbacane-mcp".to_string(),
-                serde_json::json!({
-                    "enabled": true,
-                    "server_name": "Custom Name"
-                }),
-            )]),
-            security_schemes: BTreeMap::new(),
-            security: None,
-        };
-        let specs = vec![(spec, String::new(), String::new())];
-        let cfg = extract_root_mcp_config(&specs);
-        assert!(cfg.enabled);
-        assert_eq!(cfg.server_name.as_deref(), Some("Custom Name"));
-        assert!(cfg.server_version.is_none());
-    }
-
-    #[test]
-    fn extract_root_mcp_config_disabled_by_default() {
-        let spec = ApiSpec {
-            filename: None,
-            schema_defs: None,
-            format: SpecFormat::OpenApi,
-            version: "3.1.0".to_string(),
-            title: "Test".to_string(),
-            api_version: "1.0.0".to_string(),
-            operations: vec![],
-            global_middlewares: vec![],
-            extensions: BTreeMap::new(),
-            security_schemes: BTreeMap::new(),
-            security: None,
-        };
-        let specs = vec![(spec, String::new(), String::new())];
-        let cfg = extract_root_mcp_config(&specs);
-        assert!(!cfg.enabled);
-    }
-
-    #[test]
-    fn resolve_mcp_config_inherits_from_root() {
-        let root = McpConfig {
-            enabled: true,
-            server_name: None,
-            server_version: None,
-        };
-        // No operation-level extension → inherits root
-        let (enabled, desc) = resolve_mcp_config(&root, None);
-        assert_eq!(enabled, Some(true));
-        assert!(desc.is_none());
-    }
-
-    #[test]
-    fn resolve_mcp_config_operation_overrides_root() {
-        let root = McpConfig {
-            enabled: true,
-            server_name: None,
-            server_version: None,
-        };
-        // Operation opts out
-        let ext = serde_json::json!({"enabled": false});
-        let (enabled, _) = resolve_mcp_config(&root, Some(&ext));
-        assert_eq!(enabled, Some(false));
-    }
-
-    #[test]
-    fn resolve_mcp_config_operation_description_override() {
-        let root = McpConfig {
-            enabled: true,
-            server_name: None,
-            server_version: None,
-        };
-        let ext = serde_json::json!({"description": "Custom tool description"});
-        let (enabled, desc) = resolve_mcp_config(&root, Some(&ext));
-        // enabled not set at operation level → inherits root true
-        assert_eq!(enabled, Some(true));
-        assert_eq!(desc.as_deref(), Some("Custom tool description"));
-    }
-
-    #[test]
-    fn resolve_mcp_config_root_disabled_no_inheritance() {
-        let root = McpConfig {
-            enabled: false,
-            server_name: None,
-            server_version: None,
-        };
-        let (enabled, _) = resolve_mcp_config(&root, None);
-        assert!(enabled.is_none());
-    }
-
     // --- AR-1: artifact integrity & signing ---
 
     fn integrity_test_manifest() -> Manifest {
@@ -5638,7 +5378,6 @@ paths:
             }],
             artifact_hash: String::new(),
             provenance: Provenance::default(),
-            mcp: McpConfig::default(),
             waf: WafConfig::default(),
             signature: None,
             signing_public_key: None,
@@ -5721,8 +5460,8 @@ paths:
     }
 
     /// H3 regression: the signed hash must bind the capability-enforcement
-    /// surface. Before the fix, `capabilities_enforced`, a plugin's declared
-    /// `host_functions`/`body_access`, and the MCP config were omitted from
+    /// surface. Before the fix, `capabilities_enforced` and a plugin's declared
+    /// `host_functions`/`body_access` were omitted from
     /// `artifact_hash`, so an attacker could weaken the sandbox in `manifest.json`
     /// while `artifact_hash` (and thus the signature over it) stayed valid.
     ///
@@ -5744,13 +5483,11 @@ paths:
             m.plugins[0].capabilities.host_functions = vec!["host_http_call".to_string()]
         };
         let grant_body_access = |m: &mut Manifest| m.plugins[0].capabilities.body_access = true;
-        let enable_mcp = |m: &mut Manifest| m.mcp.enabled = true;
 
         let tampers: Vec<&dyn Fn(&mut Manifest)> = vec![
             &disable_enforcement,
             &widen_host_functions,
             &grant_body_access,
-            &enable_mcp,
         ];
 
         for tamper in tampers {
@@ -5999,7 +5736,6 @@ mod waf_tests {
         let specs: Vec<SourceSpec> = Vec::new();
         let checksums = BTreeMap::new();
         let plugins: Vec<BundledPlugin> = Vec::new();
-        let mcp = McpConfig::default();
 
         let base = WafConfig {
             enabled: true,
@@ -6010,7 +5746,7 @@ mod waf_tests {
             ..Default::default()
         };
         let hash_of =
-            |waf: &WafConfig| compute_artifact_hash(&specs, &checksums, &plugins, true, &mcp, waf);
+            |waf: &WafConfig| compute_artifact_hash(&specs, &checksums, &plugins, true, waf);
         let baseline = hash_of(&base);
 
         let mut detection = base.clone();

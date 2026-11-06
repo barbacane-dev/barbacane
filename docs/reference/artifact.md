@@ -26,7 +26,7 @@ Metadata about the artifact.
 
 ```json
 {
-  "barbacane_artifact_version": 6,
+  "barbacane_artifact_version": 8,
   "compiled_at": "2026-07-10T10:30:00Z",
   "compiler_version": "0.8.0",
   "source_specs": [
@@ -55,7 +55,6 @@ Metadata about the artifact.
     "routes.json": "sha256:def456..."
   },
   "capabilities_enforced": true,
-  "mcp": { "enabled": false },
   "artifact_hash": "sha256:a1b2c3d4e5f6...",
   "signature": "…hex…",
   "signing_public_key": "…hex…",
@@ -70,7 +69,7 @@ Metadata about the artifact.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `barbacane_artifact_version` | integer | Format version (currently `6`). The data plane refuses an artifact whose version it does not read. |
+| `barbacane_artifact_version` | integer | Format version (currently `8`). The data plane refuses an artifact whose version it does not read. |
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
 | `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
@@ -78,7 +77,6 @@ Metadata about the artifact.
 | `routes_count` | integer | Number of compiled routes |
 | `checksums` | object | SHA-256 checksums for integrity (`routes.json` + each plugin WASM) |
 | `capabilities_enforced` | bool | Whether per-plugin `host_functions` are authoritative and enforced on load (WA-1) |
-| `mcp` | object | MCP server config (`enabled`, optional `server_name`/`server_version`) |
 | `artifact_hash` | string | Combined SHA-256 fingerprint (see below) |
 | `signature` | string? | Detached Ed25519 signature over `artifact_hash` (present when signed with `BARBACANE_SIGNING_KEY`) |
 | `signing_public_key` | string? | Hex public key the signature was produced with (informational) |
@@ -88,8 +86,7 @@ Metadata about the artifact.
 
 `artifact_hash` binds not just the spec/route/plugin-WASM checksums but also the
 **capability-enforcement surface** — `capabilities_enforced`, each plugin's
-declared `host_functions` / `body_access` / type / version, and the MCP config —
-so a tampered artifact cannot flip the sandbox off while still passing signature
+declared `host_functions` / `body_access` / type / version, so a tampered artifact cannot flip the sandbox off while still passing signature
 verification. The data plane recomputes and verifies `artifact_hash` on **every**
 load, independent of signing.
 

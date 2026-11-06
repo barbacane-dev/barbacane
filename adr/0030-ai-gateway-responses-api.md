@@ -1,6 +1,6 @@
 # ADR-0030: AI Gateway — OpenAI Responses API Support & Dynamic Model Routing
 
-**Status:** Proposed
+**Status:** Deprecated. Barbacane no longer ships the AI gateway plugins.
 **Date:** 2026-04-22
 
 ## Context

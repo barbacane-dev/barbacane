@@ -38,8 +38,7 @@ struct DenyAction {
     #[serde(default = "default_deny_status")]
     status: u16,
     /// Machine-readable error code, snake_case. Becomes the URN suffix and the
-    /// `code` field on the response body — the convention used by `ai-proxy`
-    /// for `model_not_permitted` and similar.
+    /// `code` field on the response body.
     code: String,
     /// Human-readable detail message. Falls back to `code` when omitted.
     #[serde(default)]
@@ -763,50 +762,134 @@ mod tests {
         }
     }
 
+    /// Builds a request with optional JWT claims and an optional JSON body.
+    fn request_with(claims: Option<&str>, body: Option<&str>) -> Request {
+        let mut req = create_request();
+        if let Some(claims) = claims {
+            req.headers
+                .insert("x-auth-claims".to_string(), claims.to_string());
+        }
+        req.body = body.map(|b| b.as_bytes().to_vec());
+        req
+    }
+
+    fn status_of(config: &mut CelPolicy, req: Request) -> u16 {
+        match config.on_request(req) {
+            Action::Continue(_) => 200,
+            Action::ShortCircuit(resp) => resp.status,
+        }
+    }
+
     #[test]
-    fn eval_body_json_ai_consumer_policy_example() {
-        // The motivating ADR-0030 example: per-tier model gating using `on_match.deny`.
+    fn missing_key_is_an_evaluation_error() {
+        // The authorization guide tells users to guard optional fields with
+        // has() because reading a missing key returns 500.
+        let mut body_rule = create_config("request.body_json.format == 'parquet'");
+        assert_eq!(
+            status_of(&mut body_rule, request_with(None, Some(r#"{"x":1}"#))),
+            500
+        );
+        assert_eq!(status_of(&mut body_rule, request_with(None, None)), 500);
+
+        let mut claim_rule = create_config("request.claims.tier == 'premium'");
+        assert_eq!(status_of(&mut claim_rule, request_with(None, None)), 500);
+    }
+
+    #[test]
+    fn guide_per_tier_gating_example() {
+        // The "Match-and-deny: per-tier gating" example in
+        // docs/guide/middlewares/authorization.md.
         let json = r#"{
-            "expression": "request.body_json.model.startsWith('gpt-4o') && request.claims.tier != 'premium'",
+            "expression": "has(request.body_json.format) && request.body_json.format == 'parquet' && (!has(request.claims.tier) || request.claims.tier != 'premium')",
             "on_match": {
                 "deny": {
                     "status": 403,
-                    "code": "model_not_permitted"
+                    "code": "format_not_permitted_for_tier",
+                    "message": "Parquet exports are restricted to the premium tier"
                 }
             }
         }"#;
         let mut config: CelPolicy = serde_json::from_str(json).expect("config parses");
+        let parquet = Some(r#"{"format":"parquet"}"#);
 
-        // Free tier asking for gpt-4o-mini → expression matches → 403 model_not_permitted.
-        let mut req_blocked = create_request();
-        req_blocked.headers.insert(
-            "x-auth-claims".to_string(),
-            r#"{"tier":"free"}"#.to_string(),
-        );
-        req_blocked.body = Some(br#"{"model":"gpt-4o-mini"}"#.to_vec());
-        match config.on_request(req_blocked) {
-            Action::Continue(_) => panic!("expected 403 for free tier on gpt-4o-mini"),
+        match config.on_request(request_with(Some(r#"{"tier":"free"}"#), parquet)) {
+            Action::Continue(_) => panic!("expected 403 for a free-tier parquet export"),
             Action::ShortCircuit(resp) => {
                 assert_eq!(resp.status, 403);
                 let body: serde_json::Value =
                     serde_json::from_slice(&resp.body.unwrap()).expect("problem+json");
-                assert_eq!(body["code"], "model_not_permitted");
-                assert_eq!(body["type"], "urn:barbacane:error:model_not_permitted");
-                assert_eq!(body["status"], 403);
+                assert_eq!(body["code"], "format_not_permitted_for_tier");
+                assert_eq!(
+                    body["type"],
+                    "urn:barbacane:error:format_not_permitted_for_tier"
+                );
+                assert_eq!(
+                    body["detail"],
+                    "Parquet exports are restricted to the premium tier"
+                );
             }
         }
 
-        // Premium tier asking for gpt-4o → expression false → continue.
-        let mut req_allowed = create_request();
-        req_allowed.headers.insert(
-            "x-auth-claims".to_string(),
-            r#"{"tier":"premium"}"#.to_string(),
+        // A token without a tier claim counts as not premium.
+        assert_eq!(
+            status_of(&mut config, request_with(Some(r#"{"sub":"a"}"#), parquet)),
+            403
         );
-        req_allowed.body = Some(br#"{"model":"gpt-4o"}"#.to_vec());
-        match config.on_request(req_allowed) {
-            Action::Continue(_) => {}
-            Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
-        }
+        assert_eq!(
+            status_of(
+                &mut config,
+                request_with(Some(r#"{"tier":"premium"}"#), parquet)
+            ),
+            200
+        );
+        // Requests without a body, without a format, or with another format continue.
+        assert_eq!(status_of(&mut config, request_with(None, None)), 200);
+        assert_eq!(
+            status_of(&mut config, request_with(None, Some(r#"{"x":1}"#))),
+            200
+        );
+        assert_eq!(
+            status_of(
+                &mut config,
+                request_with(Some(r#"{"tier":"free"}"#), Some(r#"{"format":"csv"}"#))
+            ),
+            200
+        );
+    }
+
+    #[test]
+    fn guide_policy_routing_example() {
+        // The two cel rules of the "Policy-driven routing (cel stacking)"
+        // example in docs/guide/middlewares/authorization.md.
+        let rules = [
+            "has(request.claims.tier) && request.claims.tier == 'premium'",
+            "has(request.claims.roles) && 'premium' in request.claims.roles",
+        ];
+        let tier_after = |claims: Option<&str>| {
+            host::reset_context();
+            for rule in rules {
+                let mut ctx = BTreeMap::new();
+                ctx.insert("plan.tier".to_string(), "premium".to_string());
+                let mut config = create_config_with_on_match(rule, ctx);
+                assert_eq!(status_of(&mut config, request_with(claims, None)), 200);
+            }
+            host::context_value("plan.tier")
+        };
+
+        assert_eq!(tier_after(None), None);
+        assert_eq!(tier_after(Some(r#"{"sub":"a"}"#)), None);
+        assert_eq!(
+            tier_after(Some(r#"{"tier":"free","roles":["viewer"]}"#)),
+            None
+        );
+        assert_eq!(
+            tier_after(Some(r#"{"tier":"premium"}"#)).as_deref(),
+            Some("premium")
+        );
+        assert_eq!(
+            tier_after(Some(r#"{"roles":["viewer","premium"]}"#)).as_deref(),
+            Some("premium")
+        );
     }
 
     #[test]
@@ -1264,7 +1347,7 @@ mod tests {
     fn on_match_true_sets_context_and_continues() {
         host::reset_context();
         let mut ctx_map = BTreeMap::new();
-        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        ctx_map.insert("upstream.target".to_string(), "premium".to_string());
         let mut config = create_config_with_on_match("request.consumer == 'alice'", ctx_map);
         let req = create_request();
 
@@ -1273,14 +1356,17 @@ mod tests {
             Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
         }
 
-        assert_eq!(host::context_value("ai.target").as_deref(), Some("premium"));
+        assert_eq!(
+            host::context_value("upstream.target").as_deref(),
+            Some("premium")
+        );
     }
 
     #[test]
     fn on_match_false_continues_without_403() {
         host::reset_context();
         let mut ctx_map = BTreeMap::new();
-        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        ctx_map.insert("upstream.target".to_string(), "premium".to_string());
         let mut config = create_config_with_on_match("request.consumer == 'bob'", ctx_map);
         let req = create_request(); // consumer = alice, not bob
 
@@ -1292,21 +1378,24 @@ mod tests {
         }
 
         // Context was NOT set (expression was false)
-        assert!(host::context_value("ai.target").is_none());
+        assert!(host::context_value("upstream.target").is_none());
     }
 
     #[test]
     fn on_match_sets_multiple_context_keys() {
         host::reset_context();
         let mut ctx_map = BTreeMap::new();
-        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        ctx_map.insert("upstream.target".to_string(), "premium".to_string());
         ctx_map.insert("ai.priority".to_string(), "high".to_string());
         let mut config = create_config_with_on_match("true", ctx_map);
         let req = create_request();
 
         let _ = config.on_request(req);
 
-        assert_eq!(host::context_value("ai.target").as_deref(), Some("premium"));
+        assert_eq!(
+            host::context_value("upstream.target").as_deref(),
+            Some("premium")
+        );
         assert_eq!(host::context_value("ai.priority").as_deref(), Some("high"));
     }
 
@@ -1316,7 +1405,7 @@ mod tests {
             "expression": "request.claims.tier == 'premium'",
             "on_match": {
                 "set_context": {
-                    "ai.target": "premium"
+                    "upstream.target": "premium"
                 }
             }
         }"#;
@@ -1324,7 +1413,10 @@ mod tests {
         assert!(config.on_match.is_some());
         let on_match = config.on_match.unwrap();
         assert_eq!(
-            on_match.set_context.get("ai.target").map(|s| s.as_str()),
+            on_match
+                .set_context
+                .get("upstream.target")
+                .map(|s| s.as_str()),
             Some("premium")
         );
     }

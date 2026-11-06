@@ -2,24 +2,6 @@
 // Regenerate: node docs/rulesets/generate.mjs
 
 const schemas = {
-  "ai-proxy": {
-    required: [],
-    properties: {
-      provider: { type: "string" },
-      api_key: { type: "string", writeOnly: true },
-      base_url: { type: "string" },
-      auth: { type: "undefined" },
-      timeout: { type: "integer", minimum: 1 },
-      models_timeout_ms: { type: "integer", minimum: 1 },
-      max_tokens: { type: "integer", minimum: 1 },
-      fallback: { type: "array" },
-      routes: { type: "array" },
-      targets: { type: "object" },
-      default_target: { type: "string" },
-    },
-    additionalProperties: false,
-  },
-
   "fire-and-forget": {
     required: ["url"],
     properties: {

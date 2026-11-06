@@ -609,11 +609,8 @@ components:
 
 /// A configuration the plugin's own schema rejects must not compile.
 ///
-/// `ai-proxy` stopped accepting `model` on a target (ADR-0030): the client names
-/// the model and the gateway routes on it. A deployment carried the old form
-/// past a clean compile and the plugin then refused to initialise, which reached
-/// callers as a 500 on every request through that dispatcher. The compiler held
-/// the schema that describes this all along.
+/// The plugin would refuse it at init, which reaches every caller of the
+/// operation as a 500. `http-upstream`'s schema allows no unknown keys.
 #[test]
 fn a_config_the_plugin_schema_rejects_does_not_compile() {
     use barbacane_compiler::{compile_with_manifest, CompileOptions, ProjectManifest};
@@ -622,7 +619,7 @@ fn a_config_the_plugin_schema_rejects_does_not_compile() {
         .parent()
         .and_then(Path::parent)
         .expect("repository root");
-    let wasm = repo.join("plugins/ai-proxy/ai-proxy.wasm");
+    let wasm = repo.join("plugins/http-upstream/http-upstream.wasm");
     if !wasm.exists() {
         eprintln!("skipping: {} is not built", wasm.display());
         return;
@@ -632,7 +629,7 @@ fn a_config_the_plugin_schema_rejects_does_not_compile() {
     let manifest_path = dir.path().join("barbacane.yaml");
     std::fs::write(
         &manifest_path,
-        format!("plugins:\n  ai-proxy:\n    path: {}\n", wasm.display()),
+        format!("plugins:\n  http-upstream:\n    path: {}\n", wasm.display()),
     )
     .expect("write manifest");
 
@@ -641,16 +638,13 @@ fn a_config_the_plugin_schema_rejects_does_not_compile() {
             r#"openapi: "3.1.0"
 info: {{ title: Proxy, version: "1.0.0" }}
 paths:
-  /chat:
-    post:
-      operationId: chat
+  /orders:
+    get:
+      operationId: listOrders
       x-barbacane-dispatch:
-        name: ai-proxy
+        name: http-upstream
         config:
-          targets:
-            cloud:
-              provider: anthropic{extra}
-          default_target: cloud
+          url: https://orders.internal.example{extra}
       responses:
         "200": {{ description: ok }}
 "#
@@ -674,22 +668,18 @@ paths:
         )
     };
 
-    // The form the plugin no longer accepts.
-    let err = compile(
-        &spec_for("\n              model: claude-sonnet-5"),
-        "legacy",
-    )
-    .expect_err("a legacy `model` on a target must be refused");
+    let err = compile(&spec_for("\n          retries: 3"), "unknown-key")
+        .expect_err("a key the schema does not allow must be refused");
     let message = err.to_string();
     assert!(message.contains("E1023"), "{message}");
     assert!(
-        message.contains("model"),
+        message.contains("retries"),
         "the message must name the offending field: {message}"
     );
 
-    // And the same spec without it still compiles, so the check is not simply
+    // The same spec without the key compiles, so the check is not simply
     // refusing this plugin.
-    compile(&spec_for(""), "current").expect("a valid config must still compile");
+    compile(&spec_for(""), "valid").expect("a valid config must still compile");
 }
 
 /// A config value given as a runtime reference compiles even when the plugin's

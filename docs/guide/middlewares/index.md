@@ -10,7 +10,6 @@ This guide splits middlewares by concern:
 - [Observability](observability.md) — `correlation-id`, `http-log`
 - [Transformation](transformation.md) — `request-transformer`, `response-transformer`, `redirect`
 - [Caching](caching.md) — `cache`
-- [AI Gateway](ai-gateway.md) — `ai-prompt-guard`, `ai-token-limit`, `ai-cost-tracker`, `ai-response-guard`
 
 ---
 
@@ -44,7 +43,6 @@ Any middleware can appear multiple times in a chain. Each entry is executed inde
 Patterns that rely on stacking:
 
 - **`cel` with `on_match.set_context`** — one entry per routing rule. Each writes context keys that downstream plugins read. See [Policy-driven routing](authorization.md#policy-driven-routing-cel-stacking).
-- **`ai-token-limit` with distinct `policy_name`** — multiple windows (per-minute, per-hour). See [Stacking multiple windows](ai-gateway.md#stacking-multiple-windows).
 - **`rate-limit` with distinct `partition_key`** — layered limits (per-IP, per-user, per-tenant). See [Layered rate limits](traffic-control.md#layered-rate-limits-stacking).
 
 Stacking is the primary composition mechanism. If a plugin's feature set feels constrained, stacking another instance is usually the answer before reaching for config complexity.
@@ -148,7 +146,7 @@ x-barbacane-middlewares:
 
 Every auth plugin (`basic-auth`, `apikey-auth`, `jwt-auth`, `oauth2-auth`, `oidc-auth`, `ldap-auth`) writes the same two identity keys after a successful authentication, alongside the `x-auth-*` headers: `auth.sub` (the consumer id, the value of `x-auth-consumer`) and `auth.groups` (the comma-separated groups, only when the identity has groups). `rate-limit`'s `partition_key: "context:auth.sub"` and `request-transformer`'s `context:` sources read them; unlike headers, context values cannot be supplied by the client.
 
-The dispatcher may also write context keys (e.g. `ai-proxy` writes `ai.prompt_tokens` after calling the LLM) that flow into the on_response chain — see [AI Gateway](ai-gateway.md) for the full map.
+The dispatcher may also write context keys that flow into the on_response chain.
 
 ---
 

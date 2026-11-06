@@ -330,8 +330,8 @@ impl HttpClient {
         // request. `Host` is derived from the URL (a plugin-set Host enables
         // routing/cache/SSRF confusion), and the hop-by-hop / framing headers
         // below are owned by the HTTP client (a plugin-set value enables request
-        // smuggling). `Authorization` is intentionally allowed: dispatchers such
-        // as ai-proxy legitimately authenticate to their upstream.
+        // smuggling). `Authorization` is intentionally allowed: dispatchers
+        // legitimately authenticate to their upstream.
         for (key, value) in &request.headers {
             if is_forbidden_outbound_header(key) {
                 continue;

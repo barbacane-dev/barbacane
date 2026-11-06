@@ -170,7 +170,7 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// are ignored entirely and the observed peer is used.
 ///
 /// This is the single source of truth for client-IP resolution so security
-/// middlewares (ip-restriction, rate-limit, ai-token-limit) cannot drift into
+/// middlewares (ip-restriction, rate-limit) cannot drift into
 /// independently spoofable implementations.
 pub fn resolve_client_ip(req: &Request, trusted_proxies: &[String]) -> String {
     let peer = req.client_ip.trim();

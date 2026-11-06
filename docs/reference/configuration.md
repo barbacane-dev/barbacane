@@ -31,17 +31,13 @@ These changes are intentional secure defaults. Adopt them as follows:
    secrets like `file:///run/secrets/api-key`, set
    `BARBACANE_SECRETS_DIR=/run/secrets`. `env://` references are unaffected.
 
-3. **MCP clients must initialize a session.** Non-`initialize` MCP requests
-   (`tools/list`, `tools/call`, …) without a valid `Mcp-Session-Id` are now
-   rejected; call `initialize` first and reuse the returned session id.
-
-4. **Plugin egress to internal addresses is blocked by default.** This covers
+3. **Plugin egress to internal addresses is blocked by default.** This covers
    plugin HTTP calls, Kafka/NATS broker connections, and WebSocket upstreams. If
    a plugin legitimately reaches an internal upstream or broker, set
    `BARBACANE_ALLOW_INTERNAL_EGRESS=1` (or prefer an explicit allowlist when one
    is available).
 
-5. **Plugins may only use their declared capabilities.** A plugin whose WASM
+4. **Plugins may only use their declared capabilities.** A plugin whose WASM
    imports a host function outside the capabilities declared in its
    `plugin.toml` fails to load. Official plugins already declare the correct
    capabilities; custom plugins must list theirs under
@@ -116,7 +112,7 @@ BARBACANE_TRUSTED_PUBKEY=<hex-public-key> \
 The signature covers the artifact's content hash (`artifact_hash`), which binds
 every spec, route, and plugin WASM checksum **plus the capability-enforcement
 surface** (`capabilities_enforced`, each plugin's declared `host_functions` /
-`body_access`, and the MCP config), so any tampering with the artifact (including
+`body_access`), so any tampering with the artifact (including
 attempts to weaken the sandbox) fails verification on load.
 
 ## Verifying release container images
