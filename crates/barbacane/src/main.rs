@@ -1851,12 +1851,15 @@ impl Gateway {
                             // short-circuit (e.g. error responses with JSON problem details).
                             let sc_body = instance.take_output_body().unwrap_or(None);
                             let final_context = instance.get_context();
-                            let final_response = barbacane_wasm::execute_on_response_partial(
+                            let final_response = match barbacane_wasm::execute_on_response_partial(
                                 &mut instances,
                                 &response,
                                 index,
                                 final_context,
-                            );
+                            ) {
+                                Ok(r) => r,
+                                Err(e) => return Err(self.dev_error_response(e)),
+                            };
                             return match serde_json::from_slice::<barbacane_wasm::Response>(
                                 &final_response,
                             ) {
@@ -1912,21 +1915,26 @@ impl Gateway {
     /// Like the on_request path (SPEC-008), response body is stripped for
     /// middleware that don't declare `body_access = true`. Bodies travel via
     /// side-channel host functions, not embedded in JSON.
+    ///
+    /// A middleware that fails stops the chain and the request is answered
+    /// with a 500 (SPEC-003 section 6.4).
+    #[allow(clippy::result_large_err)]
     fn execute_middleware_on_response(
         &self,
         mut instances: Vec<barbacane_wasm::PluginInstance>,
         response: barbacane_wasm::Response,
         context: barbacane_wasm::RequestContext,
-    ) -> barbacane_wasm::Response {
+    ) -> Result<barbacane_wasm::Response, Response<Full<Bytes>>> {
         // Extract body — it travels via side-channel, not in JSON.
-        let resp_body = response.body.clone();
-        let mut resp_for_json = response.clone();
-        resp_for_json.body = None;
-
-        let response_json = match serde_json::to_vec(&resp_for_json) {
-            Ok(j) => j,
-            Err(_) => return response,
+        let resp_body = response.body;
+        let resp_for_json = barbacane_wasm::Response {
+            body: None,
+            ..response
         };
+
+        let response_json = serde_json::to_vec(&resp_for_json).map_err(|e| {
+            self.dev_error_response(format_args!("failed to serialize response: {e}"))
+        })?;
 
         // Side-channel body control: body only goes to body-access middleware.
         let mut body_ctrl = barbacane_wasm::BodyAccessControl::new(response_json, resp_body);
@@ -1960,27 +1968,21 @@ impl Gateway {
                         start.elapsed().as_secs_f64(),
                         false,
                     );
-                    let trap_result = barbacane_wasm::TrapResult::from_error(
-                        &e,
-                        barbacane_wasm::TrapContext::OnResponse,
-                    );
-                    tracing::warn!(
-                        error = %trap_result.message(),
-                        "Middleware on_response failed, continuing with original response"
-                    );
+                    return Err(self.dev_error_response(format_args!(
+                        "plugin '{middleware_name}' on_response failed: {e}"
+                    )));
                 }
             }
         }
 
         // Reconstruct Response from metadata JSON + side-channel body.
         let (final_json, final_body) = body_ctrl.finalize();
-        match serde_json::from_slice::<barbacane_wasm::Response>(&final_json) {
-            Ok(mut resp) => {
-                resp.body = final_body;
-                resp
-            }
-            Err(_) => response,
-        }
+        let mut resp =
+            serde_json::from_slice::<barbacane_wasm::Response>(&final_json).map_err(|e| {
+                self.dev_error_response(format_args!("failed to parse middleware response: {e}"))
+            })?;
+        resp.body = final_body;
+        Ok(resp)
     }
 
     /// Build an HTTP response from a plugin Response.
@@ -2231,12 +2233,17 @@ impl Gateway {
                                 let cb = |name: &str, phase: &str, dur: f64, sc: bool| {
                                     metrics.record_middleware(name, phase, dur, sc);
                                 };
-                                barbacane_wasm::execute_on_response_with_metrics(
+                                if let Err(e) = barbacane_wasm::execute_on_response_with_metrics(
                                     &mut instances,
                                     &resp_json,
                                     post_ctx,
                                     Some(&cb),
-                                );
+                                ) {
+                                    tracing::error!(
+                                        error = %e,
+                                        "middleware failed after a streamed response was sent"
+                                    );
+                                }
                             }
                         }
                         Ok((Err(e), _, _, _, _, _)) => {
@@ -2365,18 +2372,19 @@ impl Gateway {
                         }
                     };
 
-                    // Run on_response for observability (modifications discarded).
+                    // Run on_response for observability (modifications
+                    // discarded). A middleware that fails refuses the upgrade.
                     if !middleware_instances.is_empty() {
                         let sentinel_response = barbacane_wasm::Response {
                             status: 101,
                             headers: std::collections::BTreeMap::new(),
                             body: None,
                         };
-                        let _ = self.execute_middleware_on_response(
+                        self.execute_middleware_on_response(
                             middleware_instances,
                             sentinel_response,
                             post_dispatch_context.clone(),
-                        );
+                        )?;
                     }
 
                     // Spawn the WebSocket relay as a background task.
@@ -2430,7 +2438,7 @@ impl Gateway {
                         middleware_instances,
                         plugin_response,
                         post_dispatch_context,
-                    )
+                    )?
                 } else {
                     plugin_response
                 };

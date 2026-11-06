@@ -212,7 +212,8 @@ fn bench_middleware_chain(c: &mut Criterion) {
                         black_box(&response),
                         ctx,
                         None,
-                    );
+                    )
+                    .expect("no-op middlewares succeed");
                     black_box(result);
                 });
             },

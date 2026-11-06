@@ -359,9 +359,9 @@ WASM instances are **not** shared across threads. The data plane maintains a poo
 | `on_request` traps (panic, timeout, OOM) | `500 Internal Server Error` |
 | `dispatch` returns non-zero | `500 Internal Server Error` |
 | `dispatch` traps | `500 Internal Server Error` |
-| `on_response` traps | Log error, pass original (unmodified) response through |
+| `on_response` traps | `500 Internal Server Error` |
 
-The response phase is fault-tolerant: a plugin crash during `on_response` does not kill the response. The request phase is not: a crash during `on_request` or `dispatch` results in a `500`.
+Every phase fails closed: a middleware that traps never lets the request or response it was handling through. This includes the `on_response` chain that runs after a middleware short-circuits, and the WebSocket upgrade, which is refused. On a streamed response, `on_response` runs after the response has been sent, so a trap there is logged and the response is unaffected.
 
 ---
 
