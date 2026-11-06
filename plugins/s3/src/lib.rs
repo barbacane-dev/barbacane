@@ -210,6 +210,7 @@ impl S3Dispatcher {
             url: full_url,
             headers,
             timeout_ms: Some((self.timeout * 1000.0) as u64),
+            ..Default::default()
         }
     }
 

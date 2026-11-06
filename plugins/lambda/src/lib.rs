@@ -69,6 +69,7 @@ impl LambdaDispatcher {
             url: self.url.clone(),
             headers,
             timeout_ms: Some((self.timeout * 1000.0) as u64),
+            ..Default::default()
         };
 
         // Call Lambda via the shared SDK HTTP helper.

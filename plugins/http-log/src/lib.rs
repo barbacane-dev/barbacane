@@ -211,6 +211,7 @@ impl HttpLog {
             url: self.endpoint.clone(),
             headers,
             timeout_ms: Some(self.timeout_ms),
+            ..Default::default()
         };
 
         // Best-effort: the payload travels via the side-channel inside

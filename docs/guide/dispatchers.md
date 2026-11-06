@@ -135,17 +135,17 @@ x-barbacane-dispatch:
 | `url` | string | Yes | - | Base URL of the upstream (must be HTTPS in production) |
 | `path` | string | No | Same as operation path | Upstream path template with `{param}` substitution |
 | `timeout` | number | No | 30.0 | Request timeout in seconds |
-| `tls` | object | No | - | TLS configuration for mTLS (see below) |
+| `tls` | object | No | - | Client certificate and CA for the upstream connection (see below) |
 
 ##### TLS Configuration (mTLS)
 
-For upstreams that require mutual TLS (client certificate authentication):
+For upstreams that require mutual TLS (client certificate authentication), or that present a certificate from a private CA:
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `tls.client_cert` | string | If mTLS | Path to PEM-encoded client certificate |
-| `tls.client_key` | string | If mTLS | Path to PEM-encoded client private key |
-| `tls.ca` | string | No | Path to PEM-encoded CA certificate for server verification |
+| `tls.client_cert` | string | With `client_key` | PEM client certificate presented to the upstream |
+| `tls.client_key` | string | With `client_cert` | PEM private key of the client certificate |
+| `tls.ca` | string | No | PEM CA certificate the upstream's certificate must chain to |
 
 **Example with mTLS:**
 
@@ -155,16 +155,16 @@ x-barbacane-dispatch:
   config:
     url: "https://secure-backend.internal"
     tls:
-      client_cert: "/etc/barbacane/certs/client.crt"
-      client_key: "/etc/barbacane/certs/client.key"
-      ca: "/etc/barbacane/certs/ca.crt"
+      client_cert: certs/client.crt
+      client_key: certs/client.key
+      ca: certs/ca.crt
 ```
 
 **Notes:**
-- Both `client_cert` and `client_key` must be specified together
-- Certificate files must be in PEM format
-- The `ca` option adds a custom CA for server verification (in addition to system roots)
-- TLS-configured clients are cached and reused across requests
+- Files are read as `file://` secrets are: from under `BARBACANE_SECRETS_DIR`, with relative paths resolved against it, and never from outside it (after symlinks and `..` are resolved). Without `BARBACANE_SECRETS_DIR`, an upstream with `tls` is unreachable and each request answers 502.
+- `client_cert` and `client_key` go together; the config schema refuses one without the other.
+- With `ca`, the upstream's certificate is verified against that CA only: the built-in roots are not trusted alongside it.
+- Clients are built once per distinct `tls` setting and reused across requests.
 
 #### Path Parameters
 
@@ -251,9 +251,9 @@ The dispatcher returns RFC 9457 error responses:
 
 - **HTTPS required in production**: `http://` URLs are rejected by the compiler (E1031)
 - **Development mode**: Use `--allow-plaintext` at compile time and `--allow-plaintext-upstream` at runtime
-- **TLS**: Uses rustls with system CA roots by default
+- **TLS**: Uses rustls with the built-in CA roots by default
 - **mTLS**: Configure `tls.client_cert` and `tls.client_key` for mutual TLS authentication
-- **Custom CA**: Use `tls.ca` to add a custom CA certificate for private PKI
+- **Private CA**: `tls.ca` verifies the upstream against that CA alone
 
 ### lambda
 
