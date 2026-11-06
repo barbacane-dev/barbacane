@@ -30,6 +30,7 @@
 pub mod body;
 pub mod context;
 pub mod errors;
+pub mod groups;
 pub mod hash;
 pub mod http;
 pub mod jwt;

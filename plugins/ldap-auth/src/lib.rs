@@ -7,6 +7,7 @@
 //! a directory failure gets 503 and is never cached.
 
 use barbacane_plugin_sdk::context;
+use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::ldap::{self, Connection, Entry, LdapError, SearchRequest};
 use barbacane_plugin_sdk::log;
 use barbacane_plugin_sdk::prelude::*;
@@ -232,7 +233,7 @@ impl LdapAuth {
             .headers
             .insert("x-auth-dn".to_string(), identity.dn);
         if !identity.groups.is_empty() {
-            let groups = identity.groups.join(",");
+            let groups = groups::encode(&identity.groups);
             context::set(context::AUTH_GROUPS, &groups);
             modified
                 .headers
@@ -1012,9 +1013,13 @@ mod tests {
         let mut p = plugin();
         p.group_name_from_dn = false;
         let req = expect_continue(p.on_request(request(Some(&basic("alice", "wonderland")))));
+        let header = req.headers.get("x-auth-consumer-groups").unwrap();
         assert_eq!(
-            req.headers.get("x-auth-consumer-groups").unwrap(),
-            &format!("cn=admins,ou=groups,{BASE},cn=dev,ou=groups,{BASE}")
+            groups::decode(header),
+            [
+                format!("cn=admins,ou=groups,{BASE}"),
+                format!("cn=dev,ou=groups,{BASE}")
+            ]
         );
     }
 
