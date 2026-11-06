@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
+        ws::{close_code, CloseFrame, Message, WebSocket},
         State, WebSocketUpgrade,
     },
     response::IntoResponse,
@@ -139,9 +139,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let (tx, mut rx) = mpsc::channel::<ControlPlaneMessage>(32);
 
     // Register in connection manager
-    state
+    let close = state
         .connection_manager
-        .register(data_plane_id, project_id, tx);
+        .register(data_plane_id, project_id, api_key.id, tx);
+
+    // The key is rechecked on this period, so its expiry, or a revocation made
+    // through another control-plane instance, also ends the session.
+    let key_check_period =
+        std::time::Duration::from_secs(u64::from(DEFAULT_HEARTBEAT_INTERVAL_SECS));
+    let mut key_check = tokio::time::interval_at(
+        tokio::time::Instant::now() + key_check_period,
+        key_check_period,
+    );
 
     tracing::info!(
         data_plane_id = %data_plane_id,
@@ -153,6 +162,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     // Main message loop
     loop {
         tokio::select! {
+            // The API key was revoked through this control plane.
+            _ = close.notified() => {
+                end_session(&mut sender, "API key revoked").await;
+                break;
+            }
+
+            _ = key_check.tick() => {
+                match api_keys_repo.is_active(api_key.id).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        end_session(&mut sender, "API key revoked or expired").await;
+                        break;
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Failed to recheck the API key"),
+                }
+            }
+
             // Messages from connection manager (e.g., artifact notifications)
             Some(msg) = rx.recv() => {
                 let json = match serde_json::to_string(&msg) {
@@ -208,6 +234,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     tracing::info!(data_plane_id = %data_plane_id, "Data plane disconnected");
+}
+
+/// Tell the data plane why its session ends, then close the socket.
+async fn end_session(
+    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    reason: &'static str,
+) {
+    let notice = ControlPlaneMessage::Disconnect {
+        reason: reason.to_string(),
+    };
+    let _ = sender.send(to_ws_message(&notice)).await;
+    let _ = sender
+        .send(Message::Close(Some(CloseFrame {
+            code: close_code::POLICY,
+            reason: reason.into(),
+        })))
+        .await;
 }
 
 /// Registration info extracted from the register message.

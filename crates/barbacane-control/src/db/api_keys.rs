@@ -112,6 +112,23 @@ impl ApiKeysRepository {
         .await
     }
 
+    /// Whether the key can still authenticate: not revoked and not expired.
+    pub async fn is_active(&self, id: Uuid) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM api_keys
+                WHERE id = $1
+                  AND revoked_at IS NULL
+                  AND (expires_at IS NULL OR expires_at > NOW())
+            )
+            "#,
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+    }
+
     /// Revoke an API key.
     pub async fn revoke(&self, id: Uuid) -> Result<Option<ApiKey>, sqlx::Error> {
         sqlx::query_as::<_, ApiKey>(
