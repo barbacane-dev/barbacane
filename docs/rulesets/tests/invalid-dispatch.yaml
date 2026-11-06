@@ -101,19 +101,3 @@ paths:
       responses:
         "101":
           description: Switching Protocols
-
-  /ai-bad-field:
-    post:
-      operationId: aiBadField
-      summary: ai-proxy unknown field
-      description: ai-proxy with unknown config field.
-      tags: [test]
-      x-barbacane-dispatch:
-        name: ai-proxy
-        config:
-          provider: "openai"
-          model: "gpt-4o"
-          unknown_option: true
-      responses:
-        "200":
-          description: OK

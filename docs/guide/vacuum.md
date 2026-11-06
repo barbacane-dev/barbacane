@@ -24,7 +24,7 @@ mkdir -p .barbacane/rulesets/functions .barbacane/rulesets/schemas
 curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
 for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
          barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
-         barbacane-validate-ai-regex barbacane-validate-dispatch-config \
+         barbacane-validate-dispatch-config \
          barbacane-validate-middleware-config; do
   curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
 done
@@ -56,11 +56,9 @@ The Barbacane ruleset includes the following rules, grouped by category.
 |------|----------|-------------|
 | `barbacane-dispatch-required` | error | Every operation must declare `x-barbacane-dispatch` |
 | `barbacane-dispatch-has-name` | error | Dispatch block must include a `name` field |
-| `barbacane-dispatch-known-plugin` | error | Plugin name must be a known dispatcher (`ai-proxy`, `http-upstream`, `kafka`, `lambda`, `mock`, `nats`, `s3`, `ws-upstream`) |
+| `barbacane-dispatch-known-plugin` | error | Plugin name must be a known dispatcher (`http-upstream`, `kafka`, `lambda`, `mock`, `nats`, `s3`, `ws-upstream`) |
 | `barbacane-dispatch-has-config` | error | Dispatch block must include a `config` object |
 | `barbacane-dispatch-config-valid` | error | Config must validate against the plugin's JSON Schema (required fields, types, no unknown fields) |
-
-The `no unknown fields` clause is what catches `model:` on `ai-proxy` configs. ADR-0030 §0 made the `model` identifier caller-owned (taken from the request body, never from the gateway config), and the JSON schema for `ai-proxy` no longer accepts a `model` key on the flat block, on `targets.<name>`, or on `fallback[]` entries. Any leftover `model:` fails at lint time as `Unknown config field "model" for dispatcher "ai-proxy"` — and at runtime as a `serde(deny_unknown_fields)` error during WASM instance load. Fix by deleting the field; clients send `model` in the request body as they always did.
 
 ### Middleware Validation
 
@@ -135,7 +133,7 @@ rules:
     curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
     for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
              barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
-             barbacane-validate-ai-regex barbacane-validate-dispatch-config \
+             barbacane-validate-dispatch-config \
              barbacane-validate-middleware-config; do
       curl -fsSL "https://docs.barbacane.dev/rulesets/functions/${f}.js" -o ".barbacane/rulesets/functions/${f}.js"
     done

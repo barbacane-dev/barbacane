@@ -272,7 +272,7 @@ one to a **plaintext literal** instead of an `env://` / `file://` reference,
 `barbacane compile` warns:
 
 ```
-warning[E1070]: plugin 'ai-proxy' config field 'api_key' is a secret but is set
+warning[E1070]: plugin 'oauth2-auth' config field 'client_secret' is a secret but is set
 to a plaintext literal; use an env:// or file:// reference so it is resolved at
 runtime instead of baked into the artifact
 ```

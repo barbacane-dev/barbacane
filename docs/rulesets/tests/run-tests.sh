@@ -79,12 +79,6 @@ assert_has_violations "$SCRIPT_DIR/invalid-upstream-secrets.yaml" "invalid-upstr
 assert_has_violations "$ROOT_DIR/tests/fixtures/invalid-missing-dispatch.yaml" "fixtures/invalid-missing-dispatch" 1
 assert_has_violations "$ROOT_DIR/tests/fixtures/invalid-unknown-extension.yaml" "fixtures/invalid-unknown-extension" 1
 assert_has_violations "$SCRIPT_DIR/invalid-wildcard-paths.yaml" "invalid-wildcard-paths" 2
-# Invalid regex patterns in AI middleware profiles should each trigger one
-# barbacane-ai-regex-root violation (4 bad patterns → 4 violations).
-assert_has_violations "$SCRIPT_DIR/invalid-ai-regex.yaml" "invalid-ai-regex" 4
-# ADR-0030 §0 migration UX: leftover `model:` on ai-proxy must surface at lint
-# time via the auto-generated dispatch validator (additionalProperties: false).
-assert_has_violations "$SCRIPT_DIR/invalid-ai-proxy-leftover-model.yaml" "invalid-ai-proxy-leftover-model" 1
 # A `writeOnly` (secret) config field set to a plaintext literal must be flagged
 # by the generated dispatch validator (mirrors compiler warning E1070).
 assert_has_violations "$SCRIPT_DIR/invalid-plaintext-secret.yaml" "invalid-plaintext-secret" 1

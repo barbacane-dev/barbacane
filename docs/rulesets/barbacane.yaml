@@ -28,7 +28,7 @@ rules:
       function: truthy
 
   barbacane-dispatch-known-plugin:
-    description: "Dispatcher plugin must be one of: ai-proxy, fire-and-forget, http-upstream, kafka, lambda, mock, nats, s3, ws-upstream."
+    description: "Dispatcher plugin must be one of: fire-and-forget, http-upstream, kafka, lambda, mock, nats, s3, ws-upstream."
     documentationUrl: https://docs.barbacane.dev/guide/dispatchers.html
     severity: error
     given: "$.paths[*][*]['x-barbacane-dispatch'].name"
@@ -36,7 +36,6 @@ rules:
       function: enumeration
       functionOptions:
         values:
-          - ai-proxy
           - fire-and-forget
           - http-upstream
           - kafka
@@ -86,10 +85,6 @@ rules:
       functionOptions:
         values:
           - acl
-          - ai-cost-tracker
-          - ai-prompt-guard
-          - ai-response-guard
-          - ai-token-limit
           - apikey-auth
           - basic-auth
           - bot-detection
@@ -120,9 +115,8 @@ rules:
       function: barbacane-validate-middleware-config
 
   # Note: no duplicate-name rule. Middlewares are intentionally stackable —
-  # `cel` (routing rules), `rate-limit` (layered keys), `ai-token-limit`
-  # (multi-window) all rely on appearing multiple times with different
-  # configs. See docs/guide/middlewares/index.md#stacking.
+  # `cel` (routing rules) and `rate-limit` (layered keys) rely on appearing
+  # multiple times with different configs. See docs/guide/middlewares/index.md#stacking.
 
   # Operation-level middleware rules (same checks)
 
@@ -145,10 +139,6 @@ rules:
       functionOptions:
         values:
           - acl
-          - ai-cost-tracker
-          - ai-prompt-guard
-          - ai-response-guard
-          - ai-token-limit
           - apikey-auth
           - basic-auth
           - bot-detection
@@ -177,29 +167,6 @@ rules:
     given: "$.paths[*][*]['x-barbacane-middlewares'][*]"
     then:
       function: barbacane-validate-middleware-config
-
-  # ---------------------------------------------------------------------------
-  # AI middleware regex validation (shift-left)
-  # ---------------------------------------------------------------------------
-  # Rust `regex` is close enough to JavaScript for the class of mistakes
-  # operators actually write (unclosed brackets, stray quantifiers). Catches
-  # these at lint time instead of at the first 500 from the gateway.
-
-  barbacane-ai-regex-root:
-    description: Regex patterns in ai-prompt-guard / ai-response-guard profiles must compile.
-    documentationUrl: https://docs.barbacane.dev/guide/middlewares/ai-gateway.html
-    severity: error
-    given: "$['x-barbacane-middlewares'][*]"
-    then:
-      function: barbacane-validate-ai-regex
-
-  barbacane-ai-regex-op:
-    description: Regex patterns in operation-level ai-prompt-guard / ai-response-guard profiles must compile.
-    documentationUrl: https://docs.barbacane.dev/guide/middlewares/ai-gateway.html
-    severity: error
-    given: "$.paths[*][*]['x-barbacane-middlewares'][*]"
-    then:
-      function: barbacane-validate-ai-regex
 
   # ---------------------------------------------------------------------------
   # MCP validation

@@ -24,14 +24,14 @@
       "properties": {
         "set_context": {
           "type": "object",
-          "description": "Key-value pairs written into the request context when the expression is true. The `ai-proxy` dispatcher reads `ai.target` to select the active provider target.",
+          "description": "Key-value pairs written into the request context when the expression is true, for later middlewares and the dispatcher to read.",
           "additionalProperties": {
             "type": "string"
           }
         },
         "deny": {
           "type": "object",
-          "description": "Reject the request with the given problem+json status and code when the expression is true. The `code` becomes the URN suffix on the `type` field and is exposed as the `code` field on the response body — the convention used by `ai-proxy` for `model_not_permitted` and similar.",
+          "description": "Reject the request with the given problem+json status and code when the expression is true. The `code` becomes the URN suffix on the `type` field and is exposed as the `code` field on the response body.",
           "required": ["code"],
           "additionalProperties": false,
           "properties": {
@@ -44,7 +44,7 @@
             },
             "code": {
               "type": "string",
-              "description": "Machine-readable error code. snake_case to match the `error.type` convention used by `ai-proxy` and OpenAI-style APIs (e.g. `model_not_permitted`, `invalid_request_error`). Becomes the URN suffix on the response `type` field.",
+              "description": "Machine-readable error code in snake_case (e.g. `plan_not_permitted`). Becomes the URN suffix on the response `type` field.",
               "pattern": "^[a-z][a-z0-9_]*$"
             },
             "message": {

@@ -54,15 +54,15 @@ jobs:
             plugins/mock/target
             plugins/rate-limit/target
             plugins/basic-auth/target
-            plugins/ai-proxy/target
-          key: ${{ runner.os }}-corpus-plugins-${{ hashFiles('plugins/mock/**/*.rs', 'plugins/rate-limit/**/*.rs', 'plugins/basic-auth/**/*.rs', 'plugins/ai-proxy/**/*.rs', 'plugins/*/Cargo.lock', 'crates/barbacane-plugin-sdk/**') }}
+            plugins/http-upstream/target
+          key: ${{ runner.os }}-corpus-plugins-${{ hashFiles('plugins/mock/**/*.rs', 'plugins/rate-limit/**/*.rs', 'plugins/basic-auth/**/*.rs', 'plugins/http-upstream/**/*.rs', 'plugins/*/Cargo.lock', 'crates/barbacane-plugin-sdk/**') }}
           restore-keys: |
             ${{ runner.os }}-corpus-plugins-
 
       - name: Build them
         run: |
           set -euo pipefail
-          for plugin in mock rate-limit basic-auth ai-proxy; do
+          for plugin in mock rate-limit basic-auth http-upstream; do
             (cd "plugins/$plugin" && cargo build --release --target wasm32-unknown-unknown)
             # The crate name is not the directory name, so glob for it. Exactly
             # one artifact is expected; cp rejects more than one.

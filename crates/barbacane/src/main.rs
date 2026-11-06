@@ -2026,7 +2026,7 @@ impl Gateway {
             // set for a different body. hyper recomputes `content-length` from
             // the actual `Full<Bytes>` payload; keeping a stale value would
             // cause the client to see a truncated response (`IncompleteMessage`)
-            // when a middleware — e.g. `ai-response-guard` redaction —
+            // when a middleware (for example `response-transformer`)
             // modifies the body length.
             let key_lc = key.to_ascii_lowercase();
             if matches!(
@@ -2452,7 +2452,7 @@ impl Gateway {
 
                 // Run on_response middleware chain with the post-dispatch
                 // context so middlewares can observe keys written by the
-                // dispatcher (e.g. `ai.prompt_tokens` from `ai-proxy`).
+                // dispatcher.
                 let final_response = if !middleware_instances.is_empty() {
                     self.execute_middleware_on_response(
                         middleware_instances,

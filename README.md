@@ -21,16 +21,16 @@
 
 ---
 
-Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it enforces it: routing, request and response validation, authentication, rate limiting, a native WAF, and observability, all declared in the spec you already write. No proprietary config language, no drift between your spec and your infrastructure. The same middleware chain also routes LLM traffic and exposes your operations to agents as typed MCP tools.
+Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it enforces it: routing, request and response validation, authentication, rate limiting, a native WAF, and observability, all declared in the spec you already write. No proprietary config language, no drift between your spec and your infrastructure. The same middleware chain also exposes your operations to agents as typed MCP tools.
 
 - **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. The compiler turns it into a sealed `.bca` artifact; no separate gateway DSL to maintain.
 - **A full API gateway** — Routing, schema-based request and response validation, authentication and authorization, rate limiting, caching, and request/response transformation, all driven by the operation definitions and `x-barbacane-*` extensions in your spec.
 - **Native WAF** — A built-in ModSecurity/CRS-compatible web application firewall inspects requests and responses inline, in scoring or blocking mode, with per-operation tuning and audit logging. Configured with one `x-barbacane-waf` block, no sidecar.
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
-- **AI and MCP on the same chain** — `ai-proxy` unifies OpenAI / Anthropic / Ollama behind one OpenAI-compatible surface (Chat Completions, the stateless Responses API, an aggregated `/v1/models`), with glob routing, per-target `allow`/`deny`, and provider fallback. When MCP is enabled (`x-barbacane-mcp`), your operations are exposed as Model Context Protocol tools at `POST /__barbacane/mcp`. Both run behind the same auth, rate-limit, and validation chain as your REST traffic ([ADR-0024](adr/0024-ai-gateway-plugin.md), [ADR-0025](adr/0025-mcp-server.md), [ADR-0030](adr/0030-ai-gateway-responses-api.md)).
+- **MCP on the same chain** — When MCP is enabled (`x-barbacane-mcp`), your operations are exposed as Model Context Protocol tools at `POST /__barbacane/mcp`, behind the same auth and rate-limit chain as your REST traffic ([ADR-0025](adr/0025-mcp-server.md)).
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
-- **Extensible** — 34 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
+- **Extensible** — 29 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
 - **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export. Per-middleware timing comes for free.
 
 ## Quick Start
@@ -95,19 +95,16 @@ paths:
 
 The compiler validates the spec against each plugin's JSON schema (`vacuum:barbacane`) and seals everything into a single `.bca` artifact — including pinned plugin WASM. The data plane runs the artifact; nothing is fetched at request time.
 
-AI traffic uses the same shape: replace the `http-upstream` dispatcher block with `ai-proxy` (configured with providers and routes) and add the AI middlewares (`ai-prompt-guard`, `ai-token-limit`, `ai-response-guard`, `ai-cost-tracker`). See the [AI Gateway guide](https://docs.barbacane.dev/guide/middlewares/ai-gateway.html).
-
 ## Documentation
 
 Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane.dev)**.
 
 - [Getting Started](https://docs.barbacane.dev/guide/getting-started.html) — First steps with Barbacane
 - [Spec Configuration](https://docs.barbacane.dev/guide/spec-configuration.html) — Configure routing and middleware via `x-barbacane-*` extensions
-- [Dispatchers](https://docs.barbacane.dev/guide/dispatchers.html) — Route requests to HTTP, Lambda, S3, Kafka, NATS, LLMs, WebSocket backends
+- [Dispatchers](https://docs.barbacane.dev/guide/dispatchers.html) — Route requests to HTTP, Lambda, S3, Kafka, NATS, WebSocket backends
 - **Middlewares** — grouped by concern:
   - [Authentication](https://docs.barbacane.dev/guide/middlewares/authentication.html) · [Authorization](https://docs.barbacane.dev/guide/middlewares/authorization.html) · [Traffic control](https://docs.barbacane.dev/guide/middlewares/traffic-control.html)
   - [Caching](https://docs.barbacane.dev/guide/middlewares/caching.html) · [Transformation](https://docs.barbacane.dev/guide/middlewares/transformation.html) · [Observability](https://docs.barbacane.dev/guide/middlewares/observability.html)
-  - [AI Gateway](https://docs.barbacane.dev/guide/middlewares/ai-gateway.html) — prompt guarding, token limits, cost tracking, response redaction
 - [MCP Server](https://docs.barbacane.dev/guide/mcp.html) — Expose your spec as a Model Context Protocol server
 - [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) · [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Manage specs, artifacts, and data planes
 - [WAF](https://docs.barbacane.dev/guide/waf.html) — Native ModSecurity/CRS-compatible web application firewall
@@ -146,7 +143,6 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | `kafka` | Publish messages to Kafka |
 | `nats` | Publish messages to NATS |
 | `s3` | Proxy requests to AWS S3 / S3-compatible storage with SigV4 signing |
-| `ai-proxy` | OpenAI-compatible LLM gateway — Chat Completions, stateless Responses API, aggregated `/v1/models`, glob-based routing, per-target `allow`/`deny`, fallback |
 | `ws-upstream` | WebSocket transparent proxy with full middleware chain on upgrade |
 | `fire-and-forget` | Forward request to upstream and return immediate static response |
 
@@ -160,7 +156,6 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 | **Caching** | `cache` (response caching) |
 | **Transformation** | `request-transformer`, `response-transformer`, `cors`, `correlation-id` |
 | **Observability** | `observability` (SLO + detailed logging), `http-log` |
-| **AI gateway** | `ai-prompt-guard`, `ai-token-limit`, `ai-cost-tracker`, `ai-response-guard` |
 
 ## Performance
 

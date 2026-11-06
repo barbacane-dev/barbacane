@@ -1784,7 +1784,7 @@ fn now_utc_iso8601() -> String {
 /// secret via the standard JSON Schema `writeOnly: true` keyword. Walks the
 /// whole schema (properties, array `items`, `additionalProperties`, and the
 /// `$defs`/`allOf`/`anyOf`/`oneOf` combinators) so nested shapes such as
-/// ai-proxy's `routes[].api_key` and `targets{}.api_key` are covered.
+/// `routes[].api_key` and `targets{}.api_key` are covered.
 pub fn collect_writeonly_fields(schema: &serde_json::Value) -> std::collections::BTreeSet<String> {
     fn walk(node: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
         match node {
@@ -3858,7 +3858,7 @@ mod tests {
 
     #[test]
     fn collect_writeonly_fields_finds_nested_secrets() {
-        // Mirrors ai-proxy: writeOnly api_key at top level, in routes[].items,
+        // writeOnly api_key at top level, in routes[].items,
         // and in targets{}.additionalProperties. `base_url` is not writeOnly.
         let schema = serde_json::json!({
             "type": "object",
@@ -3897,7 +3897,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        // Nested shape like ai-proxy: routes[] and targets{}.
+        // Nested shape: routes[] and targets{}.
         let config = serde_json::json!({
             "routes": [
                 { "provider": "openai", "api_key": "sk-live-plaintext" },
@@ -3912,7 +3912,7 @@ mod tests {
         let mut warnings = Vec::new();
         scan_plaintext_secrets(
             &config,
-            "ai-proxy",
+            "example-plugin",
             &secret_fields,
             "GET /v1 in 'api.yaml'",
             &mut warnings,
@@ -3934,7 +3934,13 @@ mod tests {
             "api_key": "",
         });
         let mut warnings = Vec::new();
-        scan_plaintext_secrets(&config, "ai-proxy", &secret_fields, "loc", &mut warnings);
+        scan_plaintext_secrets(
+            &config,
+            "example-plugin",
+            &secret_fields,
+            "loc",
+            &mut warnings,
+        );
         assert!(warnings.is_empty(), "got: {warnings:?}");
     }
 

@@ -38,8 +38,7 @@ struct DenyAction {
     #[serde(default = "default_deny_status")]
     status: u16,
     /// Machine-readable error code, snake_case. Becomes the URN suffix and the
-    /// `code` field on the response body — the convention used by `ai-proxy`
-    /// for `model_not_permitted` and similar.
+    /// `code` field on the response body.
     code: String,
     /// Human-readable detail message. Falls back to `code` when omitted.
     #[serde(default)]
@@ -1264,7 +1263,7 @@ mod tests {
     fn on_match_true_sets_context_and_continues() {
         host::reset_context();
         let mut ctx_map = BTreeMap::new();
-        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        ctx_map.insert("upstream.target".to_string(), "premium".to_string());
         let mut config = create_config_with_on_match("request.consumer == 'alice'", ctx_map);
         let req = create_request();
 
@@ -1273,14 +1272,14 @@ mod tests {
             Action::ShortCircuit(resp) => panic!("expected continue, got status {}", resp.status),
         }
 
-        assert_eq!(host::context_value("ai.target").as_deref(), Some("premium"));
+        assert_eq!(host::context_value("upstream.target").as_deref(), Some("premium"));
     }
 
     #[test]
     fn on_match_false_continues_without_403() {
         host::reset_context();
         let mut ctx_map = BTreeMap::new();
-        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        ctx_map.insert("upstream.target".to_string(), "premium".to_string());
         let mut config = create_config_with_on_match("request.consumer == 'bob'", ctx_map);
         let req = create_request(); // consumer = alice, not bob
 
@@ -1292,21 +1291,21 @@ mod tests {
         }
 
         // Context was NOT set (expression was false)
-        assert!(host::context_value("ai.target").is_none());
+        assert!(host::context_value("upstream.target").is_none());
     }
 
     #[test]
     fn on_match_sets_multiple_context_keys() {
         host::reset_context();
         let mut ctx_map = BTreeMap::new();
-        ctx_map.insert("ai.target".to_string(), "premium".to_string());
+        ctx_map.insert("upstream.target".to_string(), "premium".to_string());
         ctx_map.insert("ai.priority".to_string(), "high".to_string());
         let mut config = create_config_with_on_match("true", ctx_map);
         let req = create_request();
 
         let _ = config.on_request(req);
 
-        assert_eq!(host::context_value("ai.target").as_deref(), Some("premium"));
+        assert_eq!(host::context_value("upstream.target").as_deref(), Some("premium"));
         assert_eq!(host::context_value("ai.priority").as_deref(), Some("high"));
     }
 
@@ -1316,7 +1315,7 @@ mod tests {
             "expression": "request.claims.tier == 'premium'",
             "on_match": {
                 "set_context": {
-                    "ai.target": "premium"
+                    "upstream.target": "premium"
                 }
             }
         }"#;
@@ -1324,7 +1323,7 @@ mod tests {
         assert!(config.on_match.is_some());
         let on_match = config.on_match.unwrap();
         assert_eq!(
-            on_match.set_context.get("ai.target").map(|s| s.as_str()),
+            on_match.set_context.get("upstream.target").map(|s| s.as_str()),
             Some("premium")
         );
     }
