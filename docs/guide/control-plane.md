@@ -141,10 +141,10 @@ curl -X POST http://localhost:9090/plugins \
   -F "version=1.0.0" \
   -F "type=middleware" \
   -F "description=My custom middleware" \
-  -F "capabilities=[\"http\", \"log\"]" \
-  -F "config_schema={\"type\": \"object\"}" \
   -F "file=@my-middleware.wasm"
 ```
+
+A compilation reads each plugin's capabilities, category and config schema from the `plugin.toml` and `config-schema.json` embedded in its WASM by the `barbacane-plugin-sdk` macros, and the artifact enforces those capabilities on load. A plugin without an embedded manifest cannot be compiled by the control plane (E1041): rebuild it with the current SDK.
 
 ### Artifacts
 

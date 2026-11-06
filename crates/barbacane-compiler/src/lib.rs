@@ -10,6 +10,7 @@ pub mod error;
 pub mod manifest;
 pub mod spec_parser;
 
+pub use artifact::compile_with_capabilities;
 pub use artifact::{
     compile, compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs,
     recompute_artifact_hash, verify_artifact_hash, verify_artifact_signature,
@@ -19,8 +20,8 @@ pub use artifact::{
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{
-    embedded_category, embedded_config_schema, embedded_implements, extract_plugin_names,
-    PathSource, PluginSource, ProjectManifest, ResolvedPlugin, UrlSource,
+    embedded_capabilities, embedded_category, embedded_config_schema, embedded_implements,
+    extract_plugin_names, PathSource, PluginSource, ProjectManifest, ResolvedPlugin, UrlSource,
 };
 // Re-export spec-parser types for convenience
 pub use spec_parser::{

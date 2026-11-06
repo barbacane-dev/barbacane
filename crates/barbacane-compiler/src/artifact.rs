@@ -529,15 +529,36 @@ pub fn compile(
 ) -> Result<CompileResult, CompileError> {
     let specs = parse_specs(spec_paths)?;
     // Plain `compile` receives caller-built bundles whose declared capabilities
-    // may not have been read from plugin.toml (e.g. the control plane builds
-    // bundles from the registry, which does not yet persist capabilities), so
-    // the resulting artifact is not marked capability-authoritative.
+    // may not come from the plugins' manifests, so the resulting artifact is not
+    // marked capability-authoritative. See `compile_with_capabilities`.
     compile_inner(
         &specs,
         plugins,
         output,
         options,
         false,
+        spec_paths.first().and_then(|p| p.parent()),
+    )
+}
+
+/// Compile like [`compile`], from bundles whose `body_access` and
+/// `host_functions` were read from each plugin's own manifest (for example
+/// with [`crate::embedded_capabilities`]). The artifact is marked
+/// capability-authoritative, so the data plane enforces those capabilities
+/// against each module's imports on load.
+pub fn compile_with_capabilities(
+    spec_paths: &[&Path],
+    plugins: &[PluginBundle],
+    output: &Path,
+    options: &CompileOptions,
+) -> Result<CompileResult, CompileError> {
+    let specs = parse_specs(spec_paths)?;
+    compile_inner(
+        &specs,
+        plugins,
+        output,
+        options,
+        true,
         spec_paths.first().and_then(|p| p.parent()),
     )
 }
@@ -4327,6 +4348,51 @@ paths:
         let plugin = loaded.get("test-plugin").unwrap();
         assert_eq!(plugin.version, "1.0.0");
         assert_eq!(plugin.wasm_bytes, fake_wasm);
+    }
+
+    #[test]
+    fn compile_with_capabilities_marks_the_artifact_enforced() {
+        let temp = TempDir::new().unwrap();
+        let spec_path = create_test_spec(
+            temp.path(),
+            "test.yaml",
+            "openapi: \"3.1.0\"\ninfo:\n  title: Test API\n  version: \"1.0.0\"\npaths:\n  /health:\n    get:\n      x-barbacane-dispatch:\n        name: mock\n",
+        );
+        let plugins = vec![PluginBundle {
+            name: "probe".to_string(),
+            version: "1.0.0".to_string(),
+            plugin_type: "middleware".to_string(),
+            category: None,
+            implements: vec![],
+            wasm_bytes: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+            body_access: true,
+            host_functions: vec!["log".to_string()],
+            secret_fields: vec![],
+            config_schema: None,
+        }];
+
+        let enforced = compile_with_capabilities(
+            &[spec_path.as_path()],
+            &plugins,
+            &temp.path().join("enforced.bca"),
+            &CompileOptions::default(),
+        )
+        .unwrap();
+        assert!(enforced.manifest.capabilities_enforced);
+        assert_eq!(
+            enforced.manifest.plugins[0].capabilities.host_functions,
+            vec!["log"]
+        );
+        assert!(enforced.manifest.plugins[0].capabilities.body_access);
+
+        let plain = compile(
+            &[spec_path.as_path()],
+            &plugins,
+            &temp.path().join("plain.bca"),
+            &CompileOptions::default(),
+        )
+        .unwrap();
+        assert!(!plain.manifest.capabilities_enforced);
     }
 
     #[test]
