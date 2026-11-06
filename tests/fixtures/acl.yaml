@@ -235,6 +235,63 @@ paths:
         "200":
           description: Public access
 
+  # A group name that contains commas, as an LDAP DN does, is one group.
+  /deny-dn-group:
+    get:
+      summary: A group named by a DN is denied as a whole
+      operationId: getDenyDnGroup
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "acl-test"
+            credentials:
+              - username: ops
+                password: "ops123"
+                roles: ["cn=ops,ou=groups,dc=example,dc=org"]
+        - name: acl
+          config:
+            deny:
+              - "cn=ops,ou=groups,dc=example,dc=org"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "deny-dn-group"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Access granted
+        "403":
+          description: Forbidden
+
+  /allow-dn-fragment:
+    get:
+      summary: Part of a group name does not satisfy an allow rule
+      operationId: getAllowDnFragment
+      x-barbacane-middlewares:
+        - name: basic-auth
+          config:
+            realm: "acl-test"
+            credentials:
+              - username: ops
+                password: "ops123"
+                roles: ["cn=ops,ou=groups,dc=example,dc=org"]
+        - name: acl
+          config:
+            allow:
+              - "ou=groups"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"area": "allow-dn-fragment"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Access granted
+        "403":
+          description: Forbidden
+
 # The operations run an authentication middleware, so the document names the
 # scheme carrying the credential. That is what admits the header (ADR-0033).
 security:

@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::db::{
-    ArtifactsRepository, CompilationsRepository, PluginsRepository, ProjectPluginConfigsRepository,
-    SpecsRepository,
+    ArtifactsRepository, CompilationsRepository, PluginWithBinary, PluginsRepository,
+    ProjectPluginConfigsRepository, SpecsRepository,
 };
 
 /// Run the compilation worker loop.
@@ -136,7 +136,12 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
         let output_path = output_path.clone();
         tokio::task::spawn_blocking(move || {
             let spec_path_refs: Vec<&Path> = spec_paths.iter().map(|p| p.as_path()).collect();
-            barbacane_compiler::compile(&spec_path_refs, &plugin_bundles, &output_path, &options)
+            barbacane_compiler::compile_with_capabilities(
+                &spec_path_refs,
+                &plugin_bundles,
+                &output_path,
+                &options,
+            )
         })
         .await
     };
@@ -279,7 +284,7 @@ async fn resolve_project_plugins(
             .join(", ");
         return Err(anyhow::anyhow!(
             "E1040: plugin(s) {} used in spec but not enabled in project. \
-             Add them on the Plugins page before compiling.",
+             Enable them in the project before compiling.",
             missing_list
         ));
     }
@@ -308,32 +313,7 @@ async fn resolve_project_plugins(
                 )
             })?;
 
-        // The plugin's family and config schema travel inside the WASM, so both
-        // are read from the binary the registry stores, before it is moved.
-        let category = barbacane_compiler::embedded_category(&plugin_with_binary.wasm_binary);
-        let implements = barbacane_compiler::embedded_implements(&plugin_with_binary.wasm_binary);
-        let config_schema =
-            barbacane_compiler::embedded_config_schema(&plugin_with_binary.wasm_binary);
-
-        bundles.push(barbacane_compiler::PluginBundle {
-            name: plugin_with_binary.name.clone(),
-            version: plugin_with_binary.version.clone(),
-            plugin_type: plugin_with_binary.plugin_type.clone(),
-            category,
-            implements,
-            wasm_bytes: plugin_with_binary.wasm_binary,
-            // TODO: read body_access + host_functions from the registry once the
-            // plugins table persists capabilities. Until then the control plane
-            // compiles capability-less (non-authoritative) artifacts, so the data
-            // plane loads them without capability enforcement (WA-1).
-            body_access: false,
-            host_functions: vec![],
-            // `secret_fields` is computed during path resolution, which this
-            // path does not use, so the plaintext-secret warning (E1070) stays a
-            // no-op for control-plane compiles (WA-1).
-            secret_fields: vec![],
-            config_schema,
-        });
+        bundles.push(registry_bundle(plugin_with_binary)?);
     }
 
     tracing::info!(
@@ -346,6 +326,46 @@ async fn resolve_project_plugins(
     Ok(bundles)
 }
 
+/// Build a compile bundle from a registry plugin. The plugin's family,
+/// capabilities and config schema travel inside its WASM, so they are read from
+/// the binary the registry stores. A plugin without an embedded manifest is
+/// refused: its capabilities are unknown, and the artifact enforces them.
+fn registry_bundle(plugin: PluginWithBinary) -> anyhow::Result<barbacane_compiler::PluginBundle> {
+    let capabilities =
+        barbacane_compiler::embedded_capabilities(&plugin.wasm_binary).ok_or_else(|| {
+            anyhow::anyhow!(
+                "E1041: plugin '{}' v{} carries no embedded manifest, so its capabilities \
+                 are unknown. Rebuild it with the current barbacane-plugin-sdk.",
+                plugin.name,
+                plugin.version
+            )
+        })?;
+    let category = barbacane_compiler::embedded_category(&plugin.wasm_binary);
+    let implements = barbacane_compiler::embedded_implements(&plugin.wasm_binary);
+    let config_schema = barbacane_compiler::embedded_config_schema(&plugin.wasm_binary);
+    let secret_fields = config_schema
+        .as_ref()
+        .map(|schema| {
+            barbacane_compiler::artifact::collect_writeonly_fields(schema)
+                .into_iter()
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(barbacane_compiler::PluginBundle {
+        name: plugin.name,
+        version: plugin.version,
+        plugin_type: plugin.plugin_type,
+        category,
+        implements,
+        wasm_bytes: plugin.wasm_binary,
+        body_access: capabilities.body_access,
+        host_functions: capabilities.host_functions,
+        secret_fields,
+        config_schema,
+    })
+}
+
 /// Extract an error code and clean message from an error string like "E1040: some message".
 /// Returns `(code, message)` where the code prefix is stripped from the message.
 fn parse_error_code(error_str: &str, default_code: &str) -> (String, String) {
@@ -354,5 +374,66 @@ fn parse_error_code(error_str: &str, default_code: &str) -> (String, String) {
             (prefix.to_string(), rest.trim().to_string())
         }
         _ => (default_code.to_string(), error_str.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A module whose `barbacane_manifest` custom section holds `manifest`, as
+    /// the plugin macros embed `plugin.toml`.
+    fn module_with_manifest(manifest: &str) -> Vec<u8> {
+        fn leb128(mut n: usize, out: &mut Vec<u8>) {
+            loop {
+                let byte = (n & 0x7f) as u8;
+                n >>= 7;
+                if n == 0 {
+                    out.push(byte);
+                    return;
+                }
+                out.push(byte | 0x80);
+            }
+        }
+        let name = b"barbacane_manifest";
+        let mut section = Vec::new();
+        leb128(name.len(), &mut section);
+        section.extend_from_slice(name);
+        section.extend_from_slice(manifest.as_bytes());
+
+        let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        wasm.push(0x00);
+        leb128(section.len(), &mut wasm);
+        wasm.extend_from_slice(&section);
+        wasm
+    }
+
+    fn registry_plugin(wasm_binary: Vec<u8>) -> PluginWithBinary {
+        PluginWithBinary {
+            name: "probe".to_string(),
+            version: "1.0.0".to_string(),
+            plugin_type: "middleware".to_string(),
+            wasm_binary,
+        }
+    }
+
+    #[test]
+    fn registry_bundle_reads_capabilities_from_the_embedded_manifest() {
+        let wasm = module_with_manifest(
+            "[plugin]\nname = \"probe\"\nversion = \"1.0.0\"\ntype = \"middleware\"\n\n\
+             [capabilities]\nbody_access = true\nhost_functions = [\"log\", \"http_call\"]\n",
+        );
+        let bundle = registry_bundle(registry_plugin(wasm)).expect("bundle");
+        assert!(bundle.body_access);
+        assert_eq!(bundle.host_functions, vec!["log", "http_call"]);
+    }
+
+    #[test]
+    fn registry_bundle_refuses_a_plugin_without_an_embedded_manifest() {
+        let wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        let Err(err) = registry_bundle(registry_plugin(wasm)) else {
+            panic!("a plugin without an embedded manifest must be refused");
+        };
+        assert!(err.to_string().starts_with("E1041"), "{err}");
     }
 }

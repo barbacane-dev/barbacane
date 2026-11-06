@@ -1,29 +1,20 @@
-//! BARB-SEC-006 — Artifact integrity (hash + signature verification on load).
+//! BARB-SEC-006 — Artifact integrity (hash, member and signature verification
+//! on load).
 //!
-//! Threat: `Gateway::load` (`crates/barbacane/src/main.rs`) reads the manifest,
-//! routes, specs, and plugin WASM out of the `.bca` archive but NEVER verifies
-//! them against the per-file `checksums` / `artifact_hash` recorded in
-//! `manifest.json`, and there is no signature at all. An attacker who can modify
-//! an artifact at rest (or in transit to a data plane) can swap in a malicious
-//! plugin, rewrite routes, or alter the manifest, and the gateway will load it.
-//!
-//! The fix:
-//!   * verify each archive entry's SHA-256 against `manifest.checksums` and the
-//!     combined `artifact_hash` at load time (reject on mismatch), and
-//!   * verify an Ed25519 signature over the artifact against a trusted public
-//!     key provided via `BARBACANE_TRUSTED_PUBKEY` (reject if missing/invalid).
+//! The data plane reads a `.bca` archive once, checks `artifact_hash` (and the
+//! Ed25519 signature when `BARBACANE_TRUSTED_PUBKEY` is set), then checks every
+//! archive member against the checksums the hash covers before parsing any of
+//! it. A duplicate, unlisted or missing member is refused, and a plugin is read
+//! only from `plugins/<name>.wasm` under its recorded checksum.
 //!
 //! ## How these tests work
 //!
-//! We compile a real `.bca` via `barbacane-compiler`, then rebuild the gzip+tar
-//! archive flipping exactly one byte inside a chosen member (plugin WASM, routes,
-//! or manifest) — leaving the gzip/tar framing intact so the corruption is
-//! *content* corruption, not a parse error. We then ask the actual `barbacane`
-//! binary to `serve` the tampered artifact and assert it REFUSES TO START.
-//!
-//! Today there is no verification, so a content-tampered artifact loads and the
-//! gateway comes up healthy → RED. Once hash/signature verification lands, the
-//! load fails fast → GREEN.
+//! We compile a real `.bca` via `barbacane-compiler`, rewrite the gzip+tar
+//! archive, and ask the actual `barbacane` binary to `serve` it, asserting that
+//! it refuses to start. Most rewrites keep every member well formed (valid
+//! JSON, a valid WASM module, a manifest whose own fields agree), so a refusal
+//! can only come from the integrity checks; `untampered_artifact_loads` is the
+//! positive control.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -192,8 +183,6 @@ async fn gateway_loads_artifact(artifact: &Path) -> bool {
 /// Tampering a bundled plugin's WASM bytes must make the load FAIL.
 #[tokio::test]
 async fn tampered_plugin_wasm_is_rejected() {
-    // EXPECTED TO FAIL until BARB-SEC-006 is fixed (Gateway::load does not verify
-    // archive-entry hashes against manifest.checksums or any signature).
     if find_barbacane_binary().is_none() {
         eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
         return;
@@ -209,10 +198,9 @@ async fn tampered_plugin_wasm_is_rejected() {
     );
 }
 
-/// Tampering `routes.json` must make the load FAIL.
+/// Corrupting `routes.json` (one flipped byte) must make the load FAIL.
 #[tokio::test]
 async fn tampered_routes_is_rejected() {
-    // EXPECTED TO FAIL until BARB-SEC-006 is fixed.
     if find_barbacane_binary().is_none() {
         eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
         return;
@@ -232,8 +220,6 @@ async fn tampered_routes_is_rejected() {
 /// over the manifest is what makes this detectable.
 #[tokio::test]
 async fn tampered_manifest_is_rejected() {
-    // EXPECTED TO FAIL until BARB-SEC-006 is fixed (no signature over the
-    // manifest; an attacker can edit manifest.json and its self-described hash).
     if find_barbacane_binary().is_none() {
         eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
         return;
@@ -284,9 +270,7 @@ async fn tampered_manifest_is_rejected() {
 /// fine. This guards against the tamper helpers being so destructive that every
 /// artifact fails to load (which would make the RED tests above meaningless).
 ///
-/// NOTE: once BARB-SEC-006 lands and load requires a valid `BARBACANE_TRUSTED_PUBKEY`
-/// signature, this control will need the signing key wired in; until then a
-/// pristine artifact must load.
+/// No trusted key is configured, so no signature is required.
 #[tokio::test]
 async fn untampered_artifact_loads() {
     if find_barbacane_binary().is_none() {
@@ -301,4 +285,183 @@ async fn untampered_artifact_loads() {
         loaded,
         "a pristine, untampered artifact must load and the gateway must become healthy"
     );
+}
+
+/// Rewrite the members of a freshly compiled artifact with `edit` and write
+/// the result to `tampered.bca` in `dir`. Unlike `tamper_artifact`, the edits
+/// keep every member well formed, so a rejection can only come from the
+/// integrity checks.
+fn rewrite_artifact(dir: &Path, edit: impl FnOnce(&mut Vec<(String, Vec<u8>)>)) -> PathBuf {
+    let original = compile_minimal_artifact(dir);
+    let mut entries = read_archive(&original);
+    edit(&mut entries);
+    let tampered = dir.join("tampered.bca");
+    write_archive(&tampered, &entries);
+    tampered
+}
+
+fn member<'a>(entries: &'a mut [(String, Vec<u8>)], name: &str) -> &'a mut Vec<u8> {
+    &mut entries
+        .iter_mut()
+        .find(|(n, _)| n == name)
+        .unwrap_or_else(|| panic!("artifact has no {name}"))
+        .1
+}
+
+/// The module with a custom section appended: still a valid module with the
+/// same behaviour, but different bytes and so a different digest.
+fn with_custom_section(wasm: &[u8]) -> Vec<u8> {
+    let name = b"tampered";
+    let mut content = vec![name.len() as u8];
+    content.extend_from_slice(name);
+    content.push(1);
+    let mut out = wasm.to_vec();
+    out.push(0x00);
+    out.push(content.len() as u8);
+    out.extend_from_slice(&content);
+    out
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// `routes.json` with every mock response body replaced: valid JSON that
+/// deserialises into routes, but not the routes that were compiled.
+fn rewritten_routes(routes: &[u8]) -> Vec<u8> {
+    fn walk(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map.iter_mut() {
+                    if key == "body" && child.is_string() {
+                        *child = serde_json::Value::String(r#"{"tampered":true}"#.into());
+                    } else {
+                        walk(child);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    let mut parsed: serde_json::Value = serde_json::from_slice(routes).expect("parse routes.json");
+    let before = parsed.clone();
+    walk(&mut parsed);
+    assert_ne!(
+        parsed, before,
+        "the fixture's routes carry a mock body to rewrite"
+    );
+    serde_json::to_vec_pretty(&parsed).expect("serialise routes.json")
+}
+
+/// Point the manifest's `mock` plugin entry at `wasm_path` with `sha256`.
+fn redirect_mock_plugin(entries: &mut [(String, Vec<u8>)], wasm_path: &str, sha256: &str) {
+    let manifest = member(entries, "manifest.json");
+    let mut parsed: serde_json::Value = serde_json::from_slice(manifest).expect("parse manifest");
+    let plugin = parsed["plugins"]
+        .as_array_mut()
+        .expect("plugins array")
+        .iter_mut()
+        .find(|p| p["name"] == "mock")
+        .expect("mock plugin entry");
+    plugin["wasm_path"] = serde_json::Value::String(wasm_path.to_string());
+    plugin["sha256"] = serde_json::Value::String(sha256.to_string());
+    *manifest = serde_json::to_vec(&parsed).expect("serialise manifest");
+}
+
+async fn assert_rejected(artifact: &Path, what: &str) {
+    assert!(
+        !gateway_loads_artifact(artifact).await,
+        "gateway must refuse an artifact whose {what}"
+    );
+}
+
+/// Valid routes that differ from the compiled ones must be refused: the
+/// manifest's checksum for `routes.json` no longer matches.
+#[tokio::test]
+async fn rewritten_routes_is_rejected() {
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+        return;
+    }
+    let dir = TempDir::new().expect("temp dir");
+    let tampered = rewrite_artifact(dir.path(), |entries| {
+        let routes = member(entries, "routes.json");
+        *routes = rewritten_routes(routes);
+    });
+    assert_rejected(
+        &tampered,
+        "routes.json was replaced with other valid routes",
+    )
+    .await;
+}
+
+/// A different, valid plugin module must be refused even when the manifest's
+/// per-plugin `sha256` is updated to match it: that field is not covered by
+/// `artifact_hash`, the checksum table is.
+#[tokio::test]
+async fn plugin_swapped_with_matching_digest_is_rejected() {
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+        return;
+    }
+    let dir = TempDir::new().expect("temp dir");
+    let tampered = rewrite_artifact(dir.path(), |entries| {
+        let wasm = member(entries, "plugins/mock.wasm");
+        *wasm = with_custom_section(wasm);
+        let digest = sha256_hex(wasm);
+        redirect_mock_plugin(entries, "plugins/mock.wasm", &digest);
+    });
+    assert_rejected(&tampered, "mock plugin module was replaced").await;
+}
+
+/// A plugin entry pointed at another archive member must be refused: a plugin
+/// runs only from `plugins/<name>.wasm`, under its checksum.
+#[tokio::test]
+async fn plugin_redirected_to_another_member_is_rejected() {
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+        return;
+    }
+    let dir = TempDir::new().expect("temp dir");
+    let tampered = rewrite_artifact(dir.path(), |entries| {
+        let other = with_custom_section(member(entries, "plugins/mock.wasm"));
+        let digest = sha256_hex(&other);
+        entries.push(("plugins/other.wasm".to_string(), other));
+        redirect_mock_plugin(entries, "plugins/other.wasm", &digest);
+    });
+    assert_rejected(&tampered, "mock plugin entry points at another member").await;
+}
+
+/// A source spec that differs from the one compiled must be refused: the
+/// gateway serves it at `/__barbacane/specs`.
+#[tokio::test]
+async fn rewritten_spec_is_rejected() {
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+        return;
+    }
+    let dir = TempDir::new().expect("temp dir");
+    let tampered = rewrite_artifact(dir.path(), |entries| {
+        let spec = member(entries, "specs/minimal.yaml");
+        spec.extend_from_slice(b"\n# tampered\n");
+    });
+    assert_rejected(&tampered, "source spec was rewritten").await;
+}
+
+/// Two members with the same path must be refused, so the bytes that are
+/// verified are the bytes that are used.
+#[tokio::test]
+async fn duplicate_member_is_rejected() {
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+        return;
+    }
+    let dir = TempDir::new().expect("temp dir");
+    let tampered = rewrite_artifact(dir.path(), |entries| {
+        let routes = rewritten_routes(member(entries, "routes.json"));
+        entries.push(("routes.json".to_string(), routes));
+    });
+    assert_rejected(&tampered, "archive holds routes.json twice").await;
 }

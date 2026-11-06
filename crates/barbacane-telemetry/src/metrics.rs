@@ -33,6 +33,22 @@ const DURATION_BUCKETS: [f64; 12] = [
 /// Covers 100B to 10MB range with exponential growth.
 const SIZE_BUCKETS: [f64; 6] = [100.0, 1000.0, 10000.0, 100000.0, 1000000.0, 10000000.0];
 
+/// Methods recorded under their own name. A client may send any token as a
+/// method, so every other one, including a method an OpenAPI 3.2
+/// `additionalOperations` entry declares, is recorded as `OTHER`.
+const METHOD_LABELS: [&str; 10] = [
+    "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH", "QUERY",
+];
+
+/// The label a request method is recorded under.
+fn method_label(method: &str) -> String {
+    METHOD_LABELS
+        .iter()
+        .find(|m| **m == method)
+        .map_or("OTHER", |m| m)
+        .to_string()
+}
+
 /// Request labels.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct RequestLabels {
@@ -452,7 +468,7 @@ impl MetricsRegistry {
         response_size: u64,
     ) {
         let labels = RequestLabels {
-            method: method.to_string(),
+            method: method_label(method),
             path: path.to_string(),
             status,
             api: api.to_string(),
@@ -473,7 +489,7 @@ impl MetricsRegistry {
     /// Record a validation failure.
     pub fn record_validation_failure(&self, method: &str, path: &str, reason: &str) {
         let labels = ValidationLabels {
-            method: method.to_string(),
+            method: method_label(method),
             path: path.to_string(),
             reason: reason.to_string(),
         };
@@ -484,7 +500,7 @@ impl MetricsRegistry {
     pub fn record_waf_blocked(&self, method: &str, path: &str, rule_id: u32) {
         self.waf_blocked_total
             .get_or_create(&WafLabels {
-                method: method.to_string(),
+                method: method_label(method),
                 path: path.to_string(),
                 rule_id: rule_id.to_string(),
             })
@@ -495,7 +511,7 @@ impl MetricsRegistry {
     pub fn record_waf_match(&self, method: &str, path: &str, rule_id: u32) {
         self.waf_matched_total
             .get_or_create(&WafLabels {
-                method: method.to_string(),
+                method: method_label(method),
                 path: path.to_string(),
                 rule_id: rule_id.to_string(),
             })
@@ -512,7 +528,7 @@ impl MetricsRegistry {
         allowed: bool,
     ) {
         let labels = WafInspectionLabels {
-            method: method.to_string(),
+            method: method_label(method),
             path: path.to_string(),
         };
         self.waf_duration_seconds
@@ -534,7 +550,7 @@ impl MetricsRegistry {
     pub fn record_waf_response_body_skipped(&self, method: &str, path: &str) {
         self.waf_response_body_skipped_total
             .get_or_create(&WafInspectionLabels {
-                method: method.to_string(),
+                method: method_label(method),
                 path: path.to_string(),
             })
             .inc();
@@ -544,7 +560,7 @@ impl MetricsRegistry {
     pub fn record_waf_audit(&self, method: &str, path: &str) {
         self.waf_audit_total
             .get_or_create(&WafInspectionLabels {
-                method: method.to_string(),
+                method: method_label(method),
                 path: path.to_string(),
             })
             .inc();
@@ -615,7 +631,7 @@ impl MetricsRegistry {
     /// Record a request to a deprecated route.
     pub fn record_deprecated_route(&self, method: &str, path: &str, api: &str) {
         let labels = RouteLabels {
-            method: method.to_string(),
+            method: method_label(method),
             path: path.to_string(),
             api: api.to_string(),
         };
@@ -742,6 +758,32 @@ mod tests {
             api: "users-api".to_string(),
         };
         assert_eq!(registry.requests_total.get_or_create(&labels).get(), 1);
+    }
+
+    /// A client may send any token as a method, so methods outside the
+    /// standard set share one label rather than adding a series each.
+    #[test]
+    fn methods_outside_the_standard_set_share_one_label() {
+        let registry = MetricsRegistry::new();
+        for i in 0..50 {
+            let method = format!("X{i}");
+            registry.record_request(&method, "/api/users", 404, "users-api", 0.01, 0, 0);
+            registry.record_validation_failure(&method, "/api/users", "invalid_body");
+            registry.record_waf_match(&method, "/api/users", 942100);
+            registry.record_waf_inspection(&method, "/api/users", 0.001, true);
+            registry.record_deprecated_route(&method, "/api/users", "users-api");
+        }
+        registry.record_request("QUERY", "/api/users", 200, "users-api", 0.01, 0, 0);
+
+        let rendered = crate::prometheus::render_metrics(&registry);
+        assert!(!rendered.contains("method=\"X"), "{rendered}");
+        assert!(rendered.contains("method=\"OTHER\""));
+        assert!(rendered.contains("method=\"QUERY\""));
+        let requests = rendered
+            .lines()
+            .filter(|l| l.starts_with("barbacane_requests_total{"))
+            .count();
+        assert_eq!(requests, 2, "{rendered}");
     }
 
     #[test]

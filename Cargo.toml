@@ -19,7 +19,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.12.3"
+version = "0.12.4"
 edition = "2021"
 # Minimum supported Rust version, set by the dependency floor: wasmtime 48
 # requires rustc 1.95. Enforced by the `msrv` CI job.
@@ -34,7 +34,7 @@ categories = ["web-programming::http-server", "network-programming"]
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+yaml_serde = "0.10"
 
 # Async runtime
 # Narrowed from "full": only the features the workspace actually uses (rt +
@@ -159,15 +159,15 @@ assert_cmd = "2"
 predicates = "3"
 
 # Workspace crates (version required for crates.io publishing)
-barbacane-sigv4 = { path = "crates/barbacane-sigv4", version = "0.12.3" }
-barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.12.3" }
-barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.12.3" }
-barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "0.12.3" }
-barbacane-wasm = { path = "crates/barbacane-wasm", version = "0.12.3" }
-barbacane-telemetry = { path = "crates/barbacane-telemetry", version = "0.12.3" }
-barbacane-test = { path = "crates/barbacane-test", version = "0.12.3" }
-barbacane = { path = "crates/barbacane", version = "0.12.3" }
-barbacane-control = { path = "crates/barbacane-control", version = "0.12.3" }
+barbacane-sigv4 = { path = "crates/barbacane-sigv4", version = "0.12.4" }
+barbacane-compiler = { path = "crates/barbacane-compiler", version = "0.12.4" }
+barbacane-plugin-sdk = { path = "crates/barbacane-plugin-sdk", version = "0.12.4" }
+barbacane-plugin-macros = { path = "crates/barbacane-plugin-macros", version = "0.12.4" }
+barbacane-wasm = { path = "crates/barbacane-wasm", version = "0.12.4" }
+barbacane-telemetry = { path = "crates/barbacane-telemetry", version = "0.12.4" }
+barbacane-test = { path = "crates/barbacane-test", version = "0.12.4" }
+barbacane = { path = "crates/barbacane", version = "0.12.4" }
+barbacane-control = { path = "crates/barbacane-control", version = "0.12.4" }
 
 [profile.dev]
 opt-level = 0

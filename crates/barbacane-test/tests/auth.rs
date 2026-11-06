@@ -41,7 +41,7 @@ fn jwt_public_jwk_xy() -> (String, String) {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
     let sk = jwt_signing_key();
-    let point = sk.verifying_key().to_encoded_point(false);
+    let point = sk.verifying_key().to_sec1_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().expect("x coord").as_slice());
     let y = URL_SAFE_NO_PAD.encode(point.y().expect("y coord").as_slice());
     (x, y)

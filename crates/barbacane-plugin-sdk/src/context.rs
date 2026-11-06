@@ -3,8 +3,8 @@
 //!
 //! The context is a per-request key-value map shared along the middleware
 //! chain and with the dispatcher. Auth plugins write the identity keys
-//! `auth.sub` (consumer id) and `auth.groups` (comma-separated groups) after a
-//! successful authentication, so later plugins can read them as
+//! `auth.sub` (consumer id) and `auth.groups` (the group list, as
+//! [`crate::groups::encode`] writes it) after a successful authentication, so later plugins can read them as
 //! `context:auth.sub` / `context:auth.groups` instead of trusting headers.
 //!
 //! On non-wasm targets (unit tests) the map is a thread-local store, so a test
@@ -21,7 +21,8 @@
 /// Key under which auth plugins publish the consumer id.
 pub const AUTH_SUB: &str = "auth.sub";
 
-/// Key under which auth plugins publish the comma-separated groups.
+/// Key under which auth plugins publish the group list, as
+/// [`crate::groups::encode`] writes it.
 pub const AUTH_GROUPS: &str = "auth.groups";
 
 /// Read a context value set earlier in the chain.

@@ -5,6 +5,7 @@
 //! `host_verify_signature` host function.
 
 use barbacane_plugin_sdk::context;
+use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
 use barbacane_plugin_sdk::jwt::{self, Audience};
 use barbacane_plugin_sdk::prelude::*;
@@ -356,7 +357,7 @@ impl OidcAuth {
                         }
                     }
                 } else if let Some(scope) = &claims.scope {
-                    let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
+                    let groups = groups::encode(scope.split_whitespace());
                     if !groups.is_empty() {
                         modified_req
                             .headers
@@ -733,29 +734,30 @@ impl OidcAuth {
 
         match value {
             serde_json::Value::Array(arr) => {
-                let groups: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
-                if groups.is_empty() {
+                let names: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+                if names.is_empty() {
                     None
                 } else {
-                    Some(groups.join(","))
+                    Some(groups::encode(names))
                 }
             }
             serde_json::Value::String(s) => {
                 if let Some(sep) = &self.groups_claim_separator {
-                    let groups: Vec<&str> = s
+                    let names: Vec<&str> = s
                         .split(sep.as_str())
                         .map(|g| g.trim())
                         .filter(|g| !g.is_empty())
                         .collect();
-                    if groups.is_empty() {
+                    if names.is_empty() {
                         None
                     } else {
-                        Some(groups.join(","))
+                        Some(groups::encode(names))
                     }
                 } else if s.is_empty() {
                     None
                 } else {
-                    Some(s.clone())
+                    // Without a separator, the whole string is one group.
+                    Some(groups::encode([s]))
                 }
             }
             _ => None,
@@ -1801,6 +1803,17 @@ mod tests {
         let claims_value = serde_json::json!({"sub": "user1", "roles": "admin"});
         let groups = config.extract_groups_from_claim(&claims_value);
         assert_eq!(groups.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn groups_claim_names_with_commas_stay_one_group() {
+        let config = create_test_config_with_groups_claim(Some("roles"), None);
+        let dn = "cn=ops,ou=groups,dc=example,dc=org";
+        for claim in [serde_json::json!(dn), serde_json::json!([dn, "viewer"])] {
+            let claims_value = serde_json::json!({"sub": "user1", "roles": claim});
+            let groups = config.extract_groups_from_claim(&claims_value).unwrap();
+            assert_eq!(groups::decode(&groups)[0], dn);
+        }
     }
 
     #[test]

@@ -138,6 +138,12 @@ impl LdapClient {
         if req.conn.bind_dn.is_empty() {
             return Err(LdapError::InvalidRequest("bind_dn is required".into()));
         }
+        // RFC 4513 §5.1.2: a DN with an empty password is an unauthenticated
+        // bind, which a directory may accept without checking the DN, so it
+        // proves nothing about the caller.
+        if req.conn.password.is_empty() {
+            return Err(LdapError::InvalidCredentials);
+        }
         let is_tls = scheme_is_tls(&req.conn.url)?;
         check_transport(&req.conn, is_tls)?;
 
@@ -646,6 +652,29 @@ mod tests {
         let client = LdapClient::new(true).expect("ldap client");
         let result = client.bind_blocking(&bind("http://127.0.0.1:389"));
         assert!(matches!(result, Err(LdapError::InvalidRequest(_))));
+    }
+
+    /// RFC 4513 §5.1.2: a simple bind with a DN and an empty password is an
+    /// unauthenticated bind, which a directory may accept without checking the
+    /// DN. It is refused as invalid credentials before any connection is made.
+    #[tokio::test]
+    async fn an_empty_password_is_refused_without_contacting_the_directory() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("ldap://{}", listener.local_addr().expect("local addr"));
+        let client = LdapClient::new(true).expect("ldap client");
+
+        let mut unauthenticated = bind(&url);
+        unauthenticated.conn.password.clear();
+        let result = client.bind(&unauthenticated).await;
+
+        assert!(
+            matches!(result, Err(LdapError::InvalidCredentials)),
+            "{result:?}"
+        );
+        let accepted = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+        assert!(accepted.is_err(), "the directory must not be contacted");
     }
 
     #[test]

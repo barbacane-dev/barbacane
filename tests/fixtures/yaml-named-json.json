@@ -1,0 +1,19 @@
+# A spec written in YAML under a .json file name. The compiler parses YAML and
+# JSON alike, so it compiles; the specs endpoint must serve it parsed and
+# stripped of x-barbacane-* extensions like any other spec.
+openapi: "3.1.0"
+info:
+  title: YAML Named JSON API
+  version: "1.0.0"
+paths:
+  /status:
+    get:
+      operationId: getStatus
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"internal-only-value"}'
+      responses:
+        "200":
+          description: OK
