@@ -1,6 +1,6 @@
 # ADR-0035: Upstream Load Balancing in `http-upstream`
 
-**Status:** Proposed (amends the division of responsibilities in [ADR-0018](0018-kubernetes-gateway-api-compatibility.md))
+**Status:** Accepted (amends the division of responsibilities in [ADR-0018](0018-kubernetes-gateway-api-compatibility.md))
 **Date:** 2026-10-14
 
 ## Context
@@ -26,7 +26,9 @@ The host HTTP client carries a circuit breaker that nothing enables (`crates/bar
 
 The roadmap states that no general circuit breaker is planned.
 
-A plugin instance lives for one request ([#138](https://github.com/barbacane-dev/barbacane/issues/138)), so state that must outlive a request, such as a rotation position or an endpoint's health, cannot live in the plugin.
+A plugin must not carry state from one request to the next ([#138](https://github.com/barbacane-dev/barbacane/issues/138)), so state that outlives a request, such as a rotation position or an endpoint's health, cannot live in the plugin.
+
+`http-upstream` passes no TLS settings to the host, and its schema refuses `tls`, although the host client supports a client certificate and a CA per request and the dispatchers guide documents `tls` for `http-upstream`.
 
 ## Decision
 
@@ -60,18 +62,23 @@ x-barbacane-dispatch:
 - `endpoints` holds one or more entries, each with a `url` (required, accepting `env://` and `file://` references as `url` does) and a `weight` (integer, at least 1, default 1).
 - `url` and `endpoints` are exclusive. The config schema states it, so a config with both, or neither, fails `E1023`.
 - `E1031` applies to every endpoint URL. `extract_upstream_url` reads `url` only today.
-- The name is `endpoints`, not `targets`: in `ai-proxy`, `targets` are named tiers chosen by a policy ([ADR-0030](0030-ai-gateway-responses-api.md)), not a pool.
 - Endpoints are listed per operation, as `url` is.
+- `tls` (`client_cert`, `client_key`, `ca`) applies to `url`, or to every endpoint of the list: the endpoints of a pool share one TLS client configuration. `http-upstream` passes it to the host, which makes the documented upstream mTLS work for both forms.
+- `retries` is accepted with `endpoints` only; with `url` the schema refuses it (`E1023`).
 
 ### Selection
 
 Smooth weighted round-robin, the algorithm nginx uses: deterministic, plain round-robin when weights are equal, and an endpoint's extra turns interleaved rather than consecutive. The rotation belongs to a pool, identified by its list of endpoints and weights, so operations listing the same endpoints share one rotation.
 
+When an artifact is loaded, rotations and breakers are kept for the pools and endpoints it still lists and dropped for the rest, so their state stays bounded across reloads.
+
 Least-request selection is a follow-up: it needs the in-flight count of each endpoint, which the host can keep.
 
 ### Where balancing runs
 
-In the host, next to the connection pools. The SDK's outbound request gains an optional list of endpoints. When it is set, the request's `url` holds the path and query, and the host prefixes the endpoint it selects. This goes through a new host function and capability, as `hash` did for `s3` in 0.12.2, so a gateway that predates this change refuses the new `http-upstream.wasm` when it loads rather than misrouting its requests.
+In the host, next to the connection pools. The SDK's outbound request gains an optional list of endpoints. When it is set, the request's `url` holds the path and query, and the host prefixes the endpoint it selects. This goes through a new host function, `host_http_pool_call(req_ptr, req_len) -> i32`, under a new capability, `http_pool`, as `hash` did for `s3` in 0.12.2, so a gateway that predates this change refuses the new `http-upstream.wasm` when it loads rather than misrouting its requests. Its result is read with `host_http_read_result`, as for `host_http_call`.
+
+Every attempt goes through the same egress checks as a single `url`: the SSRF guard on the addresses the endpoint resolves to, the plaintext policy, and `Host` and SNI taken from the endpoint's own URL. A plugin-set `Host` is dropped, as it is today.
 
 ### Health: the circuit breaker becomes per-endpoint passive health checking
 
@@ -82,7 +89,7 @@ The dormant breaker is kept and given this role:
 - Failures are transport errors (connect, TLS handshake, timeout) and responses `502`, `503` and `504`, where the endpoint or something in front of it reports itself unavailable. Other responses, `500` included, are answers from the application and record a success.
 - Selection skips an endpoint whose breaker is open. After the reset timeout it takes requests again; the first success closes the breaker and a failure reopens it. The module comment is corrected to say so.
 - When every endpoint of a pool is open, the host sends to them anyway, as Envoy's panic threshold does, so that a burst of false positives does not turn into a full outage. The responses then decide.
-- Thresholds are gateway settings, not per operation. One endpoint's breaker serves every operation that lists it, so two operations could not hold different thresholds for it. The breaker's current defaults are kept: 5 failures within 60 seconds open it, it is tried again after 30 seconds, and 1 success closes it.
+- Thresholds are gateway-wide, not per operation. One endpoint's breaker serves every operation that lists it, so two operations could not hold different thresholds for it. This version uses the breaker's current defaults: 5 failures within 60 seconds open it, it is tried again after 30 seconds, and 1 success closes it. Exposing them as gateway settings is a follow-up.
 - An upstream given as a single `url` gets no breaker. Failing fast on the only endpoint replaces a slow failure with a 503 without sending the request anywhere else. That is a load-shedding policy and a decision of its own, so `url` keeps its current behaviour.
 - Results are recorded only for registered endpoints, under the map's read lock; each breaker holds its own lock. Requests to a single `url` no longer take a write lock.
 - `configure_circuit_breaker`, which has no caller, is replaced by the registration above.
@@ -98,6 +105,7 @@ The dormant breaker is kept and given this role:
 ### Observability
 
 - Metrics per endpoint: requests, failures, breaker state, and retries.
+- An endpoint is identified as `scheme://host:port` in metrics, logs and spans, never by its full URL, which can carry user information or a query resolved from a secret reference. The number of label values is the number of endpoints the artifact lists.
 - The dispatch span records the endpoint used.
 - Breaker transitions are logged with the endpoint.
 
@@ -120,7 +128,7 @@ The dormant breaker is kept and given this role:
 
 - **Leave balancing to the platform.** Keeps ADR-0018's split as it is, but a deployment without a platform balancer needs one added, and per-request spreading in Kubernetes is not available.
 - **Named upstreams** at the spec or manifest root, such as `x-barbacane-upstreams`, referenced by name from a dispatch. Defined once, and the host knows every endpoint at startup, which active health checks need. It adds a section to the artifact (a format change), a namespace shared by every spec, and a new class of reference errors. It can be built later on the same host machinery, with `endpoints` as the inline form.
-- **Balancing in the plugin.** A plugin instance lives for one request, so it cannot keep a rotation or health state. Host functions to store that state would rebuild the host design with an extra round trip per decision.
+- **Balancing in the plugin.** A plugin must not keep state across requests, so it cannot hold a rotation or health state. Host functions to store that state would rebuild the host design with an extra round trip per decision.
 - **DNS round-robin**, spreading requests over the addresses one name resolves to. There are no weights or health, pooled connections stay with the address that answered first, and the SSRF guard already filters those addresses. Deployments that want it have DNS-aware balancers.
 - **Deleting the circuit breaker.** Removes untested code, but per-endpoint health needs this state machine.
 - **Enabling the breaker for every upstream host.** Changes the behaviour of every single-`url` upstream (a 503 with no other endpoint to try), and as written it counts transport errors only and keys by host without port.
