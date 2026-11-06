@@ -2416,11 +2416,10 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         state.last_ldap_result.take()
     })?;
 
-    // ── Minimal WASI stubs ──────────────────────────────────────────────
-    // Some plugins (e.g. cel) compile with wasm32-wasip1 and import WASI
-    // functions even though Barbacane provides its own host ABI. We add
-    // lightweight stubs so the linker can resolve these imports.
-    // Full WASI support (wasmtime-wasi) can replace these if needed.
+    // ── WASI stubs ──────────────────────────────────────────────────────
+    // Plugins built for wasm32-wasip1 (e.g. cel) import a few WASI functions.
+    // These stubs are the whole WASI surface: `validate::WASI_IMPORTS` lists
+    // them, and a plugin importing any other is refused before it is linked.
 
     // random_get — fill the guest buffer with cryptographically secure random
     // bytes from the host CSPRNG. WASI imports are not capability-gated, so any
@@ -2604,6 +2603,43 @@ mod tests {
             .expect("compiles");
         let instance = PluginInstance::new(engine.engine(), &module, limits).expect("instantiates");
         (engine, instance)
+    }
+
+    /// Every function `WASI_IMPORTS` lists has a stub the plugin links against.
+    #[test]
+    fn every_listed_wasi_function_links() {
+        let signatures = [
+            ("random_get", "(param i32 i32) (result i32)"),
+            ("clock_time_get", "(param i32 i64 i32) (result i32)"),
+            ("fd_write", "(param i32 i32 i32 i32) (result i32)"),
+            ("sched_yield", "(result i32)"),
+            ("environ_get", "(param i32 i32) (result i32)"),
+            ("environ_sizes_get", "(param i32 i32) (result i32)"),
+            ("proc_exit", "(param i32)"),
+        ];
+        let listed: Vec<&str> = signatures.iter().map(|(name, _)| *name).collect();
+        assert_eq!(listed, crate::validate::WASI_IMPORTS);
+
+        let imports: String = signatures
+            .iter()
+            .map(|(name, sig)| {
+                format!(r#"(import "wasi_snapshot_preview1" "{name}" (func {sig}))"#)
+            })
+            .collect();
+        let limits = PluginLimits::default();
+        let engine = crate::WasmEngine::with_limits(limits.clone()).expect("engine");
+        let wasm = wat::parse_str(format!(
+            r#"(module {imports}
+                (memory (export "memory") 1)
+                (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+                (func (export "init") (param i32 i32) (result i32) (i32.const 0)))"#
+        ))
+        .expect("valid wat");
+        let module = engine
+            .compile(&wasm, "wasi".into(), "0.0.0".into(), false)
+            .expect("compiles");
+        crate::validate::validate_import_modules(module.module()).expect("all provided");
+        PluginInstance::new(engine.engine(), &module, limits).expect("every stub links");
     }
 
     #[test]

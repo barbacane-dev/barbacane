@@ -840,6 +840,11 @@ impl Gateway {
                 )
                 .map_err(|e| format!("failed to compile plugin '{}': {}", name, e))?;
 
+            // A plugin imports only what the host provides: `barbacane` host
+            // functions and the supported WASI functions.
+            barbacane_wasm::validate_import_modules(module.module())
+                .map_err(|e| format!("plugin '{}' cannot be loaded: {}", name, e))?;
+
             // WA-1: enforce the capability contract. The plugin may only import
             // host functions covered by the capabilities it declared in
             // plugin.toml (carried in the artifact manifest); anything else is a
@@ -5204,6 +5209,22 @@ fn check_artifact_version(found: u32) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod wasi_tests {
+    /// The compiler refuses what the data plane cannot link, and only that.
+    #[test]
+    fn the_compiler_and_the_runtime_agree_on_the_wasi_set() {
+        assert_eq!(
+            barbacane_compiler::wasi::WASI_IMPORTS,
+            barbacane_wasm::WASI_IMPORTS
+        );
+        assert_eq!(
+            barbacane_compiler::wasi::WASI_MODULE,
+            barbacane_wasm::WASI_MODULE
+        );
+    }
 }
 
 #[cfg(test)]

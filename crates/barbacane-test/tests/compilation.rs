@@ -104,3 +104,31 @@ async fn test_fixture_compiles_s3() {
     let resp = gateway.get("/__barbacane/health").await.unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+/// Every official plugin imports only what the gateway provides, so none is
+/// refused with E1043. Reads the `<name>.wasm` each plugin directory holds
+/// once `make plugins` has built it.
+#[test]
+fn every_official_plugin_imports_only_what_the_gateway_provides() {
+    let plugins = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&plugins).expect("plugins directory") {
+        let dir = entry.expect("entry").path();
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Ok(wasm) = std::fs::read(dir.join(format!("{name}.wasm"))) else {
+            continue;
+        };
+        assert_eq!(
+            barbacane_compiler::wasi::unsupported_import(&wasm),
+            Ok(None),
+            "{name}"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 20,
+        "only {checked} plugins are built; run `make plugins`"
+    );
+}

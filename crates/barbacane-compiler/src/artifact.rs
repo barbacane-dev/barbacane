@@ -1483,6 +1483,19 @@ fn compile_inner(
     );
 
     for plugin in plugins {
+        // E1043: a plugin may import only what the gateway provides.
+        if let Some((module, name)) = crate::wasi::unsupported_import(&plugin.wasm_bytes)
+            .map_err(|e| CompileError::PluginResolution(format!("plugin '{}': {e}", plugin.name)))?
+        {
+            return Err(CompileError::UnsupportedImport {
+                plugin: plugin.name.clone(),
+                module,
+                name,
+                wasi: crate::wasi::WASI_MODULE,
+                supported: crate::wasi::WASI_IMPORTS.join(", "),
+            });
+        }
+
         let wasm_path = format!("plugins/{}.wasm", plugin.name);
         let sha256 = compute_sha256(&plugin.wasm_bytes);
 

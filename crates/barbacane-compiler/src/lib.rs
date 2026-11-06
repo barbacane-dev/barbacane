@@ -10,6 +10,7 @@ pub mod error;
 pub mod manifest;
 pub mod request_schema;
 pub mod spec_parser;
+pub mod wasi;
 pub mod yaml;
 
 pub use artifact::compile_with_capabilities;
