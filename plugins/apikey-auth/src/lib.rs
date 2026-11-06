@@ -4,6 +4,7 @@
 //! unauthenticated requests with 401 Unauthorized.
 
 use barbacane_plugin_sdk::context;
+use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -104,11 +105,12 @@ impl ApiKeyAuth {
                     let scopes_csv = key_entry.scopes.join(",");
                     modified_req
                         .headers
-                        .insert("x-auth-key-scopes".to_string(), scopes_csv.clone());
+                        .insert("x-auth-key-scopes".to_string(), scopes_csv);
+                    let groups = groups::encode(&key_entry.scopes);
                     modified_req
                         .headers
-                        .insert("x-auth-consumer-groups".to_string(), scopes_csv.clone());
-                    context::set(context::AUTH_GROUPS, &scopes_csv);
+                        .insert("x-auth-consumer-groups".to_string(), groups.clone());
+                    context::set(context::AUTH_GROUPS, &groups);
                 }
 
                 // Standard consumer header for ACL and downstream middlewares,
