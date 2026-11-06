@@ -1132,12 +1132,22 @@ fn parse_asyncapi_channels(
 
         let extensions = extract_extensions(op_obj);
 
+        let summary = op_obj
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let description = op_obj
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         operations.push(Operation {
             path: address,
             method,
             operation_id: Some(op_id.clone()),
-            summary: None,
-            description: None,
+            summary,
+            description,
             parameters: channel_params,
             request_body,
             dispatch,
@@ -2029,6 +2039,55 @@ operations:
             op.messages[0].content_type,
             Some("application/json".to_string())
         );
+    }
+
+    #[test]
+    fn parse_asyncapi_operation_summary_and_description() {
+        let yaml = r#"
+asyncapi: "3.0.0"
+info:
+  title: Notification Service
+  version: "1.0.0"
+channels:
+  notifications:
+    address: notifications
+operations:
+  sendNotification:
+    action: send
+    channel:
+      $ref: '#/channels/notifications'
+    summary: Send a notification
+    description: Publishes a notification to the user's devices.
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        let op = &spec.operations[0];
+        assert_eq!(op.summary.as_deref(), Some("Send a notification"));
+        assert_eq!(
+            op.description.as_deref(),
+            Some("Publishes a notification to the user's devices.")
+        );
+    }
+
+    #[test]
+    fn parse_asyncapi_operation_summary_and_description_absent() {
+        let yaml = r#"
+asyncapi: "3.0.0"
+info:
+  title: Notification Service
+  version: "1.0.0"
+channels:
+  notifications:
+    address: notifications
+operations:
+  sendNotification:
+    action: send
+    channel:
+      $ref: '#/channels/notifications'
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        let op = &spec.operations[0];
+        assert!(op.summary.is_none());
+        assert!(op.description.is_none());
     }
 
     #[test]
