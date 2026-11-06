@@ -2858,40 +2858,23 @@ impl Gateway {
             .expect("valid response")
     }
 
-    /// Serve a specific spec file.
+    /// Serve a specific spec file, parsed and stripped of `x-barbacane-*`
+    /// extensions. It is read with the compiler's parser, which takes YAML and
+    /// JSON alike whatever the file name says. A spec that does not parse is
+    /// not served: its source carries the gateway configuration.
     fn spec_file_response(&self, filename: &str, format: &str) -> Response<Full<Bytes>> {
-        if let Some(content) = self.specs.get(filename) {
-            let is_source_json = filename.ends_with(".json");
-
-            // Parse the spec
-            let parsed: Option<serde_json::Value> = if is_source_json {
-                serde_json::from_str(content).ok()
-            } else {
-                yaml_serde::from_str(content).ok()
-            };
-
-            match parsed {
-                Some(mut value) => {
-                    // Strip x-barbacane-* extensions
-                    strip_barbacane_keys_recursive(&mut value);
-                    self.serve_spec_content(&value, format)
-                }
-                None => {
-                    // If parsing fails, return original content
-                    let content_type = if is_source_json {
-                        "application/json"
-                    } else {
-                        "text/yaml"
-                    };
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("content-type", content_type)
-                        .body(Full::new(Bytes::from(content.clone())))
-                        .expect("valid response")
-                }
+        let Some(content) = self.specs.get(filename) else {
+            return self.not_found_response();
+        };
+        match yaml_serde::from_str::<serde_json::Value>(content) {
+            Ok(mut value) => {
+                strip_barbacane_keys_recursive(&mut value);
+                self.serve_spec_content(&value, format)
             }
-        } else {
-            self.not_found_response()
+            Err(e) => {
+                tracing::error!(spec = %filename, error = %e, "spec cannot be parsed for serving");
+                self.internal_error_response(Some("the spec cannot be parsed"))
+            }
         }
     }
 
