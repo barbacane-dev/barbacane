@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
 - **control-plane image**: `barbacane-control` runs the API alone, as the non-root `barbacane` user, and exposes only port 9090. Port 80 and its `/api/` prefix are gone: clients call the API on port 9090.
+- **artifacts**: the data plane reads a `.bca` once and checks every member (routes, specs, plugins, WAF rules) against the checksums `artifact_hash` covers before using any of it. A duplicate, unlisted or missing member is refused, and a plugin is read only from `plugins/<name>.wasm` under its recorded checksum. The compiler refuses two specs with the same file name (E1058), since the artifact stores specs by file name.
+- **control plane**: compilations read each plugin's capabilities from the manifest embedded in its WASM and mark the artifact capability-enforced, so the data plane checks control-plane builds the same way as `barbacane compile` builds. A plugin without an embedded manifest is refused (E1041). Secret config fields from the embedded schema now produce the plaintext-secret warning (E1070) in control-plane builds too.
 
 ### Removed
 
@@ -24,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WAF**: the libinjection classifiers follow libinjection 4.0.1 ([`barbacane-libinjection`](https://crates.io/crates/barbacane-libinjection) 0.1.2). `@detectSQLi` flags a number with an empty exponent, as in `1' or 1.e(1)`, which MySQL ignores, and reads `LIKE (` after an operand as an operator rather than a function call. `@detectXSS` checks attributes after a 0xFF byte, which had ended tokenizing, and uses upstream's list of 432 event-handler attributes (145 added, 11 removed). The OWASP CRS v4.9.0 regression results are unchanged.
 - **vacuum ruleset**: `barbacane-no-unknown-extension` accepts `x-barbacane-waf`, so a spec that configures the WAF no longer gets an unknown-extension warning.
 - **docker-compose**: the control-plane service passes `BARBACANE_CONTROL_ADMIN_TOKEN`, and compose stops with a message when it is unset, instead of starting a control plane that exits for want of it.
+- **ldap host function**: `host_ldap_bind` refuses an empty password as `invalid_credentials` without contacting the directory. A DN with an empty password is an unauthenticated bind (RFC 4513 §5.1.2), which a directory may accept without checking the DN. `ldap-auth` already refused it; the host now does for every plugin.
+- **auth plugins and acl**: a group name containing a comma, such as an LDAP DN or a single-group claim value, stays one group. In `x-auth-consumer-groups` and `auth.groups` a name's `,` is written `%2C` and its `%` is written `%25`, and `acl` decodes them, so its rules match whole group names. Names without either character are unchanged. An upstream that reads `x-auth-consumer-groups` and has groups with commas must decode the two escapes.
+- **control plane**: revoking a data-plane API key ends the WebSocket sessions registered with it: each receives `disconnect` and the socket closes. Sessions also recheck their key at the heartbeat interval, so an expired key, or one revoked through another control-plane instance, ends them as well.
 
 ### Security
 
