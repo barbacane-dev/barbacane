@@ -166,6 +166,19 @@ pub fn embedded_category(wasm: &[u8]) -> Option<String> {
         .and_then(|m| m.category)
 }
 
+/// Read the capabilities a plugin declares in the manifest inside its WASM
+/// binary. `None` when the binary carries no manifest, so its capabilities are
+/// unknown.
+pub fn embedded_capabilities(wasm: &[u8]) -> Option<crate::artifact::PluginCapabilities> {
+    read_embedded_manifest(wasm)
+        .as_deref()
+        .and_then(parse_plugin_metadata)
+        .map(|m| crate::artifact::PluginCapabilities {
+            body_access: m.body_access,
+            host_functions: m.host_functions,
+        })
+}
+
 /// Read the security scheme types a plugin declares it reads, from the manifest
 /// inside its WASM binary.
 pub fn embedded_implements(wasm: &[u8]) -> Vec<String> {
