@@ -4,6 +4,7 @@
 //! unauthenticated requests with 401 Unauthorized or 403 Forbidden.
 
 use barbacane_plugin_sdk::context;
+use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::http::{call, HttpError, HttpRequest};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -170,8 +171,8 @@ impl OAuth2Auth {
                     modified_req
                         .headers
                         .insert("x-auth-scope".to_string(), scope.clone());
-                    // Convert space-separated scopes to comma-separated groups
-                    let groups = scope.split_whitespace().collect::<Vec<_>>().join(",");
+                    // Each space-separated scope is a group.
+                    let groups = groups::encode(scope.split_whitespace());
                     if !groups.is_empty() {
                         modified_req
                             .headers

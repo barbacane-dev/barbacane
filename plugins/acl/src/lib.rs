@@ -4,6 +4,7 @@
 //! Reads `x-auth-consumer` and `x-auth-consumer-groups` headers set by
 //! upstream auth plugins (basic-auth, jwt-auth, oidc-auth, etc.).
 
+use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -98,12 +99,11 @@ impl Acl {
     fn resolve_groups(&self, consumer: &str, req: &Request) -> Vec<String> {
         let mut groups = Vec::new();
 
-        // Groups from header (comma-separated)
+        // Groups from the header, as the auth plugins encode them
         if let Some(header_val) = req.headers.get("x-auth-consumer-groups") {
-            for g in header_val.split(',') {
-                let trimmed = g.trim().to_string();
-                if !trimmed.is_empty() && !groups.contains(&trimmed) {
-                    groups.push(trimmed);
+            for g in groups::decode(header_val) {
+                if !groups.contains(&g) {
+                    groups.push(g);
                 }
             }
         }
@@ -337,6 +337,26 @@ mod tests {
         match acl.on_request(req) {
             Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
             Action::Continue(_) => panic!("Expected 403 — deny takes precedence"),
+        }
+    }
+
+    #[test]
+    fn a_group_name_with_commas_is_matched_whole() {
+        let dn = "cn=ops,ou=groups,dc=example,dc=org";
+        let header = groups::encode([dn, "viewer"]);
+
+        let mut deny = default_acl();
+        deny.deny.push(dn.to_string());
+        match deny.on_request(request_with_consumer("alice", Some(&header))) {
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+            Action::Continue(_) => panic!("a deny rule naming the DN must apply"),
+        }
+
+        let mut fragment = default_acl();
+        fragment.allow.push("ou=groups".to_string());
+        match fragment.on_request(request_with_consumer("alice", Some(&header))) {
+            Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
+            Action::Continue(_) => panic!("part of a group name is not a group"),
         }
     }
 

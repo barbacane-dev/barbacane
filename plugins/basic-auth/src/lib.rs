@@ -4,6 +4,7 @@
 //! and rejects unauthenticated requests with 401 Unauthorized.
 
 use barbacane_plugin_sdk::context;
+use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::prelude::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
@@ -103,11 +104,12 @@ impl BasicAuth {
                     let roles_csv = entry.roles.join(",");
                     modified_req
                         .headers
-                        .insert("x-auth-roles".to_string(), roles_csv.clone());
+                        .insert("x-auth-roles".to_string(), roles_csv);
+                    let groups = groups::encode(&entry.roles);
                     modified_req
                         .headers
-                        .insert("x-auth-consumer-groups".to_string(), roles_csv.clone());
-                    context::set(context::AUTH_GROUPS, &roles_csv);
+                        .insert("x-auth-consumer-groups".to_string(), groups.clone());
+                    context::set(context::AUTH_GROUPS, &groups);
                 }
 
                 // Standard consumer header for ACL and downstream middlewares,

@@ -53,6 +53,37 @@ async fn test_acl_editor_denied_admin_only() {
     assert_eq!(resp.status(), 403);
 }
 
+/// A group whose name contains commas (an LDAP DN) reaches `acl` as one
+/// group, so a deny rule naming it applies.
+#[tokio::test]
+async fn test_acl_denies_a_group_named_by_a_dn() {
+    let gateway = TestGateway::from_spec(&fixture("acl.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/deny-dn-group")
+        .header("Authorization", acl_basic_auth("ops", "ops123"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
+/// A piece of a group name between commas is not a group the consumer has.
+#[tokio::test]
+async fn test_acl_part_of_a_group_name_does_not_satisfy_allow() {
+    let gateway = TestGateway::from_spec(&fixture("acl.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/allow-dn-fragment")
+        .header("Authorization", acl_basic_auth("ops", "ops123"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
 /// `x-auth-*` request headers are dropped at ingress: a client cannot forge
 /// groups for a user the auth plugin gives none.
 #[tokio::test]
