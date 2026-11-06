@@ -438,6 +438,31 @@ when `allow_plaintext` is set. Escape any user-supplied value per RFC 4515
 before placing it in a filter. See
 [ADR-0032](../../adr/0032-native-ldap-host-functions.md) for the design.
 
+### WASI
+
+A plugin imports the `barbacane` host functions above and, from
+`wasi_snapshot_preview1`, only these WASI functions:
+
+| Function | What the host does |
+|----------|--------------------|
+| `random_get` | Fills the buffer from the host's CSPRNG |
+| `clock_time_get` | Writes the current time |
+| `fd_write` | Accepts the write and discards it |
+| `sched_yield` | Returns immediately |
+| `environ_get`, `environ_sizes_get` | Report an empty environment |
+| `proc_exit` | Traps |
+
+A plugin importing any other function, from WASI or another module, fails
+compilation with `E1043`, and the data plane refuses to load it. The error
+names the import and lists this set.
+
+Building for `wasm32-unknown-unknown`, as the quick start does, imports no
+WASI at all. `wasm32-wasip1` also works while the plugin stays inside the set:
+randomness (`getrandom`, `HashMap`), the clock, and `println!` are covered, but
+reading files, environment variables or command-line arguments, and threads,
+are not. To see what a build imports, run
+`wasm-tools print my_plugin.wasm | grep import`.
+
 ## Using Plugins in Specs
 
 ### Declare in barbacane.yaml
@@ -609,6 +634,13 @@ Your plugin exceeded resource limits or panicked. Check logs for details. Common
 ### Unknown capability
 
 You're using a host function not declared in `plugin.toml`. Add it to `capabilities.host_functions`.
+
+### Unsupported import (E1043)
+
+The plugin imports a function the gateway does not provide, usually a WASI
+function such as `fd_close` or `args_get` pulled in by the standard library on
+`wasm32-wasip1`. Build for `wasm32-unknown-unknown`, or remove the code that
+needs it; see [WASI](#wasi) for the supported set.
 
 ## Distributing Plugins
 

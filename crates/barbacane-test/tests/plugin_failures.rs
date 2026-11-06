@@ -252,3 +252,56 @@ async fn a_response_middleware_that_traps_is_answered_with_500() {
 async fn a_response_middleware_that_traps_after_a_short_circuit_is_answered_with_500() {
     assert_response_trap_is_answered_with_500("/refused").await;
 }
+
+/// A dispatcher importing a WASI function the gateway does not provide.
+const UNSUPPORTED_WASI_DISPATCHER: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_close" (func (param i32) (result i32)))
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+  (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "dispatch") (param i32 i32) (result i32) (i32.const 0))
+)"#;
+
+#[tokio::test]
+async fn a_plugin_importing_an_unsupported_wasi_function_does_not_compile() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let plugin_dir = dir.path().join("wasi-user");
+    std::fs::create_dir(&plugin_dir).expect("plugin dir");
+    std::fs::write(
+        plugin_dir.join("wasi-user.wasm"),
+        wat::parse_str(UNSUPPORTED_WASI_DISPATCHER).expect("valid WAT"),
+    )
+    .expect("wasm");
+    std::fs::write(
+        plugin_dir.join("plugin.toml"),
+        "[plugin]\nname = \"wasi-user\"\nversion = \"0.1.0\"\ntype = \"dispatcher\"\nwasm = \"wasi-user.wasm\"\n\n[capabilities]\nhost_functions = []\n",
+    )
+    .expect("plugin.toml");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  wasi-user:\n    path: {}\n",
+            plugin_dir.join("wasi-user.wasm").display()
+        ),
+    )
+    .expect("manifest");
+    let spec = dir.path().join("api.yaml");
+    std::fs::write(
+        &spec,
+        "openapi: \"3.1.0\"\ninfo: { title: WASI, version: \"1.0.0\" }\npaths:\n  /x:\n    get:\n      operationId: x\n      x-barbacane-dispatch:\n        name: wasi-user\n      responses:\n        \"200\": { description: never }\n",
+    )
+    .expect("spec");
+
+    let error = match TestGateway::from_spec(spec.to_str().expect("utf-8")).await {
+        Ok(_) => panic!("compiled a plugin importing fd_close"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        error.contains("E1043") && error.contains("wasi_snapshot_preview1::fd_close"),
+        "{error}"
+    );
+    assert!(
+        error.contains("random_get"),
+        "lists what is provided: {error}"
+    );
+}

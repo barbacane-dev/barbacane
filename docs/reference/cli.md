@@ -257,6 +257,7 @@ plugins and builds an artifact.
 | E1032 | Security | An operation runs an authentication middleware that reads none of the schemes its `security` requirement names |
 | E1033 | Security | An operation requires a credential and runs no authentication middleware (warning) |
 | E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
+| E1043 | Plugin | A plugin imports a function the gateway does not provide: anything outside the `barbacane` host functions and the supported WASI functions (see the [plugin guide](../contributing/plugins.md#wasi)) |
 | E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
 | E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
 | E1059 | Schema | A request schema cannot be enforced: its `$schema` names neither a JSON Schema draft nor an OpenAPI dialect, it refers to a resource outside the spec, or it does not compile (an invalid `pattern`, for one) |
