@@ -1,6 +1,6 @@
 # ADR-0024: AI Gateway Plugin
 
-**Status:** Accepted
+**Status:** Deprecated. Barbacane no longer ships the AI gateway plugins.
 **Date:** 2026-03-03
 
 ## Context

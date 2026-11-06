@@ -1,6 +1,6 @@
 # ADR-0025: MCP Server Support
 
-**Status:** Accepted
+**Status:** Deprecated. Barbacane no longer has an MCP server.
 **Date:** 2026-03-03
 
 ## Context

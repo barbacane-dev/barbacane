@@ -14,7 +14,6 @@ A security review drove a hardening pass. Landed on `security/hardening-and-test
 
 - [x] **Control-plane authentication** — admin bearer token (`BARBACANE_CONTROL_ADMIN_TOKEN`) required on all routes except `/health` and the data-plane WebSocket; server fails closed without it. CORS tightened to an allowlist (`BARBACANE_CONTROL_ALLOWED_ORIGINS`).
 - [x] **Artifact integrity & signing** — `.bca` now carries an Ed25519 signature over its content hash; the data plane recomputes every plugin/spec/route checksum and verifies the signature against a pinned key (`BARBACANE_TRUSTED_PUBKEY`) on load. Sign at compile with `BARBACANE_SIGNING_KEY`.
-- [x] **MCP session enforcement** — non-`initialize` requests without a valid session are rejected (no more header-omission bypass).
 - [x] **Plugin egress SSRF guard** — the WASM host HTTP client rejects loopback/link-local/private/metadata targets and no longer follows redirects (override with `BARBACANE_ALLOW_INTERNAL_EGRESS`).
 - [x] **`jwt-auth` real verification** — signatures verified via the host `verify_signature` capability (inline JWK); the test-only skip flag is ignored in production builds.
 - [x] **Secret confinement** — `file://` secret references confined to `BARBACANE_SECRETS_DIR`.
@@ -88,7 +87,6 @@ Committed but not yet scheduled. Grouped by concern.
 
 | Feature | Priority | Notes |
 |---|---|---|
-| MCP compile-time validation | P1 | Warn on missing `operationId`; embed MCP tool manifest in `.bca` (ADR-0025) |
 | VS Code extension | P2 | Spec editing with validation and autocomplete |
 | OpenAPI diff | P2 | Show changes between spec versions |
 | Compile-time error catalog | P2 | Document all E-codes with examples and remediation |
@@ -144,15 +142,8 @@ The first three rungs of the trusted spec-to-run pipeline are shipped (artifact 
 
 Ideas worth tracking but not committed. Items flagged **`[competitive]`** are on competitors' feature matrices (see Competitive watch).
 
-- **`[competitive]`** Semantic caching for `ai-proxy` — embedding-based response dedup, vector-store-backed via `host_http_call` (Kong 3.8, Portkey)
-- **`[competitive]`** Semantic routing — route by cosine similarity between prompt and per-target descriptions (Kong 3.8)
-- **`[competitive]`** Hard-budget spend enforcement — extend `ai-cost-tracker` from "emit cost metric" to "reject when spend > cap per consumer/window" (Portkey, LiteLLM)
 - **`[competitive]`** OpenAPI Overlay support — env-specific config via overlay spec so one base spec + dev/staging/prod overlays replace copies (Zuplo pattern)
 - **`[competitive]`** Auto-generated developer portal — Scalar/Redocly-backed portal served by the control plane from the compiled spec
-- Multi-modal AI — explicit vision/audio support beyond the OpenAI-compatible image URLs we already carry
-- **Stateful Responses API** — `previous_response_id` + `GET /v1/responses/{id}` retrieval (ADR-0030 §2 deferred). Requires session-scoped storage (artifact-bound vs. external KV is the open call); the stateless build emits a `Warning: 299` header on `store: true` and increments `responses_store_downgrades_total` so operators can quantify demand before we commit to a backend
-- **Responses SSE re-encoding** — rewrite the in-event `id` in the OpenAI passthrough's text/event-stream so synthetic `resp_<uuid-v7>` ids hold under streaming (ADR-0030 §2 "Streaming"). Anthropic translation for streamed Responses also lands here
-- **`/v1/models` caching + single-flight** — v1 hits upstreams on every call; on hot deployments, cache the aggregated catalog with a short TTL and coalesce concurrent fetches. Endpoint is intentionally off the data-plane critical path, so this is a polish item not a correctness one
 
 ---
 
@@ -190,7 +181,7 @@ Waiting on external unblockers: none at the moment.
 
 ## Competitive watch
 
-What competitors ship that we might copy. Barbacane is primarily an API gateway; the AI gateway is one feature category among many. Signal only — absence from Barbacane isn't a bug. Landscape refresh: **2026-04-20**.
+What competitors ship that we might copy. Signal only — absence from Barbacane isn't a bug. Landscape refresh: **2026-04-20**.
 
 ### Protocol & routing
 
@@ -210,7 +201,7 @@ What competitors ship that we might copy. Barbacane is primarily an API gateway;
 | Sliding-window rate limiting | Kong (Rate Limiting Advanced — enterprise for advanced window), Tyk, Envoy local ratelimit | ✅ `rate-limit` |
 | Multi-tier / layered rate limits | Kong, Tyk | ✅ via stacking (cf. `docs/guide/middlewares/traffic-control.md`) |
 | Response caching | Kong, Tyk, Cloudflare | ✅ `cache` |
-| Circuit breaker | Kong, Istio | Partially covered: `ai-proxy` has provider-level fallback on 5xx/timeout. No general circuit breaker; not planned as a separate middleware |
+| Circuit breaker | Kong, Istio | No general circuit breaker; not planned as a separate middleware |
 | Idempotency | Some gateways via custom code | ➜ Later/P1 (`idempotency` middleware) |
 | Request/response transformation | Kong, Tyk (core) | ✅ `request-transformer`, `response-transformer` |
 
@@ -254,22 +245,3 @@ What competitors ship that we might copy. Barbacane is primarily an API gateway;
 | Multi-cluster routing | Kong, Traefik, Istio Ambient Multicluster (Beta) | ➜ Later (control-plane "data plane groups") |
 | Sidecarless service mesh | Istio Ambient (GA since 1.24, Nov 2024) | ⛔ Out of scope |
 | Service mesh (sidecar) | Istio, Linkerd | ⛔ Out of scope |
-
-### AI / LLM gateway (one category among the above)
-
-Every serious gateway now ships AI features. Barbacane is competitive on the core (multi-provider routing, guardrails, rate limiting, cost tracking, MCP server); newer differentiators sit in the semantic layer and MCP governance.
-
-| Capability | Who | Barbacane status |
-|---|---|---|
-| Multi-provider LLM proxy + fallback | Kong 3.8+, APISIX 3.15+, Portkey, LiteLLM, Cloudflare AI Gateway (Universal Endpoint), Zuplo | ✅ `ai-proxy` (ADR-0024, ADR-0030) — caller-owned `model`, glob `routes`, per-target `allow`/`deny` |
-| Prompt + response guardrails | Portkey (60+), LiteLLM (built-in), Kong, Zuplo | ✅ `ai-prompt-guard`, `ai-response-guard` |
-| Token-based rate limiting + spend metric | Kong (enterprise for token limits), Portkey, LiteLLM | ✅ `ai-token-limit`, `ai-cost-tracker` |
-| OpenAI Responses API (stateless) | OpenAI native, Cloudflare AI Gateway, Portkey | ✅ `POST /v1/responses` (ADR-0030 §2) — synthetic `resp_<uuid-v7>` ids, Anthropic Messages translation, Ollama 400. Stateful (`previous_response_id`, `GET /v1/responses/{id}`) deferred |
-| Aggregated `/v1/models` discovery | OpenAI clients, Continue.dev, LiteLLM | ✅ `GET /v1/models` (ADR-0030 §4) — aggregates every unique provider declared in `routes` / `targets` / flat, partial-failure response with `partial: true` + `warnings[]` |
-| MCP server + MCP traffic governance | Kong (API→MCP conversion), APISIX (`mcp-bridge`), LiteLLM, Portkey, Zuplo | ✅ Native MCP server from spec (ADR-0025) |
-| MCP authentication (OAuth 2.1 / PKCE) | Portkey | Covered via existing auth middlewares on `/__barbacane/mcp` (`oidc-auth` handles PKCE-authenticated JWTs; `apikey-auth` / `oauth2-auth` also apply) |
-| Streaming Responses API (SSE event-stream rewrites) | OpenAI native, Cloudflare AI Gateway | Partial — non-streaming JSON path complete; SSE re-encoding for synthetic ids deferred (ADR-0030 §2 "Streaming") |
-| Semantic cache / semantic routing | Kong 3.8 (Redis-backed), Portkey (enterprise) | ➜ Someday/maybe |
-| Hard-budget spend enforcement | Portkey, LiteLLM (per-team budgets) | ➜ Someday/maybe |
-| Agent-to-agent (A2A) governance | Kong 3.14, Istio Agentgateway (experimental) | Watch — new category, unclear if it stabilizes |
-| K8s Gateway API Inference Extension (`InferencePool` / `InferenceModel`) | Envoy Gateway, kgateway, GKE Gateway, NGINX Gateway Fabric | Watch — complementary to our CEL-driven policy routing, not overlapping |
