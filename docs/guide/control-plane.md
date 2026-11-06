@@ -464,6 +464,7 @@ Tags:
 - `x.y.z` - Specific version (e.g., `0.2.0`)
 - `x.y` - Latest patch for minor version (e.g., `0.2`)
 - `x` - Latest minor for major version (e.g., `0`)
+- `x.y.z-rc.n` - A pre-release (e.g., `1.0.0-rc.1`), published under its own tag only: `latest`, `x.y` and `x` stay on the last stable release
 
 ### Docker Compose Example
 
