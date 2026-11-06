@@ -116,6 +116,11 @@ pub enum CompileError {
     #[error("E1058: two specs are named '{0}'; rename one")]
     DuplicateSpecFile(String),
 
+    /// E1059: A request schema the gateway cannot build a validator for, such
+    /// as one naming a dialect it does not know or a resource outside the spec.
+    #[error("E1059: schema cannot be enforced: {0}")]
+    UnenforceableSchema(String),
+
     /// Manifest parsing or loading error.
     #[error("manifest error: {0}")]
     ManifestError(String),

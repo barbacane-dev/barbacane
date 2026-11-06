@@ -258,6 +258,7 @@ plugins and builds an artifact.
 | E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
 | E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
 | E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
+| E1059 | Schema | A request schema cannot be enforced: its `$schema` names neither a JSON Schema draft nor an OpenAPI dialect, it refers to a resource outside the spec, or it does not compile (an invalid `pattern`, for one) |
 | E1071 | Manifest | A plugin was bundled without its manifest or config schema, so its configured headers are not admitted (warning) |
 | E1072 | Security | A security scheme and an authentication plugin's configuration name different credential headers (warning) |
 

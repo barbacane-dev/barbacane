@@ -328,10 +328,10 @@ fn every_schema_compiles() {
     for path in corpus() {
         let spec = parse_spec_file(&path).expect("parse");
         for (where_, schema) in schemas_of(&spec) {
-            // The data plane attaches the pool before compiling, so this builds
-            // the same value it does.
-            let schema = spec.self_contained(&schema);
-            if let Err(e) = jsonschema::options().build(&schema) {
+            // Built as the data plane builds it, with the pool attached.
+            if let Err(e) =
+                barbacane_compiler::request_validator(&schema, spec.schema_defs.as_ref())
+            {
                 panic!(
                     "{} {where_} produced a schema the validator cannot build: {e}",
                     path.display()

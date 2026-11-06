@@ -1245,6 +1245,7 @@ fn compile_inner(
                         options.max_schema_properties,
                         &param_location,
                     )?;
+                    check_enforceable(schema, spec.schema_defs.as_ref(), &param_location)?;
                 }
             }
 
@@ -1259,6 +1260,7 @@ fn compile_inner(
                             options.max_schema_properties,
                             &body_location,
                         )?;
+                        check_enforceable(schema, spec.schema_defs.as_ref(), &body_location)?;
                     }
                 }
             }
@@ -2629,6 +2631,17 @@ fn reserved_checked(name: &str, source: &str) -> Result<String, CompileError> {
         )));
     }
     Ok(lowered)
+}
+
+/// Refuse a request schema the data plane cannot build a validator for (E1059).
+fn check_enforceable(
+    schema: &serde_json::Value,
+    defs: Option<&serde_json::Value>,
+    location: &str,
+) -> Result<(), CompileError> {
+    crate::request_schema::request_validator(schema, defs)
+        .map(|_| ())
+        .map_err(|e| CompileError::UnenforceableSchema(format!("{location}: {e}")))
 }
 
 /// Validate schema complexity (E1051, E1052).
@@ -4824,6 +4837,44 @@ paths:
         );
 
         assert!(matches!(result, Err(CompileError::SchemaTooDeep(_))));
+    }
+
+    #[test]
+    fn compile_refuses_a_schema_the_gateway_cannot_enforce() {
+        let temp = TempDir::new().unwrap();
+        for schema in [
+            r#"{ "$schema": "https://example.com/my-dialect", "type": "string" }"#,
+            r#"{ "type": "string", "pattern": "(" }"#,
+        ] {
+            let spec_content = format!(
+                r#"openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /test:
+    post:
+      x-barbacane-dispatch:
+        name: mock
+      requestBody:
+        content:
+          application/json:
+            schema: {schema}
+"#
+            );
+            let spec_path = create_test_spec(temp.path(), "test.yaml", &spec_content);
+            let output_path = temp.path().join("artifact.bca");
+            let result = compile(
+                &[spec_path.as_path()],
+                &[],
+                &output_path,
+                &CompileOptions::default(),
+            );
+            assert!(
+                matches!(result, Err(CompileError::UnenforceableSchema(_))),
+                "{schema}: {result:?}"
+            );
+        }
     }
 
     #[test]

@@ -987,11 +987,13 @@ impl Gateway {
 
             // Pre-compile validator for this operation. Schemas point into the
             // artifact's shared definition pool rather than carrying their own.
+            // An artifact holding a schema that cannot be enforced is refused.
             let validator = OperationValidator::with_defs(
                 &op.parameters,
                 op.request_body.as_ref(),
                 routes.schema_defs.as_ref(),
-            );
+            )
+            .map_err(|e| format!("{} {}: {e}", op.method, op.path))?;
             validators.push(validator);
 
             // Log middleware chain for this operation (informational)

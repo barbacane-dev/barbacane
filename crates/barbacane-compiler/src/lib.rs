@@ -8,6 +8,7 @@ pub(crate) mod cache;
 pub(crate) mod download;
 pub mod error;
 pub mod manifest;
+pub mod request_schema;
 pub mod spec_parser;
 
 pub use artifact::compile_with_capabilities;
@@ -23,6 +24,7 @@ pub use manifest::{
     embedded_capabilities, embedded_category, embedded_config_schema, embedded_implements,
     extract_plugin_names, PathSource, PluginSource, ProjectManifest, ResolvedPlugin, UrlSource,
 };
+pub use request_schema::request_validator;
 // Re-export spec-parser types for convenience
 pub use spec_parser::{
     parse_spec, parse_spec_file, ApiSpec, AsyncAction, Channel, ContentSchema, DispatchConfig,
