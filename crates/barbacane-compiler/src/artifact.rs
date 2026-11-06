@@ -98,6 +98,9 @@ pub struct CompileOptions {
     pub provenance_source: Option<String>,
     /// Bypass the plugin download cache entirely (no read, no write).
     pub no_cache: bool,
+    /// PKCS#8 Ed25519 key to sign the artifact with. When unset, the key the
+    /// `BARBACANE_SIGNING_KEY` environment variable names is used, if any.
+    pub signing_key: Option<PathBuf>,
 }
 
 impl Default for CompileOptions {
@@ -109,6 +112,7 @@ impl Default for CompileOptions {
             provenance_commit: None,
             provenance_source: None,
             no_cache: false,
+            signing_key: None,
         }
     }
 }
@@ -1595,7 +1599,7 @@ fn compile_inner(
     // hash as well as the capability-enforcement surface (capabilities_enforced,
     // per-plugin host_functions/body_access), so a tampered artifact
     // fails verification on load (H3).
-    sign_manifest_from_env(&mut manifest)?;
+    sign_manifest(&mut manifest, options)?;
 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
 
@@ -1754,11 +1758,14 @@ pub enum IntegrityError {
     Malformed { path: String, reason: String },
     #[error("artifact cannot be read: {0}")]
     Unreadable(String),
-    #[error("artifact is unsigned but a trusted public key is configured")]
+    #[error(
+        "the artifact is unsigned, but a trusted key is pinned: compile it with \
+         BARBACANE_SIGNING_KEY set to the key that matches BARBACANE_TRUSTED_PUBKEY"
+    )]
     MissingSignature,
     #[error("invalid key/signature material: {0}")]
     InvalidMaterial(String),
-    #[error("artifact signature verification failed")]
+    #[error("the artifact is not signed by the key BARBACANE_TRUSTED_PUBKEY pins")]
     BadSignature,
 }
 
@@ -1818,19 +1825,27 @@ pub fn verify_artifact_signature(
         .map_err(|_| IntegrityError::BadSignature)
 }
 
-/// Sign the manifest's `artifact_hash` when `BARBACANE_SIGNING_KEY` (a path to a
-/// PKCS#8 Ed25519 private key) is set. No-op when unset (unsigned artifact).
-fn sign_manifest_from_env(manifest: &mut Manifest) -> Result<(), CompileError> {
+/// Sign the manifest's `artifact_hash` with `options.signing_key`, or with the
+/// key `BARBACANE_SIGNING_KEY` names when that is unset. Without a key (an
+/// empty variable is none) the artifact is unsigned.
+fn sign_manifest(manifest: &mut Manifest, options: &CompileOptions) -> Result<(), CompileError> {
     use ring::signature::KeyPair;
 
-    let key_path = match std::env::var_os("BARBACANE_SIGNING_KEY") {
-        Some(p) => p,
-        None => return Ok(()),
+    let from_env = std::env::var_os("BARBACANE_SIGNING_KEY").filter(|p| !p.is_empty());
+    let key_path = match (&options.signing_key, from_env) {
+        (Some(path), _) => path.clone(),
+        (None, Some(path)) => PathBuf::from(path),
+        (None, None) => return Ok(()),
     };
-    let pkcs8 = std::fs::read(&key_path)
-        .map_err(|e| CompileError::Signing(format!("reading BARBACANE_SIGNING_KEY: {e}")))?;
-    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(&pkcs8)
-        .map_err(|e| CompileError::Signing(format!("invalid PKCS#8 Ed25519 key: {e}")))?;
+    let key_file = std::fs::read(&key_path).map_err(|e| {
+        CompileError::Signing(format!(
+            "reading the signing key {}: {e}",
+            key_path.display()
+        ))
+    })?;
+    let key_pair = crate::signing::load_signing_key(&key_file).map_err(|e| {
+        CompileError::Signing(format!("the signing key {}: {e}", key_path.display()))
+    })?;
     let signature = key_pair.sign(manifest.artifact_hash.as_bytes());
     manifest.signature = Some(hex::encode(signature.as_ref()));
     manifest.signing_public_key = Some(hex::encode(key_pair.public_key().as_ref()));

@@ -412,6 +412,7 @@ name = "barbacane-compiler"
 version = "0.12.3"
 dependencies = [
  "barbacane-waf",
+ "base64",
  "chrono",
  "criterion",
  "flate2",
