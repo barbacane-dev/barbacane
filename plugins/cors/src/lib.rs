@@ -171,18 +171,21 @@ impl Cors {
         }
     }
 
-    /// Check if origin matches a wildcard pattern like "*.example.com".
+    /// Check if origin matches a wildcard pattern like "*.example.com": its
+    /// host is one or more labels followed by `.example.com`.
     fn matches_wildcard_origin(&self, pattern: &str, origin: &str) -> bool {
-        if let Some(suffix) = pattern.strip_prefix("*.") {
-            // Pattern: *.example.com should match sub.example.com
-            if let Some(origin_host) = origin.strip_prefix("https://") {
-                return origin_host.ends_with(suffix) && origin_host != suffix;
-            }
-            if let Some(origin_host) = origin.strip_prefix("http://") {
-                return origin_host.ends_with(suffix) && origin_host != suffix;
-            }
-        }
-        false
+        let Some(domain) = pattern.strip_prefix("*.") else {
+            return false;
+        };
+        let Some(host) = origin
+            .strip_prefix("https://")
+            .or_else(|| origin.strip_prefix("http://"))
+        else {
+            return false;
+        };
+        host.strip_suffix(domain)
+            .and_then(|labels| labels.strip_suffix('.'))
+            .is_some_and(|labels| !labels.is_empty())
     }
 
     /// Check if the requested method is allowed.
@@ -403,6 +406,16 @@ mod tests {
         assert!(cors.matches_wildcard_origin("*.example.com", "https://api.example.com"));
         assert!(!cors.matches_wildcard_origin("*.example.com", "https://example.com"));
         assert!(!cors.matches_wildcard_origin("*.example.com", "https://other.com"));
+    }
+
+    #[test]
+    fn a_wildcard_matches_whole_labels_only() {
+        let cors = create_test_cors(vec!["*.example.com".to_string()]);
+        assert!(!cors.matches_wildcard_origin("*.example.com", "https://evilexample.com"));
+        assert!(!cors.matches_wildcard_origin("*.example.com", "http://evilexample.com"));
+        assert!(!cors.matches_wildcard_origin("*.example.com", "https://.example.com"));
+        assert!(cors.matches_wildcard_origin("*.example.com", "https://a.b.example.com"));
+        assert!(!cors.is_origin_allowed("https://evilexample.com"));
     }
 
     #[test]

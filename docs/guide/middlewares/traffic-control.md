@@ -119,7 +119,7 @@ x-barbacane-middlewares:
 
 Origins can be:
 - Exact match: `https://app.example.com`
-- Wildcard subdomain: `*.example.com` (matches `sub.example.com`)
+- Wildcard subdomain: `*.example.com` (matches `sub.example.com` and `a.b.example.com`, but not `example.com` itself or `evilexample.com`)
 - Wildcard: `*` (only when `allow_credentials: false`)
 
 ### Error responses
@@ -171,6 +171,7 @@ x-barbacane-middlewares:
 - If `allow` is configured, only IPs in the list are permitted (allowlist mode)
 - Client IP is extracted from `X-Forwarded-For`, `X-Real-IP`, or direct connection
 - Supports both single IPs (`10.0.0.1`) and CIDR notation (`10.0.0.0/8`)
+- An IPv4 client on a dual-stack listener arrives as an IPv4-mapped IPv6 address (`::ffff:10.0.0.1`); it is matched as the IPv4 address it carries, and so is a rule written in that form
 
 ### Error response
 

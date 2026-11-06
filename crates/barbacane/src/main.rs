@@ -4297,7 +4297,7 @@ async fn run_dev(
                 let gateway_snapshot = gateway.load_full();
                 let conn_metrics = metrics.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
-                let client_addr = Some(peer_addr);
+                let client_addr = Some(canonical_peer(peer_addr));
 
                 tokio::spawn(async move {
                     let service = service_fn(move |req| {
@@ -4419,6 +4419,12 @@ fn ws_url_to_http_base(ws_url: &str) -> String {
     } else {
         http_url
     }
+}
+
+/// The peer as the gateway reports it. A dual-stack listener sees an IPv4
+/// client as an IPv4-mapped IPv6 address, which is reported as the IPv4 address.
+fn canonical_peer(addr: SocketAddr) -> SocketAddr {
+    SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
 
 /// Load TLS certificates and create a rustls ServerConfig.
@@ -4804,7 +4810,7 @@ async fn run_serve(
                 let conn_metrics = metrics.clone();
                 let conn_counter = active_connections.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
-                let client_addr = Some(peer_addr);
+                let client_addr = Some(canonical_peer(peer_addr));
                 let conn_keepalive = keepalive_duration;
 
                 tokio::spawn(async move {
@@ -5198,6 +5204,20 @@ fn check_artifact_version(found: u32) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod peer_tests {
+    use super::canonical_peer;
+    use std::net::SocketAddr;
+
+    #[test]
+    fn an_ipv4_mapped_peer_is_reported_as_ipv4() {
+        let mapped: SocketAddr = "[::ffff:10.0.0.1]:4242".parse().unwrap();
+        assert_eq!(canonical_peer(mapped), "10.0.0.1:4242".parse().unwrap());
+        let v6: SocketAddr = "[2001:db8::1]:4242".parse().unwrap();
+        assert_eq!(canonical_peer(v6), v6);
+    }
 }
 
 #[cfg(test)]
