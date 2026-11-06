@@ -49,9 +49,15 @@ cd my-api
 For production, use the explicit compile-and-serve workflow:
 
 ```bash
-barbacane compile -m barbacane.yaml -o api.bca
-barbacane serve --artifact api.bca --listen 0.0.0.0:8080
+# Once: generate the key that signs your artifacts, and keep it secret
+barbacane key generate --out signing.pk8
+
+BARBACANE_SIGNING_KEY=signing.pk8 barbacane compile -m barbacane.yaml -o api.bca
+BARBACANE_TRUSTED_PUBKEY=$(barbacane key public --key signing.pk8) \
+  barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
+
+The gateway serves only artifacts signed by the key it pins; see [artifact signing](docs/reference/configuration.md#artifact-signing-quickstart).
 
 ### What configuration looks like
 

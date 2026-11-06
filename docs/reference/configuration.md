@@ -12,8 +12,8 @@ insecurely.
 |----------|-----------|---------|--------|
 | `BARBACANE_CONTROL_ADMIN_TOKEN` | Control plane | _unset_ | **Required.** Bearer token that must accompany every control-plane API request (except `GET /health` and the data-plane WebSocket). The server refuses to start if unset. |
 | `BARBACANE_CONTROL_ALLOWED_ORIGINS` | Control plane | _unset (no cross-origin)_ | Comma-separated CORS allowlist of browser origins permitted to call the API, e.g. `https://ui.example.com`. |
-| `BARBACANE_TRUSTED_PUBKEY` | Data plane | _unset_ | Hex-encoded Ed25519 public key. When set, the data plane requires every loaded `.bca` artifact to carry a valid signature produced by the matching private key; load fails otherwise. When unset, the artifact's content hashes are still verified, but signature checking is skipped (a startup warning is logged). |
-| `BARBACANE_SIGNING_KEY` | Compiler | _unset_ | Path to a PKCS#8 Ed25519 private key. When set, `barbacane compile` signs the artifact's content hash. When unset, the artifact is built unsigned. |
+| `BARBACANE_TRUSTED_PUBKEY` | Data plane | _unset_ | **Required by `barbacane serve`**, unless `--dev` or `--allow-unsigned` is passed. The hex-encoded Ed25519 public key (64 characters, as `barbacane key public` prints it) whose private key signs your artifacts. Every artifact the gateway loads, hot reloads included, must carry a valid signature by it; an unsigned or differently signed artifact is refused, whatever the flags. Without a pinned key, `--dev` and `--allow-unsigned` load artifacts unsigned, and each load logs a warning; content hashes are checked either way. |
+| `BARBACANE_SIGNING_KEY` | Compiler, control plane | _unset_ | Path to a PKCS#8 Ed25519 private key, DER or PEM, from `barbacane key generate` or `openssl genpkey -algorithm ed25519`. When set, `barbacane compile` and the control plane's compilations sign the artifact's content hash. When unset or empty, artifacts are built unsigned. |
 | `BARBACANE_SECRETS_DIR` | Data plane | _unset_ | Base directory that `file://` secret references are confined to. **Required to use `file://` secrets** — references are rejected when it is unset, and any path resolving outside this directory (after symlink/`..` resolution) is rejected. |
 | `BARBACANE_ALLOW_INTERNAL_EGRESS` | Data plane | `false` | Set to `1`/`true` to disable the plugin SSRF guard and allow plugin egress (HTTP calls, Kafka/NATS broker connections, LDAP directory connections **and** WebSocket upstreams) to internal/loopback/link-local/cloud-metadata addresses. Guarded clients connect to the address vetted by the guard rather than resolving again (DNS-rebinding safe), except a NATS `tls://` broker, which keeps its hostname so the TLS handshake carries SNI. Leave off unless you have legitimate internal upstreams or brokers. |
 | `BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES` | Data plane | `16777216` (16 MiB) | Maximum size of an upstream response body that the buffered plugin HTTP-call path will read into host memory. Bodies larger than this are rejected, bounding host memory against a hostile or compromised upstream. Streaming dispatchers are unaffected. |
@@ -37,7 +37,15 @@ These changes are intentional secure defaults. Adopt them as follows:
    `BARBACANE_ALLOW_INTERNAL_EGRESS=1` (or prefer an explicit allowlist when one
    is available).
 
-4. **Plugins may only use their declared capabilities.** A plugin whose WASM
+4. **The data plane serves only signed artifacts.** `barbacane serve` refuses
+   to start until `BARBACANE_TRUSTED_PUBKEY` pins the key your artifacts are
+   signed with. Generate one with `barbacane key generate`, compile with
+   `BARBACANE_SIGNING_KEY` set to it, and pin the public key it prints (see the
+   quickstart below). `barbacane dev` and `serve --dev` are unaffected;
+   `serve --allow-unsigned` loads unsigned artifacts outside development, with
+   a warning at every load.
+
+5. **Plugins may only use their declared capabilities.** A plugin whose WASM
    imports a host function outside the capabilities declared in its
    `plugin.toml` fails to load, whether the artifact was compiled with
    `barbacane compile` or by the control plane. Official plugins already declare
@@ -98,17 +106,33 @@ metadata off-host.
 ## Artifact signing quickstart
 
 ```bash
-# 1. Generate a dev keypair (PKCS#8 Ed25519). Any tool that emits PKCS#8 works;
-#    keep the private key secret and distribute only the public key.
+# 1. Generate a signing key. It is written owner-readable only, never over an
+#    existing file; the public key is printed.
+barbacane key generate --out signing.pk8
 
 # 2. Sign at compile time:
-BARBACANE_SIGNING_KEY=/path/to/ed25519.pk8 \
+BARBACANE_SIGNING_KEY=signing.pk8 \
   barbacane compile -m barbacane.yaml -o api.bca
 
-# 3. Require verification on the data plane (pin the public key):
-BARBACANE_TRUSTED_PUBKEY=<hex-public-key> \
+# 3. Pin the public key on the data plane:
+BARBACANE_TRUSTED_PUBKEY=$(barbacane key public --key signing.pk8) \
   barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
+
+Keep the private key where your builds run (a CI secret, or the control
+plane's secret store) and give data planes only the public key. Each data plane
+pins the key itself rather than learning it from the control plane, so whoever
+can send it artifacts cannot also choose the key that vouches for them.
+
+To rotate the key, generate a new one, sign new artifacts with it, and update
+`BARBACANE_TRUSTED_PUBKEY` on each data plane as you deploy them: a data plane
+pins one key at a time, so restart it with the new key and the newly signed
+artifact together.
+
+When a data plane refuses an artifact, the error says which case it is: no key
+pinned (`no trusted signing key`), an unsigned artifact (`the artifact is
+unsigned, but a trusted key is pinned`), or a signature by another key (`the
+artifact is not signed by the key BARBACANE_TRUSTED_PUBKEY pins`).
 
 The signature covers the artifact's content hash (`artifact_hash`), which binds
 every spec, route, and plugin WASM checksum **plus the capability-enforcement

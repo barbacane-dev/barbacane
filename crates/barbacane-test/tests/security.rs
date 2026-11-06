@@ -33,6 +33,7 @@ use std::path::PathBuf;
 
 mod security {
     pub mod artifact_integrity;
+    pub mod artifact_signing;
     pub mod authz;
     pub mod crypto_auth;
     pub mod dos;

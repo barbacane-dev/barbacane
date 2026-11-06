@@ -58,10 +58,10 @@ docker pull ghcr.io/barbacane-dev/barbacane:latest
 docker pull ghcr.io/barbacane-dev/barbacane-control:latest
 ```
 
-Quick start with Docker:
+Quick start with Docker (`--allow-unsigned` for a first try; in production, pin the key that signs your artifacts with `-e BARBACANE_TRUSTED_PUBKEY=...`):
 ```bash
 docker run -v ./api.bca:/config/api.bca -p 8080:8080 \
-  ghcr.io/barbacane-dev/barbacane serve --artifact /config/api.bca
+  ghcr.io/barbacane-dev/barbacane serve --artifact /config/api.bca --allow-unsigned
 ```
 
 ### Using Cargo
@@ -293,9 +293,15 @@ This compiles your specs, starts the gateway, and watches for file changes. Ever
 
 For production, use the explicit compile-and-serve workflow:
 ```bash
-barbacane compile -m barbacane.yaml -o api.bca
-barbacane serve --artifact api.bca --listen 0.0.0.0:8080
+# Once: generate the key that signs your artifacts, and keep it secret
+barbacane key generate --out signing.pk8
+
+BARBACANE_SIGNING_KEY=signing.pk8 barbacane compile -m barbacane.yaml -o api.bca
+BARBACANE_TRUSTED_PUBKEY=$(barbacane key public --key signing.pk8) \
+  barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
+
+The gateway serves only artifacts signed by the key it pins; see [artifact signing](../reference/configuration.md#artifact-signing-quickstart).
 
 ## Observability
 

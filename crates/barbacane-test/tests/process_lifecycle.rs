@@ -116,6 +116,8 @@ fn sigterm_on_a_serving_gateway_exits_zero() {
         .arg("--artifact")
         .arg(&artifact)
         .args(["--listen", "127.0.0.1:34201"])
+        .arg("--allow-unsigned")
+        .env_remove("BARBACANE_TRUSTED_PUBKEY")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -178,6 +180,8 @@ fn a_taken_port_reports_the_cause_without_panicking() {
         .arg("--artifact")
         .arg(&artifact)
         .args(["--listen", "127.0.0.1:34202"])
+        .arg("--allow-unsigned")
+        .env_remove("BARBACANE_TRUSTED_PUBKEY")
         .output()
         .expect("run the gateway");
 
@@ -218,6 +222,8 @@ fn a_taken_admin_port_does_not_stop_the_gateway_serving() {
         .arg("--artifact")
         .arg(&artifact)
         .args(["--listen", LISTEN_ANY_PORT])
+        .arg("--allow-unsigned")
+        .env_remove("BARBACANE_TRUSTED_PUBKEY")
         .arg("--admin-bind")
         .arg(format!("127.0.0.1:{taken}"));
 

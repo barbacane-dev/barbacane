@@ -436,6 +436,12 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 enum Commands {
+    /// Manage the Ed25519 keys that sign artifacts.
+    Key {
+        #[command(subcommand)]
+        action: KeyAction,
+    },
+
     /// Compile OpenAPI spec(s) into a .bca artifact.
     Compile {
         /// Input spec file(s) (YAML or JSON).
@@ -604,6 +610,11 @@ enum Commands {
         #[arg(long)]
         allow_plaintext_upstream: bool,
 
+        /// Load artifacts no trusted key has signed, when BARBACANE_TRUSTED_PUBKEY
+        /// is unset (development and testing only; logged at every load).
+        #[arg(long)]
+        allow_unsigned: bool,
+
         /// Path to TLS certificate file (PEM format).
         /// If provided, --tls-key must also be specified.
         #[arg(long)]
@@ -712,25 +723,27 @@ impl Gateway {
         limits: RequestLimits,
         allow_plaintext_upstream: bool,
         metrics: Arc<MetricsRegistry>,
+        trust: &ArtifactTrust,
     ) -> Result<Self, String> {
         let archive = ArtifactArchive::read(artifact_path)
             .map_err(|e| format!("failed to read artifact: {}", e))?;
 
         check_artifact_version(archive.manifest().barbacane_artifact_version)?;
 
-        // AR-1: authenticate the artifact before using any of it. An Ed25519
-        // signature is required when a trusted public key is pinned via
-        // BARBACANE_TRUSTED_PUBKEY; `artifact_hash` and every archive member
-        // are always checked against the manifest.
-        match std::env::var("BARBACANE_TRUSTED_PUBKEY") {
-            Ok(pubkey) if !pubkey.trim().is_empty() => {
-                barbacane_compiler::verify_artifact_signature(archive.manifest(), &pubkey)
-                    .map_err(|e| format!("artifact signature verification failed: {}", e))?;
+        // AR-1: authenticate the artifact before using any of it. With a pinned
+        // key the Ed25519 signature is required; `artifact_hash` and every
+        // archive member are always checked against the manifest.
+        match trust {
+            ArtifactTrust::Pinned(pubkey) => {
+                barbacane_compiler::verify_artifact_signature(archive.manifest(), pubkey)
+                    .map_err(|e| format!("artifact signature check failed: {e}"))?;
                 tracing::info!("artifact Ed25519 signature verified");
             }
-            _ => {
+            ArtifactTrust::Unsigned => {
                 tracing::warn!(
-                    "artifact signature verification disabled; set BARBACANE_TRUSTED_PUBKEY to require a valid Ed25519 signature"
+                    "artifact signature not checked: no key is pinned in \
+                     BARBACANE_TRUSTED_PUBKEY, and --dev or --allow-unsigned lets unsigned \
+                     artifacts load"
                 );
             }
         }
@@ -3689,6 +3702,7 @@ Thumbs.db
 // =============================================================================
 
 /// Perform hot-reload: download, verify, load, and swap the gateway state.
+#[allow(clippy::too_many_arguments)]
 async fn perform_hot_reload(
     notification: control_plane::ArtifactNotification,
     shared_gateway: &SharedGateway,
@@ -3697,6 +3711,7 @@ async fn perform_hot_reload(
     limits: RequestLimits,
     allow_plaintext_upstream: bool,
     metrics: Arc<MetricsRegistry>,
+    trust: ArtifactTrust,
 ) -> HotReloadResult {
     let artifact_id = notification.artifact_id;
 
@@ -3757,6 +3772,7 @@ async fn perform_hot_reload(
         limits,
         allow_plaintext_upstream,
         metrics,
+        &trust,
     ) {
         Ok(g) => g,
         Err(e) => {
@@ -3926,6 +3942,15 @@ async fn run_dev(
         return ExitCode::from(1);
     }
 
+    let pinned = std::env::var("BARBACANE_TRUSTED_PUBKEY").ok();
+    let trust = match artifact_trust(pinned.as_deref(), true, false) {
+        Ok(trust) => trust,
+        Err(e) => {
+            eprintln!("barbacane dev: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
     let manifest_dir = manifest_path
         .parent()
         .unwrap_or(Path::new("."))
@@ -4003,20 +4028,26 @@ async fn run_dev(
     let compile_ms = compile_start.elapsed().as_millis();
 
     // Load gateway.
-    let gateway: SharedGateway =
-        match Gateway::load(&temp_path, true, limits.clone(), true, metrics.clone()) {
-            Ok(g) => {
-                eprintln!(
-                    "barbacane dev: compiled {} route(s) in {}ms",
-                    g.manifest.routes_count, compile_ms
-                );
-                Arc::new(ArcSwap::new(Arc::new(g)))
-            }
-            Err(e) => {
-                eprintln!("barbacane dev: {}", e);
-                return ExitCode::from(1);
-            }
-        };
+    let gateway: SharedGateway = match Gateway::load(
+        &temp_path,
+        true,
+        limits.clone(),
+        true,
+        metrics.clone(),
+        &trust,
+    ) {
+        Ok(g) => {
+            eprintln!(
+                "barbacane dev: compiled {} route(s) in {}ms",
+                g.manifest.routes_count, compile_ms
+            );
+            Arc::new(ArcSwap::new(Arc::new(g)))
+        }
+        Err(e) => {
+            eprintln!("barbacane dev: {}", e);
+            return ExitCode::from(1);
+        }
+    };
 
     // Parse listen address.
     let addr: SocketAddr = match listen.parse() {
@@ -4233,7 +4264,7 @@ async fn run_dev(
                 }
 
                 // Load new gateway.
-                match Gateway::load(&new_path, true, limits.clone(), true, metrics.clone()) {
+                match Gateway::load(&new_path, true, limits.clone(), true, metrics.clone(), &trust) {
                     Ok(new_gw) => {
                         let routes = new_gw.manifest.routes_count;
                         let ms = compile_start.elapsed().as_millis();
@@ -4496,12 +4527,22 @@ async fn run_serve(
     shutdown_timeout: u64,
     connected_mode: Option<ConnectedModeConfig>,
     admin_bind: &str,
+    allow_unsigned: bool,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
         eprintln!("error: artifact not found: {}", artifact);
         return ExitCode::from(1);
     }
+
+    let pinned = std::env::var("BARBACANE_TRUSTED_PUBKEY").ok();
+    let trust = match artifact_trust(pinned.as_deref(), dev, allow_unsigned) {
+        Ok(trust) => trust,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
+    };
 
     // Determine artifact directory for hot-reload downloads
     let artifact_dir = artifact_path
@@ -4515,6 +4556,7 @@ async fn run_serve(
         limits.clone(),
         allow_plaintext_upstream,
         metrics.clone(),
+        &trust,
     ) {
         Ok(g) => Arc::new(ArcSwap::new(Arc::new(g))),
         Err(e) => {
@@ -4723,6 +4765,7 @@ async fn run_serve(
                 let response_tx_clone = response_tx.clone();
                 let artifact_hash_tx_clone = artifact_hash_tx.clone();
                 let admin_manifest_clone = admin_manifest.clone();
+                let trust_clone = trust.clone();
 
                 tokio::spawn(async move {
                     let result = perform_hot_reload(
@@ -4733,6 +4776,7 @@ async fn run_serve(
                         limits_clone,
                         allow_plaintext_upstream,
                         metrics_clone,
+                        trust_clone,
                     )
                     .await;
 
@@ -5008,6 +5052,7 @@ async fn main() -> ExitCode {
             no_cache,
         ),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
+        Commands::Key { action } => run_key(action),
         Commands::Dev {
             listen,
             manifest,
@@ -5071,6 +5116,7 @@ async fn main() -> ExitCode {
             max_header_size,
             max_uri_length,
             allow_plaintext_upstream,
+            allow_unsigned,
             tls_cert,
             tls_key,
             tls_min_version,
@@ -5179,6 +5225,7 @@ async fn main() -> ExitCode {
                 shutdown_timeout,
                 connected_mode,
                 &admin_bind,
+                allow_unsigned,
             )
             .await
         }
@@ -5190,6 +5237,114 @@ async fn main() -> ExitCode {
 /// value is dropped here; otherwise a caller could forge groups an auth plugin
 /// leaves unset. Used by every path that builds a plugin request (dispatch and
 /// CORS preflight).
+/// `barbacane key` actions.
+#[derive(Subcommand, Debug)]
+enum KeyAction {
+    /// Generate a signing key (PKCS#8) and print its public key.
+    ///
+    /// Compile with BARBACANE_SIGNING_KEY set to the key file, and pin the
+    /// printed public key on data planes with BARBACANE_TRUSTED_PUBKEY.
+    Generate {
+        /// Where to write the private key. An existing file is not overwritten.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Print the public key of a signing key, as BARBACANE_TRUSTED_PUBKEY takes it.
+    Public {
+        /// The signing key: PKCS#8, DER or PEM.
+        #[arg(long)]
+        key: std::path::PathBuf,
+    },
+}
+
+fn run_key(action: KeyAction) -> ExitCode {
+    match action {
+        KeyAction::Generate { out } => {
+            let result = barbacane_compiler::signing::generate_signing_key().and_then(|key| {
+                write_private_key(&out, &key)
+                    .map_err(|e| format!("writing {}: {e}", out.display()))?;
+                barbacane_compiler::signing::signing_public_key(&key)
+            });
+            match result {
+                Ok(public) => {
+                    eprintln!(
+                        "wrote {}: keep it secret, and compile with BARBACANE_SIGNING_KEY={}",
+                        out.display(),
+                        out.display()
+                    );
+                    eprintln!("pin this public key on data planes as BARBACANE_TRUSTED_PUBKEY:");
+                    println!("{public}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        KeyAction::Public { key } => {
+            let result = std::fs::read(&key)
+                .map_err(|e| format!("reading {}: {e}", key.display()))
+                .and_then(|bytes| barbacane_compiler::signing::signing_public_key(&bytes));
+            match result {
+                Ok(public) => {
+                    println!("{public}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+    }
+}
+
+/// Write a private key to a new file that only its owner can read.
+fn write_private_key(path: &Path, key: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    std::io::Write::write_all(&mut options.open(path)?, key)
+}
+
+/// Whose signature an artifact must carry to be loaded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ArtifactTrust {
+    /// Signed by the key whose hex Ed25519 public key this is.
+    Pinned(String),
+    /// Loaded unsigned: `--dev` or `--allow-unsigned`, with no key pinned.
+    Unsigned,
+}
+
+/// The trust a gateway applies to every artifact it loads, hot reloads
+/// included. A pinned key always requires its signature; with none, only
+/// `--dev` or `--allow-unsigned` lets an unsigned artifact load.
+fn artifact_trust(
+    pinned: Option<&str>,
+    dev: bool,
+    allow_unsigned: bool,
+) -> Result<ArtifactTrust, String> {
+    match pinned.map(str::trim).filter(|key| !key.is_empty()) {
+        Some(key) => match hex::decode(key) {
+            Ok(bytes) if bytes.len() == 32 => Ok(ArtifactTrust::Pinned(key.to_string())),
+            _ => Err(
+                "BARBACANE_TRUSTED_PUBKEY is not an Ed25519 public key (64 hex characters, \
+                 as `barbacane key public` prints it)"
+                    .to_string(),
+            ),
+        },
+        None if dev || allow_unsigned => Ok(ArtifactTrust::Unsigned),
+        None => Err(
+            "no trusted signing key: set BARBACANE_TRUSTED_PUBKEY to the public key \
+             that signs your artifacts (`barbacane key public --key <file>` prints it), or \
+             pass --allow-unsigned to load unsigned artifacts"
+                .to_string(),
+        ),
+    }
+}
+
 /// Refuse an artifact format this binary does not read.
 ///
 /// Without this the mismatch surfaces as an integrity failure, because the
@@ -5204,6 +5359,53 @@ fn check_artifact_version(found: u32) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod artifact_trust_tests {
+    use super::{artifact_trust, ArtifactTrust};
+
+    const KEY: &str = "19bf44096984cdfe8541bac167dc3b96c85086aa30b6b6cb0c5c38ad703166e1";
+
+    #[test]
+    fn a_pinned_key_is_required_whatever_the_flags() {
+        for (dev, allow) in [(false, false), (true, false), (false, true), (true, true)] {
+            assert_eq!(
+                artifact_trust(Some(KEY), dev, allow),
+                Ok(ArtifactTrust::Pinned(KEY.to_string()))
+            );
+        }
+        assert_eq!(
+            artifact_trust(Some(&format!("  {KEY}\n")), false, false),
+            Ok(ArtifactTrust::Pinned(KEY.to_string()))
+        );
+    }
+
+    #[test]
+    fn without_a_key_only_dev_or_allow_unsigned_loads_unsigned_artifacts() {
+        assert_eq!(
+            artifact_trust(None, true, false),
+            Ok(ArtifactTrust::Unsigned)
+        );
+        assert_eq!(
+            artifact_trust(None, false, true),
+            Ok(ArtifactTrust::Unsigned)
+        );
+        assert_eq!(
+            artifact_trust(Some("  "), false, true),
+            Ok(ArtifactTrust::Unsigned)
+        );
+        let error = artifact_trust(None, false, false).unwrap_err();
+        assert!(error.contains("BARBACANE_TRUSTED_PUBKEY") && error.contains("--allow-unsigned"));
+        assert!(artifact_trust(Some(""), false, false).is_err());
+    }
+
+    #[test]
+    fn a_pinned_value_that_is_not_a_public_key_is_refused() {
+        for bad in ["not-hex", "abcd", &KEY[..62], &format!("{KEY}00")] {
+            assert!(artifact_trust(Some(bad), true, true).is_err(), "{bad}");
+        }
+    }
 }
 
 #[cfg(test)]

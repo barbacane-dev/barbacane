@@ -13,8 +13,9 @@
 #   docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane-standalone \
 #     compile --spec /work/api.yaml --manifest /etc/barbacane/plugins.yaml --output /work/api.bca
 #
-# Serve:
-#   docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca ghcr.io/barbacane-dev/barbacane-standalone \
+# Serve, pinning the public key of the key the artifact is signed with:
+#   docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca \
+#     -e BARBACANE_TRUSTED_PUBKEY=<public key> ghcr.io/barbacane-dev/barbacane-standalone \
 #     serve --artifact /config/api.bca --listen 0.0.0.0:8080
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ barbacane <COMMAND> [OPTIONS]
 | `compile` | Compile OpenAPI spec(s) into a `.bca` artifact |
 | `validate` | Validate spec(s) without compiling |
 | `serve` | Run the gateway server |
+| `key` | Generate artifact signing keys and print their public keys |
 
 ---
 
@@ -365,6 +366,29 @@ validated 1 spec(s): 0 valid, 1 invalid
 
 ---
 
+## barbacane key
+
+Manage the Ed25519 keys that sign artifacts.
+
+```bash
+barbacane key generate --out <FILE>
+barbacane key public --key <FILE>
+```
+
+| Command | Description |
+|---------|-------------|
+| `generate --out <FILE>` | Write a new PKCS#8 signing key to `<FILE>`, readable by its owner only, and print its public key. An existing file is not overwritten |
+| `public --key <FILE>` | Print the public key of a signing key (PKCS#8, DER or PEM), as `BARBACANE_TRUSTED_PUBKEY` takes it |
+
+```bash
+barbacane key generate --out signing.pk8
+BARBACANE_SIGNING_KEY=signing.pk8 barbacane compile -m barbacane.yaml -o api.bca
+BARBACANE_TRUSTED_PUBKEY=$(barbacane key public --key signing.pk8) \
+  barbacane serve --artifact api.bca
+```
+
+---
+
 ## barbacane serve
 
 Run the gateway server, loading routes from a compiled artifact.
@@ -372,6 +396,11 @@ Run the gateway server, loading routes from a compiled artifact.
 ```bash
 barbacane serve --artifact <PATH> [OPTIONS]
 ```
+
+The artifact must be signed by the key `BARBACANE_TRUSTED_PUBKEY` pins, and
+`serve` refuses to start without one unless `--dev` or `--allow-unsigned` is
+passed. See [artifact signing](configuration.md#artifact-signing-quickstart).
+The examples below assume the key is set.
 
 ### Options
 
@@ -389,6 +418,7 @@ barbacane serve --artifact <PATH> [OPTIONS]
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
 | `--max-uri-length` | No | `8192` | Maximum URI length in bytes (8KB) |
 | `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
+| `--allow-unsigned` | No | `false` | Load artifacts no trusted key has signed, when `BARBACANE_TRUSTED_PUBKEY` is unset (development and testing only; every load logs a warning) |
 | `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
 | `--tls-key` | No | - | Path to TLS private key file (PEM format) |
 | `--tls-min-version` | No | `1.2` | Minimum TLS version (`1.2` or `1.3`) |
