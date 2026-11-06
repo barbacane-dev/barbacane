@@ -338,8 +338,9 @@ x-barbacane-middlewares:
   - name: cel
     config:
       expression: >
-        request.body_json.format == 'parquet'
-        && request.claims.tier != 'premium'
+        has(request.body_json.format)
+        && request.body_json.format == 'parquet'
+        && (!has(request.claims.tier) || request.claims.tier != 'premium')
       on_match:
         deny:
           status: 403
@@ -349,47 +350,50 @@ x-barbacane-middlewares:
 
 The expression sees both the parsed JSON body and the JWT claims, so a single rule covers what would otherwise need two layers (a custom auth filter plus a body check).
 
+Reading a key that `request.body_json` or `request.claims` does not have is an evaluation error, which returns a 500, so guard optional fields with `has()`. Here a request without a `format` continues, and a token without a `tier` claim counts as not premium.
+
 ### Policy-driven routing (cel stacking)
 
 CEL in routing mode is the building block for declarative policy routing. **Stack one entry per rule**, each writing a distinct set of context keys. Later plugins read the written keys through `context:<key>` sources: `rate-limit` can partition on them, and `request-transformer` can forward them to the upstream as headers.
 
 ```yaml
 x-barbacane-middlewares:
+  - name: oidc-auth
+    config:
+      issuer_url: "https://auth.example.com"
+      audience: "my-api"
+
   - name: cel
     config:
-      expression: "request.claims.tier == 'premium'"
+      expression: "has(request.claims.tier) && request.claims.tier == 'premium'"
       on_match:
         set_context:
           plan.tier: premium
 
   - name: cel
     config:
-      expression: "'plan:premium' in request.claims.scopes"
+      expression: "has(request.claims.roles) && 'premium' in request.claims.roles"
       on_match:
         set_context:
           plan.tier: premium
 
-  - name: cel
+  - name: request-transformer
     config:
-      expression: "request.headers['x-requested-tier'] == 'premium'"
-      on_match:
-        set_context:
-          plan.tier: premium
-
-  - name: rate-limit
-    config:
-      quota: 1000
-      window: 60
-      partition_key: "context:plan.tier"
+      skip_if_empty: true
+      headers:
+        add:
+          X-Plan-Tier: "context:plan.tier"
 ```
 
 Each entry is evaluated in order. On a `true` match, the context keys are written (the last match wins when keys collide); on `false`, the entry is a no-op. No request is ever denied by a routing-mode cel — it's pure data-plane policy, not access control.
 
-> **A computed header name needs declaring.** An operation carries only the headers it admits. The compiler reads a literal subscript such as `request.headers['x-requested-tier']` and admits that header, so an ordinary condition works as written. A name the expression builds at evaluation time is invisible to it, and so is anything an `opa-authz` policy reads, since that policy lives in OPA. Declare those as an `in: header` parameter on the operation, or the expression sees nothing and evaluates as though the header were absent:
+Derive these keys from authenticated claims rather than from request headers. A client chooses its own headers, so a context key set from one is a value the client picked, and a limit or route keyed on it is one the client can switch.
+
+> **A computed header name needs declaring.** An operation carries only the headers it admits. The compiler reads a literal subscript such as `request.headers['x-region']` and admits that header, so an ordinary condition works as written. A name the expression builds at evaluation time is invisible to it, and so is anything an `opa-authz` policy reads, since that policy lives in OPA. Declare those as an `in: header` parameter on the operation, or the expression sees nothing and evaluates as though the header were absent:
 >
 > ```yaml
 >     parameters:
->       - name: x-requested-tier
+>       - name: x-region
 >         in: header
 >         required: false
 >         schema:

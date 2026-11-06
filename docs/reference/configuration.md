@@ -37,7 +37,7 @@ These changes are intentional secure defaults. Adopt them as follows:
    `BARBACANE_ALLOW_INTERNAL_EGRESS=1` (or prefer an explicit allowlist when one
    is available).
 
-4. **Plugins may only use their declared capabilities. A plugin whose WASM
+4. **Plugins may only use their declared capabilities.** A plugin whose WASM
    imports a host function outside the capabilities declared in its
    `plugin.toml` fails to load. Official plugins already declare the correct
    capabilities; custom plugins must list theirs under
