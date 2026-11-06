@@ -39,8 +39,9 @@ These changes are intentional secure defaults. Adopt them as follows:
 
 4. **Plugins may only use their declared capabilities.** A plugin whose WASM
    imports a host function outside the capabilities declared in its
-   `plugin.toml` fails to load. Official plugins already declare the correct
-   capabilities; custom plugins must list theirs under
+   `plugin.toml` fails to load, whether the artifact was compiled with
+   `barbacane compile` or by the control plane. Official plugins already declare
+   the correct capabilities; custom plugins must list theirs under
    `[capabilities] host_functions = [...]`.
 
 ## Request headers reaching your upstream
