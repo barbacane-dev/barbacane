@@ -587,7 +587,7 @@ Plugins run in a sandboxed WASM environment with these limits:
 | Stack size | 1 MB |
 | Execution time | 100 ms |
 
-WASM memory scales automatically based on the configured `max_body_size`. Exceeding these limits results in a trap, which answers the request with a 500 in every phase.
+WASM memory scales automatically based on the configured `max_body_size`. Exceeding these limits results in a trap, which answers the request with a 500. On a streamed response, `on_response` runs after the response is sent, so a trap there is logged and the response is unaffected.
 
 ## Troubleshooting
 
