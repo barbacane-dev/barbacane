@@ -76,7 +76,7 @@ Metadata about the artifact.
 | `source_specs` | array | List of source specifications |
 | `plugins` | array | List of bundled WASM plugins (optional) |
 | `routes_count` | integer | Number of compiled routes |
-| `checksums` | object | SHA-256 checksums for integrity (`routes.json` + each plugin WASM) |
+| `checksums` | object | SHA-256 checksums for integrity: `routes.json`, each plugin WASM, and the WAF rule set and phrase lists |
 | `capabilities_enforced` | bool | Whether per-plugin `host_functions` are authoritative and enforced on load (WA-1) |
 | `mcp` | object | MCP server config (`enabled`, optional `server_name`/`server_version`) |
 | `artifact_hash` | string | Combined SHA-256 fingerprint (see below) |
@@ -227,8 +227,8 @@ sha256sum extracted/routes.json
 
 ### Integrity
 
-- All embedded files have SHA-256 checksums in the manifest
-- The gateway verifies checksums on load
+- All embedded files have SHA-256 checksums in the manifest: the `checksums` table, plus `source_specs` for the specs
+- On load, the gateway reads the archive once and refuses a duplicate, unlisted or missing member. It checks every member against its checksum before parsing any of it, and reads each plugin only from `plugins/<name>.wasm`
 - The `artifact_hash` provides a single combined fingerprint of all inputs for drift detection
 - When connected to a control plane, hash mismatches trigger drift alerts
 

@@ -647,43 +647,6 @@ pub fn load_manifest(artifact_path: &Path) -> Result<Manifest, CompileError> {
     )))
 }
 
-/// Load the sealed WAF rule set from a `.bca` artifact.
-///
-/// Returns the validated directives, which the caller compiles once. `None`
-/// when the artifact carries no rule set.
-///
-/// The caller must have verified `artifact_hash` first: the rule set is bound
-/// by it, and loading rules from an artifact whose hash has not been checked
-/// would accept a swapped rule set.
-pub fn load_waf_rules(artifact_path: &Path) -> Result<Option<SealedRuleSet>, CompileError> {
-    let file = File::open(artifact_path)?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
-
-    let mut rules: Option<Vec<parapet::Directive>> = None;
-    let mut data_files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path = entry.path()?.to_string_lossy().into_owned();
-        if path == WAF_RULES_PATH {
-            let mut content = Vec::new();
-            entry.read_to_end(&mut content)?;
-            rules = Some(serde_json::from_slice(&content)?);
-        } else if let Some(name) = path.strip_prefix(WAF_DATA_PREFIX) {
-            let name = name.to_string();
-            let mut content = Vec::new();
-            entry.read_to_end(&mut content)?;
-            data_files.insert(name, content);
-        }
-    }
-
-    Ok(rules.map(|directives| SealedRuleSet {
-        directives,
-        data_files,
-    }))
-}
-
 /// A rule set as it comes out of an artifact: the rules, plus the phrase lists
 /// their `@pmFromFile` operators reference.
 #[derive(Debug)]
@@ -729,69 +692,194 @@ pub fn load_routes(artifact_path: &Path) -> Result<CompiledRoutes, CompileError>
     )))
 }
 
-/// Load all source specs from a .bca artifact.
-/// Returns a map of filename -> content.
-pub fn load_specs(artifact_path: &Path) -> Result<HashMap<String, String>, CompileError> {
-    let file = File::open(artifact_path)?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
-
-    let mut specs = HashMap::new();
-
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path_str = entry.path()?.to_string_lossy().into_owned();
-
-        if let Some(filename) = path_str.strip_prefix("specs/") {
-            if !filename.is_empty() {
-                let mut content = String::new();
-                entry.read_to_string(&mut content)?;
-                specs.insert(filename.to_string(), content);
-            }
-        }
-    }
-
-    Ok(specs)
+/// A `.bca` artifact read in one pass. Nothing in it is trusted until
+/// [`ArtifactArchive::verify`] has checked it against the manifest.
+pub struct ArtifactArchive {
+    manifest: Manifest,
+    members: BTreeMap<String, Vec<u8>>,
 }
 
-/// Load all bundled plugins from a .bca artifact.
-/// Returns a map of plugin name -> LoadedPlugin.
-pub fn load_plugins(artifact_path: &Path) -> Result<HashMap<String, LoadedPlugin>, CompileError> {
-    // First load manifest to get plugin metadata
-    let manifest = load_manifest(artifact_path)?;
+/// An artifact whose every member matches the checksums its manifest records.
+#[derive(Debug)]
+pub struct VerifiedArtifact {
+    /// The manifest, with `artifact_hash` checked.
+    pub manifest: Manifest,
+    /// The compiled routes.
+    pub routes: CompiledRoutes,
+    /// Source specs, keyed by file name.
+    pub specs: HashMap<String, String>,
+    /// Bundled plugins, keyed by name.
+    pub plugins: HashMap<String, LoadedPlugin>,
+    /// The sealed WAF rule set, when the artifact carries one.
+    pub waf_rules: Option<SealedRuleSet>,
+}
 
-    let file = File::open(artifact_path)?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
+impl ArtifactArchive {
+    /// Read every member of the artifact at `artifact_path`. Two members with
+    /// the same path are refused, so the bytes that are verified are the bytes
+    /// that are used.
+    pub fn read(artifact_path: &Path) -> Result<Self, IntegrityError> {
+        let unreadable = |e: std::io::Error| IntegrityError::Unreadable(e.to_string());
+        let file = File::open(artifact_path).map_err(unreadable)?;
+        let decoder = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
 
-    let mut plugins = HashMap::new();
+        let mut members = BTreeMap::new();
+        for entry in archive.entries().map_err(unreadable)? {
+            let mut entry = entry.map_err(unreadable)?;
+            let path = entry
+                .path()
+                .map_err(unreadable)?
+                .to_string_lossy()
+                .into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(unreadable)?;
+            if members.insert(path.clone(), bytes).is_some() {
+                return Err(IntegrityError::DuplicateEntry { path });
+            }
+        }
 
-    // Build a map of wasm_path -> plugin info from manifest
-    let plugin_info: HashMap<String, (&BundledPlugin,)> = manifest
-        .plugins
-        .iter()
-        .map(|p| (p.wasm_path.clone(), (p,)))
-        .collect();
+        let manifest =
+            members
+                .remove("manifest.json")
+                .ok_or_else(|| IntegrityError::MissingEntry {
+                    path: "manifest.json".to_string(),
+                })?;
+        let manifest =
+            serde_json::from_slice(&manifest).map_err(|e| IntegrityError::Malformed {
+                path: "manifest.json".to_string(),
+                reason: e.to_string(),
+            })?;
+        Ok(Self { manifest, members })
+    }
 
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path_str = entry.path()?.to_string_lossy().into_owned();
+    /// The manifest, not yet verified.
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
 
-        if let Some((bundled,)) = plugin_info.get(&path_str) {
-            let mut wasm_bytes = Vec::new();
-            entry.read_to_end(&mut wasm_bytes)?;
+    /// Check `artifact_hash`, then every member against the checksums it
+    /// covers, and parse the members only once they match. A member the
+    /// manifest does not list, or a listed member the archive lacks, is
+    /// refused, and each plugin must be stored at `plugins/<name>.wasm` under
+    /// the checksum the table records for it.
+    pub fn verify(self) -> Result<VerifiedArtifact, IntegrityError> {
+        let Self {
+            manifest,
+            mut members,
+        } = self;
+        verify_artifact_hash(&manifest)?;
+
+        // Every member `artifact_hash` covers: the checksum table, and the
+        // source specs, which the compiler stores under `specs/<file>`.
+        let mut expected: BTreeMap<String, String> = manifest
+            .checksums
+            .iter()
+            .map(|(path, sum)| {
+                let sum = sum.strip_prefix("sha256:").unwrap_or(sum);
+                (path.clone(), sum.to_string())
+            })
+            .collect();
+        for spec in &manifest.source_specs {
+            expected.insert(format!("specs/{}", spec.file), spec.sha256.clone());
+        }
+
+        if let Some(path) = members.keys().find(|path| !expected.contains_key(*path)) {
+            return Err(IntegrityError::UnexpectedEntry { path: path.clone() });
+        }
+        for (path, sum) in &expected {
+            let bytes = members
+                .get(path)
+                .ok_or_else(|| IntegrityError::MissingEntry { path: path.clone() })?;
+            let actual = compute_sha256(bytes);
+            if actual != *sum {
+                return Err(IntegrityError::ChecksumMismatch {
+                    path: path.clone(),
+                    expected: sum.clone(),
+                    actual,
+                });
+            }
+        }
+
+        let mut take = |path: &str| {
+            members
+                .remove(path)
+                .ok_or_else(|| IntegrityError::MissingEntry {
+                    path: path.to_string(),
+                })
+        };
+        let malformed = |path: &str, reason: String| IntegrityError::Malformed {
+            path: path.to_string(),
+            reason,
+        };
+
+        let routes = serde_json::from_slice(&take("routes.json")?)
+            .map_err(|e| malformed("routes.json", e.to_string()))?;
+
+        let mut specs = HashMap::new();
+        for spec in &manifest.source_specs {
+            let path = format!("specs/{}", spec.file);
+            let content =
+                String::from_utf8(take(&path)?).map_err(|e| malformed(&path, e.to_string()))?;
+            specs.insert(spec.file.clone(), content);
+        }
+
+        let mut plugins = HashMap::new();
+        for plugin in &manifest.plugins {
+            let path = format!("plugins/{}.wasm", plugin.name);
+            if plugin.wasm_path != path {
+                return Err(IntegrityError::PluginPathMismatch {
+                    name: plugin.name.clone(),
+                    path: plugin.wasm_path.clone(),
+                });
+            }
+            let recorded = expected
+                .get(&path)
+                .ok_or_else(|| IntegrityError::MissingEntry { path: path.clone() })?;
+            if plugin.sha256 != *recorded {
+                return Err(IntegrityError::PluginChecksumMismatch {
+                    name: plugin.name.clone(),
+                    expected: recorded.clone(),
+                    actual: plugin.sha256.clone(),
+                });
+            }
             plugins.insert(
-                bundled.name.clone(),
+                plugin.name.clone(),
                 LoadedPlugin {
-                    version: bundled.version.clone(),
-                    wasm_bytes,
-                    body_access: bundled.capabilities.body_access,
+                    version: plugin.version.clone(),
+                    wasm_bytes: take(&path)?,
+                    body_access: plugin.capabilities.body_access,
                 },
             );
         }
-    }
 
-    Ok(plugins)
+        let waf_rules = match members.remove(WAF_RULES_PATH) {
+            None => None,
+            Some(rules) => {
+                let directives = serde_json::from_slice(&rules)
+                    .map_err(|e| malformed(WAF_RULES_PATH, e.to_string()))?;
+                let data_files = members
+                    .into_iter()
+                    .filter_map(|(path, bytes)| {
+                        path.strip_prefix(WAF_DATA_PREFIX)
+                            .map(|name| (name.to_string(), bytes))
+                    })
+                    .collect();
+                Some(SealedRuleSet {
+                    directives,
+                    data_files,
+                })
+            }
+        };
+
+        Ok(VerifiedArtifact {
+            manifest,
+            routes,
+            specs,
+            plugins,
+            waf_rules,
+        })
+    }
 }
 
 /// A plugin to be bundled into an artifact.
@@ -829,10 +917,16 @@ pub struct PluginBundle {
 /// Parse spec files into (ApiSpec, content, sha256) tuples.
 fn parse_specs(spec_paths: &[&Path]) -> Result<Vec<(ApiSpec, String, String)>, CompileError> {
     let mut specs = Vec::new();
+    let mut names = HashSet::new();
     for path in spec_paths {
         let content = std::fs::read_to_string(path)?;
         let sha256 = compute_sha256(content.as_bytes());
         let spec = parse_spec_file(path)?;
+        if let Some(name) = &spec.filename {
+            if !names.insert(name.clone()) {
+                return Err(CompileError::DuplicateSpecFile(name.clone()));
+            }
+        }
         specs.push((spec, content, sha256));
     }
     Ok(specs)
@@ -1620,18 +1714,24 @@ pub enum IntegrityError {
         expected: String,
         actual: String,
     },
-    #[error("plugin '{name}' is not listed in the manifest")]
-    UnknownPlugin { name: String },
-    #[error("WAF rule set entry '{path}' checksum mismatch: manifest {expected}, actual {actual}")]
-    WafChecksumMismatch {
+    #[error("plugin '{name}' is stored at '{path}', not plugins/{name}.wasm")]
+    PluginPathMismatch { name: String, path: String },
+    #[error("artifact member '{path}' checksum mismatch: manifest {expected}, actual {actual}")]
+    ChecksumMismatch {
         path: String,
         expected: String,
         actual: String,
     },
-    #[error("WAF rule set entry '{path}' is in the artifact but not in the manifest checksums")]
-    UnknownWafEntry { path: String },
-    #[error("WAF rule set could not be re-serialised for verification: {0}")]
-    WafSerialisation(String),
+    #[error("artifact member '{path}' is not listed in the manifest")]
+    UnexpectedEntry { path: String },
+    #[error("artifact member '{path}' is listed in the manifest but missing")]
+    MissingEntry { path: String },
+    #[error("artifact holds '{path}' more than once")]
+    DuplicateEntry { path: String },
+    #[error("artifact member '{path}' cannot be parsed: {reason}")]
+    Malformed { path: String, reason: String },
+    #[error("artifact cannot be read: {0}")]
+    Unreadable(String),
     #[error("artifact is unsigned but a trusted public key is configured")]
     MissingSignature,
     #[error("invalid key/signature material: {0}")]
@@ -1671,72 +1771,6 @@ pub fn verify_artifact_hash(manifest: &Manifest) -> Result<(), IntegrityError> {
     if actual != manifest.artifact_hash {
         return Err(IntegrityError::ArtifactHashMismatch {
             expected: manifest.artifact_hash.clone(),
-            actual,
-        });
-    }
-    Ok(())
-}
-
-/// Verify that a plugin's actual WASM bytes match the SHA-256 recorded in the
-/// manifest (detects a swapped/tampered plugin binary).
-/// Verify the sealed WAF rule set and its phrase lists against the manifest.
-///
-/// `artifact_hash` covers the manifest's checksum table, so a tampered
-/// manifest is caught by [`verify_artifact_hash`]. That says nothing about the
-/// *archive members*, though: the extracted bytes still have to be checked
-/// against the checksums, exactly as plugin WASM is. Without this, the rule
-/// set is bound in the manifest but not on load, and an attacker who can
-/// rewrite an archive member swaps rules without detection.
-pub fn verify_waf_rules(manifest: &Manifest, sealed: &SealedRuleSet) -> Result<(), IntegrityError> {
-    let check = |path: &str, bytes: &[u8]| -> Result<(), IntegrityError> {
-        let expected =
-            manifest
-                .checksums
-                .get(path)
-                .ok_or_else(|| IntegrityError::UnknownWafEntry {
-                    path: path.to_string(),
-                })?;
-        let actual = format!("sha256:{}", compute_sha256(bytes));
-        if &actual != expected {
-            return Err(IntegrityError::WafChecksumMismatch {
-                path: path.to_string(),
-                expected: expected.clone(),
-                actual,
-            });
-        }
-        Ok(())
-    };
-
-    // Re-serialise the directives to compare against the sealed bytes. The
-    // form is canonical, so this reproduces exactly what the compiler hashed.
-    let rules_json = serde_json::to_vec(&sealed.directives)
-        .map_err(|e| IntegrityError::WafSerialisation(e.to_string()))?;
-    check(WAF_RULES_PATH, &rules_json)?;
-
-    for (name, bytes) in &sealed.data_files {
-        check(&format!("{WAF_DATA_PREFIX}{name}"), bytes)?;
-    }
-    Ok(())
-}
-
-pub fn verify_plugin_checksum(
-    manifest: &Manifest,
-    name: &str,
-    wasm_bytes: &[u8],
-) -> Result<(), IntegrityError> {
-    let expected = manifest
-        .plugins
-        .iter()
-        .find(|p| p.name == name)
-        .map(|p| p.sha256.clone())
-        .ok_or_else(|| IntegrityError::UnknownPlugin {
-            name: name.to_string(),
-        })?;
-    let actual = compute_sha256(wasm_bytes);
-    if actual != expected {
-        return Err(IntegrityError::PluginChecksumMismatch {
-            name: name.to_string(),
-            expected,
             actual,
         });
     }
@@ -4343,7 +4377,11 @@ paths:
         );
 
         // Load plugins back
-        let loaded = load_plugins(&output_path).unwrap();
+        let loaded = ArtifactArchive::read(&output_path)
+            .unwrap()
+            .verify()
+            .unwrap()
+            .plugins;
         assert_eq!(loaded.len(), 1);
         let plugin = loaded.get("test-plugin").unwrap();
         assert_eq!(plugin.version, "1.0.0");
@@ -5742,20 +5780,6 @@ paths:
     }
 
     #[test]
-    fn plugin_checksum_detects_swapped_wasm() {
-        let manifest = integrity_test_manifest();
-        assert!(verify_plugin_checksum(&manifest, "jwt-auth", b"wasm-bytes").is_ok());
-        assert!(matches!(
-            verify_plugin_checksum(&manifest, "jwt-auth", b"evil-bytes"),
-            Err(IntegrityError::PluginChecksumMismatch { .. })
-        ));
-        assert!(matches!(
-            verify_plugin_checksum(&manifest, "ghost", b"x"),
-            Err(IntegrityError::UnknownPlugin { .. })
-        ));
-    }
-
-    #[test]
     fn signature_roundtrip_and_rejection() {
         let mut manifest = integrity_test_manifest();
 
@@ -6313,11 +6337,11 @@ SecMarker DONE
     #[test]
     fn tampering_with_a_sealed_member_is_caught_at_load() {
         // artifact_hash covers the manifest's checksum table, which catches a
-        // tampered manifest. It says nothing about the archive members, so the
-        // extracted bytes have to be checked too.
+        // tampered manifest. The archive members are checked against that
+        // table when the artifact is verified.
         let dir = project("member-tamper", SPEC, Some(RULES));
         let out = dir.join("api.bca");
-        let result = compile(
+        compile(
             &[&dir.join("api.yaml")],
             &[],
             &out,
@@ -6325,27 +6349,45 @@ SecMarker DONE
         )
         .unwrap();
 
-        let sealed = load_waf_rules(&out)
+        let verified = ArtifactArchive::read(&out)
             .unwrap()
-            .expect("must carry a rule set");
-        verify_waf_rules(&result.manifest, &sealed).expect("an untampered artifact verifies");
+            .verify()
+            .expect("an untampered artifact verifies");
+        assert!(verified.waf_rules.is_some(), "must carry a rule set");
 
-        // Swap a rule for a different one and the checksum no longer matches.
-        let mut swapped = sealed;
-        swapped.directives.truncate(1);
-        let err = verify_waf_rules(&result.manifest, &swapped)
+        // A different rule set no longer matches its checksum.
+        let mut members = super::read_members(&out);
+        let rules = members
+            .iter_mut()
+            .find(|(path, _)| path == WAF_RULES_PATH)
+            .expect("rules member");
+        let mut directives: Vec<serde_json::Value> = serde_json::from_slice(&rules.1).unwrap();
+        directives.truncate(1);
+        rules.1 = serde_json::to_vec(&directives).unwrap();
+        let swapped = dir.join("swapped.bca");
+        super::write_members(&swapped, &members);
+        let err = ArtifactArchive::read(&swapped)
+            .unwrap()
+            .verify()
             .expect_err("a swapped rule set must be rejected");
         assert!(
-            matches!(err, IntegrityError::WafChecksumMismatch { .. }),
+            matches!(&err, IntegrityError::ChecksumMismatch { path, .. } if path == WAF_RULES_PATH),
             "{err}"
         );
 
-        // A phrase list swapped for different contents is caught too.
-        let mut poisoned = load_waf_rules(&out).unwrap().unwrap();
-        poisoned
-            .data_files
-            .insert("injected.data".to_string(), b"evil".to_vec());
-        assert!(verify_waf_rules(&result.manifest, &poisoned).is_err());
+        // A phrase list the manifest does not record is refused too.
+        let mut members = super::read_members(&out);
+        members.push((format!("{WAF_DATA_PREFIX}injected.data"), b"evil".to_vec()));
+        let poisoned = dir.join("poisoned.bca");
+        super::write_members(&poisoned, &members);
+        let err = ArtifactArchive::read(&poisoned)
+            .unwrap()
+            .verify()
+            .unwrap_err();
+        assert!(
+            matches!(err, IntegrityError::UnexpectedEntry { .. }),
+            "{err}"
+        );
     }
 
     #[test]
@@ -6514,5 +6556,229 @@ mod runtime_reference_tests {
     fn only_a_known_scheme_is_a_reference() {
         assert!(reported(url_schema(), json!({ "url": "envx://UPSTREAM" })).is_some());
         assert!(reported(url_schema(), json!({ "url": "ENV://UPSTREAM" })).is_some());
+    }
+}
+
+/// Every member of a `.bca`, in archive order.
+#[cfg(test)]
+fn read_members(path: &Path) -> Vec<(String, Vec<u8>)> {
+    let decoder = flate2::read::GzDecoder::new(File::open(path).unwrap());
+    let mut archive = tar::Archive::new(decoder);
+    archive
+        .entries()
+        .unwrap()
+        .map(|entry| {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap().to_string_lossy().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            (path, bytes)
+        })
+        .collect()
+}
+
+/// Write `members` as a `.bca` at `path`.
+#[cfg(test)]
+fn write_members(path: &Path, members: &[(String, Vec<u8>)]) {
+    let encoder =
+        flate2::write::GzEncoder::new(File::create(path).unwrap(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    for (name, bytes) in members {
+        add_file_to_tar(&mut archive, name, bytes).unwrap();
+    }
+    archive.into_inner().unwrap().finish().unwrap();
+}
+
+#[cfg(test)]
+mod archive_verification_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    const SPEC: &str = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /health:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+"#;
+
+    /// A minimal module: the WASM magic number and version.
+    const WASM: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+    fn compiled(temp: &TempDir) -> PathBuf {
+        let spec = temp.path().join("api.yaml");
+        std::fs::write(&spec, SPEC).unwrap();
+        let out = temp.path().join("api.bca");
+        let plugins = vec![PluginBundle {
+            name: "probe".to_string(),
+            version: "1.0.0".to_string(),
+            plugin_type: "middleware".to_string(),
+            category: None,
+            implements: vec![],
+            wasm_bytes: WASM.to_vec(),
+            body_access: false,
+            host_functions: vec![],
+            secret_fields: vec![],
+            config_schema: None,
+        }];
+        compile(
+            &[spec.as_path()],
+            &plugins,
+            &out,
+            &CompileOptions::default(),
+        )
+        .unwrap();
+        out
+    }
+
+    /// Compile, apply `edit` to the archive members, and load the result.
+    fn rewritten(
+        edit: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
+    ) -> Result<VerifiedArtifact, IntegrityError> {
+        let temp = TempDir::new().unwrap();
+        let mut members = read_members(&compiled(&temp));
+        edit(&mut members);
+        let path = temp.path().join("rewritten.bca");
+        write_members(&path, &members);
+        ArtifactArchive::read(&path)?.verify()
+    }
+
+    fn member<'a>(members: &'a mut [(String, Vec<u8>)], name: &str) -> &'a mut Vec<u8> {
+        &mut members
+            .iter_mut()
+            .find(|(path, _)| path == name)
+            .unwrap_or_else(|| panic!("no member {name}"))
+            .1
+    }
+
+    /// Point the manifest's plugin entry at `wasm_path`, recorded as `sha256`.
+    fn set_plugin(members: &mut [(String, Vec<u8>)], wasm_path: &str, sha256: &str) {
+        let manifest = member(members, "manifest.json");
+        let mut parsed: serde_json::Value = serde_json::from_slice(manifest).unwrap();
+        parsed["plugins"][0]["wasm_path"] = serde_json::Value::from(wasm_path);
+        parsed["plugins"][0]["sha256"] = serde_json::Value::from(sha256);
+        *manifest = serde_json::to_vec(&parsed).unwrap();
+    }
+
+    /// The module with a custom section appended: valid, different bytes.
+    fn other_module() -> Vec<u8> {
+        let mut wasm = WASM.to_vec();
+        wasm.extend_from_slice(&[0x00, 0x03, 0x02, b'x', b'y']);
+        wasm
+    }
+
+    #[test]
+    fn an_untouched_artifact_verifies() {
+        let verified = rewritten(|_| {}).expect("verifies");
+        assert_eq!(verified.routes.operations.len(), 1);
+        assert!(verified.specs.contains_key("api.yaml"));
+        assert_eq!(verified.plugins["probe"].wasm_bytes, WASM);
+    }
+
+    #[test]
+    fn a_member_that_differs_from_its_checksum_is_refused() {
+        let err = rewritten(|members| member(members, "routes.json").push(b'\n')).unwrap_err();
+        assert!(
+            matches!(&err, IntegrityError::ChecksumMismatch { path, .. } if path == "routes.json"),
+            "{err}"
+        );
+
+        let err = rewritten(|members| {
+            member(members, "specs/api.yaml").extend_from_slice(b"\n# rewritten\n")
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&err, IntegrityError::ChecksumMismatch { path, .. } if path == "specs/api.yaml"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_swapped_module_is_refused_even_with_its_digest_updated() {
+        // `plugins[].sha256` is not covered by artifact_hash; the checksum
+        // table is.
+        let err = rewritten(|members| {
+            let module = other_module();
+            let digest = compute_sha256(&module);
+            *member(members, "plugins/probe.wasm") = module;
+            set_plugin(members, "plugins/probe.wasm", &digest);
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&err, IntegrityError::ChecksumMismatch { path, .. } if path == "plugins/probe.wasm"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_plugin_is_read_only_from_its_own_path() {
+        let err = rewritten(|members| {
+            let routes = compute_sha256(member(members, "routes.json"));
+            set_plugin(members, "routes.json", &routes);
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, IntegrityError::PluginPathMismatch { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_plugin_digest_that_disagrees_with_the_checksum_table_is_refused() {
+        let err = rewritten(|members| set_plugin(members, "plugins/probe.wasm", &"0".repeat(64)))
+            .unwrap_err();
+        assert!(
+            matches!(err, IntegrityError::PluginChecksumMismatch { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn unlisted_missing_and_duplicate_members_are_refused() {
+        let err = rewritten(|members| members.push(("extra.bin".to_string(), b"x".to_vec())))
+            .unwrap_err();
+        assert!(
+            matches!(&err, IntegrityError::UnexpectedEntry { path } if path == "extra.bin"),
+            "{err}"
+        );
+
+        let err =
+            rewritten(|members| members.retain(|(path, _)| path != "routes.json")).unwrap_err();
+        assert!(
+            matches!(&err, IntegrityError::MissingEntry { path } if path == "routes.json"),
+            "{err}"
+        );
+
+        let err = rewritten(|members| {
+            let routes = member(members, "routes.json").clone();
+            members.push(("routes.json".to_string(), routes));
+        })
+        .unwrap_err();
+        assert!(
+            matches!(&err, IntegrityError::DuplicateEntry { path } if path == "routes.json"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn two_specs_with_the_same_file_name_do_not_compile() {
+        let temp = TempDir::new().unwrap();
+        let (a, b) = (temp.path().join("a"), temp.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("api.yaml"), SPEC).unwrap();
+        std::fs::write(b.join("api.yaml"), SPEC.replace("/health", "/ready")).unwrap();
+        let err = compile(
+            &[a.join("api.yaml").as_path(), b.join("api.yaml").as_path()],
+            &[],
+            &temp.path().join("api.bca"),
+            &CompileOptions::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().starts_with("E1058"), "{err}");
     }
 }
