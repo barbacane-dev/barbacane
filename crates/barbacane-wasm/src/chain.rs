@@ -240,15 +240,26 @@ pub fn execute_on_request_with_metrics(
     }
 }
 
+/// A middleware failed during the on_response chain.
+#[derive(Debug, thiserror::Error)]
+#[error("plugin '{middleware}' on_response failed: {error}")]
+pub struct OnResponseError {
+    /// Name of the middleware that failed.
+    pub middleware: String,
+    /// What it failed with.
+    #[source]
+    pub error: WasmError,
+}
+
 /// Execute the on_response chain.
 ///
-/// Processes middlewares in reverse order. If any middleware fails,
-/// logs the error and continues with the original response (fault-tolerant).
+/// Processes middlewares in reverse order. A middleware that fails stops the
+/// chain, and its error is returned (SPEC-003 section 6.4).
 pub fn execute_on_response(
     instances: &mut [PluginInstance],
     initial_response: &[u8],
     context: RequestContext,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, OnResponseError> {
     execute_on_response_with_metrics(instances, initial_response, context, None)
 }
 
@@ -258,7 +269,7 @@ pub fn execute_on_response_with_metrics(
     initial_response: &[u8],
     context: RequestContext,
     metrics_callback: MetricsCallback<'_>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, OnResponseError> {
     let mut current_response = initial_response.to_vec();
 
     // Process in reverse order
@@ -295,17 +306,15 @@ pub fn execute_on_response_with_metrics(
                         false,
                     );
                 }
-                // Fault-tolerant: log and continue with current response
-                let trap_result = TrapResult::from_error(&e, TrapContext::OnResponse);
-                tracing::warn!(
-                    error = %trap_result.message(),
-                    "Middleware on_response failed, continuing with original response"
-                );
+                return Err(OnResponseError {
+                    middleware: middleware_name,
+                    error: e,
+                });
             }
         }
     }
 
-    current_response
+    Ok(current_response)
 }
 
 /// Execute on_response for a partial chain (after short-circuit).
@@ -316,9 +325,9 @@ pub fn execute_on_response_partial(
     response: &[u8],
     short_circuit_index: usize,
     context: RequestContext,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, OnResponseError> {
     if short_circuit_index == 0 {
-        return response.to_vec();
+        return Ok(response.to_vec());
     }
 
     let partial_instances = &mut instances[..short_circuit_index];
@@ -608,7 +617,7 @@ mod tests {
         let response = b"test response";
         let context = RequestContext::default();
 
-        let result = execute_on_response(&mut instances, response, context);
+        let result = execute_on_response(&mut instances, response, context).expect("no middleware");
         assert_eq!(result, response.to_vec());
     }
 
@@ -623,7 +632,8 @@ mod tests {
             execute_on_request_with_metrics(&mut instances, request, context.clone(), None);
         assert!(matches!(result, ChainResult::Continue { .. }));
 
-        let response = execute_on_response_with_metrics(&mut instances, request, context, None);
+        let response = execute_on_response_with_metrics(&mut instances, request, context, None)
+            .expect("no middleware");
         assert_eq!(response, request.to_vec());
     }
 }
