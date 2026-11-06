@@ -309,26 +309,19 @@ impl RequestLimits {
     }
 }
 
-/// Compile a JSON schema with format validation enabled.
-///
-/// Supports formats: date-time, email, uuid, uri, ipv4, ipv6.
-fn compile_schema_with_formats(schema: &Value) -> Option<jsonschema::Validator> {
-    jsonschema::options()
-        .should_validate_formats(true)
-        .build(schema)
-        .ok()
-}
-
 /// Compile a schema that points into the artifact's shared definition pool.
 ///
 /// The compiler holds each definition once for the whole artifact, so a schema
 /// arrives carrying `#/$defs/...` pointers and no definitions of its own. The
-/// pool is attached here, for this compilation only, so the pointers resolve.
-/// A schema that already carries its own `$defs`, as one from an older artifact
-/// does, is left exactly as it is.
-fn compile_schema_with_defs(schema: &Value, defs: Option<&Value>) -> Option<jsonschema::Validator> {
-    let attached = barbacane_compiler::spec_parser::attach_reachable_defs(schema, defs);
-    compile_schema_with_formats(&attached)
+/// pool is attached for this compilation only, so the pointers resolve. Formats
+/// are validated.
+fn compile_schema_with_defs(
+    schema: &Value,
+    defs: Option<&Value>,
+    location: &str,
+) -> Result<jsonschema::Validator, String> {
+    barbacane_compiler::request_validator(schema, defs)
+        .map_err(|e| format!("{location} schema cannot be enforced: {e}"))
 }
 
 /// Compiled validator for an operation.
@@ -403,16 +396,20 @@ fn validate_params(
 
 impl OperationValidator {
     /// Create a new validator from parsed operation metadata.
-    pub fn new(parameters: &[Parameter], request_body: Option<&RequestBody>) -> Self {
+    pub fn new(
+        parameters: &[Parameter],
+        request_body: Option<&RequestBody>,
+    ) -> Result<Self, String> {
         Self::with_defs(parameters, request_body, None)
     }
 
-    /// Build against the artifact's shared definition pool.
+    /// Build against the artifact's shared definition pool. A schema that
+    /// cannot be compiled is an error, never a check left out.
     pub fn with_defs(
         parameters: &[Parameter],
         request_body: Option<&RequestBody>,
         schema_defs: Option<&Value>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let mut path_params = Vec::new();
         let mut query_params = Vec::new();
         let mut header_params = Vec::new();
@@ -425,7 +422,14 @@ impl OperationValidator {
                 schema: param
                     .schema
                     .as_ref()
-                    .and_then(|s| compile_schema_with_defs(s, schema_defs)),
+                    .map(|s| {
+                        compile_schema_with_defs(
+                            s,
+                            schema_defs,
+                            &format!("parameter '{}'", param.name),
+                        )
+                    })
+                    .transpose()?,
             };
 
             match param.location.as_str() {
@@ -437,28 +441,38 @@ impl OperationValidator {
             }
         }
 
-        let compiled_body = request_body.map(|rb| {
-            let mut content = HashMap::new();
-            for (media_type, content_schema) in &rb.content {
-                let schema = content_schema
-                    .schema
-                    .as_ref()
-                    .and_then(|s| compile_schema_with_defs(s, schema_defs));
-                content.insert(media_type.clone(), schema);
+        let compiled_body = match request_body {
+            Some(rb) => {
+                let mut content = HashMap::new();
+                for (media_type, content_schema) in &rb.content {
+                    let schema = content_schema
+                        .schema
+                        .as_ref()
+                        .map(|s| {
+                            compile_schema_with_defs(
+                                s,
+                                schema_defs,
+                                &format!("request body ({media_type})"),
+                            )
+                        })
+                        .transpose()?;
+                    content.insert(media_type.clone(), schema);
+                }
+                Some(CompiledRequestBody {
+                    required: rb.required,
+                    content,
+                })
             }
-            CompiledRequestBody {
-                required: rb.required,
-                content,
-            }
-        });
+            None => None,
+        };
 
-        Self {
+        Ok(Self {
             path_params,
             query_params,
             header_params,
             querystring_param,
             request_body: compiled_body,
-        }
+        })
     }
 
     /// Validate path parameters extracted by the router.
@@ -704,8 +718,21 @@ fn hex_val(b: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::compile_schema_with_formats;
     use super::*;
+
+    #[test]
+    fn a_schema_that_cannot_be_compiled_is_an_error() {
+        let params = vec![make_param(
+            "q",
+            "query",
+            false,
+            Some(serde_json::json!({ "$schema": "https://example.com/my-dialect" })),
+        )];
+        let error = OperationValidator::new(&params, None)
+            .err()
+            .expect("an error rather than a parameter left unchecked");
+        assert!(error.contains("parameter 'q'"), "{error}");
+    }
 
     fn make_param(name: &str, location: &str, required: bool, schema: Option<Value>) -> Parameter {
         Parameter {
@@ -719,7 +746,7 @@ mod tests {
     #[test]
     fn validate_required_path_param() {
         let params = vec![make_param("id", "path", true, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Missing required param
         let result = validator.validate_path_params(&[]);
@@ -738,7 +765,7 @@ mod tests {
             "pattern": "^[0-9]+$"
         });
         let params = vec![make_param("id", "path", true, Some(schema))];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Valid: numeric string
         let result = validator.validate_path_params(&[("id".into(), "123".into())]);
@@ -752,7 +779,7 @@ mod tests {
     #[test]
     fn validate_required_query_param() {
         let params = vec![make_param("page", "query", true, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Missing required
         let result = validator.validate_query_params(Some(""));
@@ -766,7 +793,7 @@ mod tests {
     #[test]
     fn validate_optional_query_param() {
         let params = vec![make_param("limit", "query", false, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Missing optional is OK
         let result = validator.validate_query_params(Some(""));
@@ -782,7 +809,7 @@ mod tests {
         // use.
         let schema = serde_json::json!({"type": "string", "enum": ["user"]});
         let params = vec![make_param("role", "query", false, Some(schema))];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         let result = validator.validate_query_params(Some("role=admin&role=user"));
         assert!(result.is_err(), "duplicate declared param must be rejected");
@@ -813,7 +840,7 @@ mod tests {
             content,
         };
 
-        let validator = OperationValidator::new(&[], Some(&request_body));
+        let validator = OperationValidator::new(&[], Some(&request_body)).unwrap();
 
         // Missing required body
         let result = validator.validate_body(Some("application/json"), &[]);
@@ -850,7 +877,7 @@ mod tests {
             content,
         };
 
-        let validator = OperationValidator::new(&[], Some(&request_body));
+        let validator = OperationValidator::new(&[], Some(&request_body)).unwrap();
 
         // Valid body
         let result = validator.validate_body(Some("application/json"), br#"{"name":"test"}"#);
@@ -877,7 +904,7 @@ mod tests {
             content,
         };
 
-        let validator = OperationValidator::new(&[], Some(&request_body));
+        let validator = OperationValidator::new(&[], Some(&request_body)).unwrap();
 
         let result = validator.validate_body(Some("text/plain"), b"hello");
         assert!(result.is_err());
@@ -1110,7 +1137,7 @@ mod tests {
                 "email": { "type": "string", "format": "email" }
             }
         });
-        let validator = compile_schema_with_formats(&schema).unwrap();
+        let validator = barbacane_compiler::request_validator(&schema, None).unwrap();
 
         // Valid email
         let valid = serde_json::json!({"email": "user@example.com"});
@@ -1127,7 +1154,7 @@ mod tests {
             "type": "string",
             "format": "uuid"
         });
-        let validator = compile_schema_with_formats(&schema).unwrap();
+        let validator = barbacane_compiler::request_validator(&schema, None).unwrap();
 
         // Valid UUID
         let valid = serde_json::json!("550e8400-e29b-41d4-a716-446655440000");
@@ -1144,7 +1171,7 @@ mod tests {
             "type": "string",
             "format": "date-time"
         });
-        let validator = compile_schema_with_formats(&schema).unwrap();
+        let validator = barbacane_compiler::request_validator(&schema, None).unwrap();
 
         // Valid date-time (RFC 3339)
         let valid = serde_json::json!("2024-01-29T12:30:00Z");
@@ -1161,7 +1188,7 @@ mod tests {
             "type": "string",
             "format": "uri"
         });
-        let validator = compile_schema_with_formats(&schema).unwrap();
+        let validator = barbacane_compiler::request_validator(&schema, None).unwrap();
 
         // Valid URI
         let valid = serde_json::json!("https://example.com/path?query=1");
@@ -1178,7 +1205,7 @@ mod tests {
             "type": "string",
             "format": "ipv4"
         });
-        let validator = compile_schema_with_formats(&schema).unwrap();
+        let validator = barbacane_compiler::request_validator(&schema, None).unwrap();
 
         // Valid IPv4
         let valid = serde_json::json!("192.168.1.1");
@@ -1195,7 +1222,7 @@ mod tests {
             "type": "string",
             "format": "ipv6"
         });
-        let validator = compile_schema_with_formats(&schema).unwrap();
+        let validator = barbacane_compiler::request_validator(&schema, None).unwrap();
 
         // Valid IPv6
         let valid = serde_json::json!("2001:0db8:85a3:0000:0000:8a2e:0370:7334");
@@ -1277,7 +1304,7 @@ mod tests {
             content,
         };
 
-        let validator = OperationValidator::new(&[], Some(&request_body));
+        let validator = OperationValidator::new(&[], Some(&request_body)).unwrap();
 
         // Valid message payload
         let valid_payload = br#"{
@@ -1333,7 +1360,7 @@ mod tests {
             content,
         };
 
-        let validator = OperationValidator::new(&[], Some(&request_body));
+        let validator = OperationValidator::new(&[], Some(&request_body)).unwrap();
 
         // JSON-encoded Avro message
         let result = validator.validate_body(
@@ -1355,7 +1382,7 @@ mod tests {
     #[test]
     fn validate_required_header_param() {
         let params = vec![make_param("X-Request-Id", "header", true, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Missing required header
         let headers = HashMap::new();
@@ -1378,7 +1405,7 @@ mod tests {
     #[test]
     fn validate_optional_header_param() {
         let params = vec![make_param("X-Trace-Id", "header", false, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Missing optional header is OK
         let headers = HashMap::new();
@@ -1393,7 +1420,7 @@ mod tests {
             "pattern": "^Bearer .+$"
         });
         let params = vec![make_param("Authorization", "header", true, Some(schema))];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Valid: matches pattern
         let mut headers = HashMap::new();
@@ -1419,7 +1446,7 @@ mod tests {
     #[test]
     fn validate_header_param_case_insensitive() {
         let params = vec![make_param("X-Request-Id", "header", true, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Header provided with different casing should match
         let mut headers = HashMap::new();
@@ -1443,7 +1470,7 @@ mod tests {
         });
 
         let params = vec![make_param("userId", "path", true, Some(schema))];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Valid parameter matching pattern
         let result = validator.validate_path_params(&[("userId".into(), "user-abc123".into())]);
@@ -1465,7 +1492,7 @@ mod tests {
             "minLength": 1
         });
         let params = vec![make_param("q", "querystring", true, Some(schema))];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Valid: non-empty query string
         let result = validator.validate_querystring(Some("filter=active&sort=name"));
@@ -1475,7 +1502,7 @@ mod tests {
     #[test]
     fn validate_querystring_param_missing_required() {
         let params = vec![make_param("q", "querystring", true, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Missing required querystring
         let result = validator.validate_querystring(Some(""));
@@ -1495,7 +1522,7 @@ mod tests {
             "pattern": "^[a-z]+=\\w+$"
         });
         let params = vec![make_param("q", "querystring", false, Some(schema))];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         // Valid: matches pattern
         let result = validator.validate_querystring(Some("key=value"));
@@ -1510,7 +1537,7 @@ mod tests {
     fn validate_querystring_not_set() {
         // No querystring parameter defined — should pass through
         let params = vec![make_param("name", "query", false, None)];
-        let validator = OperationValidator::new(&params, None);
+        let validator = OperationValidator::new(&params, None).unwrap();
 
         let result = validator.validate_querystring(Some("anything"));
         assert!(result.is_ok());

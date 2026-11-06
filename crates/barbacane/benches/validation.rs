@@ -100,14 +100,14 @@ fn bench_validator_creation(c: &mut Criterion) {
 
     c.bench_function("validator_creation", |b| {
         b.iter(|| {
-            black_box(OperationValidator::new(&params, Some(&body)));
+            black_box(OperationValidator::new(&params, Some(&body)).expect("schemas compile"));
         });
     });
 }
 
 fn bench_path_param_validation(c: &mut Criterion) {
     let params = create_parameters();
-    let validator = OperationValidator::new(&params, None);
+    let validator = OperationValidator::new(&params, None).expect("schemas compile");
 
     let valid_params = vec![(
         "id".to_string(),
@@ -135,7 +135,7 @@ fn bench_path_param_validation(c: &mut Criterion) {
 
 fn bench_query_param_validation(c: &mut Criterion) {
     let params = create_parameters();
-    let validator = OperationValidator::new(&params, None);
+    let validator = OperationValidator::new(&params, None).expect("schemas compile");
 
     let valid_query = "page=1&limit=50";
     let invalid_query = "page=0&limit=1000"; // Below minimum, above maximum
@@ -160,7 +160,7 @@ fn bench_query_param_validation(c: &mut Criterion) {
 fn bench_body_validation(c: &mut Criterion) {
     let params = create_parameters();
     let body = create_request_body();
-    let validator = OperationValidator::new(&params, Some(&body));
+    let validator = OperationValidator::new(&params, Some(&body)).expect("schemas compile");
 
     // Small valid body
     let small_body = json!({
@@ -209,7 +209,7 @@ fn bench_body_validation(c: &mut Criterion) {
 fn bench_full_request_validation(c: &mut Criterion) {
     let params = create_parameters();
     let body = create_request_body();
-    let validator = OperationValidator::new(&params, Some(&body));
+    let validator = OperationValidator::new(&params, Some(&body)).expect("schemas compile");
 
     let path_params = vec![(
         "id".to_string(),

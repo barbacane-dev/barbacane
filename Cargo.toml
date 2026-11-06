@@ -99,7 +99,8 @@ rcgen = "0.13"
 parking_lot = "0.12"
 
 # JSON Schema validation
-jsonschema = "0.26"
+# No retrieval: a schema never makes the process fetch a URL or read a file.
+jsonschema = { version = "0.26", default-features = false }
 
 # SecLang/CRS engine (ADR-0031), published as `barbacane-waf`.
 parapet = { package = "barbacane-waf", version = "0.1.1", features = ["serde"] }
