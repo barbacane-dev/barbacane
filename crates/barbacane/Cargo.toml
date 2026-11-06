@@ -56,6 +56,7 @@ workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true }
+flate2 = { workspace = true }
 
 [[bench]]
 name = "routing"

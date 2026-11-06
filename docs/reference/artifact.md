@@ -18,6 +18,8 @@ artifact.bca (tar.gz)
     └── ...
 ```
 
+An artifact expands to at most 256 MiB when decompressed, archive headers included. The data plane refuses a larger one when loading it, and a hot reload abandons a download past that size.
+
 ## File Structure
 
 ### manifest.json

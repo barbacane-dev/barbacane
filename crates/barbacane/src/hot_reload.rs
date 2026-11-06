@@ -21,6 +21,15 @@ pub enum HotReloadResult {
 /// Lock to prevent concurrent hot-reloads.
 pub static HOT_RELOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// The client artifacts are downloaded with. It does not decompress, so the
+/// bytes written are the bytes the checksum covers.
+pub fn download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .no_gzip()
+        .build()
+        .map_err(|e| format!("failed to build the download client: {e}"))
+}
+
 /// Download an artifact from the control plane and verify its checksum.
 ///
 /// # Arguments
@@ -28,18 +37,22 @@ pub static HOT_RELOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_n
 /// * `download_url` - URL to download the artifact from
 /// * `expected_sha256` - Expected SHA256 hash of the artifact (hex-encoded)
 /// * `artifact_dir` - Directory to store the downloaded artifact
+/// * `max_bytes` - Size past which the download is abandoned
 ///
 /// # Returns
-/// The path to the downloaded and verified artifact, or an error message.
+/// The path to the downloaded and verified artifact, or an error message. On
+/// failure, or if the download is cancelled, nothing is left in `artifact_dir`.
 pub async fn download_artifact(
     http_client: &reqwest::Client,
     download_url: &str,
     expected_sha256: &str,
     artifact_dir: &Path,
+    max_bytes: u64,
 ) -> Result<PathBuf, String> {
     // Create temp file path
     let temp_filename = format!("artifact-{}.bca.tmp", Uuid::new_v4());
     let temp_path = artifact_dir.join(&temp_filename);
+    let temp_guard = RemoveOnDrop(Some(temp_path.clone()));
 
     tracing::info!(
         download_url = %download_url,
@@ -73,11 +86,14 @@ pub async fn download_artifact(
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|e| format!("download stream error: {}", e))?;
+        total_bytes += chunk.len() as u64;
+        if total_bytes > max_bytes {
+            return Err(format!("the artifact is larger than {max_bytes} bytes"));
+        }
         hasher.update(&chunk);
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("write error: {}", e))?;
-        total_bytes += chunk.len() as u64;
     }
 
     file.flush()
@@ -88,7 +104,6 @@ pub async fn download_artifact(
     // Verify checksum
     let computed_sha256 = hex::encode(hasher.finalize());
     if computed_sha256 != expected_sha256 {
-        let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(format!(
             "checksum mismatch: expected {}, got {}",
             expected_sha256, computed_sha256
@@ -101,6 +116,7 @@ pub async fn download_artifact(
     tokio::fs::rename(&temp_path, &final_path)
         .await
         .map_err(|e| format!("rename failed: {}", e))?;
+    temp_guard.disarm();
 
     tracing::info!(
         final_path = %final_path.display(),
@@ -110,6 +126,23 @@ pub async fn download_artifact(
     );
 
     Ok(final_path)
+}
+
+/// Removes the file at its path when dropped, unless disarmed.
+struct RemoveOnDrop(Option<PathBuf>);
+
+impl RemoveOnDrop {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Compute SHA256 hash of data (hex-encoded).
@@ -126,11 +159,25 @@ mod tests {
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
 
+    const MAX: u64 = barbacane_compiler::MAX_ARTIFACT_BYTES;
+
     /// Simple HTTP server for testing downloads.
     async fn start_test_server(
         content: Vec<u8>,
         status: u16,
     ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let mut response = format!(
+            "HTTP/1.1 {} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            status,
+            content.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(&content);
+        start_raw_server(response).await
+    }
+
+    /// A server that answers one request with `response`, written as is.
+    async fn start_raw_server(response: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -139,19 +186,72 @@ mod tests {
                 // Read the request (we don't care about the content)
                 let mut buf = [0u8; 1024];
                 let _ = socket.read(&mut buf).await;
-
-                // Send response
-                let response = format!(
-                    "HTTP/1.1 {} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    status,
-                    content.len()
-                );
-                let _ = socket.write_all(response.as_bytes()).await;
-                let _ = socket.write_all(&content).await;
+                let _ = socket.write_all(&response).await;
             }
         });
 
         (addr, handle)
+    }
+
+    fn is_empty(dir: &Path) -> bool {
+        std::fs::read_dir(dir).unwrap().next().is_none()
+    }
+
+    #[tokio::test]
+    async fn a_download_past_the_limit_is_abandoned_and_removed() {
+        let content = vec![7u8; 4096];
+        let (addr, server_handle) = start_test_server(content.clone(), 200).await;
+        let url = format!("http://{}/artifact.bca", addr);
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let client = download_client().unwrap();
+        let sha = compute_sha256(&content);
+        let error = download_artifact(&client, &url, &sha, temp_dir.path(), 1024)
+            .await
+            .unwrap_err();
+        assert!(error.contains("larger than 1024"), "{error}");
+        assert!(is_empty(temp_dir.path()), "the partial file is removed");
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn a_download_cut_short_leaves_nothing_behind() {
+        let mut response =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n".to_vec();
+        response.extend_from_slice(&[1u8; 100]);
+        let (addr, server_handle) = start_raw_server(response).await;
+        let url = format!("http://{}/artifact.bca", addr);
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let client = download_client().unwrap();
+        let result = download_artifact(&client, &url, "dummy", temp_dir.path(), MAX).await;
+        assert!(result.is_err());
+        assert!(is_empty(temp_dir.path()), "the partial file is removed");
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn a_compressed_response_is_written_as_sent() {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&vec![0u8; 64 << 10]).unwrap();
+        let sent = encoder.finish().unwrap();
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            sent.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(&sent);
+        let (addr, server_handle) = start_raw_server(response).await;
+        let url = format!("http://{}/artifact.bca", addr);
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let client = download_client().unwrap();
+        let path = download_artifact(&client, &url, &compute_sha256(&sent), temp_dir.path(), MAX)
+            .await
+            .expect("the bytes sent match their checksum");
+        assert_eq!(std::fs::read(path).unwrap(), sent);
+        server_handle.abort();
     }
 
     #[tokio::test]
@@ -169,7 +269,7 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, &url, &expected_sha256, temp_dir.path()).await;
+        let result = download_artifact(&client, &url, &expected_sha256, temp_dir.path(), MAX).await;
 
         // Verify success
         assert!(result.is_ok(), "download should succeed: {:?}", result);
@@ -199,7 +299,7 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, &url, wrong_sha256, temp_dir.path()).await;
+        let result = download_artifact(&client, &url, wrong_sha256, temp_dir.path(), MAX).await;
 
         // Verify failure
         assert!(
@@ -232,7 +332,7 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, &url, "dummy", temp_dir.path()).await;
+        let result = download_artifact(&client, &url, "dummy", temp_dir.path(), MAX).await;
 
         // Verify failure
         assert!(result.is_err(), "download should fail with HTTP error");
@@ -257,7 +357,7 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, url, "dummy", temp_dir.path()).await;
+        let result = download_artifact(&client, url, "dummy", temp_dir.path(), MAX).await;
 
         // Verify failure
         assert!(

@@ -383,6 +383,7 @@ dependencies = [
  "bytes",
  "clap",
  "criterion",
+ "flate2",
  "futures-util",
  "hex",
  "http-body-util",
