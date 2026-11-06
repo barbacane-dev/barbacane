@@ -43,6 +43,12 @@ struct BodyConfig {
 
     #[serde(default)]
     rename: BTreeMap<String, String>,
+
+    /// Let a body that is not JSON through unchanged even when `remove` is
+    /// set. Without it, such a body is refused, since the fields to remove
+    /// could not be removed from it.
+    #[serde(default)]
+    allow_non_json: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +92,19 @@ impl ResponseTransformer {
         }
 
         if let Some(body_config) = &self.body {
-            resp.body = transform_body(&resp.body, body_config);
+            match transform_body(&resp.body, body_config) {
+                Ok(body) => resp.body = body,
+                Err(reason) => {
+                    log_message(0, &format!("refusing the response: {reason}"));
+                    return ProblemDetails::new(
+                        502,
+                        "urn:barbacane:error:response-transform-failed",
+                        "Bad Gateway",
+                    )
+                    .detail("The upstream response could not be transformed.")
+                    .into_response();
+                }
+            }
         }
 
         resp
@@ -148,30 +166,33 @@ fn transform_headers(headers: &mut BTreeMap<String, String>, config: &HeaderConf
 
 /// Transform JSON body. Order: remove → rename → add.
 ///
-/// Non-JSON bodies are returned unchanged.
-fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Option<Vec<u8>> {
+/// When `remove` is set, a pointer that does not parse is an error, and so is
+/// a body that is not JSON unless `allow_non_json` is set. Otherwise a body
+/// that is not JSON is returned unchanged.
+fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Result<Option<Vec<u8>>, String> {
     let body_bytes = match body {
         Some(b) if !b.is_empty() => b,
-        _ => return body.clone(),
+        _ => return Ok(body.clone()),
     };
+    let removes = !config.remove.is_empty();
 
     let mut json: Value = match serde_json::from_slice(body_bytes) {
         Ok(v) => v,
+        Err(e) if removes && !config.allow_non_json => {
+            return Err(format!(
+                "the body is not JSON ({e}), so the configured fields cannot be removed"
+            ));
+        }
         Err(_) => {
             log_message(1, "Body is not valid JSON, skipping body transformations");
-            return body.clone();
+            return Ok(body.clone());
         }
     };
 
     for pointer_str in &config.remove {
-        match Pointer::parse(pointer_str) {
-            Ok(ptr) => {
-                json.delete(ptr);
-            }
-            Err(e) => {
-                log_message(1, &format!("Invalid JSON Pointer '{}': {}", pointer_str, e));
-            }
-        }
+        let ptr = Pointer::parse(pointer_str)
+            .map_err(|e| format!("remove pointer '{pointer_str}' does not parse: {e}"))?;
+        json.delete(ptr);
     }
 
     for (old_pointer_str, new_pointer_str) in &config.rename {
@@ -234,13 +255,14 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Option<Vec<u8>
     }
 
     match serde_json::to_vec(&json) {
-        Ok(v) => Some(v),
+        Ok(v) => Ok(Some(v)),
+        Err(e) if removes => Err(format!("the transformed body cannot be serialized: {e}")),
         Err(e) => {
             log_message(
                 0,
                 &format!("Failed to serialize JSON after transformation: {}", e),
             );
-            body.clone()
+            Ok(body.clone())
         }
     }
 }
@@ -500,7 +522,7 @@ mod tests {
             .add
             .insert("/gateway".to_string(), "barbacane".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -520,7 +542,7 @@ mod tests {
             .add
             .insert("/metadata/version".to_string(), "1.0".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -536,7 +558,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.add.insert("/status".to_string(), "new".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -550,7 +572,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.remove.push("/password".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -566,7 +588,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.remove.push("/metadata/internal".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -584,7 +606,7 @@ mod tests {
             .rename
             .insert("/userName".to_string(), "/user_name".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -603,7 +625,7 @@ mod tests {
             "/metadata/newName".to_string(),
         );
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -625,7 +647,7 @@ mod tests {
             .insert("/toOverwrite".to_string(), "new".to_string());
         config.add.insert("/added".to_string(), "value".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -642,7 +664,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.add.insert("/field".to_string(), "value".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         assert_eq!(result, Some(b"not json".to_vec()));
     }
 
@@ -653,7 +675,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.add.insert("/field".to_string(), "value".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         assert_eq!(result, None);
     }
 
@@ -664,7 +686,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.add.insert("/field".to_string(), "value".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         assert_eq!(result, Some(Vec::new()));
     }
 
@@ -675,7 +697,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.remove.push("/nonexistent/deeply/nested".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -691,7 +713,7 @@ mod tests {
             .add
             .insert("/items/0/gateway".to_string(), "barbacane".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -708,7 +730,7 @@ mod tests {
             .rename
             .insert("/field".to_string(), "/field".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -726,7 +748,7 @@ mod tests {
             .rename
             .insert("/items/0/oldKey".to_string(), "/items/0/newKey".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -743,7 +765,7 @@ mod tests {
         let mut config = BodyConfig::default();
         config.remove.push("/items/0/secret".to_string());
 
-        let result = transform_body(&body, &config);
+        let result = transform_body(&body, &config).expect("transforms");
         let json: Value =
             serde_json::from_slice(&result.expect("should have body")).expect("valid json");
 
@@ -751,6 +773,70 @@ mod tests {
         assert_eq!(json["items"][0].get("secret"), None);
         // items[1] is untouched
         assert_eq!(json["items"][1]["secret"], "y");
+    }
+
+    // -- Bodies the removals cannot apply to -------------------------------
+
+    fn plugin_with_body(body: serde_json::Value) -> ResponseTransformer {
+        serde_json::from_value(serde_json::json!({ "body": body })).expect("config")
+    }
+
+    fn response_with_body(body: &[u8]) -> Response {
+        let mut resp = create_test_response();
+        resp.body = Some(body.to_vec());
+        resp
+    }
+
+    /// Valid JSON nested deeper than the parser accepts.
+    fn deeply_nested_json_with_secret() -> Vec<u8> {
+        let depth = 200;
+        let mut body = String::from(r#"{"password":"hunter2","nested":"#);
+        body.push_str(&"[".repeat(depth));
+        body.push_str(&"]".repeat(depth));
+        body.push('}');
+        body.into_bytes()
+    }
+
+    #[test]
+    fn a_body_that_cannot_be_parsed_is_refused_when_fields_must_be_removed() {
+        let mut plugin = plugin_with_body(serde_json::json!({ "remove": ["/password"] }));
+        for body in [
+            deeply_nested_json_with_secret(),
+            br#"password=hunter2"#.to_vec(),
+        ] {
+            let resp = plugin.on_response(response_with_body(&body));
+            assert_eq!(resp.status, 502);
+            let served = String::from_utf8(resp.body.unwrap_or_default()).expect("utf-8");
+            assert!(!served.contains("hunter2"), "{served}");
+        }
+    }
+
+    #[test]
+    fn a_remove_pointer_that_does_not_parse_refuses_the_response() {
+        let mut plugin = plugin_with_body(serde_json::json!({ "remove": ["password"] }));
+        let resp = plugin.on_response(response_with_body(br#"{"password":"hunter2"}"#));
+        assert_eq!(resp.status, 502);
+        let served = String::from_utf8(resp.body.unwrap_or_default()).expect("utf-8");
+        assert!(!served.contains("hunter2"), "{served}");
+    }
+
+    #[test]
+    fn allow_non_json_passes_a_non_json_body_through() {
+        let mut plugin = plugin_with_body(
+            serde_json::json!({ "remove": ["/password"], "allow_non_json": true }),
+        );
+        let resp = plugin.on_response(response_with_body(b"plain text"));
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body.as_deref(), Some(&b"plain text"[..]));
+    }
+
+    #[test]
+    fn without_removals_a_non_json_body_passes_through() {
+        let mut plugin =
+            plugin_with_body(serde_json::json!({ "add": { "/gateway": "barbacane" } }));
+        let resp = plugin.on_response(response_with_body(b"plain text"));
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body.as_deref(), Some(&b"plain text"[..]));
     }
 
     // -- Integration / full plugin tests ------------------------------------
@@ -781,6 +867,7 @@ mod tests {
                 },
                 remove: vec!["/internal".to_string()],
                 rename: BTreeMap::new(),
+                allow_non_json: false,
             }),
         };
 
