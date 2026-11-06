@@ -172,30 +172,44 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// This is the single source of truth for client-IP resolution so security
 /// middlewares (ip-restriction, rate-limit) cannot drift into
 /// independently spoofable implementations.
+///
+/// Addresses are compared and returned in canonical form: an IPv4-mapped IPv6
+/// address (`::ffff:10.0.0.1`) is the IPv4 address it carries.
 pub fn resolve_client_ip(req: &Request, trusted_proxies: &[String]) -> String {
-    let peer = req.client_ip.trim();
-    let is_trusted = |ip: &str| trusted_proxies.iter().any(|p| p.trim() == ip);
+    let peer = canonical_ip(&req.client_ip);
+    let trusted: Vec<String> = trusted_proxies.iter().map(|p| canonical_ip(p)).collect();
+    let is_trusted = |ip: &str| trusted.iter().any(|p| p == ip);
 
-    if !is_trusted(peer) {
-        return peer.to_string();
+    if !is_trusted(&peer) {
+        return peer;
     }
 
     if let Some(xff) = req.headers.get("x-forwarded-for") {
-        for hop in xff.split(',').map(str::trim).rev() {
-            if !hop.is_empty() && !is_trusted(hop) {
-                return hop.to_string();
+        for hop in xff.split(',').map(canonical_ip).rev() {
+            if !hop.is_empty() && !is_trusted(&hop) {
+                return hop;
             }
         }
     }
 
     if let Some(real) = req.headers.get("x-real-ip") {
-        let real = real.trim();
+        let real = canonical_ip(real);
         if !real.is_empty() {
-            return real.to_string();
+            return real;
         }
     }
 
-    peer.to_string()
+    peer
+}
+
+/// `value` trimmed, and written as an IPv4 address when it is an IPv4-mapped
+/// IPv6 address. A value that is not an address is returned trimmed.
+fn canonical_ip(value: &str) -> String {
+    let value = value.trim();
+    value
+        .parse::<std::net::IpAddr>()
+        .map(|ip| ip.to_canonical().to_string())
+        .unwrap_or_else(|_| value.to_string())
 }
 
 #[cfg(test)]
@@ -557,6 +571,18 @@ mod tests {
         // No trusted proxies: a spoofed XFF must be ignored.
         let req = req_with("203.0.113.9", Some("10.0.0.5"));
         assert_eq!(resolve_client_ip(&req, &[]), "203.0.113.9");
+    }
+
+    #[test]
+    fn resolve_client_ip_reports_an_ipv4_mapped_address_as_ipv4() {
+        assert_eq!(
+            resolve_client_ip(&req_with("::ffff:10.0.0.1", None), &[]),
+            "10.0.0.1"
+        );
+        // A trusted proxy matches whichever form it is listed or seen in.
+        let trusted = vec!["10.0.0.1".to_string()];
+        let req = req_with("::ffff:10.0.0.1", Some("::ffff:203.0.113.7"));
+        assert_eq!(resolve_client_ip(&req, &trusted), "203.0.113.7");
     }
 
     #[test]

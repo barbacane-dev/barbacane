@@ -102,21 +102,36 @@ impl IpRestriction {
 
 /// Whether `client` matches a list entry: either a single IP (`10.0.0.5`,
 /// `2001:db8::1`) or a CIDR range (`10.0.0.0/8`, `2001:db8::/32`). IPv4 and IPv6
-/// are both supported; a family mismatch never matches.
+/// are both supported; a family mismatch never matches. An IPv4-mapped IPv6
+/// address (`::ffff:10.0.0.5`), in the client or the entry, is the IPv4
+/// address it carries.
 fn ip_matches(client: IpAddr, entry: &str) -> bool {
+    let client = client.to_canonical();
     match entry.split_once('/') {
         Some((network, prefix)) => match (
             network.trim().parse::<IpAddr>(),
             prefix.trim().parse::<u8>(),
         ) {
-            (Ok(network), Ok(prefix)) => ip_in_cidr(client, network, prefix),
+            (Ok(network), Ok(prefix)) => {
+                let (network, prefix) = canonical_range(network, prefix);
+                ip_in_cidr(client, network, prefix)
+            }
             _ => false,
         },
         None => entry
             .trim()
             .parse::<IpAddr>()
-            .map(|e| e == client)
+            .map(|e| e.to_canonical() == client)
             .unwrap_or(false),
+    }
+}
+
+/// A range written in IPv4-mapped form (`::ffff:10.0.0.0/104`) as the IPv4
+/// range it covers (`10.0.0.0/8`).
+fn canonical_range(network: IpAddr, prefix: u8) -> (IpAddr, u8) {
+    match network.to_canonical() {
+        IpAddr::V4(v4) if network.is_ipv6() && prefix >= 96 => (IpAddr::V4(v4), prefix - 96),
+        _ => (network, prefix),
     }
 }
 
@@ -210,6 +225,33 @@ mod tests {
     fn family_mismatch_never_matches() {
         assert!(!ip_matches(ip("10.0.0.1"), "2001:db8::/32"));
         assert!(!ip_matches(ip("2001:db8::1"), "10.0.0.0/8"));
+    }
+
+    /// A dual-stack listener reports an IPv4 client as `::ffff:a.b.c.d`.
+    #[test]
+    fn an_ipv4_mapped_client_is_matched_as_ipv4() {
+        assert!(ip_matches(ip("::ffff:10.1.2.3"), "10.0.0.0/8"));
+        assert!(ip_matches(ip("::ffff:10.0.0.5"), "10.0.0.5"));
+        assert!(!ip_matches(ip("::ffff:11.0.0.1"), "10.0.0.0/8"));
+
+        let mut p = test_plugin();
+        match p.on_request(request_with_ip("::ffff:10.0.0.5")) {
+            Action::ShortCircuit(r) => assert_eq!(r.status, 403),
+            _ => panic!("the denied address passed in its mapped form"),
+        }
+    }
+
+    #[test]
+    fn a_rule_written_in_mapped_form_matches_ipv4() {
+        assert!(ip_matches(ip("10.1.2.3"), "::ffff:10.0.0.0/104"));
+        assert!(ip_matches(ip("10.0.0.5"), "::ffff:10.0.0.5"));
+        assert!(!ip_matches(ip("11.0.0.1"), "::ffff:10.0.0.0/104"));
+    }
+
+    #[test]
+    fn ipv6_rules_still_match_ipv6() {
+        assert!(ip_matches(ip("2001:db8::1"), "2001:db8::/32"));
+        assert!(!ip_matches(ip("::ffff:10.0.0.1"), "2001:db8::/32"));
     }
 
     #[test]
