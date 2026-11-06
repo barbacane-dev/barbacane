@@ -51,7 +51,9 @@ pub use secrets::{
     resolve_secret, SecretsError, SecretsStore,
 };
 pub use trap::{TrapContext, TrapResult};
-pub use validate::{validate_exports, validate_imports};
+pub use validate::{
+    validate_exports, validate_import_modules, validate_imports, WASI_IMPORTS, WASI_MODULE,
+};
 
 // Rate limiter for host_rate_limit_check
 pub use rate_limiter::{RateLimitResult, RateLimiter, RateLimiterStats};

@@ -429,6 +429,8 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
+ "wasmparser 0.254.2",
+ "wat",
  "yaml_serde",
 ]
 
