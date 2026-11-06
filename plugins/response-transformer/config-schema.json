@@ -43,18 +43,25 @@
       "properties": {
         "add": {
           "type": "object",
+          "propertyNames": { "pattern": "^/" },
           "additionalProperties": { "type": "string" },
-          "description": "Add or overwrite JSON fields using JSON Pointer paths. Only works on JSON bodies."
+          "description": "Add or overwrite JSON fields using JSON Pointer paths (each starts with `/`). Only works on JSON bodies."
         },
         "remove": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "Remove JSON fields using JSON Pointer paths. Only works on JSON bodies."
+          "items": { "type": "string", "pattern": "^/" },
+          "description": "Remove JSON fields using JSON Pointer paths (each starts with `/`). A response whose body is not JSON is refused with 502, unless `allow_non_json` is set."
         },
         "rename": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
-          "description": "Rename JSON fields (old-pointer → new-pointer). Only works on JSON bodies."
+          "propertyNames": { "pattern": "^/" },
+          "additionalProperties": { "type": "string", "pattern": "^/" },
+          "description": "Rename JSON fields (old-pointer → new-pointer, each starts with `/`). Only works on JSON bodies."
+        },
+        "allow_non_json": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pass a body that is not JSON through unchanged even when `remove` is set. Without it, such a response is refused with 502."
         }
       }
     }

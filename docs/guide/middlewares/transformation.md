@@ -255,8 +255,11 @@ JSON body transformations use [JSON Pointer (RFC 6901)](https://tools.ietf.org/h
 | `add` | object | `{}` | Add or overwrite JSON fields |
 | `remove` | array | `[]` | Remove JSON fields by JSON Pointer path |
 | `rename` | object | `{}` | Rename JSON fields (old-pointer to new-pointer) |
+| `allow_non_json` | boolean | `false` | Pass a body that is not JSON through unchanged even when `remove` is set |
 
-Body transformations only apply to responses with JSON bodies. Non-JSON bodies pass through unchanged.
+Every pointer starts with `/`; one that does not is a compile error (`E1023`).
+
+Body transformations only apply to responses with JSON bodies. A body that is not JSON passes through unchanged, with one exception: when `remove` is set, the plugin answers `502 Bad Gateway` (`application/problem+json`, type `urn:barbacane:error:response-transform-failed`) instead, because the fields it must strip could not be found. Set `allow_non_json: true` on operations whose upstream legitimately returns other content types alongside JSON.
 
 ### Transformation order
 

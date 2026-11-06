@@ -171,3 +171,26 @@ fn a_jwk_may_carry_members_the_schema_does_not_name() {
         "RFC 7517 allows members beyond the ones listed"
     );
 }
+
+#[test]
+fn a_response_transformer_body_pointer_must_start_with_a_slash() {
+    let schema = schema_of("response-transformer");
+
+    assert!(is_valid(
+        &schema,
+        &serde_json::json!({ "body": {
+            "remove": ["/password", "/a~1b"],
+            "add": { "/gateway": "barbacane" },
+            "rename": { "/userName": "/user_name" },
+            "allow_non_json": true
+        } })
+    ));
+    for mistyped in [
+        serde_json::json!({ "body": { "remove": ["password"] } }),
+        serde_json::json!({ "body": { "add": { "gateway": "barbacane" } } }),
+        serde_json::json!({ "body": { "rename": { "userName": "/user_name" } } }),
+        serde_json::json!({ "body": { "rename": { "/userName": "user_name" } } }),
+    ] {
+        assert!(!is_valid(&schema, &mistyped), "accepted {mistyped}");
+    }
+}
