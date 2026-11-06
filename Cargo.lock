@@ -467,9 +467,9 @@ dependencies = [
 
 [[package]]
 name = "barbacane-libinjection"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "836db2b79f5f4133d5e64aa99254833016ea0e8b74b306bee79db3c9716c8fba"
+checksum = "2817349b50dd33d04ac10e04e46073989f945d3113fafd6c47e03c0c38e2c553"
 dependencies = [
  "bitflags 2.11.0",
  "serde_json",
