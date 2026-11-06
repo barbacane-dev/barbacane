@@ -24,9 +24,6 @@
 # Control plane
 /crates/barbacane-control/ @barbacane-dev/maintainers
 
-# Web UI
-/ui/ @barbacane-dev/maintainers
-
 # Documentation
 /docs/ @barbacane-dev/maintainers
 *.md @barbacane-dev/maintainers

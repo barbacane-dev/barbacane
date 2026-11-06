@@ -37,16 +37,15 @@ make docker-build-standalone
 
 ### Playground
 
-Full demo environment with observability stack (Prometheus, Grafana, Loki, Tempo) and control plane UI:
+Full demo environment with an observability stack (Prometheus, Grafana, Loki, Tempo) and the control plane:
 
 ```bash
-git clone https://github.com/barbacane-dev/barbacane.git
-cd barbacane/playground
+git clone https://github.com/barbacane-dev/playground
+cd playground
 docker-compose up -d
 
-# Gateway:       http://localhost:8080
-# Grafana:       http://localhost:3000 (admin/admin)
-# Control Plane: http://localhost:3001
+# Gateway: http://localhost:8080
+# Grafana: http://localhost:3000 (admin/admin)
 ```
 
 ### From source
@@ -82,7 +81,6 @@ barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 - [Web application firewall](guide/waf.md) - Run OWASP CRS as a native pipeline stage
 - [Observability](guide/observability.md) - Metrics, logging, and distributed tracing
 - [Control Plane](guide/control-plane.md) - REST API for spec and artifact management
-- [Web UI](guide/web-ui.md) - Web-based management interface
 
 ### Reference
 

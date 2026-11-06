@@ -11,16 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
+- **control-plane image**: `barbacane-control` runs the API alone, as the non-root `barbacane` user, and exposes only port 9090. Port 80 and its `/api/` prefix are gone: clients call the API on port 9090.
 
 ### Removed
 
 - **AI gateway**: the `ai-proxy` dispatcher and the `ai-prompt-guard`, `ai-token-limit`, `ai-cost-tracker` and `ai-response-guard` middlewares, with the `schemas/ai-gateway.yaml` spec fragment, their guide pages, and the `barbacane-ai-regex-*` lint rules. A spec that dispatches to `ai-proxy` or uses one of these middlewares no longer compiles against the official plugins. Scripts that download the ruleset functions must drop `barbacane-validate-ai-regex.js`. The `host_http_stream` plugin capability (ADR-0023) stays.
 - **MCP server**: the `POST` and `DELETE /__barbacane/mcp` endpoint, the `x-barbacane-mcp` extension, the E1060 and E1061 warnings, and the `barbacane-mcp-requires-operation-id` lint rule. A spec that still sets `x-barbacane-mcp` compiles with the E1015 unknown-extension warning and serves no MCP endpoint. Scripts that download the ruleset functions must drop `barbacane-mcp-requires-fields.js`.
+- **web UI**: the control plane's web interface and the nginx server that served it from the `barbacane-control` image, with the `make ui` and `make dev-tmux` targets. The control plane is managed through its REST API, documented interactively at `/docs`.
 
 ### Fixed
 
 - **WAF**: the libinjection classifiers follow libinjection 4.0.1 ([`barbacane-libinjection`](https://crates.io/crates/barbacane-libinjection) 0.1.2). `@detectSQLi` flags a number with an empty exponent, as in `1' or 1.e(1)`, which MySQL ignores, and reads `LIKE (` after an operand as an operator rather than a function call. `@detectXSS` checks attributes after a 0xFF byte, which had ended tokenizing, and uses upstream's list of 432 event-handler attributes (145 added, 11 removed). The OWASP CRS v4.9.0 regression results are unchanged.
 - **vacuum ruleset**: `barbacane-no-unknown-extension` accepts `x-barbacane-waf`, so a spec that configures the WAF no longer gets an unknown-extension warning.
+- **docker-compose**: the control-plane service passes `BARBACANE_CONTROL_ADMIN_TOKEN`, and compose stops with a message when it is unset, instead of starting a control plane that exits for want of it.
 
 ### Security
 
