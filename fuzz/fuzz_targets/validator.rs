@@ -66,7 +66,8 @@ fuzz_target!(|input: Input| {
         None
     };
 
-    let validator = OperationValidator::new(&params, request_body.as_ref());
+    let validator =
+        OperationValidator::new(&params, request_body.as_ref()).expect("no schema to compile");
 
     let headers: HashMap<String, String> = input.headers.into_iter().collect();
 
