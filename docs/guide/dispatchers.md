@@ -54,6 +54,8 @@ The `body` field supports `{{placeholder}}` interpolation with values from the i
 
 Unresolved placeholders are left as-is in the response body.
 
+Values come from the request, so they are encoded for `content_type`: as the inside of a JSON string for `application/json` and `+json` types (quotes, backslashes, control characters, `<`, `>` and `&` escaped), and as HTML text for every other type (`&`, `<`, `>`, `"` and `'` as entities). Place a JSON placeholder inside a string, as in `{"id": "{{path_params.id}}"}`.
+
 #### Examples
 
 **Simple health check:**
