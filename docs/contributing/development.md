@@ -191,8 +191,7 @@ barbacane/
 │   │   └── src/
 │   │       ├── main.rs
 │   │       ├── router/     # Prefix-trie routing (trie.rs)
-│   │       ├── validator.rs
-│   │       └── mcp/        # MCP server
+│   │       └── validator.rs
 │   │
 │   ├── barbacane-control/  # Control plane server (REST API, PostgreSQL)
 │   │   ├── Cargo.toml

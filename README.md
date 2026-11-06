@@ -21,14 +21,13 @@
 
 ---
 
-Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it enforces it: routing, request and response validation, authentication, rate limiting, a native WAF, and observability, all declared in the spec you already write. No proprietary config language, no drift between your spec and your infrastructure. The same middleware chain also exposes your operations to agents as typed MCP tools.
+Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it enforces it: routing, request and response validation, authentication, rate limiting, a native WAF, and observability, all declared in the spec you already write. No proprietary config language, no drift between your spec and your infrastructure.
 
 - **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. The compiler turns it into a sealed `.bca` artifact; no separate gateway DSL to maintain.
 - **A full API gateway** — Routing, schema-based request and response validation, authentication and authorization, rate limiting, caching, and request/response transformation, all driven by the operation definitions and `x-barbacane-*` extensions in your spec.
 - **Native WAF** — A built-in ModSecurity/CRS-compatible web application firewall inspects requests and responses inline, in scoring or blocking mode, with per-operation tuning and audit logging. Configured with one `x-barbacane-waf` block, no sidecar.
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
-- **MCP on the same chain** — When MCP is enabled (`x-barbacane-mcp`), your operations are exposed as Model Context Protocol tools at `POST /__barbacane/mcp`, behind the same auth and rate-limit chain as your REST traffic ([ADR-0025](adr/0025-mcp-server.md)).
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
 - **Extensible** — 29 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
 - **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export. Per-middleware timing comes for free.
@@ -105,7 +104,6 @@ Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane
 - **Middlewares** — grouped by concern:
   - [Authentication](https://docs.barbacane.dev/guide/middlewares/authentication.html) · [Authorization](https://docs.barbacane.dev/guide/middlewares/authorization.html) · [Traffic control](https://docs.barbacane.dev/guide/middlewares/traffic-control.html)
   - [Caching](https://docs.barbacane.dev/guide/middlewares/caching.html) · [Transformation](https://docs.barbacane.dev/guide/middlewares/transformation.html) · [Observability](https://docs.barbacane.dev/guide/middlewares/observability.html)
-- [MCP Server](https://docs.barbacane.dev/guide/mcp.html) — Expose your spec as a Model Context Protocol server
 - [Control Plane](https://docs.barbacane.dev/guide/control-plane.html) · [Web UI](https://docs.barbacane.dev/guide/web-ui.html) — Manage specs, artifacts, and data planes
 - [WAF](https://docs.barbacane.dev/guide/waf.html) — Native ModSecurity/CRS-compatible web application firewall
 - [Secrets](https://docs.barbacane.dev/guide/secrets.html) · [Vacuum linting](https://docs.barbacane.dev/guide/vacuum.html) · [FIPS](https://docs.barbacane.dev/guide/fips.html)

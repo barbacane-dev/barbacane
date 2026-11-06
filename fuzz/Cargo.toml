@@ -35,7 +35,7 @@ serde_json = "1"
 barbacane-compiler = { path = "../crates/barbacane-compiler" }
 # The data-plane crate exposes a library target named `barbacane_lib`
 # (see crates/barbacane/Cargo.toml `[lib] name = "barbacane_lib"`), which is how
-# we reach the validator and MCP JSON-RPC parser.
+# we reach the validator.
 barbacane = { path = "../crates/barbacane" }
 
 # Used by the artifact_loader target to materialise fuzz input as a temp .bca
@@ -62,12 +62,6 @@ test = false
 doc = false
 bench = false
 
-[[bin]]
-name = "jsonrpc"
-path = "fuzz_targets/jsonrpc.rs"
-test = false
-doc = false
-bench = false
 
 [[bin]]
 name = "validator"

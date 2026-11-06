@@ -177,10 +177,10 @@ pub struct Operation {
     pub method: String,
     /// The operationId, if present.
     pub operation_id: Option<String>,
-    /// The operation summary (short description for MCP tool name).
+    /// The operation summary.
     #[serde(default)]
     pub summary: Option<String>,
-    /// The operation description (detailed description for MCP tool).
+    /// The operation description.
     #[serde(default)]
     pub description: Option<String>,
     /// Path/channel parameters defined on this operation.

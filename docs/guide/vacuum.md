@@ -22,7 +22,7 @@ Several rules use custom JavaScript functions (config schema validation, duplica
 ```bash
 mkdir -p .barbacane/rulesets/functions .barbacane/rulesets/schemas
 curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
-for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
+for f in barbacane-no-plaintext-upstream \
          barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
          barbacane-validate-dispatch-config \
          barbacane-validate-middleware-config; do
@@ -131,7 +131,7 @@ rules:
   run: |
     mkdir -p .barbacane/rulesets/functions
     curl -fsSL https://docs.barbacane.dev/rulesets/barbacane.yaml -o .barbacane/rulesets/barbacane.yaml
-    for f in barbacane-mcp-requires-fields barbacane-no-plaintext-upstream \
+    for f in barbacane-no-plaintext-upstream \
              barbacane-no-unknown-extensions barbacane-valid-path-params barbacane-valid-secret-refs \
              barbacane-validate-dispatch-config \
              barbacane-validate-middleware-config; do

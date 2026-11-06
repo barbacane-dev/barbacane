@@ -2427,7 +2427,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
     // wasm32-wasip1 plugin links this; getrandom (and thus rand / uuid::new_v4 /
     // crypto nonces) and std HashMap's RandomState both route through it. The
     // previous deterministic fill made those values predictable across every
-    // call and re-enabled HashDoS (MCP/WA random_get).
+    // call and re-enabled HashDoS (WA random_get).
     linker
         .func_wrap(
             "wasi_snapshot_preview1",
