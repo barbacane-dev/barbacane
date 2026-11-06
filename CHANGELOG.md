@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares. The artifact format does not change.
+
 ### Changed
 
 - **dependencies**: YAML is read and written with `yaml_serde`, the YAML Organization's continuation of `serde_yaml`, in place of the deprecated `serde_yaml` 0.9. Its parser `libyaml-rs` replaces `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). Both are the same translation of libyaml, so documents parse as before.
@@ -38,10 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **tokio**: 1.54.1, for `AsyncFd` constructors violating I/O safety (RUSTSEC-2026-0386).
 - **zstd**: zstd-sys 2.1.2 (RUSTSEC-2026-0410). RUSTSEC-2026-0391, -0398 and -0403, in zstd 0.13 and zstd-safe 7, are ignored in `deny.toml`: rskafka and Wasmtime's cache still require zstd 0.13, and the gateway reaches none of the affected code (Kafka records are produced uncompressed and never consumed, the Wasmtime cache is off, and zstd-safe is built without `seekable`).
 - **tests**: p256 0.14 in the test crate, so crypto-bigint 0.7 replaces 0.5 (RUSTSEC-2026-0387). The gateway does not use it.
-
-### Added
-
-- **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares, and the UI shows the resolved chain and marks such entries. The artifact format does not change.
 
 ## [0.12.3] - 2026-10-13
 

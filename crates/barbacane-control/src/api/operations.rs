@@ -399,15 +399,15 @@ mod tests {
 
     #[test]
     fn middlewares_patch_keeps_a_disabled_entry() {
-        let mut operation = serde_yaml::Mapping::new();
+        let mut operation = yaml_serde::Mapping::new();
         apply_middlewares_patch(
             &mut operation,
             &Some(Some(vec![binding("auth", false), binding("cors", true)])),
         )
         .unwrap();
 
-        let written = serde_yaml::to_string(&operation).unwrap();
-        let reparsed: serde_json::Value = serde_yaml::from_str(&written).unwrap();
+        let written = yaml_serde::to_string(&operation).unwrap();
+        let reparsed: serde_json::Value = yaml_serde::from_str(&written).unwrap();
         assert_eq!(
             reparsed["x-barbacane-middlewares"],
             serde_json::json!([{"name": "auth", "enabled": false}, {"name": "cors"}])
