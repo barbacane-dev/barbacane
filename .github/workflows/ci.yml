@@ -181,6 +181,27 @@ jobs:
       - name: Audit workflows
         run: zizmor --config .github/zizmor.yml --min-severity=medium .github/workflows/
 
+  api-spec:
+    name: API spec
+    if: github.event_name != 'issue_comment'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install vacuum
+        run: npm install --global @quobix/vacuum@0.29.9
+
+      # The control plane's spec is the contract the CLI is generated from.
+      - name: Lint the control-plane API spec
+        run: vacuum lint --ruleset crates/barbacane-control/openapi-ruleset.yaml --details crates/barbacane-control/openapi.yaml
+
+      - name: Test the vacuum ruleset for gateway specs
+        run: docs/rulesets/tests/run-tests.sh
+
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
@@ -801,6 +822,7 @@ jobs:
       - duplication
       - clippy
       - workflows
+      - api-spec
       - msrv
       - audit
       - build

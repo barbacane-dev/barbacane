@@ -46,7 +46,11 @@ async fn make_app() -> Option<Router> {
 }
 
 /// Send one request through the router and return the status + body bytes.
+/// The response is checked against what `openapi.yaml` says the operation
+/// answers with that status.
 async fn send(app: Router, req: Request<Body>) -> (StatusCode, bytes::Bytes) {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
     let resp: Response = app.oneshot(req).await.expect("router returned error");
     let status = resp.status();
     let body = resp
@@ -55,7 +59,71 @@ async fn send(app: Router, req: Request<Body>) -> (StatusCode, bytes::Bytes) {
         .await
         .expect("body collect failed")
         .to_bytes();
+    assert_matches_spec(&method, &path, status, &body);
     (status, body)
+}
+
+/// The API's contract.
+static SPEC: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+    yaml_serde::from_str(include_str!("../../openapi.yaml")).expect("openapi.yaml parses")
+});
+
+/// The spec's operation for `method` and a concrete `path`, with its path
+/// template.
+fn spec_operation(method: &Method, path: &str) -> Option<(&'static str, &'static Value)> {
+    let segments: Vec<&str> = path.trim_end_matches('/').split('/').collect();
+    let paths = SPEC["paths"].as_object()?;
+    paths.iter().find_map(|(template, item)| {
+        let parts: Vec<&str> = template.split('/').collect();
+        let matches = parts.len() == segments.len()
+            && parts
+                .iter()
+                .zip(&segments)
+                .all(|(t, s)| t.starts_with('{') || t == s);
+        let operation = item.get(method.as_str().to_ascii_lowercase())?;
+        matches.then_some((template.as_str(), operation))
+    })
+}
+
+/// Fail unless the response is one the spec describes for this operation and
+/// status, with a body its schema accepts.
+fn assert_matches_spec(method: &Method, path: &str, status: StatusCode, body: &bytes::Bytes) {
+    let (template, operation) = spec_operation(method, path)
+        .unwrap_or_else(|| panic!("{method} {path} is not in openapi.yaml"));
+    let responses = &operation["responses"];
+    let mut response = responses
+        .get(status.as_str())
+        .or_else(|| responses.get("default"))
+        .unwrap_or_else(|| panic!("openapi.yaml gives {method} {template} no {status} response"));
+    if let Some(reference) = response["$ref"].as_str() {
+        let name = reference.trim_start_matches("#/components/responses/");
+        response = &SPEC["components"]["responses"][name];
+    }
+    let Some(schema) = ["application/json", "application/problem+json"]
+        .iter()
+        .find_map(|media| response["content"][media].get("schema"))
+    else {
+        // No JSON body described: a 204, or a download.
+        return;
+    };
+
+    let instance: Value = serde_json::from_slice(body)
+        .unwrap_or_else(|e| panic!("{method} {path} {status}: the body is not JSON: {e}"));
+    let mut root = schema.clone();
+    if let Value::Object(map) = &mut root {
+        map.insert("components".to_string(), SPEC["components"].clone());
+    }
+    let validator = jsonschema::validator_for(&root).unwrap_or_else(|e| {
+        panic!("the schema of {method} {template} {status} does not compile: {e}")
+    });
+    let errors: Vec<String> = validator
+        .iter_errors(&instance)
+        .map(|e| format!("{} at {}", e, e.instance_path))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "{method} {path} {status} does not match openapi.yaml: {errors:?}\n{instance}"
+    );
 }
 
 /// Parse body bytes as JSON.
@@ -588,4 +656,202 @@ async fn project_specs_list_returns_200() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(json_body(&body).is_array());
+}
+
+// ---------------------------------------------------------------------------
+// Project specs, operations, compilations, artifacts
+// ---------------------------------------------------------------------------
+
+const PROJECT_SPEC: &str = r#"openapi: "3.1.0"
+info:
+  title: Contract Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: cors
+    config:
+      allowed_origins: ["https://app.example.com"]
+paths:
+  /items:
+    get:
+      operationId: listItems
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: ok
+"#;
+
+/// A `multipart/form-data` request carrying `content` as the `file` field.
+fn multipart_req(uri: &str, filename: &str, content: &str) -> Request<Body> {
+    let boundary = "barbacane-test-boundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/yaml\r\n\r\n{content}\r\n--{boundary}--\r\n"
+    );
+    Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_project_spec_is_listed_with_its_operations_which_can_be_patched() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let project_id = create_project(app.clone(), &unique_project_name()).await;
+
+    let (status, body) = send(
+        app.clone(),
+        multipart_req(
+            &format!("/projects/{project_id}/specs"),
+            "api.yaml",
+            PROJECT_SPEC,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{}", json_body(&body));
+    let spec_id = json_body(&body)["id"]
+        .as_str()
+        .expect("spec id")
+        .to_string();
+
+    let (status, body) = send(
+        app.clone(),
+        empty_req(Method::GET, &format!("/projects/{project_id}/specs")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&body).as_array().map(Vec::len), Some(1));
+
+    let (status, body) = send(
+        app.clone(),
+        empty_req(Method::GET, &format!("/projects/{project_id}/operations")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let operations = json_body(&body);
+    assert_eq!(
+        operations["specs"][0]["global_middlewares"][0]["name"],
+        "cors"
+    );
+    assert_eq!(operations["specs"][0]["operations"][0]["path"], "/items");
+
+    let (status, body) = send(
+        app.clone(),
+        json_req(
+            Method::PATCH,
+            &format!("/specs/{spec_id}/operations"),
+            json!({
+                "global_middlewares": [],
+                "operations": [{ "path": "/items", "method": "GET", "middlewares": [] }]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", json_body(&body));
+    assert_eq!(json_body(&body)["global_middlewares"], json!([]));
+
+    let (status, body) = send(
+        app.clone(),
+        json_req(
+            Method::PATCH,
+            &format!("/specs/{spec_id}/operations"),
+            json!({ "operations": [{ "path": "/missing", "method": "GET" }] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{}", json_body(&body));
+
+    for list in ["compilations", "artifacts"] {
+        let (status, body) = send(
+            app.clone(),
+            empty_req(Method::GET, &format!("/projects/{project_id}/{list}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert!(json_body(&body).is_array(), "{list}");
+    }
+
+    let missing = Uuid::new_v4();
+    for list in [
+        "specs",
+        "compilations",
+        "artifacts",
+        "operations",
+        "plugins",
+    ] {
+        let (status, _) = send(
+            app.clone(),
+            empty_req(Method::GET, &format!("/projects/{missing}/{list}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{list}");
+    }
+}
+
+#[tokio::test]
+async fn a_plugin_is_added_to_updated_in_and_removed_from_a_project() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string());
+    let pool = crate::db::create_pool(&url).await.expect("pool");
+    let plugin_name = format!("contract-{}", Uuid::new_v4().simple());
+    crate::db::PluginsRepository::new(pool)
+        .create(crate::db::NewPlugin {
+            name: plugin_name.clone(),
+            version: "1.0.0".to_string(),
+            plugin_type: "middleware".to_string(),
+            description: None,
+            capabilities: json!([]),
+            config_schema: json!({}),
+            wasm_binary: b"\0asm\x01\0\0\0".to_vec(),
+            sha256: "0".repeat(64),
+        })
+        .await
+        .expect("register plugin");
+    let project_id = create_project(app.clone(), &unique_project_name()).await;
+    let plugins = format!("/projects/{project_id}/plugins");
+    let added =
+        json!({ "plugin_name": plugin_name, "plugin_version": "1.0.0", "config": { "a": 1 } });
+
+    let (status, body) = send(app.clone(), json_req(Method::POST, &plugins, added.clone())).await;
+    assert_eq!(status, StatusCode::CREATED, "{}", json_body(&body));
+    assert_eq!(json_body(&body)["enabled"], true);
+
+    let (status, _) = send(app.clone(), json_req(Method::POST, &plugins, added)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, body) = send(app.clone(), empty_req(Method::GET, &plugins)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&body).as_array().map(Vec::len), Some(1));
+
+    let one = format!("{plugins}/{plugin_name}");
+    let (status, body) = send(
+        app.clone(),
+        json_req(
+            Method::PUT,
+            &one,
+            json!({ "enabled": false, "priority": 3 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&body)["enabled"], false);
+    assert_eq!(json_body(&body)["config"], json!({ "a": 1 }));
+
+    let (status, _) = send(app.clone(), empty_req(Method::DELETE, &one)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(app.clone(), empty_req(Method::DELETE, &one)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
