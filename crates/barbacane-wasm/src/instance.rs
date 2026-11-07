@@ -54,6 +54,13 @@ pub(crate) struct PluginHttpRequest {
     /// Client certificate and CA for the connection, as file paths.
     #[serde(default)]
     pub(crate) tls: Option<crate::http_client::TlsConfig>,
+    /// Endpoints of a pool (`host_http_pool_call`); `url` then holds the path
+    /// and query.
+    #[serde(default)]
+    pub(crate) endpoints: Vec<crate::balancer::Endpoint>,
+    /// Extra attempts on other endpoints of the pool (default 1).
+    #[serde(default)]
+    pub(crate) retries: Option<u32>,
 }
 
 /// Prefix a plugin-controlled key (cache key, rate-limit partition) with the
@@ -822,6 +829,11 @@ impl PluginInstance {
         self.store.data_mut().take_ws_upgrade_request()
     }
 
+    /// Set the registry host functions record metrics in.
+    pub fn set_metrics(&mut self, metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>) {
+        self.store.data_mut().metrics = metrics;
+    }
+
     /// Set the request/response body for the next handler call (side-channel).
     pub fn set_request_body(&mut self, body: Option<Vec<u8>>) {
         self.store.data_mut().set_request_body(body);
@@ -957,6 +969,175 @@ where
             tracing::error!("failed to serialize {op_name} result: {e}");
             -1
         }
+    }
+}
+
+/// `host_http_call`, and `host_http_pool_call` when `pooled`: send the
+/// plugin's request and leave the response for `host_http_read_result`.
+fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, pooled: bool) -> i32 {
+    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+        Some(m) => m,
+        None => return -1,
+    };
+
+    let start = req_ptr as usize;
+    let end = start.saturating_add(req_len as usize);
+    let data = memory.data(&caller);
+
+    if end > data.len() {
+        return -1;
+    }
+
+    // Parse the request JSON from plugin format
+    let plugin_request: PluginHttpRequest = match serde_json::from_slice(&data[start..end]) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("failed to parse HTTP request: {}", e);
+            return -1;
+        }
+    };
+
+    // Body priority: side-channel (host_http_request_body_set) > JSON body.
+    // Side-channel avoids base64 overhead for large payloads.
+    let body = caller
+        .data_mut()
+        .http_request_body
+        .take()
+        .or(plugin_request.body);
+
+    let tls = plugin_request.tls;
+    let endpoints = plugin_request.endpoints;
+    let retries = plugin_request.retries.unwrap_or(1);
+    if pooled && endpoints.is_empty() {
+        tracing::error!("host_http_pool_call: the request lists no endpoint");
+        return -1;
+    }
+    let request = HttpClientRequest {
+        method: plugin_request.method,
+        url: plugin_request.url,
+        headers: plugin_request.headers.into_iter().collect(),
+        body,
+        timeout: plugin_request
+            .timeout_ms
+            .map(std::time::Duration::from_millis),
+    };
+
+    let metrics = caller.data().metrics.clone();
+    // The span of the request being dispatched, which records the endpoint.
+    let span = tracing::Span::current();
+    let mut used_endpoint: Option<String> = None;
+
+    // Get the HTTP client
+    let http_client = match caller.data().http_client.clone() {
+        Some(c) => c,
+        None => {
+            tracing::error!("HTTP client not available");
+            return -1;
+        }
+    };
+
+    // Use a separate runtime to avoid deadlock with the main runtime.
+    // The main runtime is blocked waiting for the WASM call to complete,
+    // so we can't schedule work on it. Create a new runtime just for this call.
+    // TODO: Optimize by using a thread-local runtime or worker pool instead of
+    // creating a new runtime per call (performance improvement for high throughput).
+    let response_result = std::thread::scope(|s| {
+        let handle = s.spawn(|| {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!("failed to create runtime: {}", e);
+                    return None;
+                }
+            };
+
+            rt.block_on(async {
+                let outcome = if pooled {
+                    let (outcome, endpoint) = http_client
+                        .pool_call(
+                            request,
+                            &endpoints,
+                            retries,
+                            tls.as_ref(),
+                            metrics.as_deref(),
+                        )
+                        .await;
+                    used_endpoint = endpoint;
+                    outcome
+                } else {
+                    http_client.call_with_tls(request, tls.as_ref()).await
+                };
+                match outcome {
+                    Ok(mut response) => {
+                        // Strip body into side-channel to avoid base64
+                        // encoding in the JSON metadata.
+                        let body = response.body.take();
+                        let json = serde_json::to_vec(&response).ok();
+                        Some((json, body))
+                    }
+                    Err(e) => {
+                        tracing::error!("HTTP call failed: {}", e);
+                        // Return error response
+                        let error_response = match e {
+                            crate::http_client::HttpClientError::Timeout => {
+                                HttpClientResponse::error(
+                                    504,
+                                    "urn:barbacane:error:upstream-timeout",
+                                    "Gateway Timeout",
+                                    "Upstream request timed out",
+                                )
+                            }
+                            crate::http_client::HttpClientError::ConnectionFailed(_) => {
+                                HttpClientResponse::error(
+                                    502,
+                                    "urn:barbacane:error:upstream-unavailable",
+                                    "Bad Gateway",
+                                    "Failed to connect to upstream",
+                                )
+                            }
+                            _ => HttpClientResponse::error(
+                                502,
+                                "urn:barbacane:error:upstream-unavailable",
+                                "Bad Gateway",
+                                &e.to_string(),
+                            ),
+                        };
+                        let json = serde_json::to_vec(&error_response).ok();
+                        Some((json, None))
+                    }
+                }
+            })
+        });
+
+        match handle.join() {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("worker thread panicked: {:?}", e);
+                None
+            }
+        }
+    });
+
+    if let Some(endpoint) = &used_endpoint {
+        span.record("upstream_endpoint", endpoint.as_str());
+    }
+
+    // Refresh the execution deadline after blocking HTTP I/O — see
+    // the host_kafka_publish handler for the rationale.
+    let deadline = caller.data().max_execution_ms.max(1);
+    caller.as_context_mut().set_epoch_deadline(deadline);
+
+    match response_result {
+        Some((Some(json), body)) => {
+            let len = json.len() as i32;
+            caller.data_mut().last_http_result = Some(json);
+            caller.data_mut().http_response_body = body;
+            len
+        }
+        _ => -1,
     }
 }
 
@@ -1302,153 +1483,24 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
         .func_wrap(
             "barbacane",
             "host_http_call",
-            |mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
-                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                    Some(m) => m,
-                    None => return -1,
-                };
-
-                let start = req_ptr as usize;
-                let end = start.saturating_add(req_len as usize);
-                let data = memory.data(&caller);
-
-                if end > data.len() {
-                    return -1;
-                }
-
-                // Parse the request JSON from plugin format
-                let plugin_request: PluginHttpRequest =
-                    match serde_json::from_slice(&data[start..end]) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::error!("failed to parse HTTP request: {}", e);
-                            return -1;
-                        }
-                    };
-
-                // Body priority: side-channel (host_http_request_body_set) > JSON body.
-                // Side-channel avoids base64 overhead for large payloads.
-                let body = caller
-                    .data_mut()
-                    .http_request_body
-                    .take()
-                    .or(plugin_request.body);
-
-                let tls = plugin_request.tls;
-                let request = HttpClientRequest {
-                    method: plugin_request.method,
-                    url: plugin_request.url,
-                    headers: plugin_request.headers.into_iter().collect(),
-                    body,
-                    timeout: plugin_request
-                        .timeout_ms
-                        .map(std::time::Duration::from_millis),
-                };
-
-                // Get the HTTP client
-                let http_client = match caller.data().http_client.clone() {
-                    Some(c) => c,
-                    None => {
-                        tracing::error!("HTTP client not available");
-                        return -1;
-                    }
-                };
-
-                // Use a separate runtime to avoid deadlock with the main runtime.
-                // The main runtime is blocked waiting for the WASM call to complete,
-                // so we can't schedule work on it. Create a new runtime just for this call.
-                // TODO: Optimize by using a thread-local runtime or worker pool instead of
-                // creating a new runtime per call (performance improvement for high throughput).
-                let response_result = std::thread::scope(|s| {
-                    let handle = s.spawn(|| {
-                        let rt = match tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            Ok(rt) => rt,
-                            Err(e) => {
-                                tracing::error!("failed to create runtime: {}", e);
-                                return None;
-                            }
-                        };
-
-                        rt.block_on(async {
-                            match http_client.call_with_tls(request, tls.as_ref()).await {
-                                Ok(mut response) => {
-                                    // Strip body into side-channel to avoid base64
-                                    // encoding in the JSON metadata.
-                                    let body = response.body.take();
-                                    let json = serde_json::to_vec(&response).ok();
-                                    Some((json, body))
-                                }
-                                Err(e) => {
-                                    tracing::error!("HTTP call failed: {}", e);
-                                    // Return error response
-                                    let error_response = match e {
-                                        crate::http_client::HttpClientError::Timeout => {
-                                            HttpClientResponse::error(
-                                                504,
-                                                "urn:barbacane:error:upstream-timeout",
-                                                "Gateway Timeout",
-                                                "Upstream request timed out",
-                                            )
-                                        }
-                                        crate::http_client::HttpClientError::CircuitOpen(host) => {
-                                            HttpClientResponse::error(
-                                                503,
-                                                "urn:barbacane:error:circuit-open",
-                                                "Service Unavailable",
-                                                &format!("Circuit breaker open for {}", host),
-                                            )
-                                        }
-                                        crate::http_client::HttpClientError::ConnectionFailed(
-                                            _,
-                                        ) => HttpClientResponse::error(
-                                            502,
-                                            "urn:barbacane:error:upstream-unavailable",
-                                            "Bad Gateway",
-                                            "Failed to connect to upstream",
-                                        ),
-                                        _ => HttpClientResponse::error(
-                                            502,
-                                            "urn:barbacane:error:upstream-unavailable",
-                                            "Bad Gateway",
-                                            &e.to_string(),
-                                        ),
-                                    };
-                                    let json = serde_json::to_vec(&error_response).ok();
-                                    Some((json, None))
-                                }
-                            }
-                        })
-                    });
-
-                    match handle.join() {
-                        Ok(result) => result,
-                        Err(e) => {
-                            tracing::error!("worker thread panicked: {:?}", e);
-                            None
-                        }
-                    }
-                });
-
-                // Refresh the execution deadline after blocking HTTP I/O — see
-                // the host_kafka_publish handler for the rationale.
-                let deadline = caller.data().max_execution_ms.max(1);
-                caller.as_context_mut().set_epoch_deadline(deadline);
-
-                match response_result {
-                    Some((Some(json), body)) => {
-                        let len = json.len() as i32;
-                        caller.data_mut().last_http_result = Some(json);
-                        caller.data_mut().http_response_body = body;
-                        len
-                    }
-                    _ => -1,
-                }
+            |caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
+                http_call(caller, req_ptr, req_len, false)
             },
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_http_call: {}", e)))?;
+
+    // host_http_pool_call - send to one endpoint of a pool (ADR-0035)
+    linker
+        .func_wrap(
+            "barbacane",
+            "host_http_pool_call",
+            |caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32| -> i32 {
+                http_call(caller, req_ptr, req_len, true)
+            },
+        )
+        .map_err(|e| {
+            WasmError::Instantiation(format!("failed to add host_http_pool_call: {}", e))
+        })?;
 
     // host_http_read_result - read HTTP response (works for both host_http_call and host_http_stream)
     add_read_result_fn(linker, "host_http_read_result", |state| {

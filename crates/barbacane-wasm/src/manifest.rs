@@ -148,6 +148,7 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "clock_now",
     "get_secret",
     "http_call",
+    "http_pool",
     "kafka_publish",
     "nats_publish",
     "ldap",
@@ -179,6 +180,14 @@ pub fn capability_to_imports(capability: &str) -> &'static [&'static str] {
             "host_http_call",
             "host_http_read_result",
             "host_http_stream",
+            "host_http_request_body_set",
+            "host_http_response_body_len",
+            "host_http_response_body_read",
+        ],
+        // A pool call (ADR-0035) uses the same result and body channels.
+        "http_pool" => &[
+            "host_http_pool_call",
+            "host_http_read_result",
             "host_http_request_body_set",
             "host_http_response_body_len",
             "host_http_response_body_read",

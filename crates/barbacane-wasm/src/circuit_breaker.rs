@@ -1,9 +1,9 @@
-//! Circuit breaker implementation for upstream resilience.
+//! Circuit breaker: the passive health of one upstream endpoint (ADR-0035).
 //!
-//! Implements a simple circuit breaker pattern:
-//! - **Closed**: Normal operation, requests flow through
-//! - **Open**: Failures exceeded threshold, requests fail fast (503)
-//! - **Half-Open**: After reset timeout, allow one request through to test
+//! - **Closed**: the endpoint takes requests.
+//! - **Open**: enough failures within the window; selection skips it.
+//! - **Half-Open**: after the reset timeout it takes requests again; the first
+//!   success closes it and a failure reopens it.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -47,6 +47,8 @@ impl Default for CircuitBreakerConfig {
 
 /// Circuit breaker for a single upstream.
 pub struct CircuitBreaker {
+    /// The endpoint, as logs show it.
+    name: String,
     config: CircuitBreakerConfig,
     /// Current failure count within the window.
     failure_count: AtomicU32,
@@ -65,7 +67,13 @@ pub struct CircuitBreaker {
 impl CircuitBreaker {
     /// Create a new circuit breaker.
     pub fn new(config: CircuitBreakerConfig) -> Self {
+        Self::named("", config)
+    }
+
+    /// Create the circuit breaker of the endpoint `name`.
+    pub fn named(name: &str, config: CircuitBreakerConfig) -> Self {
         Self {
+            name: name.to_string(),
             config,
             failure_count: AtomicU32::new(0),
             window_start: AtomicU64::new(0),
@@ -102,7 +110,7 @@ impl CircuitBreaker {
                     self.failure_count.store(0, Ordering::SeqCst);
                     self.window_start.store(0, Ordering::SeqCst);
                     self.half_open_successes.store(0, Ordering::SeqCst);
-                    tracing::info!("circuit breaker closed after successful recovery");
+                    tracing::info!(endpoint = %self.name, "circuit breaker closed after successful recovery");
                 }
             }
             CircuitState::Open => {
@@ -134,6 +142,7 @@ impl CircuitBreaker {
                         *state = CircuitState::Open;
                         self.opened_at.store(now, Ordering::SeqCst);
                         tracing::warn!(
+                            endpoint = %self.name,
                             failures = 1,
                             threshold = self.config.failure_threshold,
                             "circuit breaker opened"
@@ -147,6 +156,7 @@ impl CircuitBreaker {
                         *state = CircuitState::Open;
                         self.opened_at.store(now, Ordering::SeqCst);
                         tracing::warn!(
+                            endpoint = %self.name,
                             failures = count,
                             threshold = self.config.failure_threshold,
                             "circuit breaker opened"
@@ -159,7 +169,7 @@ impl CircuitBreaker {
                 *state = CircuitState::Open;
                 self.opened_at.store(now, Ordering::SeqCst);
                 self.half_open_successes.store(0, Ordering::SeqCst);
-                tracing::warn!("circuit breaker reopened after half-open failure");
+                tracing::warn!(endpoint = %self.name, "circuit breaker reopened after half-open failure");
             }
             CircuitState::Open => {
                 // Already open, nothing to do
@@ -177,7 +187,7 @@ impl CircuitBreaker {
             if now > opened_at + reset_ms {
                 *state = CircuitState::HalfOpen;
                 self.half_open_successes.store(0, Ordering::SeqCst);
-                tracing::info!("circuit breaker transitioned to half-open");
+                tracing::info!(endpoint = %self.name, "circuit breaker transitioned to half-open");
             }
         }
     }

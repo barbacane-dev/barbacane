@@ -28,6 +28,26 @@ pub struct HttpRequest {
     /// TLS settings for the connection: a client certificate, a CA.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls: Option<TlsSettings>,
+    /// The endpoints of a pool, for [`pool_call`]. `url` then holds the path
+    /// and query, and the host puts the endpoint it selects in front of it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<Endpoint>,
+    /// For [`pool_call`]: how many other endpoints may be tried (default 1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retries: Option<u32>,
+}
+
+/// One endpoint of a pool: a base URL and its relative share of requests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Endpoint {
+    pub url: String,
+    #[serde(default = "default_weight")]
+    pub weight: u32,
+}
+
+fn default_weight() -> u32 {
+    1
 }
 
 /// TLS settings for an outbound request: a client certificate and key for
@@ -116,13 +136,42 @@ pub fn call(request: &HttpRequest, body_bytes: Option<&[u8]>) -> Result<HttpResp
     #[link(wasm_import_module = "barbacane")]
     extern "C" {
         fn host_http_call(req_ptr: i32, req_len: i32) -> i32;
-        fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
     }
 
     body::set_http_request_body(body_bytes.unwrap_or(&[]));
-
     let serialized = serde_json::to_vec(request).map_err(|_| HttpError::InvalidResponse)?;
     let result_len = unsafe { host_http_call(serialized.as_ptr() as i32, serialized.len() as i32) };
+    read_response(result_len)
+}
+
+/// Send a request to one endpoint of `request.endpoints`, which the host
+/// selects, retrying on others as ADR-0035 describes. Needs the `http_pool`
+/// capability.
+#[cfg(target_arch = "wasm32")]
+pub fn pool_call(
+    request: &HttpRequest,
+    body_bytes: Option<&[u8]>,
+) -> Result<HttpResponse, HttpError> {
+    #[link(wasm_import_module = "barbacane")]
+    extern "C" {
+        fn host_http_pool_call(req_ptr: i32, req_len: i32) -> i32;
+    }
+
+    body::set_http_request_body(body_bytes.unwrap_or(&[]));
+    let serialized = serde_json::to_vec(request).map_err(|_| HttpError::InvalidResponse)?;
+    let result_len =
+        unsafe { host_http_pool_call(serialized.as_ptr() as i32, serialized.len() as i32) };
+    read_response(result_len)
+}
+
+/// Read the response a host HTTP call left, given the length it returned.
+#[cfg(target_arch = "wasm32")]
+fn read_response(result_len: i32) -> Result<HttpResponse, HttpError> {
+    #[link(wasm_import_module = "barbacane")]
+    extern "C" {
+        fn host_http_read_result(buf_ptr: i32, buf_len: i32) -> i32;
+    }
+
     if result_len < 0 {
         return Err(HttpError::Unreachable);
     }
@@ -145,6 +194,15 @@ pub fn call(request: &HttpRequest, body_bytes: Option<&[u8]>) -> Result<HttpResp
 /// Non-wasm stub: no host to call.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn call(_request: &HttpRequest, _body_bytes: Option<&[u8]>) -> Result<HttpResponse, HttpError> {
+    Err(HttpError::Unsupported)
+}
+
+/// Non-wasm stub: no host to call.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pool_call(
+    _request: &HttpRequest,
+    _body_bytes: Option<&[u8]>,
+) -> Result<HttpResponse, HttpError> {
     Err(HttpError::Unsupported)
 }
 

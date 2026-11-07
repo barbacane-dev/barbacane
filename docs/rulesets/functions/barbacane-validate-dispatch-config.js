@@ -13,9 +13,11 @@ const schemas = {
   },
 
   "http-upstream": {
-    required: ["url"],
+    required: [],
     properties: {
       url: { type: "string" },
+      endpoints: { type: "array" },
+      retries: { type: "integer", minimum: 0 },
       path: { type: "string" },
       timeout: { type: "number", minimum: 0 },
       tls: { type: "object" },

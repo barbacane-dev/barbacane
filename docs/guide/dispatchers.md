@@ -132,7 +132,9 @@ x-barbacane-dispatch:
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `url` | string | Yes | - | Base URL of the upstream (must be HTTPS in production) |
+| `url` | string | One of `url`, `endpoints` | - | Base URL of the upstream (must be HTTPS in production) |
+| `endpoints` | array | One of `url`, `endpoints` | - | Instances of the upstream to balance requests across (see below) |
+| `retries` | integer | No | 1 | With `endpoints`: how many other endpoints a failed request may be sent to |
 | `path` | string | No | Same as operation path | Upstream path template with `{param}` substitution |
 | `timeout` | number | No | 30.0 | Request timeout in seconds |
 | `tls` | object | No | - | Client certificate and CA for the upstream connection (see below) |
@@ -165,6 +167,33 @@ x-barbacane-dispatch:
 - `client_cert` and `client_key` go together; the config schema refuses one without the other.
 - With `ca`, the upstream's certificate is verified against that CA only: the built-in roots are not trusted alongside it.
 - Clients are built once per distinct `tls` setting and reused across requests.
+
+##### Load balancing across endpoints
+
+List a backend's instances under `endpoints` instead of `url`, each with a `url` and an optional `weight` (at least 1, default 1):
+
+```yaml
+x-barbacane-dispatch:
+  name: http-upstream
+  config:
+    endpoints:
+      - url: https://orders-1.internal:8443
+      - url: https://orders-2.internal:8443
+      - url: https://orders-3.internal:8443
+        weight: 2
+    path: /orders/{orderId}
+    timeout: 10
+    retries: 1
+```
+
+- **Selection**: smooth weighted round-robin. With equal weights it is plain round-robin; an endpoint with weight 2 gets two turns in four here, interleaved with the others. Operations listing the same endpoints and weights share one rotation.
+- **Health**: each endpoint has a circuit breaker, keyed by `scheme://host:port`. A transport failure (connect error or timeout, TLS handshake) or a `502`, `503` or `504` counts as a failure; any other response, `500` included, as a success. Five failures within 60 seconds open the breaker, and the endpoint is skipped; after 30 seconds it takes requests again, the first success closes it and a failure reopens it. When every endpoint is open, requests go to them anyway, so that a burst of false positives does not become an outage.
+- **Retries**: a request that never reached its endpoint is sent to the next one whatever its method. One that was sent and answered `502`, `503` or `504`, or not answered in time, is sent to another endpoint only if its method is idempotent (`GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT`, `DELETE`). `retries` bounds the extra attempts, at most the number of other endpoints, and every attempt shares `timeout`.
+- **What applies to `url` applies to every endpoint**: `E1031` for a plaintext URL, the egress guard, and `tls`, which every endpoint of the list uses.
+- `url` and `endpoints` are exclusive, and `retries` needs `endpoints`; the config schema refuses anything else (`E1023`).
+- An upstream given as a single `url` has no circuit breaker: failing fast on the only endpoint would answer 503 without sending the request anywhere else.
+- Rotation and breaker state carry over when a new artifact is loaded, for the pools and endpoints it still lists.
+- The plugin needs the `http_pool` capability, so a gateway without pool support refuses this `http-upstream.wasm` when it loads it.
 
 #### Path Parameters
 

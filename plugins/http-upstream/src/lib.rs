@@ -15,8 +15,19 @@ use std::collections::BTreeMap;
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
 pub struct HttpUpstreamDispatcher {
-    /// Base URL of the upstream (e.g., https://api.example.com).
-    url: String,
+    /// Base URL of the upstream (e.g., https://api.example.com). Exclusive
+    /// with `endpoints`.
+    #[serde(default)]
+    url: Option<String>,
+
+    /// Instances of the upstream to balance requests across (ADR-0035).
+    #[serde(default)]
+    endpoints: Option<Vec<http::Endpoint>>,
+
+    /// With `endpoints`: how many other endpoints a failed request may be
+    /// sent to (default 1).
+    #[serde(default)]
+    retries: Option<u32>,
 
     /// Path template for the upstream request.
     /// Supports `{param}` substitution from path parameters.
@@ -56,16 +67,33 @@ impl HttpUpstreamDispatcher {
             None => path,
         };
 
-        // Construct the full URL with query string
-        let base_url = if self.url.ends_with('/') || upstream_path.starts_with('/') {
-            format!("{}{}", self.url.trim_end_matches('/'), upstream_path)
-        } else {
-            format!("{}{}", self.url, upstream_path)
+        let path_and_query = match &query {
+            Some(qs) if !qs.is_empty() => format!("{}?{}", upstream_path, qs),
+            _ => upstream_path,
         };
 
-        let full_url = match &query {
-            Some(qs) if !qs.is_empty() => format!("{}?{}", base_url, qs),
-            _ => base_url,
+        // A single upstream gets the full URL; a pool gets the path and query,
+        // and the host puts the endpoint it selects in front of it.
+        let (url, scheme_source) = match (&self.url, &self.endpoints) {
+            (Some(base), _) => {
+                let full = if base.ends_with('/') || path_and_query.starts_with('/') {
+                    format!("{}{}", base.trim_end_matches('/'), path_and_query)
+                } else {
+                    format!("{}{}", base, path_and_query)
+                };
+                (full, base.as_str())
+            }
+            (None, Some(endpoints)) if !endpoints.is_empty() => {
+                (path_and_query, endpoints[0].url.as_str())
+            }
+            _ => {
+                return self.error_response(
+                    500,
+                    "Internal Server Error",
+                    "no upstream configured",
+                    "neither url nor endpoints is set",
+                );
+            }
         };
 
         // Build headers to send to upstream
@@ -86,7 +114,7 @@ impl HttpUpstreamDispatcher {
         if let Some(host) = req_headers.get("host") {
             headers.insert("x-forwarded-host".to_string(), host.clone());
         }
-        let proto = if self.url.starts_with("https://") {
+        let proto = if scheme_source.starts_with("https://") {
             "https"
         } else {
             "http"
@@ -99,13 +127,20 @@ impl HttpUpstreamDispatcher {
         // response body back the same way.
         let http_request = http::HttpRequest {
             method,
-            url: full_url,
+            url,
             headers,
             timeout_ms: Some(timeout_ms),
             tls: self.tls.clone(),
+            endpoints: self.endpoints.clone().unwrap_or_default(),
+            retries: self.retries,
         };
 
-        let http_response = match http::call(&http_request, body.as_deref()) {
+        let result = if http_request.endpoints.is_empty() {
+            http::call(&http_request, body.as_deref())
+        } else {
+            http::pool_call(&http_request, body.as_deref())
+        };
+        let http_response = match result {
             Ok(resp) => resp,
             Err(http::HttpError::Unreachable) | Err(http::HttpError::Unsupported) => {
                 return self.error_response(
@@ -204,7 +239,9 @@ mod tests {
     #[test]
     fn test_substitute_path_params_single() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -220,7 +257,9 @@ mod tests {
     #[test]
     fn test_substitute_path_params_multiple() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -239,7 +278,9 @@ mod tests {
     #[test]
     fn test_substitute_path_params_unmatched() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -255,7 +296,9 @@ mod tests {
     #[test]
     fn test_substitute_path_params_no_params() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -270,7 +313,9 @@ mod tests {
     #[test]
     fn test_error_response_502() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -295,7 +340,9 @@ mod tests {
     #[test]
     fn test_error_response_503() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -317,7 +364,9 @@ mod tests {
     #[test]
     fn test_error_response_504() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -335,7 +384,9 @@ mod tests {
     #[test]
     fn test_error_response_other_status() {
         let dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -358,9 +409,39 @@ mod tests {
     fn test_config_deserialization_required_url() {
         let json = r#"{"url": "http://api.example.com"}"#;
         let config: HttpUpstreamDispatcher = serde_json::from_str(json).unwrap();
-        assert_eq!(config.url, "http://api.example.com");
+        assert_eq!(config.url.as_deref(), Some("http://api.example.com"));
         assert_eq!(config.path, None);
         assert_eq!(config.timeout, 30.0);
+    }
+
+    #[test]
+    fn endpoints_and_retries_deserialize_and_travel_with_the_request() {
+        let json = r#"{"endpoints": [
+            {"url": "https://a.internal:8443"},
+            {"url": "https://b.internal:8443", "weight": 2}
+        ], "retries": 1}"#;
+        let config: HttpUpstreamDispatcher = serde_json::from_str(json).unwrap();
+        let endpoints = config.endpoints.clone().expect("endpoints");
+        assert_eq!(endpoints[0].weight, 1, "weight defaults to 1");
+        assert_eq!(endpoints[1].weight, 2);
+
+        let mut request = http::HttpRequest::new("GET", "/orders/1?x=y");
+        request.endpoints = endpoints;
+        request.retries = config.retries;
+        let sent: serde_json::Value = serde_json::to_value(&request).unwrap();
+        assert_eq!(sent["url"], "/orders/1?x=y");
+        assert_eq!(sent["endpoints"][1]["url"], "https://b.internal:8443");
+        assert_eq!(sent["retries"], 1);
+    }
+
+    #[test]
+    fn a_single_url_request_carries_no_endpoints() {
+        let sent =
+            serde_json::to_value(http::HttpRequest::new("GET", "https://a.example")).unwrap();
+        assert!(
+            sent.get("endpoints").is_none() && sent.get("retries").is_none(),
+            "{sent}"
+        );
     }
 
     #[test]
@@ -395,7 +476,7 @@ mod tests {
     fn test_config_deserialization_with_path() {
         let json = r#"{"url": "http://api.example.com", "path": "/v1/users/{id}"}"#;
         let config: HttpUpstreamDispatcher = serde_json::from_str(json).unwrap();
-        assert_eq!(config.url, "http://api.example.com");
+        assert_eq!(config.url.as_deref(), Some("http://api.example.com"));
         assert_eq!(config.path, Some("/v1/users/{id}".to_string()));
     }
 
@@ -406,17 +487,30 @@ mod tests {
         assert_eq!(config.timeout, 60.0);
     }
 
+    /// The config schema requires one of `url` and `endpoints` (E1023); a
+    /// config that reaches the plugin with neither is answered 500.
     #[test]
-    fn test_config_deserialization_missing_url() {
-        let json = r#"{"timeout": 60.0}"#;
-        let result: Result<HttpUpstreamDispatcher, _> = serde_json::from_str(json);
-        assert!(result.is_err());
+    fn a_config_without_url_or_endpoints_answers_500() {
+        let mut dispatcher: HttpUpstreamDispatcher =
+            serde_json::from_str(r#"{"timeout": 60.0}"#).unwrap();
+        let response = dispatcher.dispatch(Request {
+            method: "GET".to_string(),
+            path: "/x".to_string(),
+            query: None,
+            headers: BTreeMap::new(),
+            body: None,
+            client_ip: "127.0.0.1".to_string(),
+            path_params: BTreeMap::new(),
+        });
+        assert_eq!(response.status, 500);
     }
 
     #[test]
     fn test_dispatch_returns_502_on_native() {
         let mut dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
@@ -430,7 +524,9 @@ mod tests {
     #[test]
     fn test_dispatch_with_body_returns_502_on_native() {
         let mut dispatcher = HttpUpstreamDispatcher {
-            url: "http://example.com".to_string(),
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
             path: None,
             timeout: 30.0,
             tls: None,
