@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use arc_swap::ArcSwap;
 
 use bytes::Bytes;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Body, Frame, Incoming};
@@ -4987,7 +4987,17 @@ async fn main() -> ExitCode {
     // This must be done before any TLS operations. Ignore errors if already installed.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let cli = Cli::parse();
+    // `control` is built from the control plane's spec rather than derived.
+    let matches = Cli::command()
+        .subcommand(barbacane_lib::control::command())
+        .get_matches();
+    if let Some(("control", control)) = matches.subcommand() {
+        return barbacane_lib::control::run(control).await;
+    }
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(e) => e.exit(),
+    };
 
     match cli.command {
         Commands::Compile {

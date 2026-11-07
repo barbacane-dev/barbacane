@@ -544,6 +544,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "uuid",
  "wat",
  "wiremock",
  "yaml_serde",

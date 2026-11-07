@@ -630,6 +630,10 @@ jobs:
       - name: Run security suite
         run: cargo test -p barbacane-test --test security -- --test-threads=2
 
+      # `barbacane control` against a control plane on the same database.
+      - name: Run the control CLI tests
+        run: cargo test -p barbacane-test --test control_cli -- --test-threads=2
+
   # Benchmark regression check
   # Triggered by: adding the "run-benchmarks" label, or commenting "/bench" on a PR.
   benchmarks:

@@ -19,6 +19,7 @@ barbacane <COMMAND> [OPTIONS]
 | `compile` | Compile OpenAPI spec(s) into a `.bca` artifact |
 | `validate` | Validate spec(s) without compiling |
 | `serve` | Run the gateway server |
+| `control` | Manage a control plane: projects, specs, plugins, artifacts, data planes |
 
 ---
 
@@ -362,6 +363,170 @@ validated 1 spec(s): 0 valid, 1 invalid
 |------|---------|
 | 0 | All specs valid |
 | 1 | One or more specs have errors |
+
+---
+
+## barbacane control
+
+A client for the [control plane](../guide/control-plane.md)'s REST API. Its commands are generated from the control plane's OpenAPI spec, one per operation: `barbacane control <resource> <command>`, with path and query parameters as flags.
+
+```bash
+barbacane control <resource> <command> [FLAGS]
+barbacane control push --project <ID> <SPEC>...
+barbacane control deploy --project <ID> [--artifact <ID>] [--wait]
+```
+
+### Connection and output
+
+| Option | Environment | Default | Description |
+|--------|-------------|---------|-------------|
+| `--url` | `BARBACANE_CONTROL_URL` | `http://localhost:9090` | Base URL of the control-plane API |
+| `--token` | `BARBACANE_CONTROL_ADMIN_TOKEN` | - | Admin token, sent as a bearer token |
+| `--output`, `-o` | - | `table` | `table` or `json` |
+
+A request body is JSON, read with `--file` from a file or, with `--file -`, from standard input. An upload takes one flag per form field; a file field takes a path. A download (`artifacts download`, `plugins download`, `specs download-content`) writes to standard output, or to `--out FILE`.
+
+An error response is printed with its status and the problem's detail, as in `error: 404 Not Found: Project … not found`, and the command exits with status 1. So does a control plane that cannot be reached.
+
+### Workflows
+
+| Command | Description |
+|---------|-------------|
+| `push --project <ID> <SPEC>...` | Upload the specs to the project, compile them into one artifact (the first spec, with the others bundled), and wait for the compilation; exits 1 when it fails. `--no-compile` uploads only; `--timeout` (default 120 seconds) bounds the wait |
+| `deploy --project <ID>` | Deploy an artifact (`--artifact`, or the project's latest) to the project's data planes. With `--wait`, wait until every connected data plane runs it, up to `--timeout` |
+
+```bash
+export BARBACANE_CONTROL_URL=https://control.example.com
+export BARBACANE_CONTROL_ADMIN_TOKEN=...
+
+barbacane control projects create --file - <<< '{"name": "orders"}'
+barbacane control project-plugins add --project-id <ID> --file - \
+  <<< '{"plugin_name": "http-upstream", "plugin_version": "0.1.0"}'
+barbacane control push --project <ID> orders.yaml
+barbacane control deploy --project <ID> --wait
+barbacane control data-planes list --project-id <ID> -o json
+```
+
+### Commands
+
+<!-- barbacane-control-commands:start -->
+
+#### api-keys
+
+API key management for data plane authentication.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `api-keys list` | `GET /projects/{projectId}/api-keys` | `--project-id` |
+| `api-keys create` | `POST /projects/{projectId}/api-keys` | `--project-id`, `--file` |
+| `api-keys revoke` | `DELETE /projects/{projectId}/api-keys/{keyId}` | `--project-id`, `--key-id` |
+
+#### artifacts
+
+Compiled artifact management.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `artifacts list` | `GET /artifacts` | - |
+| `artifacts get` | `GET /artifacts/{id}` | `--id` |
+| `artifacts delete` | `DELETE /artifacts/{id}` | `--id` |
+| `artifacts download` | `GET /artifacts/{id}/download` | `--id`, `--out` (optional) |
+| `artifacts list-project` | `GET /projects/{projectId}/artifacts` | `--project-id` |
+
+#### compilations
+
+Async compilation job management.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `compilations get` | `GET /compilations/{id}` | `--id` |
+| `compilations delete` | `DELETE /compilations/{id}` | `--id` |
+| `compilations list` | `GET /projects/{projectId}/compilations` | `--project-id` |
+| `compilations list-spec` | `GET /specs/{id}/compilations` | `--id` |
+| `compilations start` | `POST /specs/{id}/compile` | `--id`, `--file` (optional) |
+
+#### data-planes
+
+Connected data plane management.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `data-planes list` | `GET /projects/{projectId}/data-planes` | `--project-id` |
+| `data-planes get` | `GET /projects/{projectId}/data-planes/{dataPlaneId}` | `--project-id`, `--data-plane-id` |
+| `data-planes disconnect` | `DELETE /projects/{projectId}/data-planes/{dataPlaneId}` | `--project-id`, `--data-plane-id` |
+| `data-planes deploy` | `POST /projects/{projectId}/deploy` | `--project-id`, `--file` (optional) |
+
+#### health
+
+Health check endpoints.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `health check` | `GET /health` | - |
+
+#### operations
+
+The operations of a project's specs, and their plugin bindings.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `operations list` | `GET /projects/{projectId}/operations` | `--project-id` |
+| `operations patch-spec` | `PATCH /specs/{id}/operations` | `--id`, `--file` |
+
+#### plugins
+
+Plugin registry management.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `plugins list` | `GET /plugins` | `--type` (optional), `--name` (optional) |
+| `plugins register` | `POST /plugins` | `--capabilities` (optional), `--config-schema` (optional), `--description` (optional), `--file`, `--name`, `--type`, `--version` |
+| `plugins list-versions` | `GET /plugins/{name}` | `--name` |
+| `plugins get` | `GET /plugins/{name}/{version}` | `--name`, `--version` |
+| `plugins delete` | `DELETE /plugins/{name}/{version}` | `--name`, `--version` |
+| `plugins download` | `GET /plugins/{name}/{version}/download` | `--name`, `--version`, `--out` (optional) |
+
+#### project-plugins
+
+The plugins a project uses, and their configuration.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `project-plugins list` | `GET /projects/{projectId}/plugins` | `--project-id` |
+| `project-plugins add` | `POST /projects/{projectId}/plugins` | `--project-id`, `--file` |
+| `project-plugins update` | `PUT /projects/{projectId}/plugins/{name}` | `--project-id`, `--name`, `--file` |
+| `project-plugins remove` | `DELETE /projects/{projectId}/plugins/{name}` | `--project-id`, `--name` |
+
+#### projects
+
+Project management.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `projects init` | `POST /init` | `--file` |
+| `projects list` | `GET /projects` | - |
+| `projects create` | `POST /projects` | `--file` |
+| `projects get` | `GET /projects/{projectId}` | `--project-id` |
+| `projects update` | `PUT /projects/{projectId}` | `--project-id`, `--file` |
+| `projects delete` | `DELETE /projects/{projectId}` | `--project-id` |
+
+#### specs
+
+API specification management.
+
+| Command | Request | Flags |
+|---------|---------|-------|
+| `specs list-project` | `GET /projects/{projectId}/specs` | `--project-id` |
+| `specs upload-project` | `POST /projects/{projectId}/specs` | `--project-id`, `--file` |
+| `specs list` | `GET /specs` | `--type` (optional), `--name` (optional) |
+| `specs upload` | `POST /specs` | `--file` |
+| `specs get` | `GET /specs/{id}` | `--id` |
+| `specs delete` | `DELETE /specs/{id}` | `--id` |
+| `specs get-compliance` | `GET /specs/{id}/compliance` | `--id` |
+| `specs download-content` | `GET /specs/{id}/content` | `--id`, `--revision` (optional), `--out` (optional) |
+| `specs get-history` | `GET /specs/{id}/history` | `--id` |
+
+<!-- barbacane-control-commands:end -->
 
 ---
 
