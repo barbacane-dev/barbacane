@@ -116,6 +116,21 @@ pub struct RouteLabels {
     pub api: String,
 }
 
+/// Upstream endpoint labels: `scheme://host:port`, so the number of values is
+/// the number of endpoints an artifact lists.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct EndpointLabels {
+    pub endpoint: String,
+}
+
+/// Upstream endpoint labels with the outcome of an attempt: `success`, or
+/// `failure` for a transport error or a `502`, `503` or `504`.
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+pub struct EndpointOutcomeLabels {
+    pub endpoint: String,
+    pub outcome: String,
+}
+
 /// Connection labels.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ConnectionLabels {
@@ -201,6 +216,12 @@ pub struct MetricsRegistry {
 
     // Deprecation metrics
     pub deprecated_route_requests_total: Family<RouteLabels, Counter>,
+
+    // Upstream endpoint pools (ADR-0035)
+    pub upstream_endpoint_requests_total: Family<EndpointOutcomeLabels, Counter>,
+    pub upstream_endpoint_retries_total: Family<EndpointLabels, Counter>,
+    /// 0 closed, 1 open, 2 half-open.
+    pub upstream_endpoint_circuit_state: Family<EndpointLabels, Gauge>,
 
     // Plugin metrics (dynamically registered)
     pub plugin_counters: Family<PluginMetricLabels, Counter>,
@@ -400,6 +421,26 @@ impl MetricsRegistry {
             deprecated_route_requests_total.clone(),
         );
 
+        // Upstream endpoint pools
+        let upstream_endpoint_requests_total = Family::<EndpointOutcomeLabels, Counter>::default();
+        registry.register(
+            "barbacane_upstream_endpoint_requests",
+            "Attempts sent to a pool endpoint, by outcome",
+            upstream_endpoint_requests_total.clone(),
+        );
+        let upstream_endpoint_retries_total = Family::<EndpointLabels, Counter>::default();
+        registry.register(
+            "barbacane_upstream_endpoint_retries",
+            "Attempts sent to a pool endpoint after another endpoint failed",
+            upstream_endpoint_retries_total.clone(),
+        );
+        let upstream_endpoint_circuit_state = Family::<EndpointLabels, Gauge>::default();
+        registry.register(
+            "barbacane_upstream_endpoint_circuit_state",
+            "Circuit breaker state of a pool endpoint: 0 closed, 1 open, 2 half-open",
+            upstream_endpoint_circuit_state.clone(),
+        );
+
         // Plugin metrics
         let plugin_counters = Family::<PluginMetricLabels, Counter>::default();
         registry.register(
@@ -448,6 +489,9 @@ impl MetricsRegistry {
             wasm_execution_duration_seconds,
             wasm_traps_total,
             deprecated_route_requests_total,
+            upstream_endpoint_requests_total,
+            upstream_endpoint_retries_total,
+            upstream_endpoint_circuit_state,
             plugin_counters,
             plugin_histograms,
             plugin_metrics_dropped_total,
@@ -626,6 +670,34 @@ impl MetricsRegistry {
         if trap {
             self.wasm_traps_total.get_or_create(&labels).inc();
         }
+    }
+
+    /// Record an attempt sent to a pool endpoint.
+    pub fn record_upstream_endpoint(&self, endpoint: &str, success: bool) {
+        self.upstream_endpoint_requests_total
+            .get_or_create(&EndpointOutcomeLabels {
+                endpoint: endpoint.to_string(),
+                outcome: if success { "success" } else { "failure" }.to_string(),
+            })
+            .inc();
+    }
+
+    /// Record an attempt sent to a pool endpoint after another one failed.
+    pub fn record_upstream_retry(&self, endpoint: &str) {
+        self.upstream_endpoint_retries_total
+            .get_or_create(&EndpointLabels {
+                endpoint: endpoint.to_string(),
+            })
+            .inc();
+    }
+
+    /// Set a pool endpoint's circuit breaker state.
+    pub fn set_upstream_circuit_state(&self, endpoint: &str, state: i64) {
+        self.upstream_endpoint_circuit_state
+            .get_or_create(&EndpointLabels {
+                endpoint: endpoint.to_string(),
+            })
+            .set(state);
     }
 
     /// Record a request to a deprecated route.

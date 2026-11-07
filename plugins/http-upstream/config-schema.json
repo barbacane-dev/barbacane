@@ -4,12 +4,42 @@
   "title": "HTTP Upstream Dispatcher Config",
   "description": "Configuration for the HTTP upstream reverse proxy dispatcher plugin",
   "type": "object",
-  "required": ["url"],
   "properties": {
     "url": {
       "type": "string",
-      "description": "Base URL of the upstream (e.g., https://api.example.com)",
+      "description": "Base URL of the upstream (e.g., https://api.example.com). Exclusive with endpoints.",
       "format": "uri"
+    },
+    "endpoints": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Instances of the upstream; each request goes to one, by weighted round-robin, skipping instances whose circuit breaker is open. Exclusive with url.",
+      "items": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Base URL of the instance"
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Relative share of requests"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "retries": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 1,
+      "description": "With endpoints: how many other endpoints a failed request may be sent to, within timeout. A request that never reached its endpoint is retried whatever its method; one that was sent, only when its method is idempotent."
     },
     "path": {
       "type": "string",
@@ -42,11 +72,46 @@
         }
       },
       "dependentRequired": {
-        "client_cert": ["client_key"],
-        "client_key": ["client_cert"]
+        "client_cert": [
+          "client_key"
+        ],
+        "client_key": [
+          "client_cert"
+        ]
       },
       "additionalProperties": false
     }
   },
+  "oneOf": [
+    {
+      "required": [
+        "url"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "endpoints"
+            ]
+          },
+          {
+            "required": [
+              "retries"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "endpoints"
+      ],
+      "not": {
+        "required": [
+          "url"
+        ]
+      }
+    }
+  ],
   "additionalProperties": false
 }

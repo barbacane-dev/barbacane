@@ -3,6 +3,7 @@
 //! This crate provides the wasmtime-based runtime for loading and executing
 //! WASM plugins (middlewares and dispatchers) according to SPEC-003.
 
+pub mod balancer;
 mod body_access;
 pub mod broker;
 pub mod cache;

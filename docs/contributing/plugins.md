@@ -357,6 +357,11 @@ a PEM file, which the host reads only from under `BARBACANE_SECRETS_DIR`; with
 `ca`, the built-in roots are not trusted. `HttpRequest` implements `Default`, so
 a struct literal can end with `..Default::default()`.
 
+`http::pool_call` sends a request to one of `request.endpoints`, which the host
+selects and retries as the [`http-upstream` endpoints](../guide/dispatchers.md#load-balancing-across-endpoints)
+describe; `request.url` then holds the path and query. It needs the `http_pool`
+capability.
+
 ### Hashing
 
 ```toml
