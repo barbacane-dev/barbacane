@@ -74,6 +74,11 @@ curl http://localhost:8081/metrics
 | `barbacane_middleware_duration_seconds` | histogram | Middleware execution time |
 | `barbacane_dispatch_duration_seconds` | histogram | Dispatcher execution time |
 | `barbacane_wasm_execution_duration_seconds` | histogram | WASM plugin execution time |
+| `barbacane_upstream_endpoint_requests_total` | counter | Attempts sent to an `endpoints` pool member, by endpoint and outcome (`success`, `failure`) |
+| `barbacane_upstream_endpoint_retries_total` | counter | Attempts sent to an endpoint after another one failed, by endpoint |
+| `barbacane_upstream_endpoint_circuit_state` | gauge | An endpoint's circuit breaker: 0 closed, 1 open, 2 half-open |
+
+An endpoint label is `scheme://host:port`, never the full URL, so it carries no user information or query; its values are the endpoints the artifact lists. The request span records the endpoint a dispatch used as `upstream_endpoint`, and breaker transitions are logged with it.
 
 Labels stay bounded whatever clients send. `path` is the route template, or one label for requests that match no route. `method` is `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `CONNECT`, `OPTIONS`, `TRACE`, `PATCH` or `QUERY`, and `OTHER` for any other method, including one declared under OpenAPI 3.2 `additionalOperations`.
 

@@ -1221,13 +1221,12 @@ fn compile_inner(
 
             // Check for plaintext HTTP upstream URLs (E1031)
             if !options.allow_plaintext {
-                if let Some(url) = extract_upstream_url(&dispatch.config) {
-                    if url.starts_with("http://") {
-                        return Err(CompileError::PlaintextUpstream(format!(
-                            "{} {} in '{}' - upstream URL: {}",
-                            op.method, op.path, spec_file, url
-                        )));
-                    }
+                let urls = extract_upstream_urls(&dispatch.config);
+                if let Some(url) = urls.iter().find(|u| u.starts_with("http://")) {
+                    return Err(CompileError::PlaintextUpstream(format!(
+                        "{} {} in '{}' - upstream URL: {}",
+                        op.method, op.path, spec_file, url
+                    )));
                 }
             }
 
@@ -2015,26 +2014,27 @@ fn scan_plaintext_secrets(
     }
 }
 
-/// Extract upstream URL from dispatch config, if present.
-///
-/// Looks for common URL fields in the dispatch config:
-/// - `url` (e.g., for http-upstream dispatcher)
-/// - `upstream` (alternative field name)
-fn extract_upstream_url(config: &serde_json::Value) -> Option<String> {
-    // Check for "url" field
+/// The upstream URLs a dispatch config names: `url`, `upstream` when it is a
+/// URL rather than a name, and the `url` of every entry of `endpoints`.
+fn extract_upstream_urls(config: &serde_json::Value) -> Vec<String> {
+    let mut urls = Vec::new();
     if let Some(url) = config.get("url").and_then(|v| v.as_str()) {
-        return Some(url.to_string());
+        urls.push(url.to_string());
     }
-
-    // Check for "upstream" field (which could be a URL or a name)
     if let Some(upstream) = config.get("upstream").and_then(|v| v.as_str()) {
-        // Only return if it looks like a URL
         if upstream.starts_with("http://") || upstream.starts_with("https://") {
-            return Some(upstream.to_string());
+            urls.push(upstream.to_string());
         }
     }
-
-    None
+    if let Some(endpoints) = config.get("endpoints").and_then(|v| v.as_array()) {
+        urls.extend(
+            endpoints
+                .iter()
+                .filter_map(|e| e.get("url").and_then(|v| v.as_str()))
+                .map(str::to_string),
+        );
+    }
+    urls
 }
 
 /// Validate path template syntax (E1054).
@@ -4267,6 +4267,40 @@ paths:
 
         let routes = load_routes(&output_path).unwrap();
         assert_eq!(routes.operations.len(), 2);
+    }
+
+    /// E1031 applies to every endpoint of a pool, not only to `url`.
+    #[test]
+    fn compile_rejects_a_plaintext_endpoint() {
+        let temp = TempDir::new().unwrap();
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /proxy:
+    get:
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          endpoints:
+            - url: "https://a.internal:8443"
+            - url: "http://b.internal:8080"
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+        match compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        ) {
+            Err(CompileError::PlaintextUpstream(message)) => {
+                assert!(message.contains("http://b.internal:8080"), "{message}")
+            }
+            other => panic!("expected E1031, got {other:?}"),
+        }
     }
 
     #[test]

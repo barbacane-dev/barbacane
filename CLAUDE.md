@@ -97,6 +97,7 @@ host_functions = ["log", "context_get"]
 | `clock_now` | `host_clock_now` |
 | `get_secret` | `host_get_secret`, `host_secret_read_result` |
 | `http_call` | `host_http_call`, `host_http_read_result` |
+| `http_pool` | `host_http_pool_call`, `host_http_read_result` |
 | `kafka_publish` | `host_kafka_publish`, `host_broker_read_result` |
 | `nats_publish` | `host_nats_publish`, `host_broker_read_result` |
 | `ldap` | `host_ldap_bind`, `host_ldap_search`, `host_ldap_read_result` |
