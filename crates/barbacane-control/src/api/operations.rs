@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::db::SpecsRepository;
+use crate::db::{ProjectsRepository, SpecsRepository};
 use crate::error::ProblemDetails;
 
 use super::router::AppState;
@@ -106,6 +106,11 @@ pub async fn get_project_operations(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<ProjectOperationsResponse>, ProblemDetails> {
+    ProjectsRepository::new(state.pool.clone())
+        .get_by_id(project_id)
+        .await?
+        .ok_or_else(|| ProblemDetails::not_found(format!("Project {} not found", project_id)))?;
+
     let repo = SpecsRepository::new(state.pool.clone());
     let specs = repo.list_for_project(project_id).await?;
 

@@ -32,6 +32,10 @@ tags:
     description: Connected data plane management
   - name: ApiKeys
     description: API key management for data plane authentication
+  - name: ProjectPlugins
+    description: The plugins a project uses, and their configuration
+  - name: Operations
+    description: The operations of a project's specs, and their plugin bindings
 
 paths:
   /health:
@@ -59,6 +63,7 @@ paths:
         (barbacane.yaml, api.yaml, .gitignore) that can be downloaded.
       operationId: initProject
       requestBody:
+        description: The project to generate
         required: true
         content:
           application/json:
@@ -114,6 +119,7 @@ paths:
         The spec name is extracted from the OpenAPI/AsyncAPI title field.
       operationId: uploadSpec
       requestBody:
+        description: The spec file to upload
         required: true
         content:
           multipart/form-data:
@@ -268,6 +274,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/specId'
       requestBody:
+        description: Compilation options
         content:
           application/json:
             schema:
@@ -383,6 +390,7 @@ paths:
       description: Register a new plugin version in the registry.
       operationId: registerPlugin
       requestBody:
+        description: The plugin's WASM, manifest and config schema
         required: true
         content:
           multipart/form-data:
@@ -629,6 +637,7 @@ paths:
       description: Create a new project.
       operationId: createProject
       requestBody:
+        description: The project to create
         required: true
         content:
           application/json:
@@ -643,6 +652,12 @@ paths:
                 $ref: '#/components/schemas/Project'
         '400':
           description: Invalid request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: A project with this name exists
           content:
             application/problem+json:
               schema:
@@ -678,6 +693,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       requestBody:
+        description: The changes to make
         required: true
         content:
           application/json:
@@ -792,6 +808,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       requestBody:
+        description: The artifact to deploy
         content:
           application/json:
             schema:
@@ -845,6 +862,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       requestBody:
+        description: The key to create
         required: true
         content:
           application/json:
@@ -921,6 +939,236 @@ paths:
         '401':
           description: Invalid or missing API key
 
+  /projects/{projectId}/specs:
+    get:
+      tags: [Specs]
+      summary: List project specs
+      description: List the specs that belong to a project.
+      operationId: listProjectSpecs
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: The project's specs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Spec'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [Specs]
+      summary: Upload a spec to a project
+      description: |
+        Upload a new API specification to a project, or a new revision of a spec
+        it holds. The spec name is extracted from the OpenAPI/AsyncAPI title field.
+      operationId: uploadProjectSpec
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        description: The spec file to upload
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The OpenAPI or AsyncAPI specification file (YAML or JSON)
+      responses:
+        '201':
+          description: Spec uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /projects/{projectId}/compilations:
+    get:
+      tags: [Compilations]
+      summary: List project compilations
+      description: List the compilations of a project's specs.
+      operationId: listProjectCompilations
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: The project's compilations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Compilation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /projects/{projectId}/artifacts:
+    get:
+      tags: [Artifacts]
+      summary: List project artifacts
+      description: List the artifacts compiled for a project.
+      operationId: listProjectArtifacts
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: The project's artifacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Artifact'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /projects/{projectId}/plugins:
+    get:
+      tags: [ProjectPlugins]
+      summary: List project plugins
+      description: List the plugins a project uses, with their configuration.
+      operationId: listProjectPlugins
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: The project's plugin configurations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectPluginConfig'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [ProjectPlugins]
+      summary: Add a plugin to a project
+      description: Add a registered plugin version to a project, with its configuration.
+      operationId: addProjectPlugin
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      requestBody:
+        description: The plugin version and its configuration
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddProjectPluginRequest'
+      responses:
+        '201':
+          description: Plugin added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectPluginConfig'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The project already uses this plugin
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /projects/{projectId}/plugins/{name}:
+    put:
+      tags: [ProjectPlugins]
+      summary: Update a project plugin
+      description: Change the version, state, priority or configuration of a plugin a project uses. Fields left out keep their value.
+      operationId: updateProjectPlugin
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/pluginName'
+      requestBody:
+        description: The changes to make
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectPluginRequest'
+      responses:
+        '200':
+          description: Plugin updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectPluginConfig'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [ProjectPlugins]
+      summary: Remove a plugin from a project
+      operationId: removeProjectPlugin
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/pluginName'
+      responses:
+        '204':
+          description: Plugin removed
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /projects/{projectId}/operations:
+    get:
+      tags: [Operations]
+      summary: List project operations
+      description: |
+        List the operations of every spec in a project, with the middlewares and
+        dispatcher each one is bound to.
+      operationId: listProjectOperations
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: The operations, grouped by spec
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectOperations'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /specs/{id}/operations:
+    patch:
+      tags: [Operations]
+      summary: Change a spec's plugin bindings
+      description: |
+        Rewrite the global middlewares, and the dispatcher and middlewares of
+        listed operations, as a new revision of the spec. Fields left out are
+        unchanged.
+      operationId: patchSpecOperations
+      parameters:
+        - $ref: '#/components/parameters/specId'
+      requestBody:
+        description: The bindings to change
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchSpecOperationsRequest'
+      responses:
+        '200':
+          description: The spec's operations after the change
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpecOperations'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
 components:
   parameters:
     specId:
@@ -993,8 +1241,23 @@ components:
         type: string
         format: uuid
 
+  responses:
+    NotFound:
+      description: The resource does not exist
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    BadRequest:
+      description: The request is invalid
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
   schemas:
     HealthResponse:
+      description: The control plane's health
       type: object
       required: [status, version]
       properties:
@@ -1006,6 +1269,7 @@ components:
           description: Control plane version
 
     Spec:
+      description: An API specification held by the control plane, with its latest revision
       type: object
       required: [id, name, current_sha256, spec_type, spec_version, created_at, updated_at]
       properties:
@@ -1032,6 +1296,7 @@ components:
           format: date-time
 
     SpecRevision:
+      description: One stored revision of a spec
       type: object
       required: [revision, sha256, filename, created_at]
       properties:
@@ -1049,6 +1314,7 @@ components:
           format: date-time
 
     UploadResponse:
+      description: The result of uploading a spec
       type: object
       required: [id, name, revision, sha256]
       properties:
@@ -1063,6 +1329,7 @@ components:
           type: string
 
     Plugin:
+      description: A plugin version in the registry
       type: object
       required: [name, version, plugin_type, capabilities, config_schema, sha256, registered_at]
       properties:
@@ -1074,8 +1341,7 @@ components:
           type: string
           enum: [middleware, dispatcher]
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
         capabilities:
           type: array
           items:
@@ -1091,6 +1357,7 @@ components:
           format: date-time
 
     Artifact:
+      description: A compiled .bca artifact
       type: object
       required: [id, manifest, sha256, size_bytes, compiler_version, compiled_at]
       properties:
@@ -1113,6 +1380,7 @@ components:
           format: date-time
 
     CompileRequest:
+      description: Options for compiling a spec
       type: object
       properties:
         production:
@@ -1127,6 +1395,7 @@ components:
           description: Additional spec IDs to bundle
 
     Compilation:
+      description: A compilation job and its result
       type: object
       required: [id, spec_id, status, production, started_at]
       properties:
@@ -1147,9 +1416,8 @@ components:
             type: string
             format: uuid
         artifact_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
           description: Set when compilation succeeds
         errors:
           type: array
@@ -1163,11 +1431,11 @@ components:
           type: string
           format: date-time
         completed_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
 
     CompilationError:
+      description: An error a compilation reported
       type: object
       required: [code, message]
       properties:
@@ -1178,6 +1446,7 @@ components:
           type: string
 
     ComplianceWarning:
+      description: A finding of the spec compliance check
       type: object
       required: [code, message]
       properties:
@@ -1219,6 +1488,7 @@ components:
             $ref: '#/components/schemas/ValidationIssue'
 
     ValidationIssue:
+      description: A problem found while validating a spec
       type: object
       required: [code, message]
       properties:
@@ -1231,6 +1501,7 @@ components:
           description: JSON pointer to the error location
 
     InitRequest:
+      description: Options for generating a new project
       type: object
       required: [name]
       properties:
@@ -1251,6 +1522,7 @@ components:
           description: API version
 
     InitResponse:
+      description: The files of a generated project
       type: object
       required: [files, next_steps]
       properties:
@@ -1266,6 +1538,7 @@ components:
           description: Instructions for the user
 
     ProjectFile:
+      description: One file of a generated project
       type: object
       required: [path, content]
       properties:
@@ -1277,6 +1550,7 @@ components:
           description: File content
 
     Project:
+      description: "A project: the specs, plugins and data planes of one gateway deployment"
       type: object
       required: [id, name, created_at, updated_at]
       properties:
@@ -1287,8 +1561,7 @@ components:
           type: string
           description: Project name
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: Optional project description
         created_at:
           type: string
@@ -1298,6 +1571,7 @@ components:
           format: date-time
 
     CreateProjectRequest:
+      description: A project to create
       type: object
       required: [name]
       properties:
@@ -1309,17 +1583,18 @@ components:
           description: Optional project description
 
     UpdateProjectRequest:
+      description: Changes to a project; fields left out keep their value
       type: object
       properties:
         name:
           type: string
           description: Project name
         description:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: Project description
 
     DataPlane:
+      description: A data plane connected to the control plane
       type: object
       required: [id, project_id, status, metadata, created_at]
       properties:
@@ -1330,27 +1605,23 @@ components:
           type: string
           format: uuid
         name:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: Optional friendly name
         artifact_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
           description: Currently deployed artifact
         status:
           type: string
           enum: [online, offline, deploying]
           description: Connection status
         last_seen:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
           description: Last heartbeat timestamp
         connected_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
           description: When the data plane connected
         metadata:
           type: object
@@ -1360,6 +1631,7 @@ components:
           format: date-time
 
     ApiKey:
+      description: A data-plane API key, shown by prefix only
       type: object
       required: [id, project_id, name, key_prefix, scopes, created_at]
       properties:
@@ -1381,20 +1653,17 @@ components:
             type: string
           description: Granted scopes
         expires_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         last_used_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         created_at:
           type: string
           format: date-time
         revoked_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
 
     ApiKeyCreated:
       type: object
@@ -1417,14 +1686,14 @@ components:
           items:
             type: string
         expires_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         created_at:
           type: string
           format: date-time
 
     CreateApiKeyRequest:
+      description: A data-plane API key to create
       type: object
       required: [name]
       properties:
@@ -1442,6 +1711,7 @@ components:
           description: Optional expiration time
 
     DeployRequest:
+      description: The artifact to deploy to a project's data planes
       type: object
       properties:
         artifact_id:
@@ -1450,6 +1720,7 @@ components:
           description: Specific artifact to deploy (defaults to latest)
 
     DeployResponse:
+      description: The result of a deployment
       type: object
       required: [artifact_id, data_planes_notified]
       properties:
@@ -1460,3 +1731,173 @@ components:
         data_planes_notified:
           type: integer
           description: Number of connected data planes notified
+
+    ProjectPluginConfig:
+      description: A plugin a project uses, with its configuration
+      type: object
+      required: [id, project_id, plugin_name, plugin_version, enabled, priority, config, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        plugin_name:
+          type: string
+        plugin_version:
+          type: string
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+        config:
+          type: object
+          description: The plugin configuration
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AddProjectPluginRequest:
+      description: A registered plugin version to add to a project
+      type: object
+      required: [plugin_name, plugin_version]
+      properties:
+        plugin_name:
+          type: string
+        plugin_version:
+          type: string
+        enabled:
+          type: boolean
+          default: true
+        priority:
+          type: integer
+          default: 0
+        config:
+          type: object
+          default: {}
+
+    UpdateProjectPluginRequest:
+      description: Changes to a project plugin; fields left out keep their value
+      type: object
+      properties:
+        plugin_version:
+          type: string
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+        config:
+          type: object
+
+    MiddlewareBinding:
+      description: A middleware in a chain, with its configuration
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        config:
+          type: object
+        enabled:
+          type: boolean
+          description: "`false` on an operation entry removes the global entries of this plugin from the operation's chain (ADR-0034). Omitted when true."
+
+    DispatchBinding:
+      description: The dispatcher an operation sends requests to, with its configuration
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        config:
+          type: object
+
+    OperationSummary:
+      description: An operation of a spec, with its plugin bindings
+      type: object
+      required: [path, method, middlewares, deprecated]
+      properties:
+        path:
+          type: string
+        method:
+          type: string
+        operation_id:
+          type: string
+        dispatch:
+          $ref: '#/components/schemas/DispatchBinding'
+        middlewares:
+          description: "`null` inherits the global middlewares, `[]` opts out of them, a list overrides them."
+          type: [array, 'null']
+          items:
+            $ref: '#/components/schemas/MiddlewareBinding'
+        deprecated:
+          type: boolean
+
+    SpecOperations:
+      description: A spec's global middlewares and operations
+      type: object
+      required: [spec_id, spec_name, spec_type, global_middlewares, operations]
+      properties:
+        spec_id:
+          type: string
+          format: uuid
+        spec_name:
+          type: string
+        spec_type:
+          type: string
+        global_middlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/MiddlewareBinding'
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationSummary'
+
+    ProjectOperations:
+      description: The operations of every spec in a project
+      type: object
+      required: [specs]
+      properties:
+        specs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpecOperations'
+
+    PatchSpecOperationsRequest:
+      description: Changes to a spec's plugin bindings; fields left out are unchanged
+      type: object
+      properties:
+        global_middlewares:
+          description: Replaces the global middleware list.
+          type: array
+          items:
+            $ref: '#/components/schemas/MiddlewareBinding'
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperationPatch'
+
+    OperationPatch:
+      description: Changes to one operation's plugin bindings
+      type: object
+      required: [path, method]
+      properties:
+        path:
+          type: string
+        method:
+          type: string
+        dispatch:
+          description: "Omitted: unchanged. `null`: removed. An object: set."
+          oneOf:
+            - $ref: '#/components/schemas/DispatchBinding'
+            - type: 'null'
+        middlewares:
+          description: "Omitted: unchanged. `null`: inherit the global middlewares. `[]`: opt out. A list: override."
+          type: [array, 'null']
+          items:
+            $ref: '#/components/schemas/MiddlewareBinding'
