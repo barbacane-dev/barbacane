@@ -4,6 +4,7 @@
 //! The main entry point is the `barbacane` binary.
 
 pub mod admin;
+pub mod control;
 pub mod control_plane;
 pub mod dev;
 pub mod hot_reload;
