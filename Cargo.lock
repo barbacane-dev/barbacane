@@ -602,6 +602,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "uuid",
+ "wasmparser 0.254.2",
  "wasmtime",
  "wat",
 ]

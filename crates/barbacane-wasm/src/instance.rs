@@ -575,13 +575,9 @@ impl PluginInstance {
         // Enable resource limiting
         store.limiter(|state| state);
 
-        // Create linker and add host functions
-        let mut linker = Linker::new(engine);
-        add_host_functions(&mut linker)?;
-
-        // Instantiate the module
-        let instance = linker
-            .instantiate(&mut store, module.module())
+        let instance = module
+            .linked()?
+            .instantiate(&mut store)
             .map_err(|e| WasmError::Instantiation(e.to_string()))?;
 
         // Get memory
@@ -622,6 +618,24 @@ impl PluginInstance {
     /// Get the plugin name.
     pub fn name(&self) -> &str {
         &self.store.data().plugin_name
+    }
+
+    /// The instance's linear memory.
+    pub(crate) fn memory(&self) -> &[u8] {
+        self.memory.data(&self.store)
+    }
+
+    /// The instance's linear memory, writable.
+    pub(crate) fn memory_mut(&mut self) -> &mut [u8] {
+        self.memory.data_mut(&mut self.store)
+    }
+
+    /// Grow linear memory by `pages`, within the instance's memory limit.
+    pub(crate) fn grow_memory(&mut self, pages: u64) -> Result<(), WasmError> {
+        self.memory
+            .grow(&mut self.store, pages)
+            .map(|_| ())
+            .map_err(|e| WasmError::Instantiation(format!("cannot grow memory: {e}")))
     }
 
     /// Write data to the plugin's linear memory and return the pointer.
@@ -1142,7 +1156,7 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
 }
 
 /// Add host functions to the linker.
-fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError> {
+pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError> {
     // host_set_output - always available
     linker
         .func_wrap(

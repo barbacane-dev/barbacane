@@ -18,6 +18,7 @@ use crate::instance::PluginInstance;
 use crate::limits::PluginLimits;
 use crate::rate_limiter::RateLimiter;
 use crate::secrets::SecretsStore;
+use crate::snapshot::MemorySnapshot;
 
 /// Key for identifying a plugin instance.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -101,10 +102,11 @@ pub struct InstancePool {
     /// Cache of compiled modules by plugin name.
     modules: DashMap<String, CompiledModule>,
 
-    /// Cache of initialized instances by key.
-    /// In a production implementation, this would be a proper pool with
-    /// checkout/return semantics. For now, we create new instances.
+    /// Registered instance keys.
     instances: DashMap<InstanceKey, ()>,
+
+    /// The memory `init` left, by key, for modules that can start from it.
+    snapshots: DashMap<InstanceKey, Arc<MemorySnapshot>>,
 
     /// Plugin configs by key.
     configs: DashMap<InstanceKey, Vec<u8>>,
@@ -134,6 +136,7 @@ impl InstancePool {
             ldap_client: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
+            snapshots: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
@@ -159,6 +162,7 @@ impl InstancePool {
             ldap_client: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
+            snapshots: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
@@ -185,6 +189,7 @@ impl InstancePool {
             ldap_client: None,
             modules: DashMap::new(),
             instances: DashMap::new(),
+            snapshots: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
@@ -217,6 +222,7 @@ impl InstancePool {
             ldap_client,
             modules: DashMap::new(),
             instances: DashMap::new(),
+            snapshots: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
@@ -261,7 +267,13 @@ impl InstancePool {
         self.instances.insert(key, ());
     }
 
-    /// Get or create an instance for the given key.
+    /// A new instance for `key`, in the state its plugin's `init(config)` left.
+    ///
+    /// The first instance for a key runs `init`. When the module allows it
+    /// ([`CompiledModule`] reports whether), what `init` wrote to memory is kept,
+    /// and every later instance is a fresh one with that memory written back,
+    /// without running `init` again. Either way no instance carries anything
+    /// from an earlier request.
     pub fn get_instance(&self, key: &InstanceKey) -> Result<PluginInstance, WasmError> {
         // Get the compiled module
         let module = self
@@ -300,7 +312,12 @@ impl InstancePool {
         )?;
         instance.set_metrics(self.metrics.clone());
 
-        // Initialize with config
+        if let Some(snapshot) = self.snapshots.get(key) {
+            snapshot.restore(&mut instance)?;
+            return Ok(instance);
+        }
+
+        let fresh = module.replayable().then(|| instance.memory().to_vec());
         let result = instance.init(&config_json)?;
         if result != 0 {
             return Err(WasmError::InitFailed(format!(
@@ -308,8 +325,17 @@ impl InstancePool {
                 key.name, result
             )));
         }
+        if let Some(fresh) = fresh {
+            let snapshot = MemorySnapshot::diff(&fresh, instance.memory());
+            self.snapshots.insert(key.clone(), Arc::new(snapshot));
+        }
 
         Ok(instance)
+    }
+
+    /// Number of keys whose instances start from a memory snapshot.
+    pub fn snapshot_count(&self) -> usize {
+        self.snapshots.len()
     }
 
     /// Check if a plugin is registered.
@@ -408,5 +434,111 @@ mod tests {
         assert!(refused.to_string().contains("init returned 1"), "{refused}");
         pool.get_instance(&InstanceKey::new("roomy", &json!({})))
             .expect("3 MiB fits in the default");
+    }
+    /// A middleware whose `init` stores 7 at 60000 and whose `on_request`
+    /// returns 0 when it finds that and no earlier mark, 1 when an earlier
+    /// call's mark is in memory or in its global, and 2 when `init`'s value is
+    /// missing. Each call leaves a mark in both.
+    const MARKS_EACH_CALL: &str = r#"(module
+      (memory (export "memory") 1)
+      (global $seen (mut i32) (i32.const 0))
+      (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+      (func (export "init") (param i32 i32) (result i32)
+        (i32.store8 (i32.const 60000) (i32.const 7))
+        (i32.const 0))
+      (func (export "on_request") (param i32 i32) (result i32)
+        (if (i32.or (i32.load8_u (i32.const 60001)) (global.get $seen))
+          (then (return (i32.const 1))))
+        (if (i32.ne (i32.load8_u (i32.const 60000)) (i32.const 7))
+          (then (return (i32.const 2))))
+        (i32.store8 (i32.const 60001) (i32.const 1))
+        (global.set $seen (i32.const 1))
+        (i32.const 0))
+      (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#;
+
+    fn pool_with(name: &str, wat: &str) -> (InstancePool, InstanceKey) {
+        let engine = Arc::new(WasmEngine::new().unwrap());
+        let pool = InstancePool::new(Arc::clone(&engine), PluginLimits::default());
+        let module = engine
+            .compile(
+                &wat::parse_str(wat).expect("valid WAT"),
+                name.into(),
+                "0.1.0".into(),
+                false,
+            )
+            .expect("compile");
+        pool.register_module(module);
+        let key = InstanceKey::new(name, &json!({"k": "v"}));
+        pool.register_config(key.clone(), br#"{"k":"v"}"#.to_vec());
+        (pool, key)
+    }
+
+    #[test]
+    fn each_instance_starts_where_init_left_off_and_sees_no_earlier_call() {
+        let (pool, key) = pool_with("marker", MARKS_EACH_CALL);
+        for call in 1..=3 {
+            let mut instance = pool.get_instance(&key).expect("instance");
+            assert_eq!(instance.on_request(b"{}").unwrap(), 0, "call {call}");
+        }
+        assert_eq!(pool.snapshot_count(), 1);
+
+        // Control: an instance used twice sees its own earlier mark.
+        let mut instance = pool.get_instance(&key).expect("instance");
+        assert_eq!(instance.on_request(b"{}").unwrap(), 0);
+        assert_eq!(instance.on_request(b"{}").unwrap(), 1);
+    }
+
+    #[test]
+    fn a_restored_instance_has_the_memory_init_left() {
+        // `init` grows memory by two pages and writes into the new one.
+        let (pool, key) = pool_with(
+            "grower",
+            r#"(module
+              (memory (export "memory") 1)
+              (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+              (func (export "init") (param i32 i32) (result i32)
+                (drop (memory.grow (i32.const 2)))
+                (i32.store (i32.const 140000) (i32.const 0x01020304))
+                (i32.const 0))
+              (func (export "on_request") (param i32 i32) (result i32) (i32.const 0))
+              (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#,
+        );
+        let initialised = pool.get_instance(&key).expect("first instance");
+        let restored = pool.get_instance(&key).expect("restored instance");
+        assert_eq!(pool.snapshot_count(), 1);
+        assert_eq!(restored.memory().len(), 3 * 65536);
+        assert!(initialised.memory() == restored.memory());
+    }
+
+    #[test]
+    fn a_module_init_does_not_fully_describe_runs_init_for_each_instance() {
+        let two_globals = MARKS_EACH_CALL.replace(
+            "(global $seen (mut i32) (i32.const 0))",
+            "(global $seen (mut i32) (i32.const 0)) (global $other (mut i32) (i32.const 0))",
+        );
+        let (pool, key) = pool_with("marker", &two_globals);
+        for call in 1..=3 {
+            let mut instance = pool.get_instance(&key).expect("instance");
+            assert_eq!(instance.on_request(b"{}").unwrap(), 0, "call {call}");
+        }
+        assert_eq!(pool.snapshot_count(), 0);
+    }
+
+    #[test]
+    fn a_failed_init_leaves_no_snapshot() {
+        let (pool, key) = pool_with(
+            "refuser",
+            r#"(module
+              (memory (export "memory") 1)
+              (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+              (func (export "init") (param i32 i32) (result i32) (i32.const 1))
+              (func (export "on_request") (param i32 i32) (result i32) (i32.const 0))
+              (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#,
+        );
+        for _ in 0..2 {
+            let error = pool.get_instance(&key).err().expect("init fails");
+            assert!(error.to_string().contains("init returned 1"), "{error}");
+        }
+        assert_eq!(pool.snapshot_count(), 0);
     }
 }

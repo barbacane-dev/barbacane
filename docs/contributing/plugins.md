@@ -623,6 +623,28 @@ Use these as references for your own plugins.
 5. **Test thoroughly** - Unit test logic, integration test with the gateway
 6. **Use semantic versioning** - Follow semver for plugin versions
 
+## Instances and state
+
+`init(config)` runs once for each plugin and config in the artifact. The gateway
+keeps what `init` left in the plugin's linear memory, and every request then
+runs in a new instance whose memory starts from that state. So:
+
+- whatever `init` builds from the config (parsed rules, compiled patterns) is
+  there for every request, without being rebuilt;
+- nothing a request writes reaches another request: each instance is discarded
+  when its request ends, and the next one starts from the state `init` left.
+
+A plugin keeps no state between requests. State that must outlive a request
+lives on the host: the rate limiter, the response cache, a context value for
+later middlewares in the same request.
+
+The gateway restores linear memory only, so `init` must leave everything else
+as the module defined it. A module qualifies when it imports no global, defines
+at most one mutable global (the stack pointer, which a call leaves as it found
+it), and changes no table or passive data segment. Plugins built with the SDK
+for `wasm32-unknown-unknown` qualify. Any other module still works: it runs
+`init` for each request instead.
+
 ## Resource Limits
 
 Each instance of a plugin runs with its own limits. A plugin declares them in a

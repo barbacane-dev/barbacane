@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 # WASM runtime
 wasmtime.workspace = true
+wasmparser.workspace = true
 
 # Serialization
 serde.workspace = true
