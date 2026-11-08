@@ -362,6 +362,12 @@ selects and retries as the [`http-upstream` endpoints](../guide/dispatchers.md#l
 describe; `request.url` then holds the path and query. It needs the `http_pool`
 capability.
 
+The host sets `Host` from the URL and owns the message framing, so it drops
+these headers when a plugin sets them, on every call, pooled or streamed:
+`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`,
+`Proxy-Connection`, `Upgrade`, `TE` and `Trailer`. `Authorization` is sent as
+set.
+
 ### Hashing
 
 ```toml

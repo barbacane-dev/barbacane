@@ -278,11 +278,10 @@ impl HttpClient {
             Some(tls) if tls.is_configured() => self.get_or_create_tls_client(tls)?,
             _ => self.client.clone(),
         };
-        let mut req_builder = client.request(method, url).timeout(timeout);
-
-        for (key, value) in &request.headers {
-            req_builder = req_builder.header(key.as_str(), value.as_str());
-        }
+        let mut req_builder = with_plugin_headers(
+            client.request(method, url).timeout(timeout),
+            &request.headers,
+        );
 
         if let Some(body) = request.body {
             req_builder = req_builder.body(body);
@@ -475,20 +474,10 @@ impl HttpClient {
             _ => self.client.clone(),
         };
 
-        let mut req_builder = client.request(method.clone(), url).timeout(timeout);
-
-        // Add headers, dropping any a plugin must not control on the outbound
-        // request. `Host` is derived from the URL (a plugin-set Host enables
-        // routing/cache/SSRF confusion), and the hop-by-hop / framing headers
-        // below are owned by the HTTP client (a plugin-set value enables request
-        // smuggling). `Authorization` is intentionally allowed: dispatchers
-        // legitimately authenticate to their upstream.
-        for (key, value) in headers {
-            if is_forbidden_outbound_header(key) {
-                continue;
-            }
-            req_builder = req_builder.header(key.as_str(), value.as_str());
-        }
+        let mut req_builder = with_plugin_headers(
+            client.request(method.clone(), url).timeout(timeout),
+            headers,
+        );
 
         if let Some(body) = body {
             req_builder = req_builder.body(body);
@@ -720,6 +709,19 @@ pub(crate) async fn connect_pinned_tcp(
         }
     }
     Err(last_err.unwrap_or_else(|| "no reachable address".to_string()))
+}
+
+/// Adds a plugin's headers to an outbound request, dropping those it may not set.
+fn with_plugin_headers(
+    mut builder: reqwest::RequestBuilder,
+    headers: &HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    for (key, value) in headers {
+        if !is_forbidden_outbound_header(key) {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+    }
+    builder
 }
 
 /// Headers a plugin may not set on an outbound HTTP request. `host` is derived
@@ -1508,6 +1510,103 @@ mod tests {
         ] {
             assert!(!is_forbidden_outbound_header(h), "{h} should be allowed");
         }
+    }
+
+    /// Accepts one connection, answers 200 and sends back the request head it read.
+    async fn capture_request_head() -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<String>)
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut buf).await.expect("read");
+                if n == 0 {
+                    break;
+                }
+                head.extend_from_slice(&buf[..n]);
+            }
+            let response = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok";
+            socket.write_all(response.as_bytes()).await.expect("write");
+            let _ = tx.send(String::from_utf8_lossy(&head).to_lowercase());
+        });
+        (addr, rx)
+    }
+
+    /// Headers a plugin sets, including ones it may not control.
+    fn plugin_headers() -> HashMap<String, String> {
+        [
+            ("Host", "evil.example"),
+            ("Transfer-Encoding", "chunked"),
+            ("Connection", "close"),
+            ("Upgrade", "websocket"),
+            ("X-Plugin", "kept"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    fn assert_forbidden_headers_dropped(head: &str, addr: std::net::SocketAddr) {
+        assert!(head.contains(&format!("\r\nhost: {addr}\r\n")), "{head}");
+        assert!(head.contains("\r\nx-plugin: kept\r\n"), "{head}");
+        for dropped in [
+            "evil.example",
+            "transfer-encoding:",
+            "connection: close",
+            "upgrade:",
+        ] {
+            assert!(
+                !head.contains(dropped),
+                "{dropped} reached the upstream: {head}"
+            );
+        }
+    }
+
+    fn local_client() -> HttpClient {
+        HttpClient::new(HttpClientConfig {
+            allow_plaintext: true,
+            allow_internal_egress: true,
+            ..Default::default()
+        })
+        .expect("client")
+    }
+
+    #[tokio::test]
+    async fn a_call_drops_the_headers_a_plugin_may_not_set() {
+        let (addr, head) = capture_request_head().await;
+        let request = HttpRequest {
+            method: "GET".into(),
+            url: format!("http://{addr}/"),
+            headers: plugin_headers(),
+            body: None,
+            timeout: None,
+        };
+        local_client().call(request).await.expect("call");
+        assert_forbidden_headers_dropped(&head.await.expect("head"), addr);
+    }
+
+    #[tokio::test]
+    async fn a_streamed_call_drops_the_headers_a_plugin_may_not_set() {
+        let (addr, head) = capture_request_head().await;
+        let request = HttpRequest {
+            method: "GET".into(),
+            url: format!("http://{addr}/"),
+            headers: plugin_headers(),
+            body: None,
+            timeout: None,
+        };
+        local_client()
+            .stream_raw(request, None)
+            .await
+            .expect("stream_raw");
+        assert_forbidden_headers_dropped(&head.await.expect("head"), addr);
     }
 
     // ── base64 body serde (host ↔ WASM plugin compatibility) ─────────────
