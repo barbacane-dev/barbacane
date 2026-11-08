@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use barbacane_compiler::spec_parser::{parse_spec, parse_spec_file, ApiSpec};
+use barbacane_compiler::spec_parser::{for_each_schema_ref, parse_spec, parse_spec_file, ApiSpec};
 use serde_json::Value;
 
 /// Methods an OpenAPI path item may hold, including `query` from 3.2.
@@ -200,26 +200,6 @@ fn schemas_of(spec: &ApiSpec) -> Vec<(String, Value)> {
     out
 }
 
-/// Walk every `$ref` string in a value.
-fn each_ref(value: &Value, f: &mut impl FnMut(&str)) {
-    match value {
-        Value::Object(obj) => {
-            if let Some(reference) = obj.get("$ref").and_then(|v| v.as_str()) {
-                f(reference);
-            }
-            for v in obj.values() {
-                each_ref(v, f);
-            }
-        }
-        Value::Array(items) => {
-            for v in items {
-                each_ref(v, f);
-            }
-        }
-        _ => {}
-    }
-}
-
 #[test]
 fn every_spec_parses() {
     for path in corpus() {
@@ -277,7 +257,7 @@ fn schemas_are_self_contained() {
     for path in corpus() {
         let spec = parse_spec_file(&path).expect("parse");
         for (where_, schema) in schemas_of(&spec) {
-            each_ref(&schema, &mut |reference| {
+            for_each_schema_ref(&schema, &mut |reference| {
                 assert!(
                     reference.starts_with("#/$defs/"),
                     "{} {where_} keeps a reference out of the schema: {reference}. \
@@ -298,7 +278,7 @@ fn every_local_reference_resolves() {
             // against the pool rather than against itself.
             let schema = spec.self_contained(&schema);
             let mut dangling = Vec::new();
-            each_ref(&schema, &mut |reference| {
+            for_each_schema_ref(&schema, &mut |reference| {
                 let Some(rest) = reference.strip_prefix("#/") else {
                     return;
                 };

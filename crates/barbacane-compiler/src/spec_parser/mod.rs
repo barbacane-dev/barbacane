@@ -14,5 +14,5 @@ pub use model::{
     Operation, Parameter, RequestBody, ResponseContent, SecurityRequirement, SecurityScheme,
     SpecFormat,
 };
-pub use parser::{parse_spec, parse_spec_file};
+pub use parser::{for_each_schema_ref, parse_spec, parse_spec_file};
 pub(crate) use parser::{pointer_escape, pointer_unescape};

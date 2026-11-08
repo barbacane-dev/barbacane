@@ -201,6 +201,41 @@ const SCHEMA_MAP_KEYWORDS: [&str; 5] = [
     "definitions",
 ];
 
+/// Call `f` with every `$ref` a schema holds where a schema can be. The values
+/// of `const`, `default`, `enum`, `example` and `examples` are instance data,
+/// so a `$ref` key inside one is part of a value, not a reference.
+pub fn for_each_schema_ref(schema: &Value, f: &mut impl FnMut(&str)) {
+    match schema {
+        Value::Object(obj) => {
+            if let Some(reference) = obj.get("$ref").and_then(Value::as_str) {
+                f(reference);
+            }
+            for (key, value) in obj {
+                let key = key.as_str();
+                if INSTANCE_KEYWORDS.contains(&key) {
+                    continue;
+                }
+                match value {
+                    Value::Object(schemas)
+                        if key == "$defs" || SCHEMA_MAP_KEYWORDS.contains(&key) =>
+                    {
+                        for schema in schemas.values() {
+                            for_each_schema_ref(schema, f);
+                        }
+                    }
+                    _ => for_each_schema_ref(value, f),
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                for_each_schema_ref(item, f);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Resolve a schema's `$ref` pointers into a self-contained schema.
 ///
 /// Every referenced definition is carried in `$defs` and pointed at, so the
@@ -4711,6 +4746,24 @@ paths:
             "/pointers",
             json!({ "$ref": "#/$defs/Missing" })
         ));
+    }
+
+    #[test]
+    fn a_ref_inside_instance_data_is_not_a_reference() {
+        let schema = json!({
+            "type": "object",
+            "example": { "$ref": "#/components/examples/sample" },
+            "examples": [{ "$ref": "#/nowhere" }],
+            "properties": {
+                "example": { "$ref": "#/$defs/A" },
+                "items": { "type": "array", "items": { "$ref": "#/$defs/B" } }
+            },
+            "$defs": { "examples": { "$ref": "#/$defs/C" } }
+        });
+        let mut found = Vec::new();
+        for_each_schema_ref(&schema, &mut |r| found.push(r.to_string()));
+        found.sort();
+        assert_eq!(found, ["#/$defs/A", "#/$defs/B", "#/$defs/C"]);
     }
 
     #[test]
