@@ -17,7 +17,7 @@ use crate::body;
 
 /// An outbound HTTP request. The body is passed separately to [`call`] and sent
 /// via the side-channel, so it is not part of this JSON.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,
@@ -25,6 +25,24 @@ pub struct HttpRequest {
     pub headers: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// TLS settings for the connection: a client certificate, a CA.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<TlsSettings>,
+}
+
+/// TLS settings for an outbound request: a client certificate and key for
+/// mutual TLS, and a CA to verify the server with in place of the system's
+/// roots. Each is a path to a PEM file, resolved under the gateway's
+/// `BARBACANE_SECRETS_DIR`, outside which the host refuses to read.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_cert: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca: Option<String>,
 }
 
 impl HttpRequest {
@@ -33,8 +51,7 @@ impl HttpRequest {
         Self {
             method: method.into(),
             url: url.into(),
-            headers: BTreeMap::new(),
-            timeout_ms: None,
+            ..Self::default()
         }
     }
 
@@ -47,6 +64,12 @@ impl HttpRequest {
     /// Set the request timeout in milliseconds.
     pub fn timeout_ms(mut self, ms: u64) -> Self {
         self.timeout_ms = Some(ms);
+        self
+    }
+
+    /// Set the TLS settings.
+    pub fn tls(mut self, tls: TlsSettings) -> Self {
+        self.tls = Some(tls);
         self
     }
 }

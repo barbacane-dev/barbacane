@@ -87,7 +87,7 @@ impl SecretsStore {
 /// base directory and verify, after canonicalization (which resolves symlinks
 /// and `..`), that the target stays inside it. Fails closed when the base dir
 /// is not configured.
-fn confine_secret_path(path: &str) -> Result<std::path::PathBuf, SecretsError> {
+pub(crate) fn confine_secret_path(path: &str) -> Result<std::path::PathBuf, SecretsError> {
     let base = std::env::var_os("BARBACANE_SECRETS_DIR").ok_or_else(|| {
         SecretsError::FileReadError(
             "file:// secret references require BARBACANE_SECRETS_DIR to be set".to_string(),

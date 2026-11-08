@@ -27,6 +27,10 @@ pub struct HttpUpstreamDispatcher {
     /// Request timeout in seconds (default: 30).
     #[serde(default = "default_timeout")]
     timeout: f64,
+
+    /// TLS settings: a client certificate for mutual TLS, a CA for the server.
+    #[serde(default)]
+    tls: Option<http::TlsSettings>,
 }
 
 fn default_timeout() -> f64 {
@@ -98,6 +102,7 @@ impl HttpUpstreamDispatcher {
             url: full_url,
             headers,
             timeout_ms: Some(timeout_ms),
+            tls: self.tls.clone(),
         };
 
         let http_response = match http::call(&http_request, body.as_deref()) {
@@ -202,6 +207,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let mut params = BTreeMap::new();
@@ -217,6 +223,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let mut params = BTreeMap::new();
@@ -235,6 +242,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let mut params = BTreeMap::new();
@@ -250,6 +258,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let params = BTreeMap::new();
@@ -264,6 +273,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let response =
@@ -288,6 +298,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let response = dispatcher.error_response(
@@ -309,6 +320,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let response =
@@ -326,6 +338,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let response = dispatcher.error_response(
@@ -348,6 +361,34 @@ mod tests {
         assert_eq!(config.url, "http://api.example.com");
         assert_eq!(config.path, None);
         assert_eq!(config.timeout, 30.0);
+    }
+
+    #[test]
+    fn tls_settings_deserialize_and_travel_with_the_request() {
+        let json = r#"{"url": "https://api.example.com", "tls": {
+            "client_cert": "certs/client.pem", "client_key": "certs/client.key", "ca": "certs/ca.pem"
+        }}"#;
+        let config: HttpUpstreamDispatcher = serde_json::from_str(json).unwrap();
+        let tls = config.tls.clone().expect("tls");
+        assert_eq!(tls.client_cert.as_deref(), Some("certs/client.pem"));
+        assert_eq!(tls.ca.as_deref(), Some("certs/ca.pem"));
+
+        let request = http::HttpRequest::new("GET", "https://api.example.com/x").tls(tls);
+        let sent: serde_json::Value = serde_json::to_value(&request).unwrap();
+        assert_eq!(sent["tls"]["client_key"], "certs/client.key");
+    }
+
+    #[test]
+    fn a_request_without_tls_sends_no_tls_field() {
+        let sent =
+            serde_json::to_value(http::HttpRequest::new("GET", "https://a.example")).unwrap();
+        assert!(sent.get("tls").is_none(), "{sent}");
+    }
+
+    #[test]
+    fn an_unknown_tls_key_is_refused() {
+        let json = r#"{"url": "https://a.example", "tls": {"client_crt": "x"}}"#;
+        assert!(serde_json::from_str::<HttpUpstreamDispatcher>(json).is_err());
     }
 
     #[test]
@@ -378,6 +419,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let req = make_request("GET", "/test", BTreeMap::new(), None, None, BTreeMap::new());
@@ -391,6 +433,7 @@ mod tests {
             url: "http://example.com".to_string(),
             path: None,
             timeout: 30.0,
+            tls: None,
         };
 
         let body = br#"{"name":"test"}"#.to_vec();

@@ -51,6 +51,9 @@ pub(crate) struct PluginHttpRequest {
     pub(crate) body: Option<Vec<u8>>,
     #[serde(default)]
     pub(crate) timeout_ms: Option<u64>,
+    /// Client certificate and CA for the connection, as file paths.
+    #[serde(default)]
+    pub(crate) tls: Option<crate::http_client::TlsConfig>,
 }
 
 /// Prefix a plugin-controlled key (cache key, rate-limit partition) with the
@@ -1331,6 +1334,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     .take()
                     .or(plugin_request.body);
 
+                let tls = plugin_request.tls;
                 let request = HttpClientRequest {
                     method: plugin_request.method,
                     url: plugin_request.url,
@@ -1369,7 +1373,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                         };
 
                         rt.block_on(async {
-                            match http_client.call(request).await {
+                            match http_client.call_with_tls(request, tls.as_ref()).await {
                                 Ok(mut response) => {
                                     // Strip body into side-channel to avoid base64
                                     // encoding in the JSON metadata.
@@ -1491,6 +1495,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                     .take()
                     .or(plugin_request.body);
 
+                let tls = plugin_request.tls;
                 let request = HttpClientRequest {
                     method: plugin_request.method,
                     url: plugin_request.url,
@@ -1531,7 +1536,7 @@ fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(), WasmError>
                         rt.block_on(async {
                             use futures_util::StreamExt;
 
-                            match http_client.stream_raw(request).await {
+                            match http_client.stream_raw(request, tls.as_ref()).await {
                                 Ok(upstream) => {
                                     let status = upstream.status().as_u16();
                                     let upstream_headers: BTreeMap<String, String> = upstream

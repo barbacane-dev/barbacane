@@ -104,6 +104,7 @@ impl FireAndForgetDispatcher {
             url: self.url.clone(),
             headers: req.headers.clone(),
             timeout_ms: Some(self.timeout_ms),
+            ..Default::default()
         };
 
         // Best-effort: the request body travels via the side-channel inside
