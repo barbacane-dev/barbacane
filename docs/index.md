@@ -94,6 +94,7 @@ The gateway serves only artifacts signed by the key it pins; see [artifact signi
 - [Spec Extensions](reference/extensions.md) - Complete `x-barbacane-*` reference
 - [Artifact Format](reference/artifact.md) - `.bca` file format
 - [Reserved Endpoints](reference/endpoints.md) - `/__barbacane/*` endpoints
+- [Stability Policy](reference/stability.md) - What 1.x keeps compatible, deprecations, security fixes
 
 ### Contributing
 

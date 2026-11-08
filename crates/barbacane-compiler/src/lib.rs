@@ -21,6 +21,7 @@ pub use artifact::{
     BundledPlugin, CompileOptions, CompileResult, CompiledOperation, CompiledRoutes,
     IntegrityError, LoadedPlugin, Manifest, PluginBundle, PluginCapabilities, Provenance,
     SourceSpec, VerifiedArtifact, ARTIFACT_VERSION, COMPILER_VERSION, MAX_ARTIFACT_BYTES,
+    OLDEST_ARTIFACT_VERSION,
 };
 pub use error::{CompileError, CompileWarning};
 pub use manifest::{

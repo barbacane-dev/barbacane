@@ -5397,17 +5397,26 @@ fn artifact_trust(
     }
 }
 
-/// Refuse an artifact format this binary does not read.
+/// Refuse an artifact format this binary does not read: one older than
+/// [`barbacane_compiler::OLDEST_ARTIFACT_VERSION`], or newer than the format
+/// this binary writes.
 ///
 /// Without this the mismatch surfaces as an integrity failure, because the
 /// hash covers the files whose shape changed. That names the wrong cause and
 /// sends the operator looking for tampering.
 fn check_artifact_version(found: u32) -> Result<(), String> {
-    let expected = barbacane_compiler::ARTIFACT_VERSION;
-    if found != expected {
+    let oldest = barbacane_compiler::OLDEST_ARTIFACT_VERSION;
+    let newest = barbacane_compiler::ARTIFACT_VERSION;
+    if found > newest {
         return Err(format!(
-            "artifact format version {found} is not supported by this build, which reads \
-             version {expected}. Recompile the spec with this version of barbacane."
+            "artifact format version {found} is newer than this build reads (up to version \
+             {newest}): it was compiled by a newer barbacane. Upgrade the data plane."
+        ));
+    }
+    if found < oldest {
+        return Err(format!(
+            "artifact format version {found} is older than this build reads (from version \
+             {oldest}). Recompile the spec with this version of barbacane."
         ));
     }
     Ok(())
@@ -5500,17 +5509,33 @@ mod artifact_version_tests {
     }
 
     #[test]
-    fn refuses_another_version_and_says_why() {
-        let err = check_artifact_version(barbacane_compiler::ARTIFACT_VERSION - 1)
+    fn accepts_every_version_from_the_oldest_this_major_reads() {
+        for version in
+            barbacane_compiler::OLDEST_ARTIFACT_VERSION..=barbacane_compiler::ARTIFACT_VERSION
+        {
+            assert!(check_artifact_version(version).is_ok(), "{version}");
+        }
+    }
+
+    #[test]
+    fn refuses_an_older_version_and_says_to_recompile() {
+        let err = check_artifact_version(barbacane_compiler::OLDEST_ARTIFACT_VERSION - 1)
             .expect_err("an older format must be refused");
         assert!(
             err.contains("Recompile"),
             "the message must say what to do: {err}"
         );
         assert!(
-            err.contains(&barbacane_compiler::ARTIFACT_VERSION.to_string()),
-            "and which version this build reads: {err}"
+            err.contains(&barbacane_compiler::OLDEST_ARTIFACT_VERSION.to_string()),
+            "and which versions this build reads: {err}"
         );
+    }
+
+    #[test]
+    fn refuses_a_newer_version_and_says_to_upgrade() {
+        let err = check_artifact_version(barbacane_compiler::ARTIFACT_VERSION + 1)
+            .expect_err("a newer format must be refused");
+        assert!(err.contains("Upgrade the data plane"), "{err}");
     }
 }
 
