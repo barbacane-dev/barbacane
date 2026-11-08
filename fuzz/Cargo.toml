@@ -42,6 +42,10 @@ barbacane = { path = "../crates/barbacane" }
 # (the loader API takes a &Path, not bytes).
 tempfile = "3"
 
+# libyaml, the reference the yaml_differential target compares the YAML module
+# with.
+yaml_serde = "0.10"
+
 [profile.release]
 debug = 1
 
@@ -73,6 +77,13 @@ bench = false
 [[bin]]
 name = "wasm_host_memory"
 path = "fuzz_targets/wasm_host_memory.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "yaml_differential"
+path = "fuzz_targets/yaml_differential.rs"
 test = false
 doc = false
 bench = false

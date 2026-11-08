@@ -2634,7 +2634,7 @@ impl Gateway {
             )
         } else {
             (
-                yaml_serde::to_string(value).unwrap_or_default(),
+                barbacane_compiler::yaml::to_string(value).unwrap_or_default(),
                 "text/yaml",
             )
         };

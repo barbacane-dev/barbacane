@@ -87,6 +87,8 @@ jobs:
           fetch petstore.json   https://petstore3.swagger.io/api/v3/openapi.json
           fetch stripe.json     https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json
           fetch github.json     https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json
+          fetch github.yaml     https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.yaml
+          fetch stripe.yaml     https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.yaml
           fetch box.json        https://raw.githubusercontent.com/box/box-openapi/main/openapi.json
           fetch asana.yaml      https://raw.githubusercontent.com/Asana/openapi/master/defs/asana_oas.yaml
           fetch asyncapi-streetlights.yml https://raw.githubusercontent.com/asyncapi/spec/master/examples/streetlights-kafka-asyncapi.yml

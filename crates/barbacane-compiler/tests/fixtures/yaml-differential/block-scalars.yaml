@@ -1,0 +1,24 @@
+clip: |
+  one
+  two
+
+strip: |-
+  one
+  two
+
+keep: |+
+  one
+  two
+
+folded: >
+  one
+  two
+
+  three
+folded-strip: >-
+  one
+  two
+folded-keep: >+
+  one
+
+last: end

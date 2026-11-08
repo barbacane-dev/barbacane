@@ -1,0 +1,66 @@
+# Fuzzes the YAML module against libyaml (the `yaml_differential` target) for
+# 30 minutes each night. A difference that belongs to no known class, or an
+# input past the time or memory bound, is kept and uploaded as an artifact.
+# Informational: a probabilistic run is not a merge gate; the differential
+# test over the repository's files is.
+name: YAML Fuzz
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: YAML differential
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            fuzz/target
+          key: ${{ runner.os }}-fuzz-yaml-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-yaml-
+
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz || cargo install cargo-fuzz --locked
+
+      # The seed corpus is the differential test's inputs: the edge-case
+      # fixtures and every YAML and JSON file in the repository.
+      - name: Seed the corpus
+        run: |
+          mkdir -p fuzz/corpus/yaml_differential
+          find . \( -path ./target -o -path ./fuzz -o -path '*/node_modules' -o -path ./.git \) -prune \
+            -o -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) -size -256k -print \
+            | while read -r file; do
+                cp "$file" "fuzz/corpus/yaml_differential/$(echo "$file" | sha256sum | cut -c1-16)"
+              done
+
+      - name: Fuzz for 30 minutes
+        working-directory: fuzz
+        run: |
+          cargo fuzz run yaml_differential corpus/yaml_differential -- \
+            -dict=yaml.dict -max_total_time=1800 -timeout=10 -rss_limit_mb=2048
+
+      - name: Upload findings
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: yaml-differential-findings
+          path: fuzz/artifacts/yaml_differential
+          if-no-files-found: ignore

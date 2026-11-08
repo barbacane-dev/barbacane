@@ -60,7 +60,7 @@ fn routes() -> BTreeSet<(String, String)> {
 }
 
 fn spec() -> Value {
-    yaml_serde::from_str(SPEC).expect("openapi.yaml parses")
+    barbacane_compiler::yaml::from_str(SPEC).expect("openapi.yaml parses")
 }
 
 fn operations(spec: &Value) -> Vec<(String, String, &Value)> {

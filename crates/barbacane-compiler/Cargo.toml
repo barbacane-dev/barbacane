@@ -24,7 +24,7 @@ wasmparser = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-yaml_serde = { workspace = true }
+serde-saphyr = { workspace = true }
 sha2 = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
@@ -45,9 +45,13 @@ serde_json = { workspace = true }
 # Proves a parsed schema is usable by the data plane's validator, which builds
 # a jsonschema::Validator from it.
 jsonschema = { workspace = true }
-# The corpus test reads specs and computes what it expects from them itself.
+# libyaml, the reference the YAML module is compared with.
 yaml_serde = { workspace = true }
 
 [[bench]]
 name = "compilation"
+harness = false
+
+[[bench]]
+name = "yaml"
 harness = false

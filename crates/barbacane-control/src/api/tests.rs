@@ -65,7 +65,8 @@ async fn send(app: Router, req: Request<Body>) -> (StatusCode, bytes::Bytes) {
 
 /// The API's contract.
 static SPEC: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
-    yaml_serde::from_str(include_str!("../../openapi.yaml")).expect("openapi.yaml parses")
+    barbacane_compiler::yaml::from_str(include_str!("../../openapi.yaml"))
+        .expect("openapi.yaml parses")
 });
 
 /// The spec's operation for `method` and a concrete `path`, with its path

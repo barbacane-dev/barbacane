@@ -32,7 +32,6 @@ http-body-util = { workspace = true }
 bytes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-yaml_serde = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 rustls = { workspace = true }
@@ -56,7 +55,7 @@ workspace = true
 
 [build-dependencies]
 serde_json = { workspace = true }
-yaml_serde = { workspace = true }
+serde-saphyr = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

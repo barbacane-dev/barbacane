@@ -1,0 +1,2 @@
+a: !custom value
+b: !local [1, 2]

@@ -36,7 +36,7 @@ fn main() {
     println!("cargo:rerun-if-changed={SPEC}");
     println!("cargo:rerun-if-changed=src/control/naming.rs");
     let text = std::fs::read_to_string(SPEC).expect("read control-openapi.yaml");
-    let spec: Value = yaml_serde::from_str(&text).expect("control-openapi.yaml parses");
+    let spec: Value = serde_saphyr::from_str(&text).expect("control-openapi.yaml parses");
 
     let mut ops = Vec::new();
     for (path, item) in spec["paths"].as_object().expect("paths") {
