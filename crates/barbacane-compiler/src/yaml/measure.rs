@@ -1,4 +1,4 @@
-//! Reading YAML with a bound on what its aliases can expand to.
+//! A bound on what a document's aliases can expand to.
 //!
 //! An alias replays the node its anchor names, so a short document can stand
 //! for a value many times its size. The document is walked once first,
@@ -8,7 +8,7 @@
 use std::cell::Cell;
 use std::fmt;
 
-use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
 /// What a node costs besides its text, close to the memory a deserialized
 /// value takes per node.
@@ -20,25 +20,16 @@ const EXPANSION_FACTOR: usize = 16;
 /// Allowance on top, so a short document is not held to a tiny budget.
 const EXPANSION_FLOOR: usize = 1 << 20;
 
-/// Deserialize a YAML document whose value stays within the expansion budget.
-pub fn from_str<T: DeserializeOwned>(input: &str) -> Result<T, String> {
-    let budget = input
-        .len()
-        .saturating_mul(EXPANSION_FACTOR)
-        .saturating_add(EXPANSION_FLOOR);
-    let remaining = Cell::new(budget);
-    Measure {
-        remaining: &remaining,
-    }
-    .deserialize(yaml_serde::Deserializer::from_str(input))
-    .map_err(|e| e.to_string())?;
-    yaml_serde::from_str(input).map_err(|e| e.to_string())
+/// What a document of `len` bytes may expand to.
+pub(super) fn budget(len: usize) -> usize {
+    len.saturating_mul(EXPANSION_FACTOR)
+        .saturating_add(EXPANSION_FLOOR)
 }
 
 /// Walks a value without building it, charging each node to `remaining`.
 #[derive(Clone, Copy)]
-struct Measure<'a> {
-    remaining: &'a Cell<usize>,
+pub(super) struct Measure<'a> {
+    pub(super) remaining: &'a Cell<usize>,
 }
 
 impl Measure<'_> {

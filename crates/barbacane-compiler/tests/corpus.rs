@@ -74,7 +74,7 @@ fn parse_document(text: &str) -> Result<Value, String> {
     if let Ok(v) = serde_json::from_str::<Value>(text) {
         return Ok(v);
     }
-    yaml_serde::from_str::<Value>(text).map_err(|e| e.to_string())
+    barbacane_compiler::yaml::from_str::<Value>(text)
 }
 
 fn raw_of(path: &Path) -> Value {
@@ -751,4 +751,25 @@ paths:
         "an omitted config stays absent rather than becoming an object: {:?}",
         dispatch.config
     );
+}
+
+/// Each spec read by the YAML module and by libyaml. A difference that belongs
+/// to no known class is printed, not failed on: published specs change
+/// upstream, and the repository's own files gate the module.
+#[test]
+fn published_specs_read_as_libyaml_reads_them() {
+    use barbacane_compiler::yaml::differential::{classify, compare};
+
+    for path in corpus() {
+        let text = std::fs::read_to_string(&path).expect("read spec");
+        let ours = barbacane_compiler::yaml::from_str::<Value>(&text);
+        let reference = yaml_serde::from_str::<Value>(&text).map_err(|e| e.to_string());
+        match compare(&ours, &reference) {
+            None => {}
+            Some(difference) => match classify(&text, &difference) {
+                Some(class) => eprintln!("{}: known: {}", path.display(), class.name),
+                None => eprintln!("{}: UNKNOWN DIFFERENCE: {difference:?}", path.display()),
+            },
+        }
+    }
 }

@@ -820,7 +820,8 @@ mod tests {
     #[test]
     fn every_operation_of_the_spec_has_a_command() {
         let spec: Value =
-            yaml_serde::from_str(include_str!("../../control-openapi.yaml")).expect("spec");
+            barbacane_compiler::yaml::from_str(include_str!("../../control-openapi.yaml"))
+                .expect("spec");
         let mut expected = 0;
         for item in spec["paths"].as_object().expect("paths").values() {
             for method in ["get", "post", "put", "patch", "delete"] {

@@ -1,0 +1,7 @@
+a: "tab\there"
+b: "\u00e9"
+c: 'it''s'
+d: "\x41"
+e: "line\nbreak"
+f: "\U0001F600"
+g: "\N\_\L\P"
