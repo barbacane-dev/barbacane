@@ -94,3 +94,7 @@ harness = false
 [[bench]]
 name = "serialization"
 harness = false
+
+[[bench]]
+name = "plugins"
+harness = false
