@@ -45,6 +45,18 @@ pub enum WasmError {
     #[error("plugin imports undeclared host function: {0}")]
     UndeclaredImport(String),
 
+    /// The plugin imports a function the host does not provide.
+    #[error(
+        "plugin imports {module}::{name}, which the host does not provide; plugins import \
+         `barbacane` host functions and, from {wasi}, only {supported}"
+    )]
+    UnsupportedImport {
+        module: String,
+        name: String,
+        wasi: &'static str,
+        supported: String,
+    },
+
     /// Unknown capability.
     #[error("unknown capability: {0}")]
     UnknownCapability(String),

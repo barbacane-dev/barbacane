@@ -41,6 +41,46 @@ pub fn validate_exports(module: &Module, plugin_type: PluginType) -> Result<(), 
     Ok(())
 }
 
+/// The module WASI functions are imported from.
+pub const WASI_MODULE: &str = "wasi_snapshot_preview1";
+
+/// The WASI functions the host provides, as stubs in the linker. A plugin
+/// importing any other WASI function, or from any module other than this one
+/// and `barbacane`, is refused by [`validate_import_modules`]. Part of the
+/// plugin interface; `barbacane_compiler::wasi::WASI_IMPORTS` holds the same
+/// list for the compile-time check.
+pub const WASI_IMPORTS: [&str; 7] = [
+    "random_get",
+    "clock_time_get",
+    "fd_write",
+    "sched_yield",
+    "environ_get",
+    "environ_sizes_get",
+    "proc_exit",
+];
+
+/// Refuse a module that imports anything the host does not provide: a function
+/// from a module other than `barbacane` and [`WASI_MODULE`], or a WASI function
+/// outside [`WASI_IMPORTS`].
+pub fn validate_import_modules(module: &Module) -> Result<(), WasmError> {
+    for import in module.imports() {
+        let provided = match import.module() {
+            "barbacane" => true,
+            WASI_MODULE => WASI_IMPORTS.contains(&import.name()),
+            _ => false,
+        };
+        if !provided {
+            return Err(WasmError::UnsupportedImport {
+                module: import.module().to_string(),
+                name: import.name().to_string(),
+                wasi: WASI_MODULE,
+                supported: WASI_IMPORTS.join(", "),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Validate that a WASM module only imports declared host functions.
 pub fn validate_imports(
     module: &Module,
@@ -227,6 +267,44 @@ mod tests {
     fn unknown_capability_returns_empty() {
         let imports = capability_to_imports("unknown");
         assert!(imports.is_empty());
+    }
+
+    fn module_importing(wat_imports: &str) -> wasmtime::Module {
+        let engine = wasmtime::Engine::default();
+        let wasm = wat::parse_str(format!(
+            "(module {wat_imports} (memory (export \"memory\") 1))"
+        ))
+        .expect("valid wat");
+        wasmtime::Module::new(&engine, &wasm).expect("valid module")
+    }
+
+    #[test]
+    fn a_wasi_function_outside_the_set_is_refused_by_name() {
+        let module = module_importing(
+            r#"(import "wasi_snapshot_preview1" "fd_close" (func (param i32) (result i32)))"#,
+        );
+        let err = validate_import_modules(&module).unwrap_err().to_string();
+        assert!(err.contains("wasi_snapshot_preview1::fd_close"), "{err}");
+        assert!(
+            err.contains("random_get, clock_time_get"),
+            "lists the set: {err}"
+        );
+    }
+
+    #[test]
+    fn an_import_from_another_module_is_refused() {
+        let module = module_importing(r#"(import "env" "abort" (func))"#);
+        let err = validate_import_modules(&module).unwrap_err().to_string();
+        assert!(err.contains("env::abort"), "{err}");
+    }
+
+    #[test]
+    fn host_functions_and_listed_wasi_functions_pass() {
+        let module = module_importing(
+            r#"(import "barbacane" "host_log" (func (param i32 i32 i32)))
+               (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))"#,
+        );
+        assert!(validate_import_modules(&module).is_ok());
     }
 
     fn module_with_import(import: &str) -> wasmtime::Module {

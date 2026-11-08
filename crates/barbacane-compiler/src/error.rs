@@ -95,6 +95,19 @@ pub enum CompileError {
     #[error("E1032: security scheme the authentication plugin does not implement: {0}")]
     UnimplementedSecurityScheme(String),
 
+    /// E1043: A plugin imports a function the gateway does not provide.
+    #[error(
+        "E1043: plugin '{plugin}' imports {module}::{name}, which the gateway does not provide; \
+         plugins import `barbacane` host functions and, from {wasi}, only {supported}"
+    )]
+    UnsupportedImport {
+        plugin: String,
+        module: String,
+        name: String,
+        wasi: &'static str,
+        supported: String,
+    },
+
     /// E1051: Schema exceeds maximum nesting depth.
     #[error("E1051: schema too deep: {0}")]
     SchemaTooDeep(String),

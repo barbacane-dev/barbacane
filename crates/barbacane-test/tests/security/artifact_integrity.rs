@@ -465,3 +465,62 @@ async fn duplicate_member_is_rejected() {
     });
     assert_rejected(&tampered, "archive holds routes.json twice").await;
 }
+
+/// The mock plugin replaced by `wat`, with its checksum and `artifact_hash`
+/// recomputed: an artifact the integrity checks accept.
+fn artifact_with_mock_plugin(dir: &Path, wat: &str) -> PathBuf {
+    let wasm = wat::parse_str(wat).expect("valid WAT");
+    rewrite_artifact(dir, |entries| {
+        *member(entries, "plugins/mock.wasm") = wasm.clone();
+        let sha = sha256_hex(&wasm);
+        let bytes = member(entries, "manifest.json");
+        let mut manifest: barbacane_compiler::Manifest =
+            serde_json::from_slice(bytes).expect("parse manifest");
+        manifest
+            .checksums
+            .insert("plugins/mock.wasm".into(), format!("sha256:{sha}"));
+        for plugin in manifest.plugins.iter_mut().filter(|p| p.name == "mock") {
+            plugin.sha256 = sha.clone();
+        }
+        manifest.artifact_hash = barbacane_compiler::recompute_artifact_hash(&manifest);
+        *bytes = serde_json::to_vec(&manifest).expect("serialise manifest");
+    })
+}
+
+/// A dispatcher importing one WASI function.
+fn dispatcher_importing(wasi_function: &str, signature: &str) -> String {
+    format!(
+        r#"(module
+  (import "wasi_snapshot_preview1" "{wasi_function}" (func {signature}))
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+  (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "dispatch") (param i32 i32) (result i32) (i32.const 0)))"#
+    )
+}
+
+/// The compiler refuses such a plugin (E1043); the data plane refuses it too,
+/// in an artifact built some other way.
+#[tokio::test]
+async fn a_plugin_importing_an_unsupported_wasi_function_is_refused_on_load() {
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let supported = artifact_with_mock_plugin(
+        dir.path(),
+        &dispatcher_importing("random_get", "(param i32 i32) (result i32)"),
+    );
+    assert!(
+        gateway_loads_artifact(&supported).await,
+        "positive control: the rewritten artifact passes the integrity checks"
+    );
+
+    let dir = TempDir::new().unwrap();
+    let unsupported = artifact_with_mock_plugin(
+        dir.path(),
+        &dispatcher_importing("fd_close", "(param i32) (result i32)"),
+    );
+    assert!(!gateway_loads_artifact(&unsupported).await);
+}
