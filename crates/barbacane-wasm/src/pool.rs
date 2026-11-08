@@ -71,8 +71,11 @@ pub struct InstancePool {
     /// The WASM engine.
     engine: Arc<WasmEngine>,
 
-    /// Resource limits for instances.
+    /// Resource limits for a plugin without its own.
     limits: PluginLimits,
+
+    /// Resource limits by plugin name.
+    plugin_limits: HashMap<String, PluginLimits>,
 
     /// HTTP client for plugins that need outbound HTTP calls.
     http_client: Option<Arc<HttpClient>>,
@@ -133,6 +136,7 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            plugin_limits: HashMap::new(),
             metrics: None,
         }
     }
@@ -157,6 +161,7 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            plugin_limits: HashMap::new(),
             metrics: None,
         }
     }
@@ -182,6 +187,7 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            plugin_limits: HashMap::new(),
             metrics: None,
         }
     }
@@ -213,6 +219,7 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            plugin_limits: HashMap::new(),
             metrics: None,
         }
     }
@@ -229,6 +236,18 @@ impl InstancePool {
     pub fn with_secret_scopes(mut self, scopes: HashMap<String, HashSet<String>>) -> Self {
         self.secret_refs_by_plugin = scopes;
         self
+    }
+
+    /// Set each plugin's resource limits, by plugin name. A plugin absent from
+    /// the map gets the pool's limits. Chain after a constructor.
+    pub fn with_plugin_limits(mut self, limits: HashMap<String, PluginLimits>) -> Self {
+        self.plugin_limits = limits;
+        self
+    }
+
+    /// The resource limits instances of `plugin` run with.
+    pub fn limits_for(&self, plugin: &str) -> &PluginLimits {
+        self.plugin_limits.get(plugin).unwrap_or(&self.limits)
     }
 
     /// Register a compiled module in the pool.
@@ -270,7 +289,7 @@ impl InstancePool {
         let mut instance = PluginInstance::new_with_all_options(
             self.engine.engine(),
             &module,
-            self.limits.clone(),
+            self.limits_for(&key.name).clone(),
             self.http_client.clone(),
             scoped_secrets,
             self.rate_limiter.clone(),
@@ -350,5 +369,44 @@ mod tests {
 
         assert_eq!(pool.module_count(), 0);
         assert_eq!(pool.instance_key_count(), 0);
+    }
+
+    /// A middleware whose `init` grows its memory to 3 MiB and returns 1 when
+    /// the growth is refused.
+    const GROWS_TO_3_MIB: &str = r#"(module
+      (memory (export "memory") 1)
+      (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+      (func (export "init") (param i32 i32) (result i32)
+        (i32.eq (memory.grow (i32.const 47)) (i32.const -1)))
+      (func (export "on_request") (param i32 i32) (result i32) (i32.const 0))
+      (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#;
+
+    #[test]
+    fn each_plugin_runs_with_its_own_limits() {
+        let engine = Arc::new(WasmEngine::new().unwrap());
+        let wasm = wat::parse_str(GROWS_TO_3_MIB).expect("valid WAT");
+        let small = PluginLimits::default().with_memory(2 * 1024 * 1024);
+        let pool = InstancePool::new(Arc::clone(&engine), PluginLimits::default())
+            .with_plugin_limits(HashMap::from([("small".to_string(), small)]));
+        for name in ["small", "roomy"] {
+            let module = engine
+                .compile(&wasm, name.into(), "0.1.0".into(), false)
+                .expect("compile");
+            pool.register_module(module);
+            pool.register_config(InstanceKey::new(name, &json!({})), b"{}".to_vec());
+        }
+
+        assert_eq!(pool.limits_for("small").max_memory_bytes, 2 * 1024 * 1024);
+        assert_eq!(
+            pool.limits_for("roomy").max_memory_bytes,
+            PluginLimits::default().max_memory_bytes
+        );
+        let refused = pool
+            .get_instance(&InstanceKey::new("small", &json!({})))
+            .err()
+            .expect("3 MiB does not fit in 2 MiB");
+        assert!(refused.to_string().contains("init returned 1"), "{refused}");
+        pool.get_instance(&InstanceKey::new("roomy", &json!({})))
+            .expect("3 MiB fits in the default");
     }
 }

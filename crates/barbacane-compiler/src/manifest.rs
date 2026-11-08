@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::cache::PluginCache;
 use crate::download;
 use crate::error::CompileError;
+use crate::limits::DeclaredLimits;
 use crate::spec_parser::ApiSpec;
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +21,8 @@ struct PluginToml {
     plugin: PluginMeta,
     #[serde(default)]
     capabilities: PluginTomlCapabilities,
+    #[serde(default)]
+    limits: toml::Table,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +58,8 @@ struct PluginMetadata {
     implements: Vec<String>,
     body_access: bool,
     host_functions: Vec<String>,
+    /// The `[limits]` table, or why it is invalid.
+    limits: Result<DeclaredLimits, String>,
 }
 
 /// Parse plugin metadata from TOML content.
@@ -67,6 +72,7 @@ fn parse_plugin_metadata(content: &str) -> Option<PluginMetadata> {
         implements: parsed.plugin.implements,
         body_access: parsed.capabilities.body_access,
         host_functions: parsed.capabilities.host_functions,
+        limits: DeclaredLimits::from_toml(&parsed.limits),
     })
 }
 
@@ -167,16 +173,28 @@ pub fn embedded_category(wasm: &[u8]) -> Option<String> {
 }
 
 /// Read the capabilities a plugin declares in the manifest inside its WASM
-/// binary. `None` when the binary carries no manifest, so its capabilities are
-/// unknown.
-pub fn embedded_capabilities(wasm: &[u8]) -> Option<crate::artifact::PluginCapabilities> {
-    read_embedded_manifest(wasm)
+/// binary. `Ok(None)` when the binary carries no manifest, so its capabilities
+/// are unknown; `E1044` when its `[limits]` are invalid.
+pub fn embedded_capabilities(
+    name: &str,
+    wasm: &[u8],
+) -> Result<Option<crate::artifact::PluginCapabilities>, CompileError> {
+    let Some(metadata) = read_embedded_manifest(wasm)
         .as_deref()
         .and_then(parse_plugin_metadata)
-        .map(|m| crate::artifact::PluginCapabilities {
-            body_access: m.body_access,
-            host_functions: m.host_functions,
-        })
+    else {
+        return Ok(None);
+    };
+    Ok(Some(crate::artifact::PluginCapabilities {
+        body_access: metadata.body_access,
+        host_functions: metadata.host_functions,
+        limits: metadata
+            .limits
+            .map_err(|reason| CompileError::InvalidLimits {
+                plugin: name.to_string(),
+                reason,
+            })?,
+    }))
 }
 
 /// Read the security scheme types a plugin declares it reads, from the manifest
@@ -271,6 +289,17 @@ fn resolve_plugin(
         );
     }
 
+    let limits = match metadata.as_ref().map(|m| m.limits.clone()) {
+        Some(Err(reason)) => {
+            return Err(CompileError::InvalidLimits {
+                plugin: name.to_string(),
+                reason,
+            })
+        }
+        Some(Ok(limits)) => limits,
+        None => DeclaredLimits::default(),
+    };
+
     // The config schema carries the secret (writeOnly) fields and the
     // annotations naming the request headers the plugin reads. Prefer the copy
     // embedded in the WASM, so it reaches the compiler wherever the binary
@@ -306,6 +335,7 @@ fn resolve_plugin(
             .as_ref()
             .map(|m| m.host_functions.clone())
             .unwrap_or_default(),
+        limits,
         secret_fields,
         config_schema,
     })
@@ -437,6 +467,8 @@ pub struct ResolvedPlugin {
     pub body_access: bool,
     /// Declared capability host-function names from plugin.toml.
     pub host_functions: Vec<String>,
+    /// Resource limits from plugin.toml's `[limits]`.
+    pub limits: DeclaredLimits,
     /// Config fields marked `writeOnly` (secret) in config-schema.json, if present.
     pub secret_fields: Vec<String>,
     /// The plugin's `config-schema.json`, kept so the compiler can read the
@@ -884,6 +916,80 @@ plugins:
 
         assert_eq!(resolved[0].version.as_deref(), Some("2.0.0"));
         assert_eq!(resolved[0].host_functions, vec!["log"]);
+    }
+
+    /// A project bundling one plugin whose sidecar `plugin.toml` ends with
+    /// `limits` (a `[limits]` table, or nothing).
+    fn resolve_with_sidecar_limits(limits: &str) -> Result<Vec<ResolvedPlugin>, CompileError> {
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("p.wasm"),
+            [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!("[plugin]\nname=\"p\"\nversion=\"1.0.0\"\ntype=\"middleware\"\n{limits}"),
+        )
+        .unwrap();
+        let content = "plugins:\n  p:\n    path: ./plugins/p.wasm\n";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+        manifest.resolve_plugins(temp.path(), false)
+    }
+
+    #[test]
+    fn declared_limits_are_read_from_plugin_toml() {
+        let resolved =
+            resolve_with_sidecar_limits("[limits]\nmemory_mib = 4\ntimeout_ms = 20\n").unwrap();
+        assert_eq!(
+            resolved[0].limits,
+            DeclaredLimits {
+                memory_mib: Some(4),
+                fuel: None,
+                timeout_ms: Some(20),
+            }
+        );
+        let resolved = resolve_with_sidecar_limits("").unwrap();
+        assert!(resolved[0].limits.is_empty());
+    }
+
+    #[test]
+    fn invalid_limits_in_plugin_toml_are_e1044() {
+        for (limits, expected) in [
+            ("[limits]\nmemory = 4\n", "unknown key `memory`"),
+            ("[limits]\nmemory_mib = 4096\n", "ceiling"),
+            ("[limits]\ntimeout_ms = 0\n", "at least 1"),
+        ] {
+            let error = resolve_with_sidecar_limits(limits).unwrap_err().to_string();
+            assert!(
+                error.starts_with("E1044: plugin 'p'") && error.contains(expected),
+                "{limits}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_capabilities_carry_the_limits() {
+        let toml = concat!(
+            "[plugin]\nname=\"p\"\nversion=\"0.1.0\"\ntype=\"middleware\"\n",
+            "[capabilities]\nhost_functions=[\"log\"]\n[limits]\nfuel = 5000\n"
+        );
+        let wasm = wasm_with_custom_section(MANIFEST_SECTION, toml.as_bytes());
+        let capabilities = embedded_capabilities("p", &wasm)
+            .unwrap()
+            .expect("manifest");
+        assert_eq!(capabilities.limits.fuel, Some(5000));
+        assert_eq!(capabilities.host_functions, vec!["log"]);
+
+        let invalid = toml.replace("fuel = 5000", "fuel = 0");
+        let wasm = wasm_with_custom_section(MANIFEST_SECTION, invalid.as_bytes());
+        let error = embedded_capabilities("p", &wasm).unwrap_err().to_string();
+        assert!(error.starts_with("E1044: plugin 'p'"), "{error}");
+
+        let bare = wasm_with_custom_section("producers", b"rustc");
+        assert!(embedded_capabilities("p", &bare).unwrap().is_none());
     }
 
     #[test]

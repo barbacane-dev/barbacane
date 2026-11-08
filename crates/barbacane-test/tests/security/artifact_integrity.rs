@@ -524,3 +524,53 @@ async fn a_plugin_importing_an_unsupported_wasi_function_is_refused_on_load() {
     );
     assert!(!gateway_loads_artifact(&unsupported).await);
 }
+
+/// The mock plugin's recorded limits replaced by `limits`, with
+/// `artifact_hash` recomputed so the integrity checks pass.
+fn artifact_with_mock_limits(dir: &Path, limits: barbacane_compiler::DeclaredLimits) -> PathBuf {
+    rewrite_artifact(dir, |entries| {
+        let bytes = member(entries, "manifest.json");
+        let mut manifest: barbacane_compiler::Manifest =
+            serde_json::from_slice(bytes).expect("parse manifest");
+        for plugin in manifest.plugins.iter_mut().filter(|p| p.name == "mock") {
+            plugin.capabilities.limits = limits;
+        }
+        manifest.artifact_hash = barbacane_compiler::recompute_artifact_hash(&manifest);
+        *bytes = serde_json::to_vec(&manifest).expect("serialise manifest");
+    })
+}
+
+/// The compiler refuses limits above the ceiling (E1044); the data plane
+/// refuses them too, in an artifact built some other way.
+#[tokio::test]
+async fn limits_above_the_gateway_ceiling_are_refused_on_load() {
+    use barbacane_compiler::limits::MAX_MEMORY_MIB;
+    use barbacane_compiler::DeclaredLimits;
+
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let at_ceiling = artifact_with_mock_limits(
+        dir.path(),
+        DeclaredLimits {
+            memory_mib: Some(MAX_MEMORY_MIB),
+            ..Default::default()
+        },
+    );
+    assert!(
+        gateway_loads_artifact(&at_ceiling).await,
+        "positive control: limits at the ceiling load"
+    );
+
+    let dir = TempDir::new().unwrap();
+    let above = artifact_with_mock_limits(
+        dir.path(),
+        DeclaredLimits {
+            memory_mib: Some(MAX_MEMORY_MIB + 1),
+            ..Default::default()
+        },
+    );
+    assert!(!gateway_loads_artifact(&above).await);
+}

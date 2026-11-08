@@ -95,6 +95,10 @@ pub enum CompileError {
     #[error("E1032: security scheme the authentication plugin does not implement: {0}")]
     UnimplementedSecurityScheme(String),
 
+    /// E1044: A plugin's `[limits]` table is invalid.
+    #[error("E1044: plugin '{plugin}' declares invalid [limits]: {reason}")]
+    InvalidLimits { plugin: String, reason: String },
+
     /// E1043: A plugin imports a function the gateway does not provide.
     #[error(
         "E1043: plugin '{plugin}' imports {module}::{name}, which the gateway does not provide; \

@@ -115,6 +115,10 @@ wasm = "my_plugin.wasm"
 
 [capabilities]
 host_functions = ["log"]
+
+# Optional: see Resource Limits.
+# [limits]
+# memory_mib = 4
 ```
 
 `category` is the plugin's family. It groups the plugin in the middleware guide,
@@ -615,15 +619,37 @@ Use these as references for your own plugins.
 
 ## Resource Limits
 
-Plugins run in a sandboxed WASM environment with these limits:
+Each instance of a plugin runs with its own limits. A plugin declares them in a
+`[limits]` table in `plugin.toml`; a limit it leaves out takes the default.
 
-| Resource | Limit |
-|----------|-------|
-| Linear memory | max(16 MB, max_body_size + 4 MB) |
-| Stack size | 1 MB |
-| Execution time | 100 ms |
+```toml
+[limits]
+memory_mib = 4      # linear memory, in MiB
+fuel = 20_000_000   # fuel for one call
+timeout_ms = 50     # wall-clock budget for one call, in ms
+```
 
-WASM memory scales automatically based on the configured `max_body_size`. Exceeding these limits results in a trap, which answers the request with a 500. On a streamed response, `on_response` runs after the response is sent, so a trap there is logged and the response is unaffected.
+| Limit | Key | Default | Ceiling |
+|-------|-----|---------|---------|
+| Linear memory | `memory_mib` | 16 MiB | 1024 MiB |
+| Fuel per call | `fuel` | 100,000,000 | 10,000,000,000 |
+| Wall clock per call | `timeout_ms` | 100 ms | 10,000 ms |
+| Stack | (not declared) | 1 MiB | |
+
+The wall clock restarts after each host function that waits on the network, so
+that wait does not count. A key outside the table above, a value below 1 or a value
+above its ceiling fails compilation with `E1044`, and the data plane refuses an
+artifact that records one.
+
+A plugin that receives bodies, a dispatcher or a middleware with
+`body_access = true`, gets at least `max_body_size` plus 4 MiB of memory, so a
+body fits beside its working memory. A middleware without `body_access` keeps
+its own memory limit whatever `max_body_size` is.
+
+The limits are recorded in the artifact with the plugin's capabilities and
+covered by `artifact_hash`, so they cannot change after the artifact is signed.
+
+Exceeding a limit results in a trap, which answers the request with a 500. On a streamed response, `on_response` runs after the response is sent, so a trap there is logged and the response is unaffected.
 
 ## Troubleshooting
 
