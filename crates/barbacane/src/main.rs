@@ -836,10 +836,10 @@ impl Gateway {
             }
         }
 
-        // WA-1: capability enforcement only applies to artifacts whose per-plugin
-        // capabilities are authoritative (compiled from plugin.toml). Artifacts
-        // built without them (e.g. via the control-plane registry, which does
-        // not yet persist capabilities) are loaded without enforcement.
+        // WA-1: capability enforcement applies to artifacts whose per-plugin
+        // capabilities are authoritative: those built by the CLI from plugin.toml
+        // and by the control plane from each plugin's embedded manifest. An
+        // artifact from `barbacane_compiler::compile` loads without it.
         let enforce_capabilities = manifest.capabilities_enforced;
         if !enforce_capabilities {
             tracing::warn!(
