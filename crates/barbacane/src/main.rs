@@ -3636,7 +3636,7 @@ paths:
         name: mock
         config:
           status: 200
-          body: '{"id": "{id}", "name": "John Doe"}'
+          body: '{"id": "{{path_params.id}}", "name": "John Doe"}'
           headers:
             Content-Type: application/json
       parameters:
@@ -3683,6 +3683,9 @@ paths:
     let gitignore_content = r#"# Build artifacts
 *.bca
 target/
+
+# Artifact signing keys
+*.pk8
 
 # IDE
 .idea/

@@ -255,7 +255,11 @@ fn init_creates_project_directory() {
     );
     assert!(project.join("specs").is_dir(), "specs/ dir missing");
     assert!(project.join("plugins").is_dir(), "plugins/ dir missing");
-    assert!(project.join(".gitignore").exists(), ".gitignore missing");
+    let gitignore = std::fs::read_to_string(project.join(".gitignore")).expect(".gitignore");
+    assert!(
+        gitignore.lines().any(|line| line == "*.pk8"),
+        "signing keys are ignored"
+    );
 }
 
 #[test]
