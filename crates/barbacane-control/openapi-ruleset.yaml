@@ -1,0 +1,7 @@
+# vacuum ruleset for the control-plane API spec (openapi.yaml).
+extends: [[vacuum:oas, recommended]]
+rules:
+  # The API's JSON fields are snake_case by convention.
+  camel-case-properties: off
+  # Responses are described by their schemas; the spec carries no examples.
+  oas3-missing-example: off
