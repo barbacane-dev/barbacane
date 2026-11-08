@@ -1,20 +1,22 @@
 //! HTTP client for outbound requests from WASM plugins.
 //!
-//! Provides connection pooling, TLS, timeouts, and circuit breaker support.
+//! Provides connection pooling, TLS, timeouts, and endpoint pools with
+//! per-endpoint health (ADR-0035).
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use reqwest::{Certificate, Client, Identity};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+use crate::balancer::{endpoint_id, Balancer, Endpoint};
+use crate::circuit_breaker::CircuitState;
 use barbacane_plugin_sdk::types::base64_body;
 
 /// TLS configuration for upstream mTLS connections.
@@ -93,7 +95,7 @@ impl Hash for TlsCacheKey {
     }
 }
 
-/// HTTP client with connection pooling and circuit breaker support.
+/// HTTP client with connection pooling and endpoint pools.
 #[derive(Clone)]
 pub struct HttpClient {
     /// Default client (no mTLS).
@@ -102,7 +104,8 @@ pub struct HttpClient {
     tls_clients: Arc<RwLock<HashMap<TlsCacheKey, Client>>>,
     /// Base config for creating new clients.
     base_config: HttpClientConfig,
-    circuit_breakers: Arc<RwLock<HashMap<String, CircuitBreaker>>>,
+    /// Rotation and health of endpoint pools, shared across artifact reloads.
+    balancer: Arc<Balancer>,
     default_timeout: Duration,
     allow_plaintext: bool,
 }
@@ -110,6 +113,15 @@ pub struct HttpClient {
 impl HttpClient {
     /// Create a new HTTP client.
     pub fn new(config: HttpClientConfig) -> Result<Self, HttpClientError> {
+        Self::with_balancer(config, Arc::new(Balancer::default()))
+    }
+
+    /// Create a client that keeps pool state in `balancer`, which a gateway
+    /// hands from one artifact to the next.
+    pub fn with_balancer(
+        config: HttpClientConfig,
+        balancer: Arc<Balancer>,
+    ) -> Result<Self, HttpClientError> {
         let client = Client::builder()
             .pool_max_idle_per_host(config.pool_max_idle_per_host)
             .pool_idle_timeout(config.pool_idle_timeout)
@@ -133,7 +145,7 @@ impl HttpClient {
             client,
             tls_clients: Arc::new(RwLock::new(HashMap::new())),
             base_config: config,
-            circuit_breakers: Arc::new(RwLock::new(HashMap::new())),
+            balancer,
             default_timeout,
             allow_plaintext,
         })
@@ -235,12 +247,9 @@ impl HttpClient {
 
     /// Send a streaming HTTP request and return the raw upstream response.
     ///
-    /// Applies the same URL validation, plaintext checks, and circuit breaker
-    /// as `call`, but returns the `reqwest::Response` directly so the caller
-    /// can stream the response body chunk by chunk (e.g. via `bytes_stream()`).
-    ///
-    /// The circuit breaker is only updated on connection-level errors; success
-    /// recording is left to the caller after streaming completes.
+    /// Applies the same URL validation and plaintext checks as `call`, but
+    /// returns the `reqwest::Response` directly so the caller can stream the
+    /// response body chunk by chunk (e.g. via `bytes_stream()`).
     pub async fn stream_raw(
         &self,
         request: HttpRequest,
@@ -255,18 +264,8 @@ impl HttpClient {
             return Err(HttpClientError::PlaintextNotAllowed);
         }
 
-        let host = url
-            .host_str()
-            .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?
-            .to_string();
-
         // SSRF guard: reject internal/loopback/link-local/metadata targets.
         ssrf_guard(&url, self.base_config.allow_internal_egress).await?;
-
-        let circuit_state = self.get_circuit_state(&host);
-        if circuit_state == crate::circuit_breaker::CircuitState::Open {
-            return Err(HttpClientError::CircuitOpen(host));
-        }
 
         let method = request
             .method
@@ -292,7 +291,6 @@ impl HttpClient {
         match req_builder.send().await {
             Ok(response) => Ok(response),
             Err(e) => {
-                self.record_failure(&host);
                 if e.is_timeout() {
                     Err(HttpClientError::Timeout)
                 } else if e.is_connect() {
@@ -310,46 +308,174 @@ impl HttpClient {
         request: HttpRequest,
         tls_config: Option<&TlsConfig>,
     ) -> Result<HttpResponse, HttpClientError> {
-        // Validate URL scheme
-        let url = request
-            .url
-            .parse::<reqwest::Url>()
-            .map_err(|e| HttpClientError::InvalidUrl(e.to_string()))?;
-
-        if url.scheme() == "http" && !self.allow_plaintext {
-            return Err(HttpClientError::PlaintextNotAllowed);
-        }
-
-        // Extract host for circuit breaker
-        let host = url
-            .host_str()
-            .ok_or_else(|| HttpClientError::InvalidUrl("missing host".into()))?
-            .to_string();
-
-        // SSRF guard: reject internal/loopback/link-local/metadata targets.
-        ssrf_guard(&url, self.base_config.allow_internal_egress).await?;
-
-        // Check circuit breaker
-        let circuit_state = self.get_circuit_state(&host);
-        if circuit_state == CircuitState::Open {
-            return Err(HttpClientError::CircuitOpen(host));
-        }
-
-        // Get the appropriate client (default or TLS-configured)
-        let client = match tls_config {
-            Some(tls) if tls.is_configured() => self.get_or_create_tls_client(tls)?,
-            _ => self.client.clone(),
-        };
-
-        // Build request
         let method = request
             .method
             .parse::<reqwest::Method>()
             .map_err(|e| HttpClientError::InvalidMethod(e.to_string()))?;
-
         let timeout = request.timeout.unwrap_or(self.default_timeout);
+        let body = request.body.map(bytes::Bytes::from);
+        self.attempt(
+            &method,
+            &request.url,
+            &request.headers,
+            body,
+            timeout,
+            tls_config,
+        )
+        .await
+        .map_err(|(error, _)| error)
+    }
 
-        let mut req_builder = client.request(method, url).timeout(timeout);
+    /// Send a request to one endpoint of `pool` (ADR-0035) and return the
+    /// outcome with the endpoint that produced it, as [`endpoint_id`] shows it.
+    ///
+    /// `request.url` holds the path and query; the selected endpoint's URL is
+    /// put in front of it. A request that never reached its endpoint is sent to
+    /// the next one whatever its method; one that was sent and answered `502`,
+    /// `503` or `504`, or not answered in time, only when its method is
+    /// idempotent. At most `retries` extra attempts are made (no more than the
+    /// pool has other endpoints), all within the request's timeout.
+    pub async fn pool_call(
+        &self,
+        request: HttpRequest,
+        pool: &[Endpoint],
+        retries: u32,
+        tls_config: Option<&TlsConfig>,
+        metrics: Option<&barbacane_telemetry::MetricsRegistry>,
+    ) -> (Result<HttpResponse, HttpClientError>, Option<String>) {
+        let method = match request.method.parse::<reqwest::Method>() {
+            Ok(m) => m,
+            Err(e) => return (Err(HttpClientError::InvalidMethod(e.to_string())), None),
+        };
+        let idempotent = matches!(
+            method,
+            reqwest::Method::GET
+                | reqwest::Method::HEAD
+                | reqwest::Method::OPTIONS
+                | reqwest::Method::TRACE
+                | reqwest::Method::PUT
+                | reqwest::Method::DELETE
+        );
+        let deadline = Instant::now() + request.timeout.unwrap_or(self.default_timeout);
+        let retries = retries.min(pool.len().saturating_sub(1) as u32);
+        let body = request.body.map(bytes::Bytes::from);
+        let path = if request.url.starts_with('/') {
+            request.url.clone()
+        } else {
+            format!("/{}", request.url)
+        };
+
+        let mut tried = Vec::new();
+        let mut last: (Result<HttpResponse, HttpClientError>, Option<String>) = (
+            Err(HttpClientError::InvalidUrl(
+                "the pool has no endpoint".into(),
+            )),
+            None,
+        );
+        while tried.len() <= retries as usize {
+            let Some(index) = self.balancer.select(pool, &tried) else {
+                break;
+            };
+            let endpoint = &pool[index];
+            let Some(id) = endpoint_id(&endpoint.url) else {
+                return (
+                    Err(HttpClientError::InvalidUrl(
+                        "an endpoint URL does not parse".into(),
+                    )),
+                    None,
+                );
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                last.0 = Err(HttpClientError::Timeout);
+                break;
+            }
+            if !tried.is_empty() {
+                if let Some(m) = metrics {
+                    m.record_upstream_retry(&id);
+                }
+            }
+            tried.push(index);
+
+            let url = format!("{}{}", endpoint.url.trim_end_matches('/'), path);
+            let outcome = self
+                .attempt(
+                    &method,
+                    &url,
+                    &request.headers,
+                    body.clone(),
+                    remaining,
+                    tls_config,
+                )
+                .await;
+            let (healthy, retry) = match &outcome {
+                Ok(response) => {
+                    let unavailable = matches!(response.status, 502..=504);
+                    (!unavailable, unavailable && idempotent)
+                }
+                Err((_, AttemptFailure::Refused)) => (true, true),
+                Err((_, AttemptFailure::Unreached)) => (false, true),
+                Err((_, AttemptFailure::Unanswered)) => (false, idempotent),
+                Err((_, AttemptFailure::Failed)) => (true, false),
+            };
+            // A refusal says nothing about the endpoint, so it is not recorded.
+            if !matches!(outcome, Err((_, AttemptFailure::Refused))) {
+                let breaker = self.balancer.breaker(&id);
+                if healthy {
+                    breaker.record_success();
+                } else {
+                    breaker.record_failure();
+                }
+                if let Some(m) = metrics {
+                    m.record_upstream_endpoint(&id, healthy);
+                    m.set_upstream_circuit_state(&id, circuit_state_value(breaker.state()));
+                }
+            }
+            last = (outcome.map_err(|(error, _)| error), Some(id));
+            if !retry {
+                break;
+            }
+        }
+        last
+    }
+
+    /// One attempt at `url`, with the reason it failed.
+    async fn attempt(
+        &self,
+        method: &reqwest::Method,
+        url: &str,
+        headers: &HashMap<String, String>,
+        body: Option<bytes::Bytes>,
+        timeout: Duration,
+        tls_config: Option<&TlsConfig>,
+    ) -> Result<HttpResponse, (HttpClientError, AttemptFailure)> {
+        let refused = |e| (e, AttemptFailure::Refused);
+        let url = url
+            .parse::<reqwest::Url>()
+            .map_err(|e| refused(HttpClientError::InvalidUrl(e.to_string())))?;
+
+        if url.scheme() == "http" && !self.allow_plaintext {
+            return Err(refused(HttpClientError::PlaintextNotAllowed));
+        }
+
+        // SSRF guard: reject internal/loopback/link-local/metadata targets. A
+        // name that does not resolve was never reached.
+        ssrf_guard(&url, self.base_config.allow_internal_egress)
+            .await
+            .map_err(|e| match e {
+                HttpClientError::ConnectionFailed(_) => (e, AttemptFailure::Unreached),
+                e => refused(e),
+            })?;
+
+        // Get the appropriate client (default or TLS-configured)
+        let client = match tls_config {
+            Some(tls) if tls.is_configured() => {
+                self.get_or_create_tls_client(tls).map_err(refused)?
+            }
+            _ => self.client.clone(),
+        };
+
+        let mut req_builder = client.request(method.clone(), url).timeout(timeout);
 
         // Add headers, dropping any a plugin must not control on the outbound
         // request. `Host` is derived from the URL (a plugin-set Host enables
@@ -357,26 +483,19 @@ impl HttpClient {
         // below are owned by the HTTP client (a plugin-set value enables request
         // smuggling). `Authorization` is intentionally allowed: dispatchers
         // legitimately authenticate to their upstream.
-        for (key, value) in &request.headers {
+        for (key, value) in headers {
             if is_forbidden_outbound_header(key) {
                 continue;
             }
             req_builder = req_builder.header(key.as_str(), value.as_str());
         }
 
-        // Add body
-        if let Some(body) = request.body {
+        if let Some(body) = body {
             req_builder = req_builder.body(body);
         }
 
-        // Execute request
-        let result = req_builder.send().await;
-
-        match result {
+        match req_builder.send().await {
             Ok(response) => {
-                // Record success
-                self.record_success(&host);
-
                 let status = response.status().as_u16();
                 let headers: HashMap<String, String> = response
                     .headers()
@@ -388,7 +507,13 @@ impl HttpClient {
                     })
                     .collect();
 
-                let body = self.read_body_capped(response).await?;
+                let body = self.read_body_capped(response).await.map_err(|e| {
+                    let failure = match e {
+                        HttpClientError::ResponseTooLarge { .. } => AttemptFailure::Failed,
+                        _ => AttemptFailure::Unanswered,
+                    };
+                    (e, failure)
+                })?;
 
                 Ok(HttpResponse {
                     status,
@@ -396,18 +521,21 @@ impl HttpClient {
                     body: Some(body),
                 })
             }
-            Err(e) => {
-                // Record failure
-                self.record_failure(&host);
-
-                if e.is_timeout() {
-                    Err(HttpClientError::Timeout)
-                } else if e.is_connect() {
-                    Err(HttpClientError::ConnectionFailed(e.to_string()))
+            // A connect error, connect timeout or TLS handshake failure: the
+            // request never reached the upstream.
+            Err(e) if e.is_connect() => {
+                let error = if e.is_timeout() {
+                    HttpClientError::Timeout
                 } else {
-                    Err(HttpClientError::RequestFailed(e.to_string()))
-                }
+                    HttpClientError::ConnectionFailed(e.to_string())
+                };
+                Err((error, AttemptFailure::Unreached))
             }
+            Err(e) if e.is_timeout() => Err((HttpClientError::Timeout, AttemptFailure::Unanswered)),
+            Err(e) => Err((
+                HttpClientError::RequestFailed(e.to_string()),
+                AttemptFailure::Unanswered,
+            )),
         }
     }
 
@@ -441,32 +569,9 @@ impl HttpClient {
         Ok(body)
     }
 
-    /// Configure circuit breaker for a host.
-    pub fn configure_circuit_breaker(&self, host: &str, config: CircuitBreakerConfig) {
-        let mut breakers = self.circuit_breakers.write();
-        breakers.insert(host.to_string(), CircuitBreaker::new(config));
-    }
-
-    fn get_circuit_state(&self, host: &str) -> CircuitState {
-        let breakers = self.circuit_breakers.read();
-        breakers
-            .get(host)
-            .map(|cb| cb.state())
-            .unwrap_or(CircuitState::Closed)
-    }
-
-    fn record_success(&self, host: &str) {
-        let mut breakers = self.circuit_breakers.write();
-        if let Some(cb) = breakers.get_mut(host) {
-            cb.record_success();
-        }
-    }
-
-    fn record_failure(&self, host: &str) {
-        let mut breakers = self.circuit_breakers.write();
-        if let Some(cb) = breakers.get_mut(host) {
-            cb.record_failure();
-        }
+    /// The pool state this client keeps, to hand to the next artifact's client.
+    pub fn balancer(&self) -> Arc<Balancer> {
+        Arc::clone(&self.balancer)
     }
 }
 
@@ -687,6 +792,31 @@ impl reqwest::dns::Resolve for GuardedResolver {
 
 /// SSRF guard for the HTTP client: reject requests whose target resolves to an
 /// internal address.
+/// Why an attempt failed, which decides whether it counts against the
+/// endpoint's health and whether another endpoint is tried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttemptFailure {
+    /// Refused before any connection: the URL, the plaintext policy, the egress
+    /// guard, the TLS settings. Says nothing about the endpoint.
+    Refused,
+    /// No connection: connect error or timeout, TLS handshake, name resolution.
+    /// The endpoint never saw the request.
+    Unreached,
+    /// Sent, and no complete response came in time.
+    Unanswered,
+    /// Answered, but the response could not be used (too large).
+    Failed,
+}
+
+/// A breaker state as the circuit-state gauge records it.
+fn circuit_state_value(state: CircuitState) -> i64 {
+    match state {
+        CircuitState::Closed => 0,
+        CircuitState::Open => 1,
+        CircuitState::HalfOpen => 2,
+    }
+}
+
 async fn ssrf_guard(url: &reqwest::Url, allow_internal: bool) -> Result<(), HttpClientError> {
     let host = url
         .host_str()
@@ -806,9 +936,6 @@ pub enum HttpClientError {
 
     #[error("plaintext HTTP not allowed")]
     PlaintextNotAllowed,
-
-    #[error("circuit breaker open for host: {0}")]
-    CircuitOpen(String),
 
     #[error("target blocked by SSRF policy: {0}")]
     BlockedTarget(String),

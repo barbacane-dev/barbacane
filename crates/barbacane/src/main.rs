@@ -421,6 +421,7 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
     merged
 }
+use barbacane_wasm::balancer::{pool_key, Balancer, Endpoint};
 use barbacane_wasm::{
     HttpClient, HttpClientConfig, InstancePool, PluginLimits, RateLimiter, ResponseCache,
     WasmEngine,
@@ -707,6 +708,8 @@ struct Gateway {
     _plugin_limits: PluginLimits,
     /// HTTP client for plugins making outbound calls (kept alive for pool lifetime).
     _http_client: Arc<HttpClient>,
+    /// Endpoint pool state, handed to the next artifact's gateway.
+    balancer: Arc<Balancer>,
     /// Metrics registry for observability.
     metrics: Arc<MetricsRegistry>,
     /// API name from the first spec's title (for metrics labels).
@@ -724,6 +727,7 @@ impl Gateway {
         allow_plaintext_upstream: bool,
         metrics: Arc<MetricsRegistry>,
         trust: &ArtifactTrust,
+        balancer: Option<Arc<Balancer>>,
     ) -> Result<Self, String> {
         let archive = ArtifactArchive::read(artifact_path)
             .map_err(|e| format!("failed to read artifact: {}", e))?;
@@ -779,7 +783,9 @@ impl Gateway {
             max_response_bytes,
             ..Default::default()
         };
-        let http_client = HttpClient::new(http_client_config)
+        // Endpoint pool state carries over from the previous artifact.
+        let balancer = balancer.unwrap_or_default();
+        let http_client = HttpClient::with_balancer(http_client_config, Arc::clone(&balancer))
             .map_err(|e| format!("failed to create HTTP client: {}", e))?;
         let http_client = Arc::new(http_client);
 
@@ -973,7 +979,8 @@ impl Gateway {
             Some(Arc::new(kafka_publisher)),
             Some(Arc::new(ldap_client)),
         )
-        .with_secret_scopes(secret_refs_by_plugin);
+        .with_secret_scopes(secret_refs_by_plugin)
+        .with_metrics(Arc::clone(&metrics));
 
         // Register all compiled modules in the pool
         for (name, version, module) in compiled_modules {
@@ -1040,6 +1047,16 @@ impl Gateway {
             })
             .unwrap_or_else(|| "default".to_string());
 
+        // Keep pool state for the pools this artifact lists, drop the rest
+        // (ADR-0035). Done last, so a load that fails leaves it as it was.
+        let pools: Vec<_> = resolved_operations
+            .iter()
+            .filter_map(|op| op.dispatch.config.get("endpoints"))
+            .filter_map(|e| serde_json::from_value::<Vec<Endpoint>>(e.clone()).ok())
+            .map(|pool| pool_key(&pool))
+            .collect();
+        balancer.retain(&pools);
+
         Ok(Gateway {
             manifest,
             router,
@@ -1054,6 +1071,7 @@ impl Gateway {
             plugin_pool: Arc::new(plugin_pool),
             _plugin_limits: plugin_limits,
             _http_client: http_client,
+            balancer,
             metrics,
             api_name,
             _request_counter: AtomicU64::new(0),
@@ -1156,7 +1174,12 @@ impl Gateway {
             })
             .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
 
-        let span = tracing::error_span!("request", request_id = %request_id, trace_id = %trace_id);
+        let span = tracing::error_span!(
+            "request",
+            request_id = %request_id,
+            trace_id = %trace_id,
+            upstream_endpoint = tracing::field::Empty
+        );
         self.handle_request_in_span(req, client_addr, start_time, request_id, trace_id)
             .instrument(span)
             .await
@@ -2134,8 +2157,11 @@ impl Gateway {
         // thread them through to `on_response`.
         instance.set_context(middleware_context.clone());
 
-        // Run WASM dispatch on a blocking thread (WASM execution is synchronous).
+        // Run WASM dispatch on a blocking thread (WASM execution is synchronous),
+        // inside the request's span so host calls can record on it.
+        let span = tracing::Span::current();
         let mut wasm_handle = tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
             let result = instance.dispatch(&request_json);
             let output = instance.take_output();
             let output_body = instance.take_output_body();
@@ -3778,6 +3804,7 @@ async fn perform_hot_reload(
         allow_plaintext_upstream,
         metrics,
         &trust,
+        Some(Arc::clone(&shared_gateway.load().balancer)),
     ) {
         Ok(g) => g,
         Err(e) => {
@@ -4040,6 +4067,7 @@ async fn run_dev(
         true,
         metrics.clone(),
         &trust,
+        None,
     ) {
         Ok(g) => {
             eprintln!(
@@ -4269,7 +4297,15 @@ async fn run_dev(
                 }
 
                 // Load new gateway.
-                match Gateway::load(&new_path, true, limits.clone(), true, metrics.clone(), &trust) {
+                match Gateway::load(
+                    &new_path,
+                    true,
+                    limits.clone(),
+                    true,
+                    metrics.clone(),
+                    &trust,
+                    Some(Arc::clone(&gateway.load().balancer)),
+                ) {
                     Ok(new_gw) => {
                         let routes = new_gw.manifest.routes_count;
                         let ms = compile_start.elapsed().as_millis();
@@ -4562,6 +4598,7 @@ async fn run_serve(
         allow_plaintext_upstream,
         metrics.clone(),
         &trust,
+        None,
     ) {
         Ok(g) => Arc::new(ArcSwap::new(Arc::new(g))),
         Err(e) => {

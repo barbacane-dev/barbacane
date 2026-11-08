@@ -110,6 +110,10 @@ pub struct InstancePool {
     /// keyed by plugin name. Used to scope `host_get_secret` to a plugin's own
     /// secrets (WA-3). A plugin absent from this map gets an empty secrets store.
     secret_refs_by_plugin: HashMap<String, HashSet<String>>,
+
+    /// Registry the gateway's metrics go to: plugin telemetry, and pool
+    /// endpoint metrics from the host's HTTP calls.
+    metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
 }
 
 impl InstancePool {
@@ -129,6 +133,7 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            metrics: None,
         }
     }
 
@@ -152,6 +157,7 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            metrics: None,
         }
     }
 
@@ -176,6 +182,7 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            metrics: None,
         }
     }
 
@@ -206,7 +213,15 @@ impl InstancePool {
             instances: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
+            metrics: None,
         }
+    }
+
+    /// Give every instance the gateway's metrics registry. Chain after a
+    /// constructor.
+    pub fn with_metrics(mut self, metrics: Arc<barbacane_telemetry::MetricsRegistry>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Set the per-plugin secret reference scopes (WA-3). Chain after a
@@ -264,6 +279,7 @@ impl InstancePool {
             self.kafka_publisher.clone(),
             self.ldap_client.clone(),
         )?;
+        instance.set_metrics(self.metrics.clone());
 
         // Initialize with config
         let result = instance.init(&config_json)?;
