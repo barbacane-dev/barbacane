@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use wasmtime::{Config, Engine, Module, OptLevel};
+use wasmtime::{Config, Engine, InstancePre, Linker, Module, OptLevel};
 
 use crate::error::WasmError;
+use crate::instance::{add_host_functions, PluginState};
 use crate::limits::PluginLimits;
 
 /// Wall-clock granularity of the epoch ticker. The per-call epoch deadline is
@@ -22,6 +23,12 @@ pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(1);
 #[derive(Clone)]
 pub struct CompiledModule {
     module: Module,
+    /// The module linked against the host functions, once for all its
+    /// instances, or why it cannot be.
+    linked: Result<InstancePre<PluginState>, String>,
+    /// Whether an instance can start from the memory `init` left (see
+    /// [`crate::snapshot::replayable`]).
+    replayable: bool,
     /// The plugin name this module belongs to.
     pub name: String,
     /// The plugin version.
@@ -35,11 +42,25 @@ impl CompiledModule {
     pub fn module(&self) -> &Module {
         &self.module
     }
+
+    /// The module linked against the host functions.
+    pub(crate) fn linked(&self) -> Result<&InstancePre<PluginState>, WasmError> {
+        self.linked
+            .as_ref()
+            .map_err(|e| WasmError::Instantiation(e.clone()))
+    }
+
+    /// Whether an instance can start from the memory `init` left.
+    pub(crate) fn replayable(&self) -> bool {
+        self.replayable
+    }
 }
 
 /// The WASM engine that compiles and manages plugin modules.
 pub struct WasmEngine {
     engine: Engine,
+    /// The host functions, shared by every module this engine compiles.
+    linker: Linker<PluginState>,
     limits: PluginLimits,
     /// Signals the epoch ticker thread to stop on drop.
     epoch_stop: Arc<AtomicBool>,
@@ -95,6 +116,8 @@ impl WasmEngine {
         config.wasm_threads(false);
 
         let engine = Engine::new(&config).map_err(|e| WasmError::EngineCreation(e.to_string()))?;
+        let mut linker = Linker::new(&engine);
+        add_host_functions(&mut linker)?;
 
         // Spawn the epoch ticker: it increments the engine epoch every
         // `EPOCH_TICK` so per-call epoch deadlines fire on a wall-clock basis.
@@ -115,6 +138,7 @@ impl WasmEngine {
 
         Ok(Self {
             engine,
+            linker,
             limits,
             epoch_stop,
             epoch_ticker: Some(epoch_ticker),
@@ -143,9 +167,15 @@ impl WasmEngine {
     ) -> Result<CompiledModule, WasmError> {
         let module = Module::new(&self.engine, wasm_bytes)
             .map_err(|e| WasmError::Compilation(e.to_string()))?;
+        let linked = self
+            .linker
+            .instantiate_pre(&module)
+            .map_err(|e| e.to_string());
 
         Ok(CompiledModule {
             module,
+            linked,
+            replayable: crate::snapshot::replayable(wasm_bytes),
             name,
             version,
             body_access,

@@ -28,6 +28,7 @@ mod schema;
 pub mod secrets;
 #[cfg(test)]
 mod serde_compat;
+mod snapshot;
 mod trap;
 mod validate;
 pub mod version;

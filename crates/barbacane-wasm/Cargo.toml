@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 # WASM runtime
 wasmtime.workspace = true
+wasmparser.workspace = true
 
 # Serialization
 serde.workspace = true
@@ -93,4 +94,8 @@ harness = false
 
 [[bench]]
 name = "serialization"
+harness = false
+
+[[bench]]
+name = "plugins"
 harness = false

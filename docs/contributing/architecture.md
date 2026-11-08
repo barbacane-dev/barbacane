@@ -153,7 +153,7 @@ WASM plugin runtime built on wasmtime.
 
 **Key types:**
 - `WasmEngine` - Configured wasmtime engine with AOT compilation
-- `InstancePool` - Instance pooling per (plugin_name, config_hash)
+- `InstancePool` - Instances per (plugin_name, config_hash): `init` runs once, and each request gets a fresh instance with the memory `init` left (see the plugin guide's "Instances and state")
 - `PluginInstance` - Single WASM instance with host function bindings
 - `MiddlewareChain` - Ordered middleware execution
 
