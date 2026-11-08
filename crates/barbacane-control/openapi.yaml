@@ -44,6 +44,7 @@ paths:
       summary: Health check
       description: Returns the health status of the control plane and database connectivity.
       operationId: healthCheck
+      x-cli: { name: check }
       responses:
         '200':
           description: Service is healthy
@@ -62,6 +63,7 @@ paths:
         Generate project files from a template. Returns the generated files
         (barbacane.yaml, api.yaml, .gitignore) that can be downloaded.
       operationId: initProject
+      x-cli: { resource: projects, name: init }
       requestBody:
         description: The project to generate
         required: true
@@ -805,6 +807,7 @@ paths:
         Notify all connected data planes that a new artifact is available.
         Data planes will pull and load the artifact.
       operationId: deployToProjectDataPlanes
+      x-cli: { name: deploy }
       parameters:
         - $ref: '#/components/parameters/projectId'
       requestBody:
@@ -933,6 +936,7 @@ paths:
         - `{"type": "artifact_available", "artifact_id": "uuid", "download_url": "/artifacts/{id}/download", "sha256": "..."}`
         - `{"type": "heartbeat_ack"}`
       operationId: dataPlaneWebSocket
+      x-cli: { skip: true }
       responses:
         '101':
           description: WebSocket upgrade successful

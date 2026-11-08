@@ -35,64 +35,28 @@ The server automatically runs database migrations on startup.
 
 Data planes serve only artifacts signed by the key they pin. Generate a key with `barbacane key generate --out signing.pk8` and set `BARBACANE_SIGNING_KEY` on the control plane to its path: every artifact the control plane compiles is then signed. Each data plane pins the matching public key (`barbacane key public --key signing.pk8`) with `BARBACANE_TRUSTED_PUBKEY`. The control plane does not hand the key out, so the channel that delivers artifacts cannot also choose the key that vouches for them.
 
-### Upload a Spec
+### Point the CLI at it
+
+The `barbacane` binary carries a client for this API, [`barbacane control`](../reference/cli.md#barbacane-control), whose commands are generated from the API's OpenAPI spec:
 
 ```bash
-curl -X POST http://localhost:9090/specs \
-  -F "file=@api.yaml"
+export BARBACANE_CONTROL_URL=http://localhost:9090
+export BARBACANE_CONTROL_ADMIN_TOKEN=<the token the server runs with>
 ```
 
-Response:
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "Petstore API",
-  "revision": 1,
-  "sha256": "a1b2c3..."
-}
-```
-
-### Start Compilation
+### Upload, compile and download
 
 ```bash
-curl -X POST http://localhost:9090/specs/550e8400-e29b-41d4-a716-446655440000/compile \
-  -H "Content-Type: application/json" \
-  -d '{"production": true}'
+barbacane control specs upload --file api.yaml
+barbacane control compilations start --id <SPEC_ID> --file - <<< '{"production": true}'
+barbacane control compilations get --id <COMPILATION_ID>
+barbacane control artifacts download --id <ARTIFACT_ID> --out api.bca
 ```
 
-Response (202 Accepted):
-```json
-{
-  "id": "660e8400-e29b-41d4-a716-446655440001",
-  "spec_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "pending",
-  "production": true,
-  "started_at": "2024-01-15T10:30:00Z"
-}
-```
-
-### Poll Compilation Status
+A compilation runs in the background: `compilations get` shows `pending` or `compiling` until it is `succeeded`, with an `artifact_id`, or `failed`, with its `errors`. For a project, `push` does the upload, the compilation and the wait in one command:
 
 ```bash
-curl http://localhost:9090/compilations/660e8400-e29b-41d4-a716-446655440001
-```
-
-When complete:
-```json
-{
-  "id": "660e8400-e29b-41d4-a716-446655440001",
-  "spec_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "succeeded",
-  "artifact_id": "770e8400-e29b-41d4-a716-446655440002",
-  "started_at": "2024-01-15T10:30:00Z",
-  "completed_at": "2024-01-15T10:30:05Z"
-}
-```
-
-### Download Artifact
-
-```bash
-curl -o api.bca http://localhost:9090/artifacts/770e8400-e29b-41d4-a716-446655440002/download
+barbacane control push --project <PROJECT_ID> api.yaml
 ```
 
 ## API Versioning
@@ -140,12 +104,8 @@ Full OpenAPI specification is available at [crates/barbacane-control/openapi.yam
 #### Plugin Registration
 
 ```bash
-curl -X POST http://localhost:9090/plugins \
-  -F "name=my-middleware" \
-  -F "version=1.0.0" \
-  -F "type=middleware" \
-  -F "description=My custom middleware" \
-  -F "file=@my-middleware.wasm"
+barbacane control plugins register --name my-middleware --version 1.0.0 \
+  --type middleware --description "My custom middleware" --file my-middleware.wasm
 ```
 
 A compilation reads each plugin's capabilities, category and config schema from the `plugin.toml` and `config-schema.json` embedded in its WASM by the `barbacane-plugin-sdk` macros, and the artifact enforces those capabilities on load. A plugin without an embedded manifest cannot be compiled by the control plane (E1041): rebuild it with the current SDK.
@@ -189,8 +149,10 @@ A compilation reads each plugin's capabilities, category and config schema from 
 ### Health
 
 ```bash
-curl http://localhost:9090/health
+barbacane control health check
 ```
+
+`/health` needs no token, so a probe can call it directly.
 
 Response:
 ```json
@@ -207,19 +169,8 @@ Projects organize your APIs and configure which plugins to use. Each project can
 ### Create a Project
 
 ```bash
-curl -X POST http://localhost:9090/projects \
-  -H "Content-Type: application/json" \
-  -d '{"name": "My API Gateway", "description": "Production gateway"}'
-```
-
-Response:
-```json
-{
-  "id": "880e8400-e29b-41d4-a716-446655440003",
-  "name": "My API Gateway",
-  "description": "Production gateway",
-  "created_at": "2024-01-15T10:00:00Z"
-}
+barbacane control projects create --file - \
+  <<< '{"name": "My API Gateway", "description": "Production gateway"}'
 ```
 
 ### Configure Plugins for a Project
@@ -227,17 +178,13 @@ Response:
 Add plugins from the registry to your project with custom configuration:
 
 ```bash
-curl -X POST http://localhost:9090/projects/880e8400.../plugins \
-  -H "Content-Type: application/json" \
-  -d '{
-    "plugin_name": "rate-limit",
-    "plugin_version": "0.1.0",
-    "enabled": true,
-    "config": {
-      "quota": 1000,
-      "window": 60
-    }
-  }'
+barbacane control project-plugins add --project-id <PROJECT_ID> --file - <<'EOF'
+{
+  "plugin_name": "rate-limit",
+  "plugin_version": "0.1.0",
+  "config": { "quota": 1000, "window": 60 }
+}
+EOF
 ```
 
 Each plugin's configuration is validated against its JSON Schema (if one is defined).
@@ -262,20 +209,11 @@ barbacane serve \
 ### Create API Key for Data Plane
 
 ```bash
-curl -X POST http://localhost:9090/projects/880e8400.../api-keys \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Production Data Plane"}'
+barbacane control api-keys create --project-id <PROJECT_ID> --file - \
+  <<< '{"name": "Production Data Plane"}'
 ```
 
-Response:
-```json
-{
-  "id": "990e8400-e29b-41d4-a716-446655440004",
-  "name": "Production Data Plane",
-  "key": "dp_key_abc123...",
-  "created_at": "2024-01-15T10:30:00Z"
-}
-```
+The response carries the key, prefixed `bbk_`, under `key`.
 
 **Note:** The API key is only shown once at creation time. Store it securely.
 
@@ -284,21 +222,10 @@ Revoking a key (`DELETE /projects/{id}/api-keys/{key_id}`) ends the data plane s
 ### List Connected Data Planes
 
 ```bash
-curl http://localhost:9090/projects/880e8400.../data-planes
+barbacane control data-planes list --project-id <PROJECT_ID>
 ```
 
-Response:
-```json
-[
-  {
-    "id": "aa0e8400-e29b-41d4-a716-446655440005",
-    "name": "production-1",
-    "status": "connected",
-    "current_artifact_id": "770e8400...",
-    "connected_at": "2024-01-15T10:35:00Z"
-  }
-]
-```
+Each data plane reports its `status` (`online`, `deploying` or `offline`) and the `artifact_id` it runs.
 
 ## Deploy
 
@@ -307,20 +234,10 @@ Deploy compiled artifacts to connected data planes for zero-downtime updates.
 ### Trigger Deployment
 
 ```bash
-curl -X POST http://localhost:9090/projects/880e8400.../deploy \
-  -H "Content-Type: application/json" \
-  -d '{"artifact_id": "770e8400-e29b-41d4-a716-446655440002"}'
+barbacane control deploy --project <PROJECT_ID> --artifact <ARTIFACT_ID> --wait
 ```
 
-Response:
-```json
-{
-  "deployment_id": "bb0e8400-e29b-41d4-a716-446655440006",
-  "artifact_id": "770e8400...",
-  "target_data_planes": 3,
-  "status": "in_progress"
-}
-```
+Without `--artifact`, the project's latest artifact is deployed. `--wait` returns once every connected data plane runs it, or fails after `--timeout` seconds (120 by default).
 
 The control plane notifies all connected data planes, which download the new artifact, verify its checksum, and perform a hot-reload.
 

@@ -54,6 +54,10 @@ fips = ["rustls/fips"]
 [lints]
 workspace = true
 
+[build-dependencies]
+serde_json = { workspace = true }
+yaml_serde = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 flate2 = { workspace = true }

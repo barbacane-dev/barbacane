@@ -16,6 +16,7 @@ reqwest = { workspace = true }
 serde_json = { workspace = true }
 yaml_serde = { workspace = true }
 tempfile = { workspace = true }
+uuid = { workspace = true }
 thiserror = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
