@@ -1,135 +1,82 @@
 # Getting started
 
-This guide walks you through creating your first Barbacane-powered API gateway.
+From an empty directory to a running gateway, then the same project run as in production.
 
-## Prerequisites
+## Install
 
-- An OpenAPI 3.x specification
-- One of the installation methods below
-
-## Installation
-
-### Pre-built Binaries (Recommended)
-
-Download the latest release for your platform from [GitHub Releases](https://github.com/barbacane-dev/barbacane/releases):
+Install `barbacane` from the [installation guide](installation.md). For macOS on Apple Silicon:
 
 ```bash
-# Linux (x86_64)
-curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-x86_64-unknown-linux-gnu
-chmod +x barbacane-x86_64-unknown-linux-gnu
-sudo mv barbacane-x86_64-unknown-linux-gnu /usr/local/bin/barbacane
-
-# Linux (ARM64)
-curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-aarch64-unknown-linux-gnu
-chmod +x barbacane-aarch64-unknown-linux-gnu
-sudo mv barbacane-aarch64-unknown-linux-gnu /usr/local/bin/barbacane
-
-# macOS (Intel)
-curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-x86_64-apple-darwin
-chmod +x barbacane-x86_64-apple-darwin
-sudo mv barbacane-x86_64-apple-darwin /usr/local/bin/barbacane
-
-# macOS (Apple Silicon)
 curl -LO https://github.com/barbacane-dev/barbacane/releases/latest/download/barbacane-aarch64-apple-darwin
 chmod +x barbacane-aarch64-apple-darwin
 sudo mv barbacane-aarch64-apple-darwin /usr/local/bin/barbacane
-```
-
-Verify installation:
-```bash
 barbacane --version
 ```
 
-### Container Images
-
-For Docker or Kubernetes deployments:
+## Create a project
 
 ```bash
-# Data plane (from Docker Hub)
-docker pull barbacane/barbacane:latest
-
-# Control plane (from Docker Hub)
-docker pull barbacane/barbacane-control:latest
-```
-
-Also available from GitHub Container Registry:
-```bash
-docker pull ghcr.io/barbacane-dev/barbacane:latest
-docker pull ghcr.io/barbacane-dev/barbacane-control:latest
-```
-
-Quick start with Docker (`--allow-unsigned` for a first try; in production, pin the key that signs your artifacts with `-e BARBACANE_TRUSTED_PUBKEY=...`):
-```bash
-docker run -v ./api.bca:/config/api.bca -p 8080:8080 \
-  ghcr.io/barbacane-dev/barbacane serve --artifact /config/api.bca --allow-unsigned
-```
-
-### Using Cargo
-
-If you have Rust installed:
-
-```bash
-cargo install barbacane
-cargo install barbacane-control  # Optional: control plane CLI
-```
-
-### From Source
-
-For development or custom builds:
-
-```bash
-git clone https://github.com/barbacane-dev/barbacane.git
-cd barbacane
-cargo build --release
-
-# Binaries are in target/release/
-```
-
-## Your First Gateway
-
-### Quick Start with `barbacane init`
-
-The fastest way to start a new project:
-
-```bash
-# Create a new project with example spec and official plugins
 barbacane init my-api --fetch-plugins
-
 cd my-api
 ```
 
 This creates:
-- `barbacane.yaml` — project manifest with plugins and specs folder configured
-- `specs/api.yaml` — OpenAPI spec with example endpoints
-- `plugins/mock.wasm` — mock dispatcher plugin
-- `plugins/http-upstream.wasm` — HTTP proxy plugin
-- `.gitignore` — ignores build artifacts
 
-For a minimal skeleton without example endpoints:
+- `barbacane.yaml`: the project manifest, naming the `specs/` folder and the plugins;
+- `specs/api.yaml`: an OpenAPI spec with a few example operations;
+- `plugins/mock.wasm` and `plugins/http-upstream.wasm`: the official mock and HTTP proxy dispatchers, downloaded from the release of your `barbacane` version;
+- `.gitignore`: ignores compiled artifacts (`*.bca`) and signing keys (`*.pk8`).
 
-```bash
-barbacane init my-api --template minimal --fetch-plugins
-```
+`barbacane init my-api --template minimal --fetch-plugins` starts from a spec with a single operation instead.
 
-If using `barbacane init`, you can skip straight to running the gateway:
+## Run it
 
 ```bash
 barbacane dev
 ```
 
-Or continue below for the manual step-by-step setup.
+```
+barbacane dev: loaded barbacane.yaml (1 spec(s), 2 plugin(s))
+barbacane dev: compiled 4 route(s) in 63ms
+barbacane dev: listening on http://0.0.0.0:8080
+barbacane dev: admin API on http://127.0.0.1:8081
+barbacane dev: watching /path/to/my-api/barbacane.yaml, ./specs, ./plugins/mock.wasm, ./plugins/http-upstream.wasm
+```
 
-### 1. Create an OpenAPI Spec
+`barbacane dev` compiles every spec in `specs/`, serves them, and recompiles and reloads when a spec, the manifest or a plugin changes. It loads its artifacts unsigned, and logs a warning saying so.
 
-Create a file called `api.yaml`:
+In another terminal:
+
+```bash
+curl http://localhost:8080/health
+# {"status": "ok"}
+
+curl http://localhost:8080/users/0b7c6f2e-8d5a-4c1e-9f3b-2a6d8e4c1b9f
+# {"id": "0b7c6f2e-8d5a-4c1e-9f3b-2a6d8e4c1b9f", "name": "John Doe"}
+```
+
+The spec is enforced before any plugin runs. The `id` path parameter is declared as a UUID, and `POST /users` requires a `name` of at least one character and an `email`:
+
+```bash
+curl http://localhost:8080/users/not-a-uuid
+# {"type":"urn:barbacane:error:validation-failed","title":"Request validation failed","status":400,
+#  "detail":"invalid parameter 'id' in path: \"not-a-uuid\" is not a \"uuid\"", ...}
+
+curl -X POST http://localhost:8080/users -H 'content-type: application/json' -d '{"name": ""}'
+# {"type":"urn:barbacane:error:validation-failed","title":"Request validation failed","status":400,
+#  "detail":"invalid request body: \"\" is shorter than 1 character; \"email\" is a required property", ...}
+
+curl http://localhost:8080/nope
+# {"status":404,"title":"Not Found","type":"urn:barbacane:error:not-found"}
+```
+
+Errors are RFC 9457 problem details (`application/problem+json`).
+
+## Change it
+
+Each operation names the plugin that answers it in `x-barbacane-dispatch`. In `specs/api.yaml`:
 
 ```yaml
-openapi: "3.1.0"
-info:
-  title: My API
-  version: "1.0.0"
-
-paths:
   /health:
     get:
       operationId: healthCheck
@@ -137,190 +84,88 @@ paths:
         name: mock
         config:
           status: 200
-          body: '{"status":"ok"}'
-      responses:
-        "200":
-          description: Health check response
+          body: '{"status": "ok"}'
+          headers:
+            Content-Type: application/json
+```
 
-  /users:
-    get:
-      operationId: listUsers
+Change the body to `'{"status": "ready"}'` and save: `barbacane dev` recompiles, and `curl http://localhost:8080/health` answers `{"status": "ready"}`.
+
+To send an operation to a real backend, dispatch it to `http-upstream`:
+
+```yaml
       x-barbacane-dispatch:
         name: http-upstream
         config:
-          url: "https://api.example.com"
-          path: /api/users
-      responses:
-        "200":
-          description: List of users
-
-  /users/{id}:
-    get:
-      operationId: getUser
-      x-barbacane-dispatch:
-        name: http-upstream
-        config:
-          url: "https://api.example.com"
-          path: /api/users/{id}
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-      responses:
-        "200":
-          description: User details
+          url: https://api.example.com
 ```
 
-The key additions are:
-- `x-barbacane-dispatch` on each operation: tells Barbacane how to handle the request
+Middlewares (authentication, rate limiting, CORS, caching) are listed in `x-barbacane-middlewares` on an operation or at the root of the spec, and declared in `barbacane.yaml` like the dispatchers. See [spec configuration](spec-configuration.md), [dispatchers](dispatchers.md) and [middlewares](middlewares/index.md).
 
-### 2. Create a Manifest
-
-Create a `barbacane.yaml` manifest to declare your specs folder and plugins:
-
-```yaml
-specs: ./specs/
-
-plugins:
-  mock:
-    path: ./plugins/mock.wasm
-  http-upstream:
-    path: ./plugins/http-upstream.wasm
-```
-
-The `specs` field points to a folder containing your spec files — all `*.yaml`/`*.json` files are discovered automatically. This enables `barbacane dev` and `barbacane compile` to work without explicit `--spec` flags.
-
-The manifest also declares all WASM plugins used by your spec. Plugins can be sourced from a local path or a remote URL:
-- **Local path**: `path: ./plugins/name.wasm`
-- **Remote URL**: `url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.2/name.wasm`
-
-Remote plugins are downloaded at compile time and cached locally. You can optionally pin integrity with a `sha256` checksum:
-
-```yaml
-plugins:
-  jwt-auth:
-    url: https://github.com/barbacane-dev/barbacane/releases/download/v0.5.2/jwt-auth.wasm
-    sha256: abc123...
-```
-
-### 3. Validate the Spec
+Check a spec without serving it:
 
 ```bash
-barbacane validate --spec api.yaml
+barbacane validate --spec specs/api.yaml
+# ✓ specs/api.yaml is valid
+#
+# validated 1 spec(s): 1 valid, 0 invalid
 ```
 
-Output:
-```
-✓ api.yaml is valid
+## Run it in production
 
-validated 1 spec(s): 1 valid, 0 invalid
-```
-
-### 4. Compile to Artifact
+In production the gateway serves a compiled artifact, and only one signed by a key it pins. Generate the key once, and keep it out of the repository (`.gitignore` already ignores `*.pk8`):
 
 ```bash
-barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
-```
-
-Output:
-```
-compiled 1 spec(s) to api.bca (3 routes, 2 plugin(s) bundled)
-```
-
-The `.bca` (Barbacane Compiled Artifact) file contains:
-- Compiled routing table
-- Embedded source specs (for `/__barbacane/specs`)
-- Bundled WASM plugins
-- Manifest with checksums
-
-### 5. Run the Gateway
-
-```bash
-barbacane serve --artifact api.bca --listen 127.0.0.1:8080 --dev
-```
-
-Output:
-```
-barbacane: loaded 3 route(s) from artifact
-barbacane: listening on 127.0.0.1:8080
-```
-
-### 6. Test It
-
-```bash
-# Health check (mock dispatcher)
-curl http://127.0.0.1:8080/health
-# {"status":"ok"}
-
-# Gateway health
-curl http://127.0.0.1:8080/__barbacane/health
-# {"status":"healthy","artifact_version":1,"compiler_version":"0.8.0","routes_count":3}
-
-# View the API specs
-curl http://127.0.0.1:8080/__barbacane/specs
-# Returns index of specs with links to merged OpenAPI/AsyncAPI
-
-# Try a non-existent route
-curl http://127.0.0.1:8080/nonexistent
-# {"error":"not found"}
-
-# Try wrong method
-curl -X POST http://127.0.0.1:8080/health
-# {"error":"method not allowed"}
-```
-
-## What's Next?
-
-- [Spec Configuration](spec-configuration.md) - Learn about all `x-barbacane-*` extensions
-- [Dispatchers](dispatchers.md) - Route to HTTP backends, mock responses, and more
-- [Middlewares](middlewares/index.md) - Add authentication, rate limiting, CORS
-- [Secrets](secrets.md) - Manage API keys, tokens, and passwords securely
-- [Observability](observability.md) - Metrics, logging, and distributed tracing
-- [Control Plane](control-plane.md) - Manage specs and artifacts via REST API
-
-## Development Mode
-
-For the fastest development workflow, use `barbacane dev`:
-
-```bash
-barbacane dev
-```
-
-This compiles your specs, starts the gateway, and watches for file changes. Every time you save a spec or plugin, the gateway recompiles and hot-reloads automatically — no manual compile-serve cycle needed.
-
-For production, use the explicit compile-and-serve workflow:
-```bash
-# Once: generate the key that signs your artifacts, and keep it secret
 barbacane key generate --out signing.pk8
+# wrote signing.pk8: keep it secret, and compile with BARBACANE_SIGNING_KEY=signing.pk8
+# pin this public key on data planes as BARBACANE_TRUSTED_PUBKEY:
+# 87f3b949...
+```
 
+Compile the project into a signed artifact:
+
+```bash
 BARBACANE_SIGNING_KEY=signing.pk8 barbacane compile -m barbacane.yaml -o api.bca
+# compiled 1 spec(s) to api.bca (4 routes, 1 plugin(s) bundled)
+```
+
+The artifact holds the routes, the specs and the plugins the specs use. Serve it, pinning the public key:
+
+```bash
 BARBACANE_TRUSTED_PUBKEY=$(barbacane key public --key signing.pk8) \
   barbacane serve --artifact api.bca --listen 0.0.0.0:8080
+# barbacane: loaded 4 route(s) from artifact
+# barbacane: listening on http://0.0.0.0:8080
+# barbacane: admin API on http://127.0.0.1:8081
 ```
 
-The gateway serves only artifacts signed by the key it pins; see [artifact signing](../reference/configuration.md#artifact-signing-quickstart).
+Without `BARBACANE_TRUSTED_PUBKEY`, `barbacane serve` refuses to start; `--allow-unsigned` serves unsigned artifacts instead. The [configuration reference](../reference/configuration.md#artifact-signing-quickstart) covers key rotation. To run the gateway as a container, see the [installation guide](installation.md#container-images).
 
-## Observability
+## Observe it
 
-Barbacane includes built-in observability features:
-
-```bash
-# Pretty logs for development
-barbacane serve --artifact api.bca --log-format pretty --log-level debug
-
-# JSON logs with OTLP tracing for production
-barbacane serve --artifact api.bca \
-  --log-format json \
-  --otlp-endpoint http://otel-collector:4317
-```
-
-Prometheus metrics are available on the admin API port (default `127.0.0.1:8081`):
+The admin API serves Prometheus metrics, on `127.0.0.1:8081` by default:
 
 ```bash
 curl http://127.0.0.1:8081/metrics
 ```
 
-See the [Observability Guide](observability.md) for full details.
+Logs are JSON by default; `--log-format pretty` reads better in a terminal, and `--otlp-endpoint` exports traces to an OpenTelemetry collector. See [observability](observability.md).
+
+## Manage gateways centrally
+
+To compile and deploy from one place, run the control plane and drive it with `barbacane control`:
+
+```bash
+barbacane control push --project <ID> specs/api.yaml
+barbacane control deploy --project <ID> --wait
+```
+
+See the [control plane guide](control-plane.md).
+
+## Next
+
+- [Spec configuration](spec-configuration.md): every `x-barbacane-*` extension
+- [Dispatchers](dispatchers.md): proxying, mocks, messaging, cloud services
+- [Middlewares](middlewares/index.md): authentication, rate limiting, CORS, caching
+- [Secrets](secrets.md): API keys and passwords outside the spec
+- [Observability](observability.md): metrics, logs and traces

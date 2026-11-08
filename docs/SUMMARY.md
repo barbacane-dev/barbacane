@@ -4,10 +4,11 @@
 
 # User Guide
 
+- [Installation](guide/installation.md)
 - [Getting started](guide/getting-started.md)
 - [Spec configuration](guide/spec-configuration.md)
 - [Dispatchers (request routing)](guide/dispatchers.md)
-- [Middlewares (auth, rate limit, AI)](guide/middlewares/index.md)
+- [Middlewares (auth, rate limit, caching)](guide/middlewares/index.md)
   - [Authentication](guide/middlewares/authentication.md)
   - [Authorization](guide/middlewares/authorization.md)
   - [Traffic Control](guide/middlewares/traffic-control.md)

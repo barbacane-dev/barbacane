@@ -102,6 +102,7 @@ The compiler validates the spec against each plugin's JSON schema (`vacuum:barba
 
 Full documentation is available at **[docs.barbacane.dev](https://docs.barbacane.dev)**.
 
+- [Installation](https://docs.barbacane.dev/guide/installation.html): release binaries, container images, crates.io, source
 - [Getting Started](https://docs.barbacane.dev/guide/getting-started.html) — First steps with Barbacane
 - [Spec Configuration](https://docs.barbacane.dev/guide/spec-configuration.html) — Configure routing and middleware via `x-barbacane-*` extensions
 - [Dispatchers](https://docs.barbacane.dev/guide/dispatchers.html) — Route requests to HTTP, Lambda, S3, Kafka, NATS, WebSocket backends
