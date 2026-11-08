@@ -45,6 +45,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      BARBACANE_TRUSTED_PUBKEY: ${BARBACANE_TRUSTED_PUBKEY:?set BARBACANE_TRUSTED_PUBKEY to the public key that signs artifact.bca (barbacane key public --key <file>)}
     ports:
       - "8080:8080"
     volumes:

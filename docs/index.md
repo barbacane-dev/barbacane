@@ -22,9 +22,9 @@ The standalone image bundles the binary and all official plugins:
 docker run --rm -v $(pwd):/work ghcr.io/barbacane-dev/barbacane-standalone \
   compile --spec /work/api.yaml --manifest /etc/barbacane/plugins.yaml --output /work/api.bca
 
-# Run the gateway
+# Run the gateway (--allow-unsigned for a first try; sign artifacts in production)
 docker run --rm -p 8080:8080 -v $(pwd)/api.bca:/config/api.bca ghcr.io/barbacane-dev/barbacane-standalone \
-  serve --artifact /config/api.bca --listen 0.0.0.0:8080
+  serve --artifact /config/api.bca --listen 0.0.0.0:8080 --allow-unsigned
 ```
 
 Also available on Docker Hub as `barbacane/barbacane-standalone`. To build locally:
@@ -65,9 +65,15 @@ cd my-api
 For production, use the explicit compile-and-serve workflow:
 
 ```bash
-barbacane compile -m barbacane.yaml -o api.bca
-barbacane serve --artifact api.bca --listen 0.0.0.0:8080
+# Once: generate the key that signs your artifacts, and keep it secret
+barbacane key generate --out signing.pk8
+
+BARBACANE_SIGNING_KEY=signing.pk8 barbacane compile -m barbacane.yaml -o api.bca
+BARBACANE_TRUSTED_PUBKEY=$(barbacane key public --key signing.pk8) \
+  barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ```
+
+The gateway serves only artifacts signed by the key it pins; see [artifact signing](reference/configuration.md#artifact-signing-quickstart).
 
 ## Documentation
 

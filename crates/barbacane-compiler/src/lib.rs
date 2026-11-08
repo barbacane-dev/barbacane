@@ -9,6 +9,7 @@ pub(crate) mod download;
 pub mod error;
 pub mod manifest;
 pub mod request_schema;
+pub mod signing;
 pub mod spec_parser;
 pub mod yaml;
 

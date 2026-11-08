@@ -31,6 +31,10 @@ barbacane-control serve \
 
 The server automatically runs database migrations on startup.
 
+### Signing artifacts
+
+Data planes serve only artifacts signed by the key they pin. Generate a key with `barbacane key generate --out signing.pk8` and set `BARBACANE_SIGNING_KEY` on the control plane to its path: every artifact the control plane compiles is then signed. Each data plane pins the matching public key (`barbacane key public --key signing.pk8`) with `BARBACANE_TRUSTED_PUBKEY`. The control plane does not hand the key out, so the channel that delivers artifacts cannot also choose the key that vouches for them.
+
 ### Upload a Spec
 
 ```bash
@@ -248,6 +252,7 @@ Data planes connect via WebSocket to receive artifacts and configuration:
 
 ```bash
 # Start a data plane connected to the control plane
+BARBACANE_TRUSTED_PUBKEY=<public key of the control plane's signing key> \
 barbacane serve \
   --control-plane ws://localhost:9090/ws/data-plane \
   --project-id 880e8400-e29b-41d4-a716-446655440003 \
@@ -456,6 +461,9 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:barbacane@postgres/barbacane
       BARBACANE_CONTROL_ADMIN_TOKEN: ${BARBACANE_CONTROL_ADMIN_TOKEN}
+      BARBACANE_SIGNING_KEY: /run/secrets/signing.pk8
+    volumes:
+      - ./signing.pk8:/run/secrets/signing.pk8:ro
     ports:
       - "9090:9090"  # API
     depends_on:
@@ -468,6 +476,8 @@ services:
       --control-plane ws://control-plane:9090/ws/data-plane
       --project-id ${PROJECT_ID}
       --api-key ${DATA_PLANE_API_KEY}
+    environment:
+      BARBACANE_TRUSTED_PUBKEY: ${BARBACANE_TRUSTED_PUBKEY}
     ports:
       - "8080:8080"
     depends_on:
