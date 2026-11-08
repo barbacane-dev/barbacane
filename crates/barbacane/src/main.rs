@@ -3388,13 +3388,22 @@ const OFFICIAL_PLUGINS: &[(&str, &str)] = &[
     ("http-upstream", "http-upstream.wasm"),
 ];
 
-/// GitHub release URL base for official plugins.
-const PLUGIN_RELEASE_BASE: &str =
-    "https://github.com/barbacane-dev/barbacane/releases/latest/download";
+/// Where the official plugins of this release are published: the GitHub
+/// release of the CLI's own version, so a release candidate gets its own
+/// plugins and not those of the last stable release.
+const PLUGIN_RELEASE_BASE: &str = concat!(
+    "https://github.com/barbacane-dev/barbacane/releases/download/v",
+    env!("CARGO_PKG_VERSION")
+);
+
+/// The download URL of an official plugin's `filename`.
+fn plugin_url(filename: &str) -> String {
+    format!("{PLUGIN_RELEASE_BASE}/{filename}")
+}
 
 /// Download a plugin from GitHub releases.
 async fn download_plugin(name: &str, filename: &str, dest_dir: &Path) -> Result<(), String> {
-    let url = format!("{}/{}", PLUGIN_RELEASE_BASE, filename);
+    let url = plugin_url(filename);
     let dest_path = dest_dir.join(filename);
 
     eprint!("  Downloading {}...", name);
@@ -3636,7 +3645,7 @@ paths:
         name: mock
         config:
           status: 200
-          body: '{"id": "{id}", "name": "John Doe"}'
+          body: '{"id": "{{path_params.id}}", "name": "John Doe"}'
           headers:
             Content-Type: application/json
       parameters:
@@ -3683,6 +3692,9 @@ paths:
     let gitignore_content = r#"# Build artifacts
 *.bca
 target/
+
+# Artifact signing keys
+*.pk8
 
 # IDE
 .idea/
@@ -5512,6 +5524,20 @@ mod plugin_limits_tests {
         assert_eq!(
             limits_for_plugin(&roomy, true, MIB).max_memory_bytes,
             256 * MIB
+        );
+    }
+}
+
+#[cfg(test)]
+mod init_tests {
+    #[test]
+    fn plugins_come_from_the_release_of_this_version() {
+        assert_eq!(
+            super::plugin_url("mock.wasm"),
+            format!(
+                "https://github.com/barbacane-dev/barbacane/releases/download/v{}/mock.wasm",
+                env!("CARGO_PKG_VERSION")
+            )
         );
     }
 }

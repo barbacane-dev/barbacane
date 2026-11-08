@@ -43,11 +43,11 @@ barbacane init [NAME] [OPTIONS]
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
 | `--template`, `-t` | No | `basic` | Template to use: `basic` (full example) or `minimal` (bare bones) |
-| `--fetch-plugins` | No | `false` | Download official plugins (mock, http-upstream) from GitHub releases |
+| `--fetch-plugins` | No | `false` | Download official plugins (mock, http-upstream) from the GitHub release of this version |
 
 ### Plugin Download
 
-The `--fetch-plugins` flag downloads official Barbacane plugins from GitHub releases:
+The `--fetch-plugins` flag downloads official Barbacane plugins from the GitHub release of the CLI's own version (`barbacane --version`), so a release candidate gets its own plugins:
 
 - **mock** — Returns static responses (useful for testing and mocking)
 - **http-upstream** — Proxies requests to HTTP/HTTPS backends
