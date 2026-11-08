@@ -230,8 +230,19 @@ async fn control_a_payload_hash_that_does_not_match_the_body_is_refused() {
 #[tokio::test]
 async fn a_body_over_the_limit_is_refused_before_the_plugin() {
     let (s3, gateway, _dir) = setup().await;
-    let response = put(&gateway, "too-big", body(MAX_BODY + 1)).await;
-    assert_eq!(response.status(), 413);
+    // The gateway answers 413 from the declared Content-Length without reading
+    // the body, and may close the connection while the client is still writing
+    // it; the client then sees the write fail instead of the response.
+    let result = reqwest::Client::new()
+        .put(format!("{}/s3/bucket/too-big", gateway.base_url()))
+        .header("content-type", "application/octet-stream")
+        .body(body(MAX_BODY + 1))
+        .send()
+        .await;
+    match result {
+        Ok(response) => assert_eq!(response.status(), 413),
+        Err(e) => assert!(e.is_request(), "upload failed for another reason: {e}"),
+    }
     let received = s3.received_requests().await.expect("recording on");
     assert!(received.is_empty(), "nothing reaches S3");
 }

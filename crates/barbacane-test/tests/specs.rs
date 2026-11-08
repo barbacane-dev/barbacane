@@ -72,7 +72,7 @@ async fn test_specs_merged_openapi() {
 
     // Parse the YAML response
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse merged spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse merged spec");
 
     // Check it's a valid OpenAPI spec
     assert!(
@@ -114,7 +114,7 @@ async fn test_specs_merged_openapi_strips_extensions() {
     assert_eq!(resp.status(), 200);
 
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse merged spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse merged spec");
 
     // Check that x-barbacane-dispatch is NOT in the merged spec
     let spec_str = serde_json::to_string(&spec).unwrap();
@@ -138,7 +138,7 @@ async fn test_specs_individual_file() {
     assert_eq!(resp.status(), 200);
 
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse spec");
 
     // Check it's the users spec
     assert_eq!(
@@ -176,6 +176,32 @@ async fn test_specs_individual_strips_extensions() {
 }
 
 #[tokio::test]
+async fn test_specs_individual_parses_regardless_of_file_extension() {
+    // The compiler reads YAML and JSON alike, so a spec named `.json` may hold
+    // YAML. It is served parsed and stripped like any other spec.
+    let gateway = TestGateway::from_spec(&fixture("yaml-named-json.json"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .get("/__barbacane/specs/yaml-named-json.json")
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body = resp.text().await.unwrap();
+    assert!(
+        !body.contains("x-barbacane-") && !body.contains("internal-only-value"),
+        "the served spec must not carry x-barbacane-* extensions: {body}"
+    );
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("served spec parses");
+    assert_eq!(
+        spec.pointer("/info/title"),
+        Some(&serde_json::json!("YAML Named JSON API"))
+    );
+}
+
+#[tokio::test]
 async fn test_specs_preserves_sunset_extension() {
     // Test that x-sunset (RFC 8594) is preserved
     let gateway = TestGateway::from_spec(&fixture("deprecated.yaml"))
@@ -189,7 +215,7 @@ async fn test_specs_preserves_sunset_extension() {
     assert_eq!(resp.status(), 200);
 
     let body = resp.text().await.unwrap();
-    let spec: serde_json::Value = serde_yaml::from_str(&body).expect("failed to parse spec");
+    let spec: serde_json::Value = yaml_serde::from_str(&body).expect("failed to parse spec");
 
     // x-sunset should be preserved (it's a standard extension per RFC 8594)
     let spec_str = serde_json::to_string(&spec).unwrap();

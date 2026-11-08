@@ -116,7 +116,9 @@ All authentication middlewares set two standard headers on successful authentica
 | Header | Description | Example |
 |--------|-------------|---------|
 | `x-auth-consumer` | Canonical consumer identifier | `"alice"`, `"user-123"` |
-| `x-auth-consumer-groups` | Comma-separated group/role memberships | `"admin,editor"`, `"read"` |
+| `x-auth-consumer-groups` | Comma-separated group/role memberships | `"admin,editor"`, `"cn=ops%2Cdc=example"` |
+
+A group name that itself contains a comma, such as an LDAP DN, stays one group: inside a name, `,` is written `%2C` and `%` is written `%25`. Names without either character appear unchanged. An upstream that reads `x-auth-consumer-groups` splits on `,` and then decodes those two escapes; plugins use `barbacane_plugin_sdk::groups`.
 
 These standard headers enable downstream middlewares (like [`acl`](authorization.md#acl)) to enforce authorization without coupling to a specific auth plugin. The gateway drops every `x-auth-*` header a client sends before the middleware chain runs, so these headers can only originate from an auth plugin.
 
@@ -146,7 +148,7 @@ x-barbacane-middlewares:
       partition_key: "context:auth.sub"
 ```
 
-Every auth plugin (`basic-auth`, `apikey-auth`, `jwt-auth`, `oauth2-auth`, `oidc-auth`, `ldap-auth`) writes the same two identity keys after a successful authentication, alongside the `x-auth-*` headers: `auth.sub` (the consumer id, the value of `x-auth-consumer`) and `auth.groups` (the comma-separated groups, only when the identity has groups). `rate-limit`'s `partition_key: "context:auth.sub"` and `request-transformer`'s `context:` sources read them; unlike headers, context values cannot be supplied by the client.
+Every auth plugin (`basic-auth`, `apikey-auth`, `jwt-auth`, `oauth2-auth`, `oidc-auth`, `ldap-auth`) writes the same two identity keys after a successful authentication, alongside the `x-auth-*` headers: `auth.sub` (the consumer id, the value of `x-auth-consumer`) and `auth.groups` (the groups, encoded as in `x-auth-consumer-groups`, only when the identity has groups). `rate-limit`'s `partition_key: "context:auth.sub"` and `request-transformer`'s `context:` sources read them; unlike headers, context values cannot be supplied by the client.
 
 The dispatcher may also write context keys (e.g. `ai-proxy` writes `ai.prompt_tokens` after calling the LLM) that flow into the on_response chain — see [AI Gateway](ai-gateway.md) for the full map.
 

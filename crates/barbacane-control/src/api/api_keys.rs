@@ -59,6 +59,8 @@ pub async fn revoke_api_key(
     }
 
     repo.revoke(key_id).await?;
+    // Sessions registered with the key end now, not at their next reconnect.
+    state.connection_manager.close_sessions_for_key(key_id);
 
     Ok(StatusCode::NO_CONTENT)
 }

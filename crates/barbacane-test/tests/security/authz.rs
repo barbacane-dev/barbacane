@@ -315,3 +315,92 @@ async fn project_scoped_idor_is_blocked() {
     // compiling against the current binary surface.
     let _ = cp.url("/projects");
 }
+
+/// Revoking a data-plane API key ends the WebSocket sessions registered with
+/// it, so a revoked credential stops receiving artifacts at once rather than
+/// at the data plane's next reconnect.
+#[tokio::test]
+async fn revoking_an_api_key_closes_its_data_plane_sessions() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let Some(cp) = TestControlPlane::boot(Some(ADMIN_TOKEN)).await else {
+        eprintln!("skip: control plane unavailable (no DATABASE_URL or binary)");
+        return;
+    };
+    let bearer = format!("Bearer {ADMIN_TOKEN}");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+
+    let project: serde_json::Value = cp
+        .client
+        .post(cp.url("/projects"))
+        .header("Authorization", &bearer)
+        .json(&serde_json::json!({ "name": format!("revoke-{unique}") }))
+        .send()
+        .await
+        .expect("create project")
+        .json()
+        .await
+        .expect("project json");
+    let project_id = project["id"].as_str().expect("project id").to_string();
+
+    let key: serde_json::Value = cp
+        .client
+        .post(cp.url(&format!("/projects/{project_id}/api-keys")))
+        .header("Authorization", &bearer)
+        .json(&serde_json::json!({ "name": "data-plane" }))
+        .send()
+        .await
+        .expect("create key")
+        .json()
+        .await
+        .expect("key json");
+    let key_id = key["id"].as_str().expect("key id").to_string();
+
+    let ws_url = cp.url("/ws/data-plane").replacen("http", "ws", 1);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("connect");
+    let register = serde_json::json!({
+        "type": "register",
+        "project_id": project_id,
+        "api_key": key["key"],
+    });
+    ws.send(Message::Text(register.to_string().into()))
+        .await
+        .expect("send register");
+    let registered = loop {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => break text.to_string(),
+            Ok(Some(Ok(_))) => continue,
+            other => panic!("no registration reply: {other:?}"),
+        }
+    };
+    assert!(registered.contains("\"registered\""), "{registered}");
+
+    let revoked = cp
+        .client
+        .delete(cp.url(&format!("/projects/{project_id}/api-keys/{key_id}")))
+        .header("Authorization", &bearer)
+        .send()
+        .await
+        .expect("revoke");
+    assert_eq!(revoked.status(), 204);
+
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match ws.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await;
+    assert!(
+        ended.is_ok(),
+        "the session must end once its API key is revoked"
+    );
+}

@@ -57,8 +57,8 @@ use barbacane_telemetry::MetricsRegistry;
 use std::collections::{HashMap, HashSet};
 
 use barbacane_compiler::{
-    compile_with_manifest, load_manifest, load_plugins, load_routes, load_specs, CompileOptions,
-    CompiledOperation, Manifest, ProjectManifest,
+    compile_with_manifest, ArtifactArchive, CompileOptions, CompiledOperation, Manifest,
+    ProjectManifest, VerifiedArtifact,
 };
 use barbacane_lib::router::{RouteEntry, RouteMatch, Router};
 use barbacane_lib::validator::{
@@ -114,7 +114,7 @@ enum SpecType {
 /// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
 fn detect_spec_type(content: &str) -> SpecType {
     // Try to parse as YAML (also handles JSON)
-    let parsed: Result<serde_json::Value, _> = serde_yaml::from_str(content);
+    let parsed: Result<serde_json::Value, _> = yaml_serde::from_str(content);
     match parsed {
         Ok(value) => {
             if value.get("openapi").is_some() {
@@ -152,7 +152,7 @@ fn merge_openapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
     let mut titles = Vec::new();
 
     for (filename, content) in specs {
-        let parsed: Option<serde_json::Value> = serde_yaml::from_str(content).ok();
+        let parsed: Option<serde_json::Value> = yaml_serde::from_str(content).ok();
         if let Some(mut spec) = parsed {
             // Strip barbacane extensions
             strip_barbacane_keys_recursive(&mut spec);
@@ -289,7 +289,7 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
     let mut titles = Vec::new();
 
     for (filename, content) in specs {
-        let parsed: Option<serde_json::Value> = serde_yaml::from_str(content).ok();
+        let parsed: Option<serde_json::Value> = yaml_serde::from_str(content).ok();
         if let Some(mut spec) = parsed {
             // Strip barbacane extensions
             strip_barbacane_keys_recursive(&mut spec);
@@ -715,16 +715,37 @@ impl Gateway {
         allow_plaintext_upstream: bool,
         metrics: Arc<MetricsRegistry>,
     ) -> Result<Self, String> {
-        let manifest =
-            load_manifest(artifact_path).map_err(|e| format!("failed to load manifest: {}", e))?;
+        let archive = ArtifactArchive::read(artifact_path)
+            .map_err(|e| format!("failed to read artifact: {}", e))?;
 
-        check_artifact_version(manifest.barbacane_artifact_version)?;
+        check_artifact_version(archive.manifest().barbacane_artifact_version)?;
 
-        let routes =
-            load_routes(artifact_path).map_err(|e| format!("failed to load routes: {}", e))?;
+        // AR-1: authenticate the artifact before using any of it. An Ed25519
+        // signature is required when a trusted public key is pinned via
+        // BARBACANE_TRUSTED_PUBKEY; `artifact_hash` and every archive member
+        // are always checked against the manifest.
+        match std::env::var("BARBACANE_TRUSTED_PUBKEY") {
+            Ok(pubkey) if !pubkey.trim().is_empty() => {
+                barbacane_compiler::verify_artifact_signature(archive.manifest(), &pubkey)
+                    .map_err(|e| format!("artifact signature verification failed: {}", e))?;
+                tracing::info!("artifact Ed25519 signature verified");
+            }
+            _ => {
+                tracing::warn!(
+                    "artifact signature verification disabled; set BARBACANE_TRUSTED_PUBKEY to require a valid Ed25519 signature"
+                );
+            }
+        }
 
-        let specs =
-            load_specs(artifact_path).map_err(|e| format!("failed to load specs: {}", e))?;
+        let VerifiedArtifact {
+            manifest,
+            routes,
+            specs,
+            plugins: bundled_plugins,
+            waf_rules,
+        } = archive
+            .verify()
+            .map_err(|e| format!("artifact integrity check failed: {}", e))?;
 
         // Initialize HTTP client for upstream requests and plugin outbound calls.
         // SSRF guard is on by default; operators opt out for trusted internal
@@ -764,36 +785,8 @@ impl Gateway {
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
         let wasm_engine = Arc::new(wasm_engine);
 
-        // Load plugins from the artifact
-        let bundled_plugins = load_plugins(artifact_path)
-            .map_err(|e| format!("failed to load plugins from artifact: {}", e))?;
-
         if bundled_plugins.is_empty() {
             tracing::warn!("no plugins bundled in artifact - ensure barbacane.yaml manifest was used during compilation");
-        }
-
-        // AR-1: verify artifact integrity before instantiating any plugin.
-        // The hash/checksum checks always run (detect tampering or corruption);
-        // an Ed25519 signature is additionally required when a trusted public
-        // key is pinned via BARBACANE_TRUSTED_PUBKEY.
-        barbacane_compiler::verify_artifact_hash(&manifest)
-            .map_err(|e| format!("artifact integrity check failed: {}", e))?;
-        for (name, loaded) in &bundled_plugins {
-            barbacane_compiler::verify_plugin_checksum(&manifest, name, &loaded.wasm_bytes)
-                .map_err(|e| format!("artifact integrity check failed: {}", e))?;
-        }
-
-        match std::env::var("BARBACANE_TRUSTED_PUBKEY") {
-            Ok(pubkey) if !pubkey.trim().is_empty() => {
-                barbacane_compiler::verify_artifact_signature(&manifest, &pubkey)
-                    .map_err(|e| format!("artifact signature verification failed: {}", e))?;
-                tracing::info!("artifact Ed25519 signature verified");
-            }
-            _ => {
-                tracing::warn!(
-                    "artifact signature verification disabled; set BARBACANE_TRUSTED_PUBKEY to require a valid Ed25519 signature"
-                );
-            }
         }
 
         // Build the WAF stage only after the artifact has been authenticated.
@@ -801,7 +794,7 @@ impl Gateway {
         // check would mean acting on rules an attacker could have swapped.
         // Refusing to start beats starting with a rule set that silently did
         // not load.
-        let waf_stage = match waf::WafStage::from_artifact(artifact_path, &manifest) {
+        let waf_stage = match waf::WafStage::from_rules(&manifest, waf_rules) {
             Ok(stage) => stage,
             Err(e) => return Err(format!("WAF: {e}")),
         };
@@ -2853,7 +2846,7 @@ impl Gateway {
             )
         } else {
             (
-                serde_yaml::to_string(value).unwrap_or_default(),
+                yaml_serde::to_string(value).unwrap_or_default(),
                 "text/yaml",
             )
         };
@@ -2865,40 +2858,23 @@ impl Gateway {
             .expect("valid response")
     }
 
-    /// Serve a specific spec file.
+    /// Serve a specific spec file, parsed and stripped of `x-barbacane-*`
+    /// extensions. It is read with the compiler's parser, which takes YAML and
+    /// JSON alike whatever the file name says. A spec that does not parse is
+    /// not served: its source carries the gateway configuration.
     fn spec_file_response(&self, filename: &str, format: &str) -> Response<Full<Bytes>> {
-        if let Some(content) = self.specs.get(filename) {
-            let is_source_json = filename.ends_with(".json");
-
-            // Parse the spec
-            let parsed: Option<serde_json::Value> = if is_source_json {
-                serde_json::from_str(content).ok()
-            } else {
-                serde_yaml::from_str(content).ok()
-            };
-
-            match parsed {
-                Some(mut value) => {
-                    // Strip x-barbacane-* extensions
-                    strip_barbacane_keys_recursive(&mut value);
-                    self.serve_spec_content(&value, format)
-                }
-                None => {
-                    // If parsing fails, return original content
-                    let content_type = if is_source_json {
-                        "application/json"
-                    } else {
-                        "text/yaml"
-                    };
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("content-type", content_type)
-                        .body(Full::new(Bytes::from(content.clone())))
-                        .expect("valid response")
-                }
+        let Some(content) = self.specs.get(filename) else {
+            return self.not_found_response();
+        };
+        match yaml_serde::from_str::<serde_json::Value>(content) {
+            Ok(mut value) => {
+                strip_barbacane_keys_recursive(&mut value);
+                self.serve_spec_content(&value, format)
             }
-        } else {
-            self.not_found_response()
+            Err(e) => {
+                tracing::error!(spec = %filename, error = %e, "spec cannot be parsed for serving");
+                self.internal_error_response(Some("the spec cannot be parsed"))
+            }
         }
     }
 

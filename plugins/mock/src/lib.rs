@@ -44,7 +44,9 @@ impl MockDispatcher {
     /// - `{{headers.<name>}}` — request header value
     /// - `{{path_params.<name>}}` — path parameter value
     ///
-    /// Unresolved placeholders are left as-is.
+    /// Values are encoded for `content_type`: as the inside of a JSON string
+    /// for a JSON media type, as HTML text for any other. Unresolved
+    /// placeholders are left as-is.
     pub fn dispatch(&mut self, req: Request) -> Response {
         let mut headers = self.headers.clone();
         headers.insert("content-type".to_string(), self.content_type.clone());
@@ -52,7 +54,12 @@ impl MockDispatcher {
         let body = if self.body.is_empty() {
             None
         } else {
-            Some(interpolate(&self.body, &req).into_bytes())
+            let encode = if is_json(&self.content_type) {
+                escape_json
+            } else {
+                escape_html
+            };
+            Some(interpolate(&self.body, &req, encode).into_bytes())
         };
 
         Response {
@@ -63,8 +70,52 @@ impl MockDispatcher {
     }
 }
 
-/// Replace `{{...}}` placeholders in `template` with values from `req`.
-fn interpolate(template: &str, req: &Request) -> String {
+/// Whether `content_type` is `application/json` or a `+json` media type.
+fn is_json(content_type: &str) -> bool {
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence == "application/json" || essence.ends_with("+json")
+}
+
+/// `value` as the inside of a JSON string. `<`, `>` and `&` are escaped too,
+/// so the body never carries markup.
+fn escape_json(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '<' | '>' | '&' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `value` as HTML text, safe in element content and quoted attributes.
+fn escape_html(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Replace `{{...}}` placeholders in `template` with values from `req`,
+/// each passed through `encode`.
+fn interpolate(template: &str, req: &Request, encode: fn(&str) -> String) -> String {
     let mut result = String::with_capacity(template.len());
     let mut rest = template;
 
@@ -74,7 +125,7 @@ fn interpolate(template: &str, req: &Request) -> String {
         if let Some(end) = after_open.find("}}") {
             let key = after_open[..end].trim();
             if let Some(value) = resolve_placeholder(key, req) {
-                result.push_str(&value);
+                result.push_str(&encode(&value));
             } else {
                 // Keep unresolved placeholder as-is
                 result.push_str(&rest[start..start + 2 + end + 2]);
@@ -248,6 +299,48 @@ mod tests {
         .unwrap();
         let resp = plugin.dispatch(test_request());
         assert_eq!(resp.body_str(), Some("ip=127.0.0.1"));
+    }
+
+    fn mock(body: &str, content_type: &str) -> MockDispatcher {
+        serde_json::from_value(serde_json::json!({ "body": body, "content_type": content_type }))
+            .unwrap()
+    }
+
+    fn request_with_name(name: &str) -> Request {
+        let mut req = test_request();
+        req.path_params.insert("name".to_string(), name.to_string());
+        req
+    }
+
+    #[test]
+    fn a_value_in_html_is_escaped() {
+        let mut plugin = mock(
+            "<p>Hello {{path_params.name}}</p>",
+            "text/html; charset=utf-8",
+        );
+        let resp = plugin.dispatch(request_with_name("<script>alert('x')</script>&\""));
+        assert_eq!(
+            resp.body_str(),
+            Some("<p>Hello &lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;&amp;&quot;</p>")
+        );
+    }
+
+    #[test]
+    fn a_value_in_json_stays_inside_its_string() {
+        let mut plugin = mock(r#"{"name":"{{path_params.name}}"}"#, "application/json");
+        let value = r#"x","admin":true,"y":"<b>"#;
+        let resp = plugin.dispatch(request_with_name(value));
+        let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap())
+            .expect("still one valid JSON object");
+        assert_eq!(body, serde_json::json!({ "name": value }));
+        assert!(!resp.body_str().unwrap().contains('<'));
+    }
+
+    #[test]
+    fn a_value_in_another_media_type_is_escaped_as_html() {
+        let mut plugin = mock("{{path_params.name}}", "text/plain");
+        let resp = plugin.dispatch(request_with_name("<svg onload=x>"));
+        assert_eq!(resp.body_str(), Some("&lt;svg onload=x&gt;"));
     }
 
     #[test]

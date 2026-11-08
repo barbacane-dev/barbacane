@@ -93,6 +93,11 @@ pub enum CompileError {
     #[error("E1055: duplicate operationId '{0}': {1}")]
     DuplicateOperationId(String, String),
 
+    /// E1058: Two specs share a file name. The artifact stores each spec
+    /// under its file name, so one would replace the other.
+    #[error("E1058: two specs are named '{0}'; rename one")]
+    DuplicateSpecFile(String),
+
     /// Manifest parsing or loading error.
     #[error("manifest error: {0}")]
     ManifestError(String),

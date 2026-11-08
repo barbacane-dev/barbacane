@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, Notify, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use super::protocol::ControlPlaneMessage;
@@ -17,7 +17,11 @@ const MAX_CONCURRENT_WS_SESSIONS: usize = 1024;
 #[derive(Debug, Clone)]
 struct DataPlaneConnection {
     project_id: Uuid,
+    /// The API key the data plane registered with.
+    key_id: Uuid,
     tx: mpsc::Sender<ControlPlaneMessage>,
+    /// Signalled to end the session.
+    close: Arc<Notify>,
 }
 
 /// Manages active WebSocket connections to data planes.
@@ -55,14 +59,22 @@ impl ConnectionManager {
         Arc::clone(&self.session_slots).try_acquire_owned().ok()
     }
 
-    /// Register a new connection.
+    /// Register a new connection, authenticated with the API key `key_id`.
+    /// Returns the signal that ends the session.
     pub fn register(
         &self,
         data_plane_id: Uuid,
         project_id: Uuid,
+        key_id: Uuid,
         tx: mpsc::Sender<ControlPlaneMessage>,
-    ) {
-        let conn = DataPlaneConnection { project_id, tx };
+    ) -> Arc<Notify> {
+        let close = Arc::new(Notify::new());
+        let conn = DataPlaneConnection {
+            project_id,
+            key_id,
+            tx,
+            close: Arc::clone(&close),
+        };
 
         self.connections.insert(data_plane_id, conn);
 
@@ -76,6 +88,18 @@ impl ConnectionManager {
             project_id = %project_id,
             "Data plane registered"
         );
+        close
+    }
+
+    /// End every session registered with the API key `key_id`. Returns how
+    /// many were signalled.
+    pub fn close_sessions_for_key(&self, key_id: Uuid) -> usize {
+        let mut closed = 0;
+        for conn in self.connections.iter().filter(|c| c.key_id == key_id) {
+            conn.close.notify_one();
+            closed += 1;
+        }
+        closed
     }
 
     /// Remove a connection.
@@ -159,5 +183,25 @@ impl ConnectionManager {
             data_planes_notified = count,
             "Broadcast artifact availability"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn closing_a_key_signals_only_its_sessions() {
+        let manager = ConnectionManager::new();
+        let (revoked_key, other_key) = (Uuid::new_v4(), Uuid::new_v4());
+        let (tx, _rx) = mpsc::channel(1);
+        let revoked = manager.register(Uuid::new_v4(), Uuid::new_v4(), revoked_key, tx.clone());
+        let other = manager.register(Uuid::new_v4(), Uuid::new_v4(), other_key, tx);
+
+        assert_eq!(manager.close_sessions_for_key(revoked_key), 1);
+
+        let wait = std::time::Duration::from_millis(50);
+        assert!(tokio::time::timeout(wait, revoked.notified()).await.is_ok());
+        assert!(tokio::time::timeout(wait, other.notified()).await.is_err());
     }
 }

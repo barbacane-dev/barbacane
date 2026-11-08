@@ -4,6 +4,7 @@
 //! unauthenticated requests with 401 Unauthorized.
 
 use barbacane_plugin_sdk::context;
+use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::jwt::{self, Audience};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -222,22 +223,18 @@ impl JwtAuth {
                 // Extract consumer groups from configured claim
                 if let Some(ref groups_claim) = self.groups_claim {
                     if let Some(groups_val) = claims.extra.get(groups_claim) {
-                        let groups_csv = match groups_val {
-                            serde_json::Value::Array(arr) => arr
-                                .iter()
-                                .filter_map(|v| v.as_str())
-                                .collect::<Vec<_>>()
-                                .join(","),
-                            serde_json::Value::String(s) => {
-                                // Support space-separated or already comma-separated
-                                if s.contains(',') {
-                                    s.clone()
-                                } else {
-                                    s.split_whitespace().collect::<Vec<_>>().join(",")
-                                }
+                        let names: Vec<&str> = match groups_val {
+                            serde_json::Value::Array(arr) => {
+                                arr.iter().filter_map(|v| v.as_str()).collect()
                             }
-                            _ => String::new(),
+                            // A string claim is a comma- or space-separated list.
+                            serde_json::Value::String(s) if s.contains(',') => {
+                                s.split(',').map(str::trim).collect()
+                            }
+                            serde_json::Value::String(s) => s.split_whitespace().collect(),
+                            _ => Vec::new(),
                         };
+                        let groups_csv = groups::encode(names);
                         if !groups_csv.is_empty() {
                             modified_req
                                 .headers
@@ -1253,6 +1250,35 @@ mod tests {
                     r.headers.get("x-auth-consumer-groups").unwrap(),
                     "admin,editor"
                 );
+            }
+            Action::ShortCircuit(_) => panic!("Expected request to be allowed"),
+        }
+    }
+
+    #[test]
+    fn test_on_request_groups_claim_names_with_commas_stay_one_group() {
+        mock_time::set_mock_timestamp(1000);
+        let mut config = JwtAuth {
+            issuer: None,
+            audience: None,
+            clock_skew_seconds: 60,
+            groups_claim: Some("roles".to_string()),
+            skip_signature_validation: true,
+            jwks_url: None,
+            public_key_pem: None,
+            public_key_jwk: None,
+        };
+
+        let token = create_test_jwt(
+            r#"{"alg":"RS256","typ":"JWT"}"#,
+            r#"{"sub":"alice","exp":2000,"roles":["cn=ops,dc=example","viewer"]}"#,
+        );
+        let req = create_test_request(Some(&format!("Bearer {}", token)));
+
+        match config.on_request(req) {
+            Action::Continue(r) => {
+                let header = r.headers.get("x-auth-consumer-groups").unwrap();
+                assert_eq!(groups::decode(header), ["cn=ops,dc=example", "viewer"]);
             }
             Action::ShortCircuit(_) => panic!("Expected request to be allowed"),
         }
