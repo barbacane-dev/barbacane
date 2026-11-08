@@ -7,6 +7,7 @@ pub mod artifact;
 pub(crate) mod cache;
 pub(crate) mod download;
 pub mod error;
+pub mod limits;
 pub mod manifest;
 pub mod request_schema;
 pub mod signing;
@@ -23,6 +24,7 @@ pub use artifact::{
     SourceSpec, VerifiedArtifact, ARTIFACT_VERSION, COMPILER_VERSION, MAX_ARTIFACT_BYTES,
 };
 pub use error::{CompileError, CompileWarning};
+pub use limits::DeclaredLimits;
 pub use manifest::{
     embedded_capabilities, embedded_category, embedded_config_schema, embedded_implements,
     extract_plugin_names, PathSource, PluginSource, ProjectManifest, ResolvedPlugin, UrlSource,

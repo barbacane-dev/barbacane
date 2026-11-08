@@ -175,10 +175,10 @@ WASM plugin runtime built on wasmtime.
 - WebSocket: `host_ws_upgrade`
 - Body access: `host_body_get`/`host_body_set`/`host_body_len`/`host_body_clear`
 
-**Resource limits:**
-- 16 MB linear memory
-- 1 MB stack
-- 100ms execution timeout (via fuel)
+**Resource limits** (per plugin, from `[limits]` in `plugin.toml`; defaults shown):
+- 16 MiB linear memory, at least `max_body_size` plus 4 MiB for a plugin that receives bodies
+- 1 MiB stack
+- 100 M fuel and 100 ms of wall clock per call
 
 ### barbacane-plugin-sdk
 

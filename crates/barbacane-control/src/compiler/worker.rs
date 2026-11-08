@@ -332,14 +332,16 @@ async fn resolve_project_plugins(
 /// refused: its capabilities are unknown, and the artifact enforces them.
 fn registry_bundle(plugin: PluginWithBinary) -> anyhow::Result<barbacane_compiler::PluginBundle> {
     let capabilities =
-        barbacane_compiler::embedded_capabilities(&plugin.wasm_binary).ok_or_else(|| {
-            anyhow::anyhow!(
-                "E1041: plugin '{}' v{} carries no embedded manifest, so its capabilities \
+        barbacane_compiler::embedded_capabilities(&plugin.name, &plugin.wasm_binary)?.ok_or_else(
+            || {
+                anyhow::anyhow!(
+                    "E1041: plugin '{}' v{} carries no embedded manifest, so its capabilities \
                  are unknown. Rebuild it with the current barbacane-plugin-sdk.",
-                plugin.name,
-                plugin.version
-            )
-        })?;
+                    plugin.name,
+                    plugin.version
+                )
+            },
+        )?;
     let category = barbacane_compiler::embedded_category(&plugin.wasm_binary);
     let implements = barbacane_compiler::embedded_implements(&plugin.wasm_binary);
     let config_schema = barbacane_compiler::embedded_config_schema(&plugin.wasm_binary);
@@ -361,6 +363,7 @@ fn registry_bundle(plugin: PluginWithBinary) -> anyhow::Result<barbacane_compile
         wasm_bytes: plugin.wasm_binary,
         body_access: capabilities.body_access,
         host_functions: capabilities.host_functions,
+        limits: capabilities.limits,
         secret_fields,
         config_schema,
     })
@@ -426,6 +429,22 @@ mod tests {
         let bundle = registry_bundle(registry_plugin(wasm)).expect("bundle");
         assert!(bundle.body_access);
         assert_eq!(bundle.host_functions, vec!["log", "http_call"]);
+        assert!(bundle.limits.is_empty());
+    }
+
+    #[test]
+    fn registry_bundle_reads_the_limits_and_refuses_invalid_ones() {
+        let manifest = "[plugin]\nname = \"probe\"\nversion = \"1.0.0\"\ntype = \"middleware\"\n\n\
+                        [limits]\nmemory_mib = 4\n";
+        let bundle =
+            registry_bundle(registry_plugin(module_with_manifest(manifest))).expect("bundle");
+        assert_eq!(bundle.limits.memory_mib, Some(4));
+
+        let invalid = manifest.replace("memory_mib = 4", "memory_mib = 0");
+        let Err(err) = registry_bundle(registry_plugin(module_with_manifest(&invalid))) else {
+            panic!("a plugin with invalid limits must be refused");
+        };
+        assert!(err.to_string().starts_with("E1044"), "{err}");
     }
 
     #[test]

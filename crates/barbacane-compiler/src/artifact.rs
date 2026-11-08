@@ -17,6 +17,7 @@ use crate::spec_parser::{
 };
 
 use crate::error::{CompileError, CompileWarning};
+use crate::limits::DeclaredLimits;
 use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
@@ -328,6 +329,9 @@ pub struct PluginCapabilities {
     /// enforces these against the module's actual imports at load (WA-1).
     #[serde(default)]
     pub host_functions: Vec<String>,
+    /// Resource limits from plugin.toml's `[limits]`.
+    #[serde(default, skip_serializing_if = "DeclaredLimits::is_empty")]
+    pub limits: DeclaredLimits,
 }
 
 /// A plugin loaded from a .bca artifact, ready for compilation.
@@ -626,6 +630,7 @@ pub fn compile_with_manifest(
             wasm_bytes: p.wasm_bytes,
             body_access: p.body_access,
             host_functions: p.host_functions,
+            limits: p.limits,
             secret_fields: p.secret_fields,
             config_schema: p.config_schema,
         })
@@ -926,6 +931,8 @@ pub struct PluginBundle {
     pub body_access: bool,
     /// Declared capability host-function names from plugin.toml.
     pub host_functions: Vec<String>,
+    /// Resource limits from plugin.toml's `[limits]`.
+    pub limits: DeclaredLimits,
     /// Config fields marked `writeOnly` (secret) in the plugin's config-schema.json.
     pub secret_fields: Vec<String>,
     /// The plugin's `config-schema.json`, read for the annotations that say
@@ -1499,6 +1506,15 @@ fn compile_inner(
             });
         }
 
+        // E1044: declared limits stay within the gateway's ceilings.
+        plugin
+            .limits
+            .check()
+            .map_err(|reason| CompileError::InvalidLimits {
+                plugin: plugin.name.clone(),
+                reason,
+            })?;
+
         let wasm_path = format!("plugins/{}.wasm", plugin.name);
         let sha256 = compute_sha256(&plugin.wasm_bytes);
 
@@ -1513,6 +1529,7 @@ fn compile_inner(
             capabilities: PluginCapabilities {
                 body_access: plugin.body_access,
                 host_functions: plugin.host_functions.clone(),
+                limits: plugin.limits,
             },
         });
     }
@@ -1702,12 +1719,13 @@ fn compute_artifact_hash(
         host_functions.sort();
         hasher.update(
             format!(
-                "plugin:{}\ttype={}\tversion={}\tbody_access={}\thost_functions={}\n",
+                "plugin:{}\ttype={}\tversion={}\tbody_access={}\thost_functions={}\tlimits={}\n",
                 p.name,
                 p.plugin_type,
                 p.version,
                 p.capabilities.body_access,
                 host_functions.join(","),
+                p.capabilities.limits.hash_input(),
             )
             .as_bytes(),
         );
@@ -4408,6 +4426,7 @@ paths:
             wasm_bytes: fake_wasm.clone(),
             body_access: false,
             host_functions: vec![],
+            limits: DeclaredLimits::default(),
             secret_fields: vec![],
             config_schema: None,
         }];
@@ -4458,6 +4477,10 @@ paths:
             wasm_bytes: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
             body_access: true,
             host_functions: vec!["log".to_string()],
+            limits: DeclaredLimits {
+                memory_mib: Some(4),
+                ..Default::default()
+            },
             secret_fields: vec![],
             config_schema: None,
         }];
@@ -4475,6 +4498,10 @@ paths:
             vec!["log"]
         );
         assert!(enforced.manifest.plugins[0].capabilities.body_access);
+        assert_eq!(
+            enforced.manifest.plugins[0].capabilities.limits.memory_mib,
+            Some(4)
+        );
 
         let plain = compile(
             &[spec_path.as_path()],
@@ -5935,6 +5962,7 @@ paths:
                 capabilities: PluginCapabilities {
                     body_access: false,
                     host_functions: vec!["host_log".to_string()],
+                    limits: DeclaredLimits::default(),
                 },
             }],
             artifact_hash: String::new(),
@@ -6030,11 +6058,14 @@ paths:
             m.plugins[0].capabilities.host_functions = vec!["host_http_call".to_string()]
         };
         let grant_body_access = |m: &mut Manifest| m.plugins[0].capabilities.body_access = true;
+        let raise_memory_limit =
+            |m: &mut Manifest| m.plugins[0].capabilities.limits.memory_mib = Some(512);
 
         let tampers: Vec<&dyn Fn(&mut Manifest)> = vec![
             &disable_enforcement,
             &widen_host_functions,
             &grant_body_access,
+            &raise_memory_limit,
         ];
 
         for tamper in tampers {
@@ -6861,6 +6892,7 @@ paths:
             wasm_bytes: WASM.to_vec(),
             body_access: false,
             host_functions: vec![],
+            limits: DeclaredLimits::default(),
             secret_fields: vec![],
             config_schema: None,
         }];

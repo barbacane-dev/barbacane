@@ -88,7 +88,7 @@ Metadata about the artifact.
 
 `artifact_hash` binds not just the spec/route/plugin-WASM checksums but also the
 **capability-enforcement surface** — `capabilities_enforced`, each plugin's
-declared `host_functions` / `body_access` / type / version, so a tampered artifact cannot flip the sandbox off while still passing signature
+declared `host_functions` / `body_access` / `limits` / type / version, so a tampered artifact cannot flip the sandbox off while still passing signature
 verification. The data plane recomputes and verifies `artifact_hash` on **every**
 load, independent of signing.
 
@@ -114,7 +114,7 @@ load, independent of signing.
 | `plugin_type` | string | Plugin type (`middleware` or `dispatcher`) |
 | `wasm_path` | string | Path to WASM file within artifact |
 | `sha256` | string | SHA-256 hash of WASM file |
-| `capabilities` | object | `{ body_access: bool, host_functions: [string] }` — declared in `plugin.toml`, enforced on load when `capabilities_enforced` is true |
+| `capabilities` | object | `{ body_access: bool, host_functions: [string], limits?: { memory_mib?, fuel?, timeout_ms? } }`: declared in `plugin.toml`, enforced on load when `capabilities_enforced` is true; `limits` is absent when the plugin declares none |
 
 ### routes.json
 

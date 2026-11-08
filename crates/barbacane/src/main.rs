@@ -57,8 +57,8 @@ use barbacane_telemetry::MetricsRegistry;
 use std::collections::{HashMap, HashSet};
 
 use barbacane_compiler::{
-    compile_with_manifest, ArtifactArchive, CompileOptions, CompiledOperation, Manifest,
-    ProjectManifest, VerifiedArtifact,
+    compile_with_manifest, ArtifactArchive, CompileOptions, CompiledOperation, DeclaredLimits,
+    Manifest, ProjectManifest, VerifiedArtifact,
 };
 use barbacane_lib::router::{RouteEntry, RouteMatch, Router};
 use barbacane_lib::validator::{
@@ -789,15 +789,23 @@ impl Gateway {
             .map_err(|e| format!("failed to create HTTP client: {}", e))?;
         let http_client = Arc::new(http_client);
 
-        // Initialize WASM engine.
-        // Scale WASM memory to accommodate max_body_size: a base64-encoded body
-        // is ~1.37× the raw size, and the plugin holds the JSON input buffer,
-        // decoded body, and re-encoded output simultaneously.  Use 4× the body
-        // limit (minimum 16 MB) so dispatchers have headroom for file uploads.
-        // Bodies travel via side-channel (raw bytes), not base64-in-JSON, so
-        // WASM only needs room for one copy of the body plus working memory.
-        let wasm_memory = std::cmp::max(16 * 1024 * 1024, limits.max_body_size + 4 * 1024 * 1024);
-        let plugin_limits = PluginLimits::default().with_memory(wasm_memory);
+        // Each plugin runs with the limits its manifest declares, the defaults
+        // for the rest, and room for one body if it receives bodies.
+        let mut per_plugin_limits = HashMap::new();
+        for plugin in &manifest.plugins {
+            let declared = &plugin.capabilities.limits;
+            declared
+                .check()
+                .map_err(|e| format!("plugin '{}' declares invalid limits: {}", plugin.name, e))?;
+            let receives_body =
+                plugin.plugin_type != "middleware" || plugin.capabilities.body_access;
+            per_plugin_limits.insert(
+                plugin.name.clone(),
+                limits_for_plugin(declared, receives_body, limits.max_body_size),
+            );
+        }
+        let plugin_limits =
+            limits_for_plugin(&DeclaredLimits::default(), true, limits.max_body_size);
         let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
         let wasm_engine = Arc::new(wasm_engine);
@@ -980,6 +988,7 @@ impl Gateway {
             Some(Arc::new(ldap_client)),
         )
         .with_secret_scopes(secret_refs_by_plugin)
+        .with_plugin_limits(per_plugin_limits)
         .with_metrics(Arc::clone(&metrics));
 
         // Register all compiled modules in the pool
@@ -5411,6 +5420,91 @@ fn check_artifact_version(found: u32) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The limits one plugin runs with: those it declares, the defaults for the
+/// rest. A plugin that receives bodies (a dispatcher, or a middleware with
+/// `body_access`) gets at least `max_body_size` plus 4 MiB of memory, so one
+/// body fits beside its working memory.
+fn limits_for_plugin(
+    declared: &DeclaredLimits,
+    receives_body: bool,
+    max_body_size: usize,
+) -> PluginLimits {
+    const MIB: usize = 1024 * 1024;
+    let defaults = PluginLimits::default();
+    let declared_memory = declared
+        .memory_mib
+        .map_or(defaults.max_memory_bytes, |mib| mib as usize * MIB);
+    let max_memory_bytes = if receives_body {
+        declared_memory.max(max_body_size.saturating_add(4 * MIB))
+    } else {
+        declared_memory
+    };
+    PluginLimits {
+        max_memory_bytes,
+        max_fuel: declared.fuel.unwrap_or(defaults.max_fuel),
+        max_execution_ms: declared.timeout_ms.unwrap_or(defaults.max_execution_ms),
+        ..defaults
+    }
+}
+
+#[cfg(test)]
+mod plugin_limits_tests {
+    use super::{limits_for_plugin, DeclaredLimits, PluginLimits};
+
+    const MIB: usize = 1024 * 1024;
+
+    #[test]
+    fn a_plugin_declaring_nothing_gets_the_defaults() {
+        let limits = limits_for_plugin(&DeclaredLimits::default(), false, MIB);
+        let defaults = PluginLimits::default();
+        assert_eq!(limits.max_memory_bytes, defaults.max_memory_bytes);
+        assert_eq!(limits.max_fuel, defaults.max_fuel);
+        assert_eq!(limits.max_execution_ms, defaults.max_execution_ms);
+    }
+
+    #[test]
+    fn declared_limits_replace_the_defaults() {
+        let declared = DeclaredLimits {
+            memory_mib: Some(4),
+            fuel: Some(5_000),
+            timeout_ms: Some(20),
+        };
+        let limits = limits_for_plugin(&declared, false, MIB);
+        assert_eq!(limits.max_memory_bytes, 4 * MIB);
+        assert_eq!(limits.max_fuel, 5_000);
+        assert_eq!(limits.max_execution_ms, 20);
+    }
+
+    #[test]
+    fn a_large_body_limit_raises_memory_only_for_plugins_receiving_bodies() {
+        let declared = DeclaredLimits {
+            memory_mib: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(
+            limits_for_plugin(&declared, false, 100 * MIB).max_memory_bytes,
+            4 * MIB
+        );
+        assert_eq!(
+            limits_for_plugin(&declared, true, 100 * MIB).max_memory_bytes,
+            104 * MIB
+        );
+        assert_eq!(
+            limits_for_plugin(&DeclaredLimits::default(), false, 100 * MIB).max_memory_bytes,
+            PluginLimits::default().max_memory_bytes
+        );
+        // A declared limit above the body floor stands.
+        let roomy = DeclaredLimits {
+            memory_mib: Some(256),
+            ..Default::default()
+        };
+        assert_eq!(
+            limits_for_plugin(&roomy, true, MIB).max_memory_bytes,
+            256 * MIB
+        );
+    }
 }
 
 #[cfg(test)]
