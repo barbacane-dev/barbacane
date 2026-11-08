@@ -20,7 +20,7 @@ security gap. Each red test carries a comment of the form
 | BARB-SEC-001 | Authz / IDOR          | Every mutating control-plane route requires an admin Bearer token (`BARBACANE_CONTROL_ADMIN_TOKEN`); `/health` and `/ws/data-plane` are exempt. Project A cannot read/mutate project B's resources. |
 | BARB-SEC-002 | SSRF                  | The WASM host HTTP client refuses to connect to loopback / link-local / private / metadata IPs, including after redirects (resolve-then-check). |
 | BARB-SEC-003 | DoS / resource limits | Oversized chunked bodies → 413 without full buffering; slowloris read-timeout; 404 floods do not create one Prometheus series per raw path (sentinel `<not_found>`). |
-| BARB-SEC-004 | Sandbox / capability  | A plugin granted only `log` cannot call other host functions — the linker is per-plugin / default-deny. |
+| BARB-SEC-004 | Sandbox / capability  | A plugin granted only `log` cannot call other host functions: the data plane refuses a plugin whose imports its declared capabilities do not cover. |
 | BARB-SEC-005 | Crypto / auth         | JWT `alg:none`, expired `exp`, tampered signature, and wrong `aud` are rejected; a forged `X-Forwarded-For` does not bypass `ip-restriction` or reset rate-limit buckets. |
 | BARB-SEC-006 | Artifact integrity    | The `.bca` load path verifies per-entry SHA-256 against the manifest and an Ed25519 signature against `BARBACANE_TRUSTED_PUBKEY`; a single flipped byte fails the load. |
 
@@ -76,12 +76,6 @@ because they need an src-side change first (see below); each carries a
 
 A few tests are `#[ignore]`d with a precise blocker:
 
-- **Sandbox (BARB-SEC-004)** — needs (a) an adversarial fixture plugin that
-  declares only `log` but imports `host_http_call`, and (b) a per-plugin
-  default-deny linker in `barbacane-wasm` (today `add_host_functions` registers
-  *all* host functions). The load-time positive control additionally needs
-  `barbacane-wasm` added as a dev-dependency of `barbacane-test` so
-  `validate::validate_imports` can be called directly.
 - **Crypto (BARB-SEC-005)** — real signature verification now exists: `jwt-auth`
   performs RS256/384/512 verification via the host `verify_signature` capability
   against an inline `public_key_jwk`. The remaining gap for the "validly-signed
