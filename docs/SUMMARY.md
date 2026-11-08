@@ -28,6 +28,7 @@
 - [Spec Extensions](reference/extensions.md)
 - [Artifact Format](reference/artifact.md)
 - [Reserved Endpoints](reference/endpoints.md)
+- [Stability policy](reference/stability.md)
 
 # Contributing
 

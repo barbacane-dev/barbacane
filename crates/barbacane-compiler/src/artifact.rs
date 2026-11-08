@@ -48,6 +48,12 @@ use crate::manifest::ProjectManifest;
 /// capability `host_functions` in the manifest.
 pub const ARTIFACT_VERSION: u32 = 8;
 
+/// The oldest artifact format a data plane of this major version loads. A 1.x
+/// data plane loads every format from the one 1.0.0 ships with up to
+/// [`ARTIFACT_VERSION`] (docs/reference/stability.md); before 1.0.0 the two
+/// are the same.
+pub const OLDEST_ARTIFACT_VERSION: u32 = ARTIFACT_VERSION;
+
 /// The most an artifact may expand to when decompressed, archive headers
 /// included. Reading stops with an error past it, before anything is verified.
 pub const MAX_ARTIFACT_BYTES: u64 = 256 << 20;

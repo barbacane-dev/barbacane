@@ -71,7 +71,7 @@ Metadata about the artifact.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `barbacane_artifact_version` | integer | Format version (currently `8`). The data plane refuses an artifact whose version it does not read. |
+| `barbacane_artifact_version` | integer | Format version (currently `8`). The data plane loads the versions its major release reads (see the [stability policy](stability.md#artifacts)), and refuses an older one with a message to recompile and a newer one with a message to upgrade the data plane. |
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
 | `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
