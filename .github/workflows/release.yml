@@ -86,10 +86,10 @@ jobs:
             cross: true
           # macOS targets
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-15
             cross: false
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             cross: false
     runs-on: ${{ matrix.os }}
     steps:
