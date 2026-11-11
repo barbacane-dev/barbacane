@@ -154,9 +154,162 @@ pub static KNOWN: &[KnownDivergence] = &[
                  quoted scalars only; libyaml reads one that begins a node elsewhere as \
                  content, the module refuses the document",
         example: "a: \u{feff}x\n",
+        matches: |_, d| match d {
+            Difference::OnlyOursFailed { error } => {
+                error.contains("a BOM must not appear inside a document")
+            }
+            Difference::Value {
+                ours: Value::Null,
+                reference: Value::String(text),
+                ..
+            } => text.contains('\u{feff}'),
+            _ => false,
+        },
+    },
+    KnownDivergence {
+        name: "block scalars ending the input without a line break",
+        reason: "YAML 1.2 keeps no final line break when a block scalar's last line ends the \
+                 input, and libyaml returns `text`; serde-saphyr adds one, `text\\n`",
+        example: "a: |\n  text",
+        matches: |input, d| {
+            !input.ends_with(['\n', '\r'])
+                && matches!(d, Difference::Value {
+                    ours: Value::String(ours),
+                    reference: Value::String(reference),
+                    ..
+                } if ours.strip_suffix('\n') == Some(reference.as_str()))
+        },
+    },
+    KnownDivergence {
+        name: "unknown tags on plain scalars",
+        reason: "libyaml keeps a plain scalar under a tag it does not resolve (`!!foo 1`, an \
+                 empty `!!foo`) as a string; the module ignores the tag and resolves the \
+                 scalar as a number, a boolean or null",
+        example: "a: !!foo 1\nb: !!foo\n",
+        matches: |input, d| {
+            input.contains('!')
+                && match d {
+                    Difference::Value {
+                        ours,
+                        reference: Value::String(text),
+                        ..
+                    } => match ours {
+                        Value::Null => text.is_empty(),
+                        Value::Number(_) | Value::Bool(_) => {
+                            serde_json::from_str::<Value>(text).ok().as_ref() == Some(ours)
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                }
+        },
+    },
+    KnownDivergence {
+        name: "core tags on content of another type",
+        reason: "YAML 1.2 makes a node tagged `!!int`, `!!float`, `!!bool`, `!!null` or \
+                 `!!binary` whose content is not of that type invalid; libyaml reads it as a \
+                 string, the module refuses the document",
+        example: "!!int :\n",
+        matches: |_, d| {
+            matches!(d, Difference::OnlyOursFailed { error } if [
+                "invalid u64",
+                "invalid i64",
+                "invalid boolean",
+                "invalid floating point",
+                "unsupported tag `!!",
+                "cannot deserialize tagged scalar into string",
+            ]
+            .iter()
+            .any(|message| error.contains(message)))
+        },
+    },
+    KnownDivergence {
+        name: "malformed tags",
+        reason: "a tag such as `!!str!` or `!!!str` is not a YAML 1.2 tag; libyaml reads one, \
+                 the module refuses the document",
+        example: "a: !!str! x\n",
         matches: |_, d| {
             matches!(d, Difference::OnlyOursFailed { error }
-                if error.contains("a BOM must not appear inside a document"))
+                if error.contains("while scanning a tag") || error.contains("while parsing a tag"))
+        },
+    },
+    KnownDivergence {
+        name: "comments not preceded by whitespace",
+        reason: "YAML 1.2 requires whitespace before a comment, as in `| #`; libyaml reads \
+                 `|#`, the module refuses the document",
+        example: "a: |#\n  x\n",
+        matches: |_, d| {
+            matches!(d, Difference::OnlyOursFailed { error }
+                if error.contains("comments must be separated from other tokens by whitespace"))
+        },
+    },
+    KnownDivergence {
+        name: "next-line and Unicode line separators",
+        reason: "YAML 1.2 no longer breaks lines at U+0085, U+2028 or U+2029; libyaml, \
+                 following YAML 1.1, does, the module keeps them as characters",
+        example: "a: \"x\u{85}y\"\n",
+        matches: |input, d| {
+            input.contains(['\u{85}', '\u{2028}', '\u{2029}'])
+                && matches!(d, Difference::Value { .. })
+        },
+    },
+    KnownDivergence {
+        name: "bare carriage returns",
+        reason: "the readers disagree on block scalars and keys in a document that breaks \
+                 lines with a carriage return alone; a spec uses LF or CRLF",
+        example: "?\r?\r>\r",
+        matches: |input, _| has_bare_carriage_return(input),
+    },
+    KnownDivergence {
+        name: "signed .nan",
+        reason: "YAML 1.2 spells not-a-number `.nan` with no sign, so `-.nan` is a string, as \
+                 libyaml reads it; serde-saphyr reads not-a-number, null in a JSON value",
+        example: "a: -.nan\n",
+        matches: |_, d| {
+            matches!(d, Difference::Value {
+                ours: Value::Null,
+                reference: Value::String(text),
+                ..
+            } if matches!(
+                text.strip_prefix(['+', '-']),
+                Some(".nan" | ".NaN" | ".NAN")
+            ))
+        },
+    },
+    KnownDivergence {
+        name: "anchor names with punctuation",
+        reason: "YAML 1.2 lets an anchor name hold any character but whitespace and flow \
+                 indicators (`&a:b`); libyaml ends it at the first character other than a \
+                 letter, digit, `-` or `_`, and reads the rest as content",
+        example: "a: &x:y\n",
+        matches: |input, d| {
+            has_punctuated_anchor(input)
+                && matches!(
+                    d,
+                    Difference::Value { .. } | Difference::OnlyOursFailed { .. }
+                )
+        },
+    },
+    KnownDivergence {
+        name: "keys equal as integers",
+        reason: "serde-saphyr takes keys spelled differently but equal as integers (`10` and \
+                 `0xA`) for one key and keeps the last; libyaml keeps both, by their text",
+        example: "10: a\n0xA: b\n",
+        matches: |input, d| {
+            has_radix_key(input)
+                && matches!(d, Difference::Value { pointer, ours: Value::Null, .. }
+                    if pointer.rsplit('/').next().is_some_and(is_integer_literal))
+        },
+    },
+    KnownDivergence {
+        name: "block content not indented past its key",
+        reason: "YAML 1.2 indents a node that starts on the line after its key (`a:` or `?`) \
+                 past the key; libyaml reads an unindented block scalar there, the module \
+                 refuses the document",
+        example: "a:\n>\n x\n",
+        matches: |_, d| {
+            matches!(d, Difference::OnlyOursFailed { error }
+                if error.contains("simple key expected ':'"))
         },
     },
     KnownDivergence {
@@ -187,6 +340,51 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
 ];
+
+/// Whether `input` breaks a line with a carriage return not followed by a
+/// line feed.
+fn has_bare_carriage_return(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    bytes
+        .iter()
+        .enumerate()
+        .any(|(i, &b)| b == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
+}
+
+/// Whether `input` has an anchor whose name holds a character libyaml does
+/// not take in one: anything but a letter, digit, `-` or `_`.
+fn has_punctuated_anchor(input: &str) -> bool {
+    input.split('&').skip(1).any(|rest| {
+        rest.chars()
+            .take_while(|c| !c.is_whitespace() && !matches!(c, ',' | '[' | ']' | '{' | '}'))
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    })
+}
+
+/// Whether `input` has a mapping key written in hexadecimal, octal or binary.
+fn has_radix_key(input: &str) -> bool {
+    input.lines().any(|line| {
+        let key = line
+            .trim_start_matches([' ', '-', '{', ','])
+            .split(':')
+            .next()
+            .unwrap_or("");
+        key.len() > 2
+            && matches!(&key[..2], "0x" | "0o" | "0b" | "0X" | "0O" | "0B")
+            && key[2..].chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+/// Whether `text` is an integer as YAML writes one: decimal, or `0x`, `0o`
+/// or `0b` followed by digits.
+fn is_integer_literal(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let digits = ["0x", "0o", "0b", "0X", "0O", "0B"]
+        .iter()
+        .find_map(|p| digits.strip_prefix(p))
+        .unwrap_or(digits);
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
+}
 
 /// Whether `difference` is the reference refusing a document the module
 /// reads, with an error containing `message`.

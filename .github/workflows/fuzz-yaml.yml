@@ -73,13 +73,25 @@ jobs:
         run: |
           shopt -s nullglob
           findings=(artifacts/yaml_differential/*)
-          for finding in "${findings[@]}"; do
-            echo "::group::$finding"
-            cargo fuzz run yaml_differential "$finding" 2>&1 \
-              | grep -m1 -E 'difference of no known class|deadly signal|timeout|out-of-memory' || true
-            echo "::endgroup::"
-          done
-          if [ ${#findings[@]} -gt 0 ]; then
-            echo "::error::${#findings[@]} input(s) kept; see the log groups above and the uploaded artifact"
-            exit 1
+          if [ ${#findings[@]} -eq 0 ]; then
+            echo "No findings."
+            exit 0
           fi
+          binary=target/x86_64-unknown-linux-gnu/release/yaml_differential
+          for finding in "${findings[@]}"; do
+            message=$("$binary" -timeout=10 -rss_limit_mb=2048 "$finding" 2>&1 \
+              | grep -m1 -oE 'a difference of no known class: .{0,160}|ERROR: libFuzzer: [a-z-]+' \
+              || echo "no message")
+            printf '%s\t%s\t%s\n' "$(stat -c %s "$finding")" "$finding" "$message"
+          done > findings.tsv
+          # One line per distinct message, digits normalised, with how many
+          # inputs gave it and the shortest of them.
+          sort -n findings.tsv | awk -F'\t' '{
+              key = $3; gsub(/[0-9]+/, "N", key)
+              count[key]++
+              if (!(key in sample)) sample[key] = $2
+            } END {
+              for (key in count) printf "%6d  %s  %s\n", count[key], sample[key], key
+            }' | sort -rn
+          echo "::error::${#findings[@]} input(s) kept, in $(cut -f3 findings.tsv | sed -E 's/[0-9]+/N/g' | sort -u | wc -l) distinct message(s); see the summary above and the uploaded artifact"
+          exit 1
