@@ -135,9 +135,9 @@ Exceeding a limit returns:
 | Limit exceeded | Status | `type` URN |
 |---------------|--------|------------|
 | Body size | `413` | `urn:barbacane:error:payload-too-large` |
-| Header count/size | `431` | `urn:barbacane:error:header-too-large` |
-| URI length | `414` | `urn:barbacane:error:uri-too-long` |
-| Timeout | `408` | `urn:barbacane:error:request-timeout` |
+| Header count or size | `400` | `urn:barbacane:error:validation-failed` |
+| URI length | `400` | `urn:barbacane:error:validation-failed` |
+| Timeout | `504` | `urn:barbacane:error:upstream-timeout` |
 
 ### 4.4 Routing
 
@@ -148,7 +148,7 @@ The prefix trie from `routes.fb` is consulted:
 
 | Outcome | Status | `type` URN |
 |---------|--------|------------|
-| No path match | `404` | `urn:barbacane:error:route-not-found` |
+| No path match | `404` | `urn:barbacane:error:not-found` |
 | Path matches but method does not | `405` | `urn:barbacane:error:method-not-allowed` |
 | Match found | Continue to validation | — |
 
@@ -216,7 +216,6 @@ The operation's dispatcher plugin is called with the fully processed request. Th
 | Success | Response is returned to the middleware response phase |
 | Upstream timeout | `504 Gateway Timeout` — `type`: `urn:barbacane:error:upstream-timeout` |
 | Upstream connection refused | `502 Bad Gateway` — `type`: `urn:barbacane:error:upstream-unavailable` |
-| Circuit breaker open | `503 Service Unavailable` — `type`: `urn:barbacane:error:circuit-open` |
 | Plugin panic/trap | `500 Internal Server Error` — `type`: `urn:barbacane:error:internal-error` |
 
 ### 4.8 Middleware Chain (Response Phase)
@@ -278,20 +277,20 @@ All gateway-generated errors follow RFC 9457 (`application/problem+json`).
 
 | `type` URN | Status | Title | Trigger |
 |------------|--------|-------|---------|
-| `urn:barbacane:error:validation-failed` | 400 | Validation Failed | Schema validation failure |
-| `urn:barbacane:error:unauthorized` | 401 | Unauthorized | Auth middleware rejection |
-| `urn:barbacane:error:forbidden` | 403 | Forbidden | Authorization policy denial |
-| `urn:barbacane:error:route-not-found` | 404 | Not Found | No matching path in trie |
+| `urn:barbacane:error:validation-failed` | 400 | Request validation failed | The request does not match its operation, or exceeds the URI, header count or header size limits |
+| `urn:barbacane:error:bad-request` | 400 | Bad Request | The request cannot be processed as sent |
+| `urn:barbacane:error:authentication-failed` | 401 | Unauthorized | An authentication middleware refused the credential |
+| `urn:barbacane:error:authorization-failed` | 403 | Forbidden | An authenticated client lacks a required group or scope |
+| `urn:barbacane:error:waf-blocked` | 403 | Forbidden | The WAF blocked the request (a rule may set another status) |
+| `urn:barbacane:error:not-found` | 404 | Not Found | No matching path in the trie |
 | `urn:barbacane:error:method-not-allowed` | 405 | Method Not Allowed | Path exists, method does not |
-| `urn:barbacane:error:request-timeout` | 408 | Request Timeout | Client request exceeded timeout |
-| `urn:barbacane:error:payload-too-large` | 413 | Payload Too Large | Body exceeds max size |
-| `urn:barbacane:error:uri-too-long` | 414 | URI Too Long | URI exceeds max length |
-| `urn:barbacane:error:rate-limited` | 429 | Too Many Requests | Rate limiter triggered |
-| `urn:barbacane:error:header-too-large` | 431 | Header Too Large | Header count or size exceeded |
-| `urn:barbacane:error:internal-error` | 500 | Internal Server Error | Plugin crash or misconfiguration |
-| `urn:barbacane:error:upstream-unavailable` | 502 | Bad Gateway | Upstream refused connection |
-| `urn:barbacane:error:circuit-open` | 503 | Service Unavailable | Circuit breaker is open |
-| `urn:barbacane:error:upstream-timeout` | 504 | Gateway Timeout | Upstream did not respond in time |
+| `urn:barbacane:error:payload-too-large` | 413 | Payload Too Large | Body exceeds the maximum size |
+| `urn:barbacane:error:rate-limit-exceeded` | 429 | Too Many Requests | The rate limiter refused the request |
+| `urn:barbacane:error:internal-error` | 500 | Internal Server Error | A plugin failed, or the gateway could not build a response |
+| `urn:barbacane:error:upstream-unavailable` | 502 | Bad Gateway | The upstream could not be reached |
+| `urn:barbacane:error:upstream-timeout` | 504 | Gateway Timeout | The upstream did not respond in time |
+
+Middlewares and dispatchers add their own types (`acl-denied`, `ip-restricted`, `lambda-timeout`, and so on), listed in each plugin's guide.
 
 ### 5.3 Development mode extensions
 

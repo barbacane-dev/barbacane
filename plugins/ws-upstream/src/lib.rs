@@ -167,7 +167,7 @@ impl WsUpstreamDispatcher {
         let error_type = match status {
             400 => "urn:barbacane:error:bad-request",
             502 => "urn:barbacane:error:upstream-unavailable",
-            _ => "urn:barbacane:error:internal",
+            _ => "urn:barbacane:error:internal-error",
         };
 
         let full_detail = format!("{}: {}", detail, debug);
@@ -560,7 +560,7 @@ mod tests {
 
         let body: serde_json::Value =
             serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["type"], "urn:barbacane:error:internal");
+        assert_eq!(body["type"], "urn:barbacane:error:internal-error");
     }
 
     // -- X-Forwarded-For header --

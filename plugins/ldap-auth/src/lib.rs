@@ -434,7 +434,7 @@ impl LdapAuth {
     fn error_response(&self, error: &AuthError) -> Response {
         match error {
             AuthError::Forbidden => {
-                ProblemDetails::new(403, "urn:barbacane:error:forbidden", "Forbidden")
+                ProblemDetails::new(403, "urn:barbacane:error:authorization-failed", "Forbidden")
                     .detail(error.description())
                     .into_response()
             }
@@ -1051,7 +1051,7 @@ mod tests {
         assert_eq!(resp.status, 403);
         assert!(!resp.headers.contains_key("www-authenticate"));
         let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["type"], "urn:barbacane:error:forbidden");
+        assert_eq!(body["type"], "urn:barbacane:error:authorization-failed");
     }
 
     #[test]

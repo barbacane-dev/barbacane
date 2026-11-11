@@ -354,7 +354,7 @@ impl S3Dispatcher {
         let error_type = match status {
             400 => "urn:barbacane:error:bad-request",
             502 => "urn:barbacane:error:upstream-unavailable",
-            _ => "urn:barbacane:error:internal",
+            _ => "urn:barbacane:error:internal-error",
         };
 
         let full_detail = format!("{}: {}", detail, debug);
@@ -914,5 +914,19 @@ mod tests {
         assert!(req.url.contains("my file (1).txt"), "url: {}", req.url);
         // Authorization header must still be present (signing did not panic)
         assert!(req.headers["authorization"].starts_with("AWS4-HMAC-SHA256 "));
+    }
+
+    #[test]
+    fn an_unexpected_failure_is_an_internal_error() {
+        let dispatcher: S3Dispatcher = serde_json::from_str(
+            r#"{"access_key_id": "AKIA...", "secret_access_key": "secret", "region": "us-east-1"}"#,
+        )
+        .expect("config");
+        let response =
+            dispatcher.error_response(500, "Internal Server Error", "unexpected", "debug");
+        assert_eq!(response.status, 500);
+        let body: serde_json::Value =
+            serde_json::from_slice(response.body.as_ref().expect("body")).expect("problem+json");
+        assert_eq!(body["type"], "urn:barbacane:error:internal-error");
     }
 }
