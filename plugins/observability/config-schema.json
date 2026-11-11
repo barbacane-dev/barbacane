@@ -5,7 +5,7 @@
   "properties": {
     "latency_slo_ms": {
       "type": "integer",
-      "description": "Latency SLO threshold in milliseconds. Emits barbacane_plugin_observability_slo_violation_total metric when exceeded.",
+      "description": "Latency SLO threshold in milliseconds. Emits barbacane_plugin_observability_slo_violation_total, labelled slo_ms, when exceeded.",
       "minimum": 1
     },
     "detailed_request_logs": {
@@ -20,7 +20,7 @@
     },
     "emit_latency_histogram": {
       "type": "boolean",
-      "description": "Emit a per-operation latency histogram metric",
+      "description": "Emit barbacane_plugin_observability_latency_seconds, a latency histogram by response status",
       "default": false
     }
   },

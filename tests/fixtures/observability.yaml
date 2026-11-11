@@ -48,6 +48,22 @@ paths:
         "200":
           description: Response measured against a 10ms SLO
 
+  /timed:
+    get:
+      operationId: timedEndpoint
+      x-barbacane-middlewares:
+        - name: observability
+          config:
+            emit_latency_histogram: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"timed":true}'
+      responses:
+        "200":
+          description: Response timed into the latency histogram
+
   /detailed:
     post:
       operationId: detailedEndpoint

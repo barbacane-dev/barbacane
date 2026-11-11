@@ -82,6 +82,14 @@ An endpoint label is `scheme://host:port`, never the full URL, so it carries no 
 
 Labels stay bounded whatever clients send. `path` is the route template, or one label for requests that match no route. `method` is `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `CONNECT`, `OPTIONS`, `TRACE`, `PATCH` or `QUERY`, and `OTHER` for any other method, including one declared under OpenAPI 3.2 `additionalOperations`.
 
+### Plugin metrics
+
+A plugin with the `telemetry` capability emits counters and histograms. Each metric is its own family, `barbacane_plugin_<plugin>_<metric>`, with the plugin name's `-` written `_`: the `observability` middleware's `slo_violation` counter is `barbacane_plugin_observability_slo_violation_total`. The labels the plugin sends are the series' labels.
+
+- A metric name is `[a-zA-Z_][a-zA-Z0-9_]*`; a label name is the same and does not start with `__`; a label value is a string, number or boolean. A histogram's buckets run from 1 ms to 10 s, for observations in seconds.
+- Each plugin has at most 1,000 series. A family belongs to the plugin metric that created it: another plugin's metric with the same exported name, or the same metric with the other type, is refused.
+- Every refused write is counted in `barbacane_plugin_metrics_dropped_total{plugin,reason}`, `reason` being `oversize`, `cardinality`, `non_finite`, `invalid_name`, `invalid_labels`, `name_conflict` or `type_conflict`.
+
 ### Prometheus Integration
 
 Configure Prometheus to scrape metrics:

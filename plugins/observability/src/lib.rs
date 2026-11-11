@@ -81,7 +81,8 @@ pub struct Observability {
     #[serde(default)]
     detailed_response_logs: bool,
 
-    /// Emit a per-operation latency histogram.
+    /// Emit `barbacane_plugin_observability_latency_seconds`, a latency
+    /// histogram by response status.
     #[serde(default)]
     emit_latency_histogram: bool,
 }
@@ -122,8 +123,9 @@ impl Observability {
         // Check SLO and emit violation metric if exceeded
         if let Some(slo_ms) = self.latency_slo_ms {
             if duration_ms > slo_ms {
-                // Emit SLO violation counter
-                let labels = format!("{{\"slo_ms\":{},\"actual_ms\":{}}}", slo_ms, duration_ms);
+                // The duration is in the log line, not a label: one series per
+                // threshold.
+                let labels = format!("{{\"slo_ms\":{}}}", slo_ms);
                 host_metric_counter_inc("slo_violation", &labels, 1);
 
                 log_message(
@@ -139,7 +141,7 @@ impl Observability {
         // Emit latency histogram if enabled
         if self.emit_latency_histogram {
             let labels = format!("{{\"status\":{}}}", resp.status);
-            host_metric_histogram_observe("latency_ms", &labels, duration_ms as f64);
+            host_metric_histogram_observe("latency_seconds", &labels, duration_ms as f64 / 1000.0);
         }
 
         // Log detailed response info if enabled
@@ -417,7 +419,7 @@ mod tests {
         assert_eq!(counters.len(), 1);
         let (name, labels, value) = &counters[0];
         assert_eq!(name, "slo_violation");
-        assert_eq!(labels, r#"{"slo_ms":200,"actual_ms":500}"#);
+        assert_eq!(labels, r#"{"slo_ms":200}"#);
         assert_eq!(*value, 1);
 
         // Verify warning log was emitted
@@ -507,9 +509,9 @@ mod tests {
         let histograms = mock_host::get_histograms();
         assert_eq!(histograms.len(), 1);
         let (name, labels, value) = &histograms[0];
-        assert_eq!(name, "latency_ms");
+        assert_eq!(name, "latency_seconds");
         assert_eq!(labels, r#"{"status":200}"#);
-        assert_eq!(*value, 250.0);
+        assert_eq!(*value, 0.25);
     }
 
     #[test]
@@ -647,8 +649,8 @@ mod tests {
         // Verify histogram
         let histograms = mock_host::get_histograms();
         assert_eq!(histograms.len(), 1);
-        assert_eq!(histograms[0].0, "latency_ms");
-        assert_eq!(histograms[0].2, 500.0);
+        assert_eq!(histograms[0].0, "latency_seconds");
+        assert_eq!(histograms[0].2, 0.5);
 
         // Verify logs (SLO warning + response info)
         let logs = mock_host::get_log_messages();
@@ -679,7 +681,7 @@ mod tests {
         // Verify metrics are still emitted with calculated duration
         let histograms = mock_host::get_histograms();
         assert_eq!(histograms.len(), 1);
-        assert_eq!(histograms[0].2, 500.0);
+        assert_eq!(histograms[0].2, 0.5);
     }
 
     #[test]
