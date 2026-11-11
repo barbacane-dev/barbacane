@@ -32,12 +32,34 @@ pub async fn list_project_plugins(
     Ok(Json(configs))
 }
 
+/// Refuse limits the gateway would not accept (E1044): they must be an
+/// object of `memory_mib`, `fuel` and `timeout_ms` within the gateway's
+/// ceilings.
+#[allow(clippy::result_large_err)]
+fn check_limits(plugin: &str, limits: &Option<serde_json::Value>) -> Result<(), ProblemDetails> {
+    let reason = match limits {
+        None => return Ok(()),
+        Some(serde_json::Value::Object(object)) => {
+            match barbacane_compiler::DeclaredLimits::from_json(object) {
+                Ok(_) => return Ok(()),
+                Err(reason) => reason,
+            }
+        }
+        Some(_) => "limits are an object of memory_mib, fuel and timeout_ms".to_string(),
+    };
+    Err(ProblemDetails::bad_request(format!(
+        "E1044: invalid limits for plugin '{plugin}': {reason}"
+    )))
+}
+
 /// POST /projects/:id/plugins - Add a plugin to a project
 pub async fn add_plugin_to_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Json(input): Json<NewProjectPluginConfig>,
 ) -> Result<(StatusCode, Json<ProjectPluginConfig>), ProblemDetails> {
+    check_limits(&input.plugin_name, &input.limits)?;
+
     // Verify project exists
     let projects_repo = ProjectsRepository::new(state.pool.clone());
     let _ = projects_repo
@@ -76,6 +98,8 @@ pub async fn update_project_plugin(
     Path((project_id, plugin_name)): Path<(Uuid, String)>,
     Json(input): Json<UpdateProjectPluginConfig>,
 ) -> Result<Json<ProjectPluginConfig>, ProblemDetails> {
+    check_limits(&plugin_name, &input.limits)?;
+
     // If changing version, verify new version exists
     if let Some(ref new_version) = input.plugin_version {
         let plugins_repo = PluginsRepository::new(state.pool.clone());

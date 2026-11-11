@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI**: `barbacane control <resource> <command>` calls the control-plane API, with one command per operation of its OpenAPI spec and path and query parameters as flags. `push --project <ID> <SPEC>...` uploads specs, compiles them into one artifact and waits for the compilation; `deploy --project <ID> --wait` deploys an artifact and waits until every connected data plane runs it. `--url` (`BARBACANE_CONTROL_URL`) and `--token` (`BARBACANE_CONTROL_ADMIN_TOKEN`) set the connection, and `--output` prints a table or JSON. An error response, or a control plane that cannot be reached, exits with status 1.
 - **plugins**: a plugin declares its resource limits in a `[limits]` table of `plugin.toml`: `memory_mib`, `fuel` and `timeout_ms`, each optional, with the defaults 16 MiB, 100,000,000 and 100 ms. Each instance of the plugin runs with them. A value above the gateway's ceiling (1024 MiB, 10,000,000,000, 10,000 ms), below 1, or an unknown key fails compilation with `E1044`, and the data plane refuses an artifact that records one. The limits are recorded with the plugin's capabilities and covered by `artifact_hash`. The official plugins declare none.
 - **docs**: the [stability policy](docs/reference/stability.md) states what 1.x keeps compatible (specs, artifacts, the plugin interface, the control-plane API and the CLI, environment variables, metrics and error codes), how deprecations work, and which releases receive security fixes. An installation guide covers the release binaries, the container images and their tags, crates.io and building from source.
+- **plugins**: the operator sets a plugin's resource limits in place of its own, key by key: `limits` (`memory_mib`, `fuel`, `timeout_ms`) on the plugin's entry in `barbacane.yaml`, or on a project's plugin in the control plane (`POST` and `PUT /projects/{id}/plugins`, where `"limits": {}` removes them). A key left out keeps the plugin's value. A value outside the gateway's ceilings is `E1044`; the control plane answers it `400`. The limits in effect are recorded in the artifact and covered by `artifact_hash`.
 
 ### Changed
 
@@ -56,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Upgrade note (breaking):** a query on `barbacane_plugin_counter_total` or `barbacane_plugin_histogram` reads the plugin's own family, such as `barbacane_plugin_observability_slo_violation_total`.
 
 - **observability**: `barbacane_plugin_observability_slo_violation_total` is labelled `slo_ms` only. It also carried the measured duration as `actual_ms`, a series per distinct latency, which reached the 1,000-series cap. The latency histogram is `barbacane_plugin_observability_latency_seconds`, observed in seconds: `latency_ms` observed milliseconds into buckets made for seconds.
+
+- **barbacane.yaml**: a key the format does not have, at the top level or in a plugin entry, fails with an error naming it, where it was ignored. A plugin entry has `path` or `url`, not both, and `sha256` only with `url`.
+
+  > **Upgrade note (breaking):** a `barbacane.yaml` with a misspelled or unknown key (`spec:` for `specs:`, a stray key in a plugin entry) no longer compiles; fix or remove the key.
 
 ### Removed
 

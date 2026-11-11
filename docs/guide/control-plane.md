@@ -189,6 +189,13 @@ EOF
 
 Each plugin's configuration is validated against its JSON Schema (if one is defined).
 
+`limits` sets the plugin's resource limits for the project, replacing its own key by key, as `limits` does in `barbacane.yaml`; a value above the gateway's ceiling is refused with `E1044`. Updating with `"limits": {}` removes them:
+
+```bash
+barbacane control project-plugins update --project-id <PROJECT_ID> --name ip-restriction --file - \
+  <<< '{"limits": {"memory_mib": 32}}'
+```
+
 ## Data Planes
 
 Data planes are gateway instances that connect to the control plane to receive configuration updates.

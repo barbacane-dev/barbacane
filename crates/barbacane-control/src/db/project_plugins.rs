@@ -26,8 +26,8 @@ impl ProjectPluginConfigsRepository {
         sqlx::query_as::<_, ProjectPluginConfig>(
             r#"
             INSERT INTO project_plugin_configs
-                (project_id, plugin_name, plugin_version, enabled, priority, config)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (project_id, plugin_name, plugin_version, enabled, priority, config, limits)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             "#,
         )
@@ -37,6 +37,7 @@ impl ProjectPluginConfigsRepository {
         .bind(config.enabled)
         .bind(config.priority)
         .bind(&config.config)
+        .bind(stored_limits(&config.limits))
         .fetch_one(&self.pool)
         .await
     }
@@ -101,6 +102,10 @@ impl ProjectPluginConfigsRepository {
         }
         if update.config.is_some() {
             set_clauses.push(format!("config = ${}", param_idx));
+            param_idx += 1;
+        }
+        if update.limits.is_some() {
+            set_clauses.push(format!("limits = ${}", param_idx));
         }
 
         let query = format!(
@@ -124,6 +129,9 @@ impl ProjectPluginConfigsRepository {
         if let Some(config) = &update.config {
             q = q.bind(config);
         }
+        if update.limits.is_some() {
+            q = q.bind(stored_limits(&update.limits));
+        }
 
         q.fetch_optional(&self.pool).await
     }
@@ -139,4 +147,11 @@ impl ProjectPluginConfigsRepository {
         .await?;
         Ok(result.rows_affected() > 0)
     }
+}
+
+/// The limits a row stores: none for an absent or empty object.
+fn stored_limits(limits: &Option<serde_json::Value>) -> Option<&serde_json::Value> {
+    limits
+        .as_ref()
+        .filter(|limits| !matches!(limits, serde_json::Value::Object(o) if o.is_empty()))
 }

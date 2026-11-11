@@ -50,6 +50,12 @@ fn write_plugin(dir: &std::path::Path, name: &str, kind: &str, wat: &str, extra_
 /// A project whose operation runs the 3 MiB middleware, which declares
 /// `limits` (a `[limits]` table, or nothing).
 fn project(limits: &str) -> (TempDir, PathBuf) {
+    project_with_override(limits, "")
+}
+
+/// [`project`], with `override_yaml` (indented `limits:` lines, or nothing)
+/// under the middleware's entry in `barbacane.yaml`.
+fn project_with_override(limits: &str, override_yaml: &str) -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("temp dir");
     write_plugin(dir.path(), "grower", "middleware", NEEDS_3_MIB, limits);
     write_plugin(
@@ -62,7 +68,7 @@ fn project(limits: &str) -> (TempDir, PathBuf) {
     std::fs::write(
         dir.path().join("barbacane.yaml"),
         format!(
-            "plugins:\n  grower:\n    path: {}\n  unreached:\n    path: {}\n",
+            "plugins:\n  grower:\n    path: {}\n{override_yaml}  unreached:\n    path: {}\n",
             dir.path().join("grower/grower.wasm").display(),
             dir.path().join("unreached/unreached.wasm").display()
         ),
@@ -107,5 +113,36 @@ async fn limits_above_the_gateway_ceiling_do_not_compile() {
     assert!(
         error.contains("E1044") && error.contains("memory_mib"),
         "{error}"
+    );
+}
+
+#[tokio::test]
+async fn barbacane_yaml_raises_a_limit_the_plugin_sets_too_low() {
+    let (_dir, spec) = project_with_override(
+        "\n[limits]\nmemory_mib = 2\n",
+        "    limits:\n      memory_mib: 4\n",
+    );
+    let gateway = TestGateway::from_spec(spec.to_str().expect("utf-8"))
+        .await
+        .expect("starts");
+    let response = gateway.get("/x").await.expect("request");
+    assert_eq!(
+        response.status(),
+        204,
+        "3 MiB fits in the 4 MiB barbacane.yaml sets"
+    );
+}
+
+#[tokio::test]
+async fn barbacane_yaml_lowers_a_limit_the_plugin_leaves_at_the_default() {
+    let (_dir, spec) = project_with_override("", "    limits:\n      memory_mib: 2\n");
+    let gateway = TestGateway::from_spec(spec.to_str().expect("utf-8"))
+        .await
+        .expect("starts");
+    let response = gateway.get("/x").await.expect("request");
+    assert_eq!(
+        response.status(),
+        500,
+        "3 MiB does not fit in the 2 MiB barbacane.yaml sets"
     );
 }

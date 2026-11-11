@@ -856,3 +856,78 @@ async fn a_plugin_is_added_to_updated_in_and_removed_from_a_project() {
     let (status, _) = send(app.clone(), empty_req(Method::DELETE, &one)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_projects_limits_for_a_plugin_are_set_replaced_removed_and_checked() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string());
+    let pool = crate::db::create_pool(&url).await.expect("pool");
+    let plugin_name = format!("limits-{}", Uuid::new_v4().simple());
+    crate::db::PluginsRepository::new(pool)
+        .create(crate::db::NewPlugin {
+            name: plugin_name.clone(),
+            version: "1.0.0".to_string(),
+            plugin_type: "middleware".to_string(),
+            description: None,
+            capabilities: json!([]),
+            config_schema: json!({}),
+            wasm_binary: b"\0asm\x01\0\0\0".to_vec(),
+            sha256: "0".repeat(64),
+        })
+        .await
+        .expect("register plugin");
+    let project_id = create_project(app.clone(), &unique_project_name()).await;
+    let plugins = format!("/projects/{project_id}/plugins");
+    let one = format!("{plugins}/{plugin_name}");
+
+    let invalid = json!({ "plugin_name": plugin_name, "plugin_version": "1.0.0", "limits": { "memory_mib": 4096 } });
+    let (status, body) = send(app.clone(), json_req(Method::POST, &plugins, invalid)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(json_body(&body)["detail"]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with("E1044"));
+
+    let added = json!({ "plugin_name": plugin_name, "plugin_version": "1.0.0", "limits": { "memory_mib": 64 } });
+    let (status, body) = send(app.clone(), json_req(Method::POST, &plugins, added)).await;
+    assert_eq!(status, StatusCode::CREATED, "{}", json_body(&body));
+    assert_eq!(json_body(&body)["limits"], json!({ "memory_mib": 64 }));
+
+    let put = |body: Value| json_req(Method::PUT, &one, body);
+    let (status, body) = send(app.clone(), put(json!({ "limits": { "fuel": 1000 } }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&body)["limits"],
+        json!({ "fuel": 1000 }),
+        "replaced, not merged"
+    );
+
+    let (status, body) = send(app.clone(), put(json!({ "enabled": false }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&body)["limits"],
+        json!({ "fuel": 1000 }),
+        "kept when left out"
+    );
+
+    for invalid in [json!({ "memory": 1 }), json!({ "timeout_ms": 0 }), json!(5)] {
+        let (status, body) = send(app.clone(), put(json!({ "limits": invalid }))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid}");
+        assert!(json_body(&body)["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("E1044"));
+    }
+
+    let (status, body) = send(app.clone(), put(json!({ "limits": {} }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&body)["limits"],
+        Value::Null,
+        "an empty object removes them"
+    );
+}
