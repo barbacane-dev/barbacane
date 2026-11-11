@@ -151,3 +151,30 @@ async fn test_metrics_connection_tracking() {
         "Metrics should contain connections_total counter"
     );
 }
+
+#[tokio::test]
+async fn a_plugin_metric_is_exported_as_its_own_family_with_real_labels() {
+    let gateway = TestGateway::from_spec(&fixture("observability.yaml"))
+        .await
+        .expect("failed to start gateway");
+    for _ in 0..3 {
+        assert_eq!(gateway.get("/timed").await.unwrap().status(), 200);
+    }
+
+    let body = gateway
+        .admin_get("/metrics")
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        body.contains("# TYPE barbacane_plugin_observability_latency_seconds histogram"),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"barbacane_plugin_observability_latency_seconds_count{status="200"} 3"#),
+        "{body}"
+    );
+    assert!(!body.contains("labels_json"), "{body}");
+}

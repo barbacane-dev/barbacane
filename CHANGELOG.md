@@ -51,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   > **Upgrade note (breaking):** a data plane given its key through `BARBACANE_API_KEY` sets `BARBACANE_CONTROL_API_KEY` instead.
 
+- **plugin metrics**: each metric a plugin emits through the `telemetry` capability is its own family, `barbacane_plugin_<plugin>_<metric>` (the plugin name's `-` written `_`), and the labels the plugin sends are its Prometheus labels. They were exported as two families, `barbacane_plugin_counter` and `barbacane_plugin_histogram`, labelled `plugin`, `metric` and `labels_json`, the plugin's labels as a JSON string. A metric or label name that cannot appear in Prometheus, labels that are not a JSON object of strings, numbers or booleans, a name another plugin's metric already exports, or a metric used with both types are refused and counted in `barbacane_plugin_metrics_dropped_total` (reasons `invalid_name`, `invalid_labels`, `name_conflict`, `type_conflict`).
+
+  > **Upgrade note (breaking):** a query on `barbacane_plugin_counter_total` or `barbacane_plugin_histogram` reads the plugin's own family, such as `barbacane_plugin_observability_slo_violation_total`.
+
+- **observability**: `barbacane_plugin_observability_slo_violation_total` is labelled `slo_ms` only. It also carried the measured duration as `actual_ms`, a series per distinct latency, which reached the 1,000-series cap. The latency histogram is `barbacane_plugin_observability_latency_seconds`, observed in seconds: `latency_ms` observed milliseconds into buckets made for seconds.
+
 ### Removed
 
 - **AI gateway**: the `ai-proxy` dispatcher and the `ai-prompt-guard`, `ai-token-limit`, `ai-cost-tracker` and `ai-response-guard` middlewares, with the `schemas/ai-gateway.yaml` spec fragment, their guide pages, and the `barbacane-ai-regex-*` lint rules. A spec that dispatches to `ai-proxy` or uses one of these middlewares no longer compiles against the official plugins. Scripts that download the ruleset functions must drop `barbacane-validate-ai-regex.js`. The `host_http_stream` plugin capability (ADR-0023) stays.

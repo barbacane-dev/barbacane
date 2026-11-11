@@ -419,6 +419,10 @@ if let Some(token) = jwt::bearer_token(auth_header) {
 }
 ```
 
+### Metrics (host imports)
+
+With the `telemetry` capability, `host_metric_counter_inc(name, labels, value)` and `host_metric_histogram_observe(name, labels, value)` record a metric, `labels` being a JSON object such as `{"status": 200}`. The gateway exports it as `barbacane_plugin_<plugin>_<name>` with those labels; observe histograms in seconds. Keep labels bounded: a value per request, such as a duration or an ID, makes a series per request, and each plugin may create 1,000. The [observability guide](../guide/observability.md#plugin-metrics) gives the naming rules and what is refused.
+
 ### Clock, secrets (host imports)
 
 These host functions do not have SDK wrappers — declare the capability and

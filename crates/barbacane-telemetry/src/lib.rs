@@ -22,6 +22,7 @@ pub mod config;
 pub mod export;
 pub mod logging;
 pub mod metrics;
+mod plugin_metrics;
 pub mod prometheus;
 pub mod tracing;
 
