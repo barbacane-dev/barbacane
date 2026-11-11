@@ -392,8 +392,8 @@ services:
       serve
       --control-plane ws://control-plane:9090/ws/data-plane
       --project-id ${PROJECT_ID}
+      --api-key ${DATA_PLANE_API_KEY}
     environment:
-      BARBACANE_CONTROL_API_KEY: ${DATA_PLANE_API_KEY}
       BARBACANE_TRUSTED_PUBKEY: ${BARBACANE_TRUSTED_PUBKEY}
     ports:
       - "8080:8080"
