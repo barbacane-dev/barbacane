@@ -199,6 +199,18 @@ jobs:
       - name: Lint the control-plane API spec
         run: vacuum lint --ruleset crates/barbacane-control/openapi-ruleset.yaml --details crates/barbacane-control/openapi.yaml
 
+      # The config validators are generated from each plugin's
+      # config-schema.json; a schema change must come with them.
+      - name: Check the ruleset validators match the plugin schemas
+        run: |
+          node docs/rulesets/generate.mjs
+          if [ -n "$(git status --porcelain -- docs/rulesets)" ]; then
+            git status --porcelain -- docs/rulesets
+            git diff -- docs/rulesets | head -50
+            echo "::error::docs/rulesets is out of date with the plugin schemas; run node docs/rulesets/generate.mjs and commit the result"
+            exit 1
+          fi
+
       - name: Test the vacuum ruleset for gateway specs
         run: docs/rulesets/tests/run-tests.sh
 
