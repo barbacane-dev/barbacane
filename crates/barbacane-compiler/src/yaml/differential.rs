@@ -395,7 +395,34 @@ pub static KNOWN: &[KnownDivergence] = &[
                 } if pointer.is_empty())
         },
     },
+    KnownDivergence {
+        name: "reused anchor names",
+        reason: "YAML 1.2 resolves an alias to the last node before it with that anchor, as \
+                 the module does; yaml_serde numbers anchors by how many names it has seen, so \
+                 once a name is reused an alias can resolve to another anchor's node, or miss \
+                 a recursive reference the module refuses (yaml/yaml-serde#18)",
+        example: "a: &a 1\nb: &b 2\nc: &a 3\nd: &c 4\nx: *a\n",
+        matches: |input, d| {
+            has_reused_anchor(input)
+                && match d {
+                    Difference::Value { .. } => true,
+                    Difference::OnlyOursFailed { error } => error.contains("recursive references"),
+                    Difference::OnlyReferenceFailed { .. } => false,
+                }
+        },
+    },
 ];
+
+/// Whether `input` gives the same anchor name to more than one node.
+fn has_reused_anchor(input: &str) -> bool {
+    let mut names = std::collections::HashSet::new();
+    input.split('&').skip(1).any(|rest| {
+        let end = rest
+            .find(|c: char| c.is_whitespace() || matches!(c, ',' | '[' | ']' | '{' | '}'))
+            .unwrap_or(rest.len());
+        end > 0 && !names.insert(&rest[..end])
+    })
+}
 
 /// Whether `text` starts with `?` followed by a character other than
 /// whitespace.
@@ -593,6 +620,7 @@ mod tests {
             "é: 1",
             "0é: 1",
             "&é: 1",
+            "&é &é",
             "\r",
             "",
         ] {
