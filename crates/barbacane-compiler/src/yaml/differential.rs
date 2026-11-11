@@ -150,16 +150,15 @@ pub static KNOWN: &[KnownDivergence] = &[
     },
     KnownDivergence {
         name: "byte order marks inside a document",
-        reason: "YAML 1.2 allows a byte order mark at the start of a document and inside \
-                 quoted scalars only; libyaml reads one that begins a node elsewhere as \
-                 content, the module refuses the document",
+        reason: "YAML 1.2 allows a byte order mark before a document and inside quoted \
+                 scalars only; libyaml reads one that begins a node as content, where the \
+                 module skips one before the document and refuses one inside it",
         example: "a: \u{feff}x\n",
         matches: |_, d| match d {
             Difference::OnlyOursFailed { error } => {
                 error.contains("a BOM must not appear inside a document")
             }
             Difference::Value {
-                ours: Value::Null,
                 reference: Value::String(text),
                 ..
             } => text.contains('\u{feff}'),
@@ -167,18 +166,37 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
+        name: "document markers after a byte order mark",
+        reason: "YAML 1.2 lets a byte order mark start the stream before `---`; libyaml then \
+                 takes `---` for content, reading the string `---` or refusing the document",
+        example: "\u{feff}---\na: 1\n",
+        matches: |input, d| {
+            input.starts_with("\u{feff}---")
+                && matches!(
+                    d,
+                    Difference::Value { .. } | Difference::OnlyReferenceFailed { .. }
+                )
+        },
+    },
+    KnownDivergence {
         name: "block scalars ending the input without a line break",
         reason: "YAML 1.2 keeps no final line break when a block scalar's last line ends the \
-                 input, and libyaml returns `text`; serde-saphyr adds one, `text\\n` \
-                 (bourumir-wyngs/serde-saphyr#270)",
+                 input, and libyaml returns `text`; serde-saphyr adds one, `text\\n`, to a \
+                 value or a key (bourumir-wyngs/serde-saphyr#270)",
         example: "a: |\n  text",
         matches: |input, d| {
             !input.ends_with(['\n', '\r'])
-                && matches!(d, Difference::Value {
-                    ours: Value::String(ours),
-                    reference: Value::String(reference),
-                    ..
-                } if ours.strip_suffix('\n') == Some(reference.as_str()))
+                && match d {
+                    Difference::Value {
+                        ours: Value::String(ours),
+                        reference: Value::String(reference),
+                        ..
+                    } => ours.strip_suffix('\n') == Some(reference.as_str()),
+                    Difference::Value { pointer, .. } => {
+                        pointer.ends_with('\n') && input.contains(['|', '>'])
+                    }
+                    _ => false,
+                }
         },
     },
     KnownDivergence {
@@ -189,20 +207,11 @@ pub static KNOWN: &[KnownDivergence] = &[
         example: "a: !!foo 1\nb: !!foo\n",
         matches: |input, d| {
             input.contains('!')
-                && match d {
-                    Difference::Value {
-                        ours,
-                        reference: Value::String(text),
-                        ..
-                    } => match ours {
-                        Value::Null => text.is_empty(),
-                        Value::Number(_) | Value::Bool(_) => {
-                            serde_json::from_str::<Value>(text).ok().as_ref() == Some(ours)
-                        }
-                        _ => false,
-                    },
-                    _ => false,
-                }
+                && matches!(d, Difference::Value {
+                    ours: ours @ (Value::Null | Value::Number(_) | Value::Bool(_)),
+                    reference: Value::String(text),
+                    ..
+                } if crate::yaml::from_str::<Value>(text).ok().as_ref() == Some(ours))
         },
     },
     KnownDivergence {
@@ -251,7 +260,10 @@ pub static KNOWN: &[KnownDivergence] = &[
         example: "a: \"x\u{85}y\"\n",
         matches: |input, d| {
             input.contains(['\u{85}', '\u{2028}', '\u{2029}'])
-                && matches!(d, Difference::Value { .. })
+                && matches!(
+                    d,
+                    Difference::Value { .. } | Difference::OnlyOursFailed { .. }
+                )
         },
     },
     KnownDivergence {
@@ -342,7 +354,64 @@ pub static KNOWN: &[KnownDivergence] = &[
                 if error.contains("cannot deserialize null into string"))
         },
     },
+    KnownDivergence {
+        name: "`?` followed by content in flow collections",
+        reason: "YAML 1.2 takes `?` for an explicit key only when whitespace follows it, so \
+                 `{?a: 1}` has the key `?a`; in a flow collection libyaml takes it for one \
+                 whatever follows, and reads the key `a`",
+        example: "{?a: 1}\n",
+        matches: |input, d| {
+            input.contains(['{', '['])
+                && matches!(d, Difference::Value { pointer, ours, .. }
+                    if pointer.rsplit('/').next().is_some_and(starts_with_question_mark)
+                        || ours.as_str().is_some_and(starts_with_question_mark))
+        },
+    },
+    KnownDivergence {
+        name: "floats past the double range",
+        reason: "YAML 1.2 resolves a plain scalar such as `1e400` as a float, which overflows \
+                 to infinity, null in a JSON value; libyaml keeps it as a string",
+        example: "a: 1e400\n",
+        matches: |_, d| {
+            matches!(d, Difference::Value {
+                ours: Value::Null,
+                reference: Value::String(text),
+                ..
+            } if is_float_literal(text) && text.parse::<f64>().is_ok_and(f64::is_infinite))
+        },
+    },
+    KnownDivergence {
+        name: "unindented lines in a top-level block scalar",
+        reason: "YAML 1.2 lets a block scalar at the top of a document hold lines at column 0 \
+                 (spec example 9.3), so `|` then `#x` is the text `#x`; libyaml requires them \
+                 indented and reads `#x` as a comment",
+        example: "|\n#x\n",
+        matches: |input, d| {
+            input.lines().any(|line| line.starts_with('#'))
+                && matches!(d, Difference::Value {
+                    pointer,
+                    ours: Value::String(_),
+                    reference: Value::String(_),
+                } if pointer.is_empty())
+        },
+    },
 ];
+
+/// Whether `text` starts with `?` followed by a character other than
+/// whitespace.
+fn starts_with_question_mark(text: &str) -> bool {
+    text.strip_prefix('?')
+        .is_some_and(|rest| rest.starts_with(|c: char| !c.is_whitespace()))
+}
+
+/// Whether `text` is written as a decimal float: digits, `.`, `e`, `E`, `+`
+/// and `-` only, with at least one digit.
+fn is_float_literal(text: &str) -> bool {
+    text.chars().any(|c| c.is_ascii_digit())
+        && text
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+}
 
 /// Whether `input` breaks a line with a carriage return not followed by a
 /// line feed.
@@ -372,9 +441,11 @@ fn has_radix_key(input: &str) -> bool {
             .split(':')
             .next()
             .unwrap_or("");
-        key.len() > 2
-            && matches!(&key[..2], "0x" | "0o" | "0b" | "0X" | "0O" | "0B")
-            && key[2..].chars().all(|c| c.is_ascii_hexdigit())
+        ["0x", "0o", "0b", "0X", "0O", "0B"].iter().any(|prefix| {
+            key.strip_prefix(prefix).is_some_and(|digits| {
+                !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
+            })
+        })
     })
 }
 
@@ -503,6 +574,32 @@ mod tests {
         );
         assert!(!files.is_empty());
         gate(&files);
+    }
+
+    #[test]
+    fn classifying_never_panics() {
+        let differences = [
+            Difference::OnlyOursFailed { error: "x".into() },
+            Difference::OnlyReferenceFailed { error: "x".into() },
+            Difference::Value {
+                pointer: "/0".into(),
+                ours: Value::Null,
+                reference: Value::String("x".into()),
+            },
+        ];
+        for input in [
+            "\u{feff}---",
+            "\u{feff}0x1: a",
+            "é: 1",
+            "0é: 1",
+            "&é: 1",
+            "\r",
+            "",
+        ] {
+            for difference in &differences {
+                let _ = classify(input, difference);
+            }
+        }
     }
 
     #[test]
