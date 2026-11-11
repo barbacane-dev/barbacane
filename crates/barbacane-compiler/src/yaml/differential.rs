@@ -169,7 +169,8 @@ pub static KNOWN: &[KnownDivergence] = &[
     KnownDivergence {
         name: "block scalars ending the input without a line break",
         reason: "YAML 1.2 keeps no final line break when a block scalar's last line ends the \
-                 input, and libyaml returns `text`; serde-saphyr adds one, `text\\n`",
+                 input, and libyaml returns `text`; serde-saphyr adds one, `text\\n` \
+                 (bourumir-wyngs/serde-saphyr#270)",
         example: "a: |\n  text",
         matches: |input, d| {
             !input.ends_with(['\n', '\r'])
@@ -263,7 +264,8 @@ pub static KNOWN: &[KnownDivergence] = &[
     KnownDivergence {
         name: "signed .nan",
         reason: "YAML 1.2 spells not-a-number `.nan` with no sign, so `-.nan` is a string, as \
-                 libyaml reads it; serde-saphyr reads not-a-number, null in a JSON value",
+                 libyaml reads it; serde-saphyr reads not-a-number, null in a JSON value \
+                 (bourumir-wyngs/serde-saphyr#271)",
         example: "a: -.nan\n",
         matches: |_, d| {
             matches!(d, Difference::Value {
@@ -292,8 +294,9 @@ pub static KNOWN: &[KnownDivergence] = &[
     },
     KnownDivergence {
         name: "keys equal as integers",
-        reason: "serde-saphyr takes keys spelled differently but equal as integers (`10` and \
-                 `0xA`) for one key and keeps the last; libyaml keeps both, by their text",
+        reason: "YAML 1.2 makes two keys equal when their tags and canonical forms are, so \
+                 `10` and `0xA`, both the integer 10, are one key, and the last is kept; libyaml \
+                 compares keys by their text and keeps both",
         example: "10: a\n0xA: b\n",
         matches: |input, d| {
             has_radix_key(input)
