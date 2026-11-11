@@ -127,6 +127,28 @@ pub static KNOWN: &[KnownDivergence] = &[
         matches: |_, d| reference_refused(d, "invalid Unicode character escape"),
     },
     KnownDivergence {
+        name: "multi-line keys in flow mappings",
+        reason: "YAML 1.2 lets a key in a flow mapping span lines, and its `:` start the next \
+                 line (yaml-test-suite NJ66, 4MUZ); libyaml keeps YAML 1.1's rule that such a \
+                 key fits on one line and refuses the document",
+        example: "{ multi\n  line: value}\n",
+        matches: |_, d| {
+            reference_refused(d, "did not find expected ',' or '}'")
+                && reference_refused(d, "while parsing a flow mapping")
+        },
+    },
+    KnownDivergence {
+        name: "under-indented quoted scalars",
+        reason: "YAML 1.2 requires the continuation lines of a quoted scalar in block context \
+                 to be indented past the node that holds it (yaml-test-suite QB6E); libyaml \
+                 reads them, the module refuses the document",
+        example: "quoted: \"a\nb\nc\"\n",
+        matches: |_, d| {
+            matches!(d, Difference::OnlyOursFailed { error }
+                if error.contains("invalid indentation in multiline quoted scalar"))
+        },
+    },
+    KnownDivergence {
         name: "upper-case radix prefixes",
         reason: "serde-saphyr reads `0X1F`, `0O17` and `0B101` as integers; YAML 1.2 and \
                  libyaml keep them as strings, since the core schema's prefixes are lower case",

@@ -1,0 +1,6 @@
+quoted: "a
+b
+c"
+nested:
+  single: 'd
+  e'
