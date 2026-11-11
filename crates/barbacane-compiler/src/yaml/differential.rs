@@ -149,6 +149,17 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
+        name: "byte order marks inside a document",
+        reason: "YAML 1.2 allows a byte order mark at the start of a document and inside \
+                 quoted scalars only; libyaml reads one that begins a node elsewhere as \
+                 content, the module refuses the document",
+        example: "a: \u{feff}x\n",
+        matches: |_, d| {
+            matches!(d, Difference::OnlyOursFailed { error }
+                if error.contains("a BOM must not appear inside a document"))
+        },
+    },
+    KnownDivergence {
         name: "upper-case radix prefixes",
         reason: "serde-saphyr reads `0X1F`, `0O17` and `0B101` as integers; YAML 1.2 and \
                  libyaml keep them as strings, since the core schema's prefixes are lower case",

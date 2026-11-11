@@ -1,6 +1,7 @@
 # Fuzzes the YAML module against libyaml (the `yaml_differential` target) for
-# 30 minutes each night. A difference that belongs to no known class, or an
-# input past the time or memory bound, is kept and uploaded as an artifact.
+# 30 minutes each night. Fuzzing goes on after a finding, so one run reports
+# every input that differs in a way no known class covers, or that passes the
+# time or memory bound; each is replayed to print why, and uploaded.
 # Informational: a probabilistic run is not a merge gate; the differential
 # test over the repository's files is.
 name: YAML Fuzz
@@ -55,12 +56,30 @@ jobs:
         working-directory: fuzz
         run: |
           cargo fuzz run yaml_differential corpus/yaml_differential -- \
-            -dict=yaml.dict -max_total_time=1800 -timeout=10 -rss_limit_mb=2048
+            -dict=yaml.dict -max_total_time=1800 -timeout=10 -rss_limit_mb=2048 \
+            -fork=2 -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1
 
       - name: Upload findings
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: yaml-differential-findings
           path: fuzz/artifacts/yaml_differential
           if-no-files-found: ignore
+
+      - name: Report findings
+        if: always()
+        working-directory: fuzz
+        run: |
+          shopt -s nullglob
+          findings=(artifacts/yaml_differential/*)
+          for finding in "${findings[@]}"; do
+            echo "::group::$finding"
+            cargo fuzz run yaml_differential "$finding" 2>&1 \
+              | grep -m1 -E 'difference of no known class|deadly signal|timeout|out-of-memory' || true
+            echo "::endgroup::"
+          done
+          if [ ${#findings[@]} -gt 0 ]; then
+            echo "::error::${#findings[@]} input(s) kept; see the log groups above and the uploaded artifact"
+            exit 1
+          fi
