@@ -298,7 +298,8 @@ fn resolve_plugin(
         }
         Some(Ok(limits)) => limits,
         None => DeclaredLimits::default(),
-    };
+    }
+    .overridden_by(source.limits());
 
     // The config schema carries the secret (writeOnly) fields and the
     // annotations naming the request headers the plugin reads. Prefer the copy
@@ -394,21 +395,20 @@ fn resolve_url_plugin(
 /// A project manifest (`barbacane.yaml`).
 ///
 /// Declares the plugins available for use in OpenAPI specs.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProjectManifest {
     /// Plugin declarations: name -> source.
-    #[serde(default)]
     pub plugins: HashMap<String, PluginSource>,
 
     /// Path to a folder containing spec files (relative to manifest or absolute).
     /// All `*.yaml` and `*.json` files in this folder are discovered as specs.
     /// Used by `barbacane dev` and as a fallback for `barbacane compile`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub specs: Option<String>,
 }
 
 /// Source location for a plugin.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum PluginSource {
     /// Local file path.
@@ -418,23 +418,37 @@ pub enum PluginSource {
 }
 
 /// Plugin sourced from a local file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PathSource {
     /// Path to the .wasm file (relative to manifest or absolute).
     pub path: String,
+    /// Limits that replace the plugin's own, key by key.
+    #[serde(skip_serializing_if = "DeclaredLimits::is_empty")]
+    pub limits: DeclaredLimits,
 }
 
 /// Plugin sourced from a remote URL.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UrlSource {
     /// HTTPS URL to the .wasm file.
     pub url: String,
     /// Optional SHA-256 checksum for integrity verification.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// Limits that replace the plugin's own, key by key.
+    #[serde(skip_serializing_if = "DeclaredLimits::is_empty")]
+    pub limits: DeclaredLimits,
 }
 
 impl PluginSource {
+    /// The limits `barbacane.yaml` sets for this plugin.
+    pub fn limits(&self) -> &DeclaredLimits {
+        match self {
+            PluginSource::Path(p) => &p.limits,
+            PluginSource::Url(u) => &u.limits,
+        }
+    }
+
     /// Get a description of the source for error messages.
     pub fn description(&self) -> String {
         match self {
@@ -477,6 +491,64 @@ pub struct ResolvedPlugin {
     pub config_schema: Option<serde_json::Value>,
 }
 
+/// Why a plugin entry in `barbacane.yaml` was refused.
+enum EntryError {
+    /// The entry's shape: an unknown key, a missing or doubled source.
+    Format(String),
+    /// Its `limits` (E1044).
+    Limits(String),
+}
+
+/// Read one plugin entry: `path`, or `url` with an optional `sha256`, and
+/// optional `limits`.
+fn parse_plugin_entry(entry: serde_json::Value) -> Result<PluginSource, EntryError> {
+    let format = |reason: &str| EntryError::Format(reason.to_string());
+    let serde_json::Value::Object(entry) = entry else {
+        return Err(format("an entry is a mapping with `path` or `url`"));
+    };
+    let mut path = None;
+    let mut url = None;
+    let mut sha256 = None;
+    let mut limits = DeclaredLimits::default();
+    for (key, value) in entry {
+        match (key.as_str(), value) {
+            ("path", serde_json::Value::String(v)) => path = Some(v),
+            ("url", serde_json::Value::String(v)) => url = Some(v),
+            ("sha256", serde_json::Value::String(v)) => sha256 = Some(v),
+            ("limits", serde_json::Value::Object(object)) => {
+                limits = DeclaredLimits::from_json(&object).map_err(EntryError::Limits)?;
+            }
+            ("limits", _) => {
+                return Err(EntryError::Limits(
+                    "limits are a mapping of memory_mib, fuel and timeout_ms".into(),
+                ))
+            }
+            ("path" | "url" | "sha256", _) => {
+                return Err(EntryError::Format(format!("`{key}` must be a string")))
+            }
+            (other, _) => {
+                return Err(EntryError::Format(format!(
+                    "unknown key `{other}`; a plugin entry takes `path` or `url`, `sha256` \
+                     with `url`, and `limits`"
+                )))
+            }
+        }
+    }
+    match (path, url) {
+        (Some(path), None) if sha256.is_none() => {
+            Ok(PluginSource::Path(PathSource { path, limits }))
+        }
+        (Some(_), None) => Err(format("`sha256` goes with `url`")),
+        (None, Some(url)) => Ok(PluginSource::Url(UrlSource {
+            url,
+            sha256,
+            limits,
+        })),
+        (Some(_), Some(_)) => Err(format("an entry has `path` or `url`, not both")),
+        (None, None) => Err(format("an entry needs `path` or `url`")),
+    }
+}
+
 impl ProjectManifest {
     /// Load a manifest from a YAML file.
     pub fn load(path: &Path) -> Result<Self, CompileError> {
@@ -487,11 +559,49 @@ impl ProjectManifest {
         Self::parse(&content, path)
     }
 
-    /// Parse a manifest from YAML content.
+    /// Parse a manifest from YAML content. A key the format does not have,
+    /// at the top level or in a plugin entry, is an error.
     pub fn parse(content: &str, path: &Path) -> Result<Self, CompileError> {
-        crate::yaml::from_str(content).map_err(|e| {
-            CompileError::ManifestError(format!("failed to parse {}: {}", path.display(), e))
-        })
+        let invalid = |reason: String| {
+            CompileError::ManifestError(format!("failed to parse {}: {reason}", path.display()))
+        };
+        let root = match crate::yaml::from_str::<serde_json::Value>(content).map_err(invalid)? {
+            serde_json::Value::Null => serde_json::Map::new(),
+            serde_json::Value::Object(root) => root,
+            _ => return Err(invalid("the manifest must be a mapping".into())),
+        };
+        let mut manifest = Self::default();
+        for (key, value) in root {
+            match (key.as_str(), value) {
+                ("specs", serde_json::Value::Null) => {}
+                ("specs", serde_json::Value::String(specs)) => manifest.specs = Some(specs),
+                ("specs", _) => return Err(invalid("`specs` must be a folder path".into())),
+                ("plugins", serde_json::Value::Null) => {}
+                ("plugins", serde_json::Value::Object(plugins)) => {
+                    for (name, entry) in plugins {
+                        let source = parse_plugin_entry(entry).map_err(|e| match e {
+                            EntryError::Format(reason) => {
+                                invalid(format!("plugin `{name}`: {reason}"))
+                            }
+                            EntryError::Limits(reason) => CompileError::InvalidLimitsOverride {
+                                plugin: name.clone(),
+                                reason,
+                            },
+                        })?;
+                        manifest.plugins.insert(name, source);
+                    }
+                }
+                ("plugins", _) => {
+                    return Err(invalid("`plugins` must map plugin names to entries".into()))
+                }
+                (other, _) => {
+                    return Err(invalid(format!(
+                        "unknown key `{other}`; barbacane.yaml takes `specs` and `plugins`"
+                    )))
+                }
+            }
+        }
+        Ok(manifest)
     }
 
     /// Discover spec files from the `specs` folder.
@@ -770,6 +880,101 @@ mod tests {
         );
     }
 
+    fn parse_error(content: &str) -> String {
+        ProjectManifest::parse(content, Path::new("barbacane.yaml"))
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn an_unknown_key_is_refused_and_named() {
+        let error = parse_error("spec: ./specs/\n");
+        assert!(error.contains("unknown key `spec`"), "{error}");
+        let error =
+            parse_error("plugins:\n  mock:\n    path: ./mock.wasm\n    limit:\n      fuel: 1\n");
+        assert!(
+            error.contains("plugin `mock`") && error.contains("unknown key `limit`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_plugin_entry_has_one_source() {
+        for (entry, expected) in [
+            (
+                "    path: ./a.wasm\n    url: https://x/a.wasm\n",
+                "not both",
+            ),
+            ("    sha256: abc\n", "needs `path` or `url`"),
+            (
+                "    path: ./a.wasm\n    sha256: abc\n",
+                "`sha256` goes with `url`",
+            ),
+            ("    path: 3\n", "`path` must be a string"),
+        ] {
+            let error = parse_error(&format!("plugins:\n  p:\n{entry}"));
+            assert!(error.contains(expected), "{entry}: {error}");
+        }
+        let error = parse_error("plugins:\n  p: ./a.wasm\n");
+        assert!(error.contains("an entry is a mapping"), "{error}");
+    }
+
+    #[test]
+    fn limits_in_barbacane_yaml_are_read_and_checked() {
+        let manifest = ProjectManifest::parse(
+            "plugins:\n  p:\n    url: https://x/p.wasm\n    limits:\n      memory_mib: 64\n",
+            Path::new("barbacane.yaml"),
+        )
+        .unwrap();
+        assert_eq!(manifest.plugins["p"].limits().memory_mib, Some(64));
+
+        for (limits, expected) in [
+            ("      memory_mib: 4096\n", "ceiling"),
+            ("      memory: 4\n", "unknown key `memory`"),
+            ("      fuel: 0\n", "at least 1"),
+        ] {
+            let error = parse_error(&format!(
+                "plugins:\n  p:\n    path: ./p.wasm\n    limits:\n{limits}"
+            ));
+            assert!(
+                error.starts_with("E1044: barbacane.yaml sets invalid limits for plugin 'p'")
+                    && error.contains(expected),
+                "{limits}: {error}"
+            );
+        }
+        let error = parse_error("plugins:\n  p:\n    path: ./p.wasm\n    limits: 4\n");
+        assert!(error.starts_with("E1044"), "{error}");
+    }
+
+    #[test]
+    fn limits_in_barbacane_yaml_replace_the_plugins_key_by_key() {
+        let temp = TempDir::new().unwrap();
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("p.wasm"),
+            [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            "[plugin]\nname=\"p\"\nversion=\"1.0.0\"\ntype=\"middleware\"\n\
+             [limits]\nmemory_mib = 4\nfuel = 5000\n",
+        )
+        .unwrap();
+        let content = "plugins:\n  p:\n    path: ./plugins/p.wasm\n    limits:\n      memory_mib: 64\n      timeout_ms: 250\n";
+        let manifest = ProjectManifest::parse(content, Path::new("barbacane.yaml")).unwrap();
+        let resolved = manifest.resolve_plugins(temp.path(), false).unwrap();
+        assert_eq!(
+            resolved[0].limits,
+            DeclaredLimits {
+                memory_mib: Some(64),
+                fuel: Some(5000),
+                timeout_ms: Some(250),
+            }
+        );
+    }
+
     #[test]
     fn parse_manifest_with_path_sources() {
         let content = r#"
@@ -827,6 +1032,7 @@ plugins:
         let source = PluginSource::Url(UrlSource {
             url: "http://example.com/plugin.wasm".to_string(),
             sha256: None,
+            limits: DeclaredLimits::default(),
         });
         let result = resolve_plugin("test", &source, Path::new("."), false);
         assert!(result.is_err());

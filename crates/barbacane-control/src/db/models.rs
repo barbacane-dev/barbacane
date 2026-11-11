@@ -47,6 +47,8 @@ pub struct ProjectPluginConfig {
     pub enabled: bool,
     pub priority: i32,
     pub config: serde_json::Value,
+    /// Limits replacing the plugin's own, key by key; `None` sets none.
+    pub limits: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -62,6 +64,9 @@ pub struct NewProjectPluginConfig {
     pub priority: i32,
     #[serde(default = "default_config")]
     pub config: serde_json::Value,
+    /// Limits replacing the plugin's own, key by key.
+    #[serde(default)]
+    pub limits: Option<serde_json::Value>,
 }
 
 fn default_enabled() -> bool {
@@ -79,6 +84,8 @@ pub struct UpdateProjectPluginConfig {
     pub enabled: Option<bool>,
     pub priority: Option<i32>,
     pub config: Option<serde_json::Value>,
+    /// New limits; an empty object removes them.
+    pub limits: Option<serde_json::Value>,
 }
 
 /// A spec metadata record.

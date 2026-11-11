@@ -313,7 +313,10 @@ async fn resolve_project_plugins(
                 )
             })?;
 
-        bundles.push(registry_bundle(plugin_with_binary)?);
+        bundles.push(with_project_limits(
+            registry_bundle(plugin_with_binary)?,
+            &project_config.limits,
+        )?);
     }
 
     tracing::info!(
@@ -367,6 +370,29 @@ fn registry_bundle(plugin: PluginWithBinary) -> anyhow::Result<barbacane_compile
         secret_fields,
         config_schema,
     })
+}
+
+/// A bundle with the limits the project sets in place of the plugin's own,
+/// key by key.
+fn with_project_limits(
+    mut bundle: barbacane_compiler::PluginBundle,
+    limits: &Option<serde_json::Value>,
+) -> anyhow::Result<barbacane_compiler::PluginBundle> {
+    let Some(limits) = limits else {
+        return Ok(bundle);
+    };
+    let operator = match limits {
+        serde_json::Value::Object(object) => barbacane_compiler::DeclaredLimits::from_json(object),
+        _ => Err("limits are an object of memory_mib, fuel and timeout_ms".to_string()),
+    }
+    .map_err(|reason| {
+        anyhow::anyhow!(
+            "E1044: the project sets invalid limits for plugin '{}': {reason}",
+            bundle.name
+        )
+    })?;
+    bundle.limits = bundle.limits.overridden_by(&operator);
+    Ok(bundle)
 }
 
 /// Extract an error code and clean message from an error string like "E1040: some message".
@@ -443,6 +469,34 @@ mod tests {
         let invalid = manifest.replace("memory_mib = 4", "memory_mib = 0");
         let Err(err) = registry_bundle(registry_plugin(module_with_manifest(&invalid))) else {
             panic!("a plugin with invalid limits must be refused");
+        };
+        assert!(err.to_string().starts_with("E1044"), "{err}");
+    }
+
+    #[test]
+    fn the_projects_limits_replace_the_plugins_key_by_key() {
+        let manifest = "[plugin]\nname = \"probe\"\nversion = \"1.0.0\"\ntype = \"middleware\"\n\n\
+                        [limits]\nmemory_mib = 4\nfuel = 5000\n";
+        let bundle =
+            || registry_bundle(registry_plugin(module_with_manifest(manifest))).expect("bundle");
+
+        let unchanged = with_project_limits(bundle(), &None).expect("no limits");
+        assert_eq!(unchanged.limits.memory_mib, Some(4));
+
+        let limits = Some(serde_json::json!({"memory_mib": 64, "timeout_ms": 250}));
+        let merged = with_project_limits(bundle(), &limits).expect("merged");
+        assert_eq!(
+            merged.limits,
+            barbacane_compiler::DeclaredLimits {
+                memory_mib: Some(64),
+                fuel: Some(5000),
+                timeout_ms: Some(250),
+            }
+        );
+
+        let invalid = Some(serde_json::json!({"memory_mib": 4096}));
+        let Err(err) = with_project_limits(bundle(), &invalid) else {
+            panic!("limits above the ceiling must be refused");
         };
         assert!(err.to_string().starts_with("E1044"), "{err}");
     }

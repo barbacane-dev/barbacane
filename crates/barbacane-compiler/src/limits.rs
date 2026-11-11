@@ -44,18 +44,35 @@ impl DeclaredLimits {
     /// Read a `[limits]` table. Every key must be one of `memory_mib`, `fuel`
     /// and `timeout_ms`, with an integer from 1 to its ceiling.
     pub fn from_toml(table: &toml::Table) -> Result<Self, String> {
+        Self::from_entries(table.iter().map(|(key, value)| {
+            let number = value.as_integer().and_then(|n| u64::try_from(n).ok());
+            (key.as_str(), number, value.to_string())
+        }))
+    }
+
+    /// Read limits from a JSON object, as `barbacane.yaml` and the control
+    /// plane give them, with the same keys and bounds as [`Self::from_toml`].
+    pub fn from_json(object: &serde_json::Map<String, serde_json::Value>) -> Result<Self, String> {
+        Self::from_entries(
+            object
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_u64(), value.to_string())),
+        )
+    }
+
+    fn from_entries<'a>(
+        entries: impl Iterator<Item = (&'a str, Option<u64>, String)>,
+    ) -> Result<Self, String> {
         let mut limits = Self::default();
-        for (key, value) in table {
-            let Some((_, ceiling)) = KEYS.iter().find(|(name, _)| name == key) else {
+        for (key, number, shown) in entries {
+            let Some((_, ceiling)) = KEYS.iter().find(|(name, _)| *name == key) else {
                 return Err(format!(
-                    "unknown key `{key}`; [limits] takes memory_mib, fuel and timeout_ms"
+                    "unknown key `{key}`; limits take memory_mib, fuel and timeout_ms"
                 ));
             };
-            let value = value
-                .as_integer()
-                .and_then(|n| u64::try_from(n).ok())
-                .ok_or_else(|| format!("`{key}` must be a positive integer, not {value}"))?;
-            let slot = match key.as_str() {
+            let value =
+                number.ok_or_else(|| format!("`{key}` must be a positive integer, not {shown}"))?;
+            let slot = match key {
                 "memory_mib" => &mut limits.memory_mib,
                 "fuel" => &mut limits.fuel,
                 _ => &mut limits.timeout_ms,
@@ -64,6 +81,15 @@ impl DeclaredLimits {
             check(key, value, *ceiling)?;
         }
         Ok(limits)
+    }
+
+    /// These limits with each value `operator` sets in its place.
+    pub fn overridden_by(&self, operator: &Self) -> Self {
+        Self {
+            memory_mib: operator.memory_mib.or(self.memory_mib),
+            fuel: operator.fuel.or(self.fuel),
+            timeout_ms: operator.timeout_ms.or(self.timeout_ms),
+        }
     }
 
     /// Check each declared value against its ceiling. The data plane runs the
@@ -156,6 +182,58 @@ mod tests {
             let error = parse(toml).unwrap_err();
             assert!(error.contains(expected), "{toml}: {error}");
         }
+    }
+
+    #[test]
+    fn json_limits_follow_the_same_rules() {
+        let parse = |json: &str| {
+            let serde_json::Value::Object(object) = serde_json::from_str(json).unwrap() else {
+                panic!("object");
+            };
+            DeclaredLimits::from_json(&object)
+        };
+        assert_eq!(
+            parse(r#"{"memory_mib": 32, "fuel": 200000000}"#),
+            Ok(DeclaredLimits {
+                memory_mib: Some(32),
+                fuel: Some(200_000_000),
+                timeout_ms: None,
+            })
+        );
+        for (json, expected) in [
+            (r#"{"memory": 4}"#, "unknown key `memory`"),
+            (r#"{"memory_mib": 0}"#, "at least 1"),
+            (r#"{"memory_mib": 4096}"#, "ceiling"),
+            (r#"{"fuel": -1}"#, "positive integer"),
+            (r#"{"timeout_ms": 1.5}"#, "positive integer"),
+            (r#"{"timeout_ms": "20"}"#, "positive integer"),
+        ] {
+            let error = parse(json).unwrap_err();
+            assert!(error.contains(expected), "{json}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_operator_value_replaces_the_declared_one_key_by_key() {
+        let declared = DeclaredLimits {
+            memory_mib: Some(4),
+            fuel: Some(5_000),
+            timeout_ms: None,
+        };
+        let operator = DeclaredLimits {
+            memory_mib: Some(64),
+            fuel: None,
+            timeout_ms: Some(250),
+        };
+        assert_eq!(
+            declared.overridden_by(&operator),
+            DeclaredLimits {
+                memory_mib: Some(64),
+                fuel: Some(5_000),
+                timeout_ms: Some(250),
+            }
+        );
+        assert_eq!(declared.overridden_by(&DeclaredLimits::default()), declared);
     }
 
     #[test]

@@ -80,7 +80,13 @@ plugins:
   jwt-auth:
     url: https://github.com/barbacane-dev/barbacane/releases/download/v0.7.0/jwt-auth.wasm
     sha256: abc123...
+  ip-restriction:
+    path: ./plugins/ip-restriction.wasm
+    limits:
+      memory_mib: 32
 ```
+
+A key the format does not have, at the top level or in a plugin entry, fails with an error naming it.
 
 ### `specs` (optional)
 
@@ -97,6 +103,12 @@ Declares all WASM plugins used by your specs. Each plugin maps a name to a sourc
 - **Local path**: `path: ./plugins/name.wasm` — relative to the manifest directory
 - **Remote URL**: `url: https://...` — downloaded at compile time, cached in `~/.barbacane/cache/plugins/`
 - **Checksum** (optional): `sha256: ...` — integrity verification for remote plugins
+
+An entry has `path` or `url`, not both, and `sha256` only with `url`.
+
+### `limits` (optional)
+
+Resource limits for the plugin's instances, each replacing the value the plugin declares in its `plugin.toml` (or the default): `memory_mib`, `fuel` and `timeout_ms`, as the [plugin guide](../contributing/plugins.md#resource-limits) describes them. A key left out keeps the plugin's value. Raise a limit when your configuration needs more than the plugin's author planned for, such as a long `ip-restriction` list; lower one to confine a plugin further. A value below 1 or above the gateway's ceiling fails compilation with `E1044`. The control plane takes the same `limits` on a project's plugin.
 
 ---
 

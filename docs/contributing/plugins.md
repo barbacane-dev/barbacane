@@ -678,8 +678,13 @@ A plugin that receives bodies, a dispatcher or a middleware with
 body fits beside its working memory. A middleware without `body_access` keeps
 its own memory limit whatever `max_body_size` is.
 
-The limits are recorded in the artifact with the plugin's capabilities and
-covered by `artifact_hash`, so they cannot change after the artifact is signed.
+The operator can set limits in place of the plugin's, key by key, in
+`barbacane.yaml` or on the control plane's project plugin, within the same
+ceilings: see [the project manifest](../guide/spec-configuration.md#limits-optional).
+
+The limits in effect are recorded in the artifact with the plugin's
+capabilities and covered by `artifact_hash`, so they cannot change after the
+artifact is signed.
 
 Exceeding a limit results in a trap, which answers the request with a 500. On a streamed response, `on_response` runs after the response is sent, so a trap there is logged and the response is unaffected.
 

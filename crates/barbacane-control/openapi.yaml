@@ -1076,6 +1076,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectPluginConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -1089,7 +1091,7 @@ paths:
     put:
       tags: [ProjectPlugins]
       summary: Update a project plugin
-      description: Change the version, state, priority or configuration of a plugin a project uses. Fields left out keep their value.
+      description: Change the version, state, priority, configuration or limits of a plugin a project uses. Fields left out keep their value; `limits` replaces the project's limits for the plugin, and an empty object removes them.
       operationId: updateProjectPlugin
       parameters:
         - $ref: '#/components/parameters/projectId'
@@ -1108,6 +1110,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProjectPluginConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
     delete:
@@ -1758,6 +1762,11 @@ components:
         config:
           type: object
           description: The plugin configuration
+        limits:
+          description: Limits the project sets for the plugin, replacing its own key by key; null when it sets none
+          oneOf:
+            - $ref: '#/components/schemas/PluginLimits'
+            - type: 'null'
         created_at:
           type: string
           format: date-time
@@ -1783,6 +1792,8 @@ components:
         config:
           type: object
           default: {}
+        limits:
+          $ref: '#/components/schemas/PluginLimits'
 
     UpdateProjectPluginRequest:
       description: Changes to a project plugin; fields left out keep their value
@@ -1796,6 +1807,32 @@ components:
           type: integer
         config:
           type: object
+        limits:
+          $ref: '#/components/schemas/PluginLimits'
+
+    PluginLimits:
+      description: >-
+        Resource limits for a plugin's instances, each replacing the plugin's
+        own value; an empty object sets none. Values above the gateway's
+        ceiling are refused with E1044.
+      type: object
+      additionalProperties: false
+      properties:
+        memory_mib:
+          type: integer
+          minimum: 1
+          maximum: 1024
+          description: Linear memory, in MiB
+        fuel:
+          type: integer
+          minimum: 1
+          maximum: 10000000000
+          description: Fuel for one call
+        timeout_ms:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          description: Wall-clock budget for one call, in milliseconds
 
     MiddlewareBinding:
       description: A middleware in a chain, with its configuration

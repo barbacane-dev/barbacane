@@ -99,6 +99,10 @@ pub enum CompileError {
     #[error("E1044: plugin '{plugin}' declares invalid [limits]: {reason}")]
     InvalidLimits { plugin: String, reason: String },
 
+    /// E1044: `barbacane.yaml` sets invalid limits for a plugin.
+    #[error("E1044: barbacane.yaml sets invalid limits for plugin '{plugin}': {reason}")]
+    InvalidLimitsOverride { plugin: String, reason: String },
+
     /// E1043: A plugin imports a function the gateway does not provide.
     #[error(
         "E1043: plugin '{plugin}' imports {module}::{name}, which the gateway does not provide; \
