@@ -399,7 +399,7 @@ Build consistent `application/problem+json` error responses with the shared buil
 use barbacane_plugin_sdk::errors::ProblemDetails;
 
 return Action::ShortCircuit(
-    ProblemDetails::new(403, "urn:barbacane:error:forbidden", "Forbidden")
+    ProblemDetails::new(403, "urn:barbacane:error:authorization-failed", "Forbidden")
         .detail("Access denied")
         .with("consumer", "alice") // optional extension members
         .into_response(),

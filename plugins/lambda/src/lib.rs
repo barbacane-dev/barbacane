@@ -122,7 +122,7 @@ impl LambdaDispatcher {
             502 => "urn:barbacane:error:lambda-invocation-failed",
             503 => "urn:barbacane:error:lambda-unavailable",
             504 => "urn:barbacane:error:lambda-timeout",
-            _ => "urn:barbacane:error:internal",
+            _ => "urn:barbacane:error:internal-error",
         };
 
         ProblemDetails::new(status, error_type, title)
@@ -430,5 +430,17 @@ mod tests {
         assert_eq!(response.status, 502);
 
         // The logic doesn't set content-type when there's no body
+    }
+
+    #[test]
+    fn an_unexpected_failure_is_an_internal_error() {
+        let dispatcher: LambdaDispatcher =
+            serde_json::from_str(r#"{"url": "https://example.lambda-url.us-east-1.on.aws/"}"#)
+                .expect("config");
+        let response = dispatcher.error_response(500, "Internal Server Error", "unexpected");
+        assert_eq!(response.status, 500);
+        let body: serde_json::Value =
+            serde_json::from_slice(response.body.as_ref().expect("body")).expect("problem+json");
+        assert_eq!(body["type"], "urn:barbacane:error:internal-error");
     }
 }

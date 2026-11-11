@@ -218,7 +218,7 @@ impl KafkaDispatcher {
         let error_type = match status {
             502 => "urn:barbacane:error:kafka-publish-failed",
             503 => "urn:barbacane:error:kafka-unavailable",
-            _ => "urn:barbacane:error:internal",
+            _ => "urn:barbacane:error:internal-error",
         };
 
         ProblemDetails::new(status, error_type, title)
@@ -631,5 +631,17 @@ mod tests {
         // Should handle missing headers gracefully
         let response = dispatcher.dispatch(req);
         assert_eq!(response.status, 502);
+    }
+
+    #[test]
+    fn an_unexpected_failure_is_an_internal_error() {
+        let dispatcher: KafkaDispatcher =
+            serde_json::from_str(r#"{"brokers": "kafka:9092", "topic": "test-topic"}"#)
+                .expect("config");
+        let response = dispatcher.error_response(500, "Internal Server Error", "unexpected");
+        assert_eq!(response.status, 500);
+        let body: serde_json::Value =
+            serde_json::from_slice(response.body.as_ref().expect("body")).expect("problem+json");
+        assert_eq!(body["type"], "urn:barbacane:error:internal-error");
     }
 }

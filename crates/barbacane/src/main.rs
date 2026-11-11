@@ -641,7 +641,7 @@ enum Commands {
         shutdown_timeout: u64,
 
         // Connected mode options (optional)
-        /// Control plane WebSocket URL (e.g., ws://control:8080/ws/data-plane).
+        /// Control plane WebSocket URL (e.g., ws://control:9090/ws/data-plane).
         /// When provided, the data plane connects to the control plane for centralized management.
         #[arg(long)]
         control_plane: Option<String>,
@@ -653,7 +653,7 @@ enum Commands {
 
         /// API key for control plane authentication.
         /// Required if --control-plane is specified.
-        #[arg(long, env = "BARBACANE_API_KEY")]
+        #[arg(long, env = "BARBACANE_CONTROL_API_KEY")]
         api_key: Option<String>,
 
         /// Data plane name for identification in control plane.

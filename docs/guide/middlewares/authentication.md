@@ -333,7 +333,7 @@ Sets headers for downstream:
 }
 ```
 
-`403 Forbidden` (`urn:barbacane:error:forbidden`) when `required_groups` is set and the user is in none of them.
+`403 Forbidden` (`urn:barbacane:error:authorization-failed`) when `required_groups` is set and the user is in none of them.
 
 `503 Service Unavailable` (`urn:barbacane:error:ldap-unavailable`) when the directory cannot be reached or a search or bind fails for a reason other than the credentials. Directory failures are never cached.
 

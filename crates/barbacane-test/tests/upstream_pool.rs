@@ -207,6 +207,11 @@ async fn a_503_is_not_retried_for_a_post() {
     let response = gw.post("/pool", "{}").await.unwrap();
     assert_eq!(response.status(), 503);
     assert_eq!((busy.hits(), ok.hits()), (1, 0));
+    assert_eq!(
+        response.text().await.unwrap(),
+        "busy",
+        "the upstream's 503 is forwarded as it sent it, not replaced by a problem response"
+    );
 }
 
 #[tokio::test]

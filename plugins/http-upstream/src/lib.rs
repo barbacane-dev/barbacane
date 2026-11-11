@@ -199,10 +199,9 @@ impl HttpUpstreamDispatcher {
     /// Create an error response in RFC 9457 format.
     fn error_response(&self, status: u16, title: &str, detail: &str, debug: &str) -> Response {
         let error_type = match status {
-            502 => "urn:barbacane:error:upstream-unavailable",
-            503 => "urn:barbacane:error:circuit-open",
+            502 | 503 => "urn:barbacane:error:upstream-unavailable",
             504 => "urn:barbacane:error:upstream-timeout",
-            _ => "urn:barbacane:error:internal",
+            _ => "urn:barbacane:error:internal-error",
         };
 
         let full_detail = format!("{}: {}", detail, debug);
@@ -351,14 +350,14 @@ mod tests {
         let response = dispatcher.error_response(
             503,
             "Service Unavailable",
-            "circuit open",
-            "too many failures",
+            "upstream unavailable",
+            "every endpoint refused",
         );
         assert_eq!(response.status, 503);
 
         let body: serde_json::Value =
             serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["type"], "urn:barbacane:error:circuit-open");
+        assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
     }
 
     #[test]
@@ -402,7 +401,7 @@ mod tests {
 
         let body: serde_json::Value =
             serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
-        assert_eq!(body["type"], "urn:barbacane:error:internal");
+        assert_eq!(body["type"], "urn:barbacane:error:internal-error");
     }
 
     #[test]

@@ -176,7 +176,7 @@ impl ProblemDetails {
 
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| {
-            r#"{"type":"urn:barbacane:error:internal","title":"Serialization error","status":500}"#.into()
+            r#"{"type":"urn:barbacane:error:internal-error","title":"Serialization error","status":500}"#.into()
         })
     }
 }
