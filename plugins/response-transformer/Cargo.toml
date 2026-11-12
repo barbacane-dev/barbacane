@@ -3,7 +3,7 @@ name = "barbacane-response-transformer"
 version = "0.1.0"
 edition = "2021"
 description = "Response transformation middleware plugin for Barbacane API gateway"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 # Mark as standalone crate (not part of any workspace)
 [workspace]

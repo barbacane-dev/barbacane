@@ -10,13 +10,15 @@ Barbacane is the light, robust, zero-trust API gateway: the OpenAPI or AsyncAPI 
 
 ### 1.0.0-rc.1
 
-The release candidate ([milestone](https://github.com/barbacane-dev/barbacane/milestone/1)). Remaining before it:
+The release candidate ([milestone](https://github.com/barbacane-dev/barbacane/milestone/1)). Done:
 
-- [ ] **Stability policy** ([#280](https://github.com/barbacane-dev/barbacane/issues/280)): what 1.0 guarantees (spec extensions, artifact format, plugin interface, control-plane API and CLI, environment variables, metrics, error codes), how deprecations work, and which versions get security fixes.
-- [ ] **Getting started and installation** ([#283](https://github.com/barbacane-dev/barbacane/issues/283)): from an empty directory to a running gateway with `barbacane dev`, and every install path (release binaries, images, source), each command run as written.
-- [ ] **Per-plugin resource limits** ([#274](https://github.com/barbacane-dev/barbacane/issues/274)): a `[limits]` table in `plugin.toml`, enforced per instance and covered by the artifact signature.
-- [ ] **Instance reuse** ([#273](https://github.com/barbacane-dev/barbacane/issues/273)): `init` once per plugin and config, each request in a fresh instance started from that state.
-- [ ] **YAML in safe Rust** ([#254](https://github.com/barbacane-dev/barbacane/issues/254)): serde-saphyr, held to libyaml by a differential test and nightly fuzzing.
+- [x] **Stability policy** ([#280](https://github.com/barbacane-dev/barbacane/issues/280)): what 1.0 guarantees (spec extensions, artifact format, plugin interface, control-plane API and CLI, environment variables, metrics, error codes), how deprecations work, and which versions get security fixes.
+- [x] **Getting started and installation** ([#283](https://github.com/barbacane-dev/barbacane/issues/283)): from an empty directory to a running gateway with `barbacane dev`, and every install path (release binaries, images, source), each command run as written.
+- [x] **Per-plugin resource limits** ([#274](https://github.com/barbacane-dev/barbacane/issues/274)): a `[limits]` table in `plugin.toml`, enforced per instance and covered by the artifact signature.
+- [x] **Instance reuse** ([#273](https://github.com/barbacane-dev/barbacane/issues/273)): `init` once per plugin and config, each request in a fresh instance started from that state.
+- [x] **YAML in safe Rust** ([#254](https://github.com/barbacane-dev/barbacane/issues/254)): serde-saphyr, held to libyaml by a differential test and nightly fuzzing.
+
+Remaining: the findings of the pre-release review, issues [#321](https://github.com/barbacane-dev/barbacane/issues/321) to [#336](https://github.com/barbacane-dev/barbacane/issues/336) on the milestone.
 
 ---
 

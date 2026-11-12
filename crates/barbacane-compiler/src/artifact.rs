@@ -48,11 +48,11 @@ use crate::manifest::ProjectManifest;
 /// capability `host_functions` in the manifest.
 pub const ARTIFACT_VERSION: u32 = 8;
 
-/// The oldest artifact format a data plane of this major version loads. A 1.x
-/// data plane loads every format from the one 1.0.0 ships with up to
-/// [`ARTIFACT_VERSION`] (docs/reference/stability.md); before 1.0.0 the two
-/// are the same.
-pub const OLDEST_ARTIFACT_VERSION: u32 = ARTIFACT_VERSION;
+/// The oldest artifact format a data plane of this major version loads: the
+/// one 1.0.0 ships with. A 1.x data plane loads every format from it up to
+/// [`ARTIFACT_VERSION`] (docs/reference/stability.md), so raising this
+/// constant is a change for the next major version.
+pub const OLDEST_ARTIFACT_VERSION: u32 = 8;
 
 /// The most an artifact may expand to when decompressed, archive headers
 /// included. Reading stops with an error past it, before anything is verified.
@@ -7057,5 +7057,18 @@ paths:
         )
         .unwrap_err();
         assert!(err.to_string().starts_with("E1058"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod format_range_tests {
+    use super::{ARTIFACT_VERSION, OLDEST_ARTIFACT_VERSION};
+
+    /// The floor is the format 1.0.0 ships with; a 1.x data plane keeps
+    /// loading it whatever `ARTIFACT_VERSION` becomes.
+    #[test]
+    fn the_oldest_format_read_is_the_one_1_0_ships_with() {
+        assert_eq!(OLDEST_ARTIFACT_VERSION, 8);
+        assert!(ARTIFACT_VERSION >= OLDEST_ARTIFACT_VERSION);
     }
 }

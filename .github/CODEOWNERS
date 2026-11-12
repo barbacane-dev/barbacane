@@ -10,16 +10,17 @@
 
 # Compiler and spec parsing
 /crates/barbacane-compiler/ @barbacane-dev/maintainers
-/crates/barbacane-spec-parser/ @barbacane-dev/maintainers
-/crates/barbacane-validator/ @barbacane-dev/maintainers
 
-# Router
-/crates/barbacane-router/ @barbacane-dev/maintainers
-
-# Plugin SDK and WASM runtime
+# Plugin SDK, macros, WASM runtime, telemetry, SigV4
 /crates/barbacane-plugin-sdk/ @barbacane-dev/maintainers
+/crates/barbacane-plugin-macros/ @barbacane-dev/maintainers
 /crates/barbacane-wasm/ @barbacane-dev/maintainers
+/crates/barbacane-telemetry/ @barbacane-dev/maintainers
+/crates/barbacane-sigv4/ @barbacane-dev/maintainers
 /plugins/ @barbacane-dev/maintainers
+
+# Integration tests
+/crates/barbacane-test/ @barbacane-dev/maintainers
 
 # Control plane
 /crates/barbacane-control/ @barbacane-dev/maintainers

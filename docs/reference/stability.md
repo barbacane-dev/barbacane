@@ -59,6 +59,7 @@ A covered item is deprecated in a minor release, which:
 - lists it under **Deprecated** in the [CHANGELOG](https://github.com/barbacane-dev/barbacane/blob/main/CHANGELOG.md), with what to use instead;
 - marks it in the documentation;
 - has the compiler or the gateway warn when it is used, where they can see it.
+- carries `#[deprecated(since, note)]` when it is a Rust item of the plugin SDK or the macros, so a plugin build warns.
 
 A deprecated item may be removed two minor releases later at the earliest: deprecated in 1.2, removed in 1.4 or after. Its removal is listed under **Removed** in the CHANGELOG.
 

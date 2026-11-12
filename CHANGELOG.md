@@ -322,7 +322,7 @@ Headline: a comprehensive security-hardening pass (adversarial review + full rem
 - **security**: the plugin HTTP SSRF guard is now DNS-rebinding safe — a custom resolver filters internal addresses at connection time, so the vetted IP is the one actually connected to.
 - **security**: WebSocket upstreams (`host_ws_upgrade`) are covered by the SSRF guard (internal/metadata targets blocked unless `BARBACANE_ALLOW_INTERNAL_EGRESS`).
 - **security**: `barbacane compile` warns (E1070) when a plugin config field marked `writeOnly` in its `config-schema.json` (a secret) is set to a plaintext literal instead of an `env://` / `file://` reference; the vacuum ruleset flags the same at lint time.
-- **docs**: [Configuration & environment variables](reference/configuration.md) reference.
+- **docs**: [Configuration & environment variables](docs/reference/configuration.md) reference.
 
 ### Changed (breaking, secure-by-default)
 
@@ -960,7 +960,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.3...HEAD
+[Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...HEAD
+[0.12.4]: https://github.com/barbacane-dev/barbacane/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.0...v0.12.1

@@ -44,6 +44,19 @@ jobs:
           fi
           echo "Version validated: $TAG_VERSION"
 
+      # The workspace crates depend on each other by path with a version pin
+      # for crates.io; a pin left behind fails `cargo publish` mid-sequence.
+      - name: Check the intra-workspace version pins
+        env:
+          VERSION: ${{ steps.cargo.outputs.version }}
+        run: |
+          stale=$(grep -E '^barbacane[a-z0-9-]* = \{ path = ' Cargo.toml | grep -v "version = \"$VERSION\"" || true)
+          if [ -n "$stale" ]; then
+            echo "::error::workspace dependency pins do not match version $VERSION:"
+            echo "$stale"
+            exit 1
+          fi
+
   # Validate that CHANGELOG.md has an entry for this version
   validate-changelog:
     name: Validate Changelog
@@ -452,6 +465,7 @@ jobs:
           }
 
           # Publish in dependency order (leaves first).
+          publish_crate "barbacane-sigv4"
           publish_crate "barbacane-plugin-macros"
           publish_crate "barbacane-plugin-sdk"
           publish_crate "barbacane-telemetry"
