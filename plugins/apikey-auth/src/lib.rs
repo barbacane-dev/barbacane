@@ -218,11 +218,9 @@ impl ApiKeyAuth {
             "detail": error.description()
         });
 
-        Response {
-            status: 401,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        Response::new(401)
+            .with_headers(headers)
+            .with_body(body.to_string().into_bytes())
     }
 }
 
@@ -274,27 +272,15 @@ mod tests {
         for (k, v) in headers {
             h.insert(k.to_string(), v.to_string());
         }
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: h,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(h)
     }
 
     fn request_with_query(query: &str) -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: Some(query.to_string()),
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test")
+            .with_query(query.to_string())
+            .with_client_ip("127.0.0.1")
     }
 
     // --- extract_from_header ---
@@ -555,11 +541,7 @@ mod tests {
     #[test]
     fn test_on_response_passthrough() {
         let mut plugin = test_plugin();
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"ok".to_vec()),
-        };
+        let resp = Response::new(200).with_body(b"ok".to_vec());
         let result = plugin.on_response(resp);
         assert_eq!(result.status, 200);
         assert_eq!(result.body_str(), Some("ok"));

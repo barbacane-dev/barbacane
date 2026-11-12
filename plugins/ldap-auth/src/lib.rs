@@ -691,9 +691,8 @@ mod directory {
                     })
                 })
                 .take(limit)
-                .map(|e| Entry {
-                    dn: e.dn.clone(),
-                    attrs: if req.attributes.is_empty() {
+                .map(|e| {
+                    let attrs = if req.attributes.is_empty() {
                         e.attrs.clone()
                     } else {
                         e.attrs
@@ -703,7 +702,8 @@ mod directory {
                             })
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect()
-                    },
+                    };
+                    Entry::new(e.dn.clone(), attrs)
                 })
                 .collect();
             Ok(entries)
@@ -843,15 +843,9 @@ mod tests {
         if let Some(a) = auth {
             headers.insert("authorization".to_string(), a.to_string());
         }
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            query: None,
-            headers,
-            body: None,
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        }
+        Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     fn expect_continue(action: Action<Request>) -> Request {
@@ -1226,11 +1220,7 @@ mod tests {
     #[test]
     fn on_response_passes_through() {
         let mut p = plugin();
-        let resp = Response {
-            status: 204,
-            headers: BTreeMap::new(),
-            body: None,
-        };
+        let resp = Response::new(204);
         assert_eq!(p.on_response(resp).status, 204);
     }
 }

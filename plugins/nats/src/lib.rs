@@ -154,11 +154,9 @@ impl NatsDispatcher {
             self.default_ack_body(result)
         };
 
-        Response {
-            status: 202,
-            headers,
-            body: Some(body.into_bytes()),
-        }
+        Response::new(202)
+            .with_headers(headers)
+            .with_body(body.into_bytes())
     }
 
     /// Build the default acknowledgment body.
@@ -220,15 +218,9 @@ mod tests {
     }
 
     fn create_test_request() -> Request {
-        Request {
-            method: "POST".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: Some(b"test body".to_vec()),
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("POST", "/test")
+            .with_body(b"test body".to_vec())
+            .with_client_ip("127.0.0.1")
     }
 
     #[test]

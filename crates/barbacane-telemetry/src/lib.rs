@@ -6,6 +6,10 @@
 //! - Distributed tracing with W3C Trace Context
 //! - OTLP export to OpenTelemetry Collector
 //!
+//! The crate is published so the binaries install with `cargo install`; its
+//! Rust API is not covered by the
+//! [stability policy](https://docs.barbacane.dev/reference/stability.html).
+//!
 //! # Usage
 //!
 //! ```ignore

@@ -309,6 +309,7 @@ impl OAuth2Auth {
             HttpError::InvalidResponse => {
                 OAuth2Error::IntrospectionFailed("invalid response format".to_string())
             }
+            _ => OAuth2Error::IntrospectionFailed("request failed".to_string()),
         })?;
 
         // Check HTTP status
@@ -378,11 +379,9 @@ impl OAuth2Auth {
             "detail": error.description()
         });
 
-        Response {
-            status,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        Response::new(status)
+            .with_headers(headers)
+            .with_body(body.to_string().into_bytes())
     }
 }
 
@@ -492,15 +491,9 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("authorization".to_string(), auth_value.to_string());
 
-        Request {
-            method: "GET".to_string(),
-            path: "/api/resource".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/api/resource")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     #[test]
@@ -536,15 +529,7 @@ mod tests {
     #[test]
     fn test_extract_token_missing_header() {
         let config = create_test_config();
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/api/resource".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/api/resource").with_client_ip("127.0.0.1");
 
         let result = config.extract_token(&req);
         assert!(result.is_err());
@@ -567,15 +552,7 @@ mod tests {
     #[test]
     fn test_extract_token_case_insensitive_header() {
         let config = create_test_config();
-        let mut req = Request {
-            method: "GET".to_string(),
-            path: "/api/resource".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let mut req = Request::new("GET", "/api/resource").with_client_ip("127.0.0.1");
         req.headers
             .insert("Authorization".to_string(), "Bearer cap_token".to_string());
 
@@ -865,11 +842,7 @@ mod tests {
     #[test]
     fn test_on_response_passthrough() {
         let mut config = create_test_config();
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test body".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"test body".to_vec());
 
         let result = config.on_response(response.clone());
         assert_eq!(result.status, response.status);

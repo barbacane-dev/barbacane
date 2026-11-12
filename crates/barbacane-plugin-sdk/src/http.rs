@@ -17,7 +17,11 @@ use crate::body;
 
 /// An outbound HTTP request. The body is passed separately to [`call`] and sent
 /// via the side-channel, so it is not part of this JSON.
+///
+/// Build one with [`HttpRequest::new`] and its methods; the fields are public
+/// to read and assign. A minor release may add fields.
 #[derive(Debug, Clone, Default, Serialize)]
+#[non_exhaustive]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,
@@ -40,6 +44,7 @@ pub struct HttpRequest {
 /// One endpoint of a pool: a base URL and its relative share of requests.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Endpoint {
     pub url: String,
     #[serde(default = "default_weight")]
@@ -50,12 +55,29 @@ fn default_weight() -> u32 {
     1
 }
 
+impl Endpoint {
+    /// An endpoint with weight 1.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            weight: default_weight(),
+        }
+    }
+
+    /// Set the endpoint's share of requests relative to the pool's others.
+    pub fn weight(mut self, weight: u32) -> Self {
+        self.weight = weight;
+        self
+    }
+}
+
 /// TLS settings for an outbound request: a client certificate and key for
 /// mutual TLS, and a CA to verify the server with in place of the system's
 /// roots. Each is a path to a PEM file, resolved under the gateway's
 /// `BARBACANE_SECRETS_DIR`, outside which the host refuses to read.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct TlsSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_cert: Option<String>,
@@ -63,6 +85,26 @@ pub struct TlsSettings {
     pub client_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca: Option<String>,
+}
+
+impl TlsSettings {
+    /// Settings that use the system roots and no client certificate.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Present this client certificate and key (PEM paths under the secrets directory).
+    pub fn client_identity(mut self, cert: impl Into<String>, key: impl Into<String>) -> Self {
+        self.client_cert = Some(cert.into());
+        self.client_key = Some(key.into());
+        self
+    }
+
+    /// Verify the server with this CA (a PEM path under the secrets directory).
+    pub fn ca(mut self, ca: impl Into<String>) -> Self {
+        self.ca = Some(ca.into());
+        self
+    }
 }
 
 impl HttpRequest {
@@ -97,6 +139,7 @@ impl HttpRequest {
 /// An HTTP response from the host. The body is read from the side-channel and
 /// attached by [`call`].
 #[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct HttpResponse {
     pub status: u16,
     #[serde(default)]
@@ -106,6 +149,15 @@ pub struct HttpResponse {
 }
 
 impl HttpResponse {
+    /// A response with a status, no headers and no body (for tests).
+    pub fn new(status: u16) -> Self {
+        Self {
+            status,
+            headers: BTreeMap::new(),
+            body: None,
+        }
+    }
+
     /// The response body as a UTF-8 string, if present and valid.
     pub fn body_str(&self) -> Option<&str> {
         self.body
@@ -114,8 +166,9 @@ impl HttpResponse {
     }
 }
 
-/// Failure modes of [`call`].
+/// Failure modes of [`call`]. A minor release may add variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HttpError {
     /// The host could not reach the target (`host_http_call` < 0).
     Unreachable,

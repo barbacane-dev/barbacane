@@ -114,15 +114,9 @@ mod tests {
         if let Some(ua) = ua {
             headers.insert("user-agent".to_string(), ua.to_string());
         }
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "1.2.3.4".to_string(),
-        }
+        Request::new("GET", "/test")
+            .with_client_ip("1.2.3.4")
+            .with_headers(headers)
     }
 
     // --- config defaults ---
@@ -320,11 +314,7 @@ mod tests {
     #[test]
     fn test_on_response_passthrough() {
         let mut plugin: BotDetection = serde_json::from_value(serde_json::json!({})).unwrap();
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        };
+        let resp = Response::new(200);
         assert_eq!(plugin.on_response(resp).status, 200);
     }
 

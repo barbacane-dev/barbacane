@@ -20,15 +20,7 @@ fn bench_request_serialization(c: &mut Criterion) {
 
     // Minimal request
     group.bench_function("minimal", |b| {
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/health".to_string(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: None,
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("GET", "/health").with_client_ip("127.0.0.1");
         b.iter(|| black_box(serde_json::to_vec(&req).unwrap()));
     });
 
@@ -38,15 +30,9 @@ fn bench_request_serialization(c: &mut Criterion) {
         for i in 0..count {
             headers.insert(format!("x-header-{}", i), format!("value-{}", i));
         }
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/api/users".to_string(),
-            query: None,
-            headers,
-            body: None,
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("POST", "/api/users")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         group.bench_with_input(BenchmarkId::new("with_headers", count), &req, |b, req| {
             b.iter(|| black_box(serde_json::to_vec(req).unwrap()));
@@ -56,14 +42,13 @@ fn bench_request_serialization(c: &mut Criterion) {
     // With varying body sizes
     for (label, size) in [("1KB", 1024), ("10KB", 10 * 1024)] {
         let body = "x".repeat(size);
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/api/users".to_string(),
-            query: None,
-            headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
-            body: Some(body.into_bytes()),
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
+        let req = {
+            let mut req = Request::new("POST", "/api/users")
+                .with_body(body.into_bytes())
+                .with_client_ip("127.0.0.1");
+            req.headers =
+                BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+            req
         };
 
         group.bench_with_input(BenchmarkId::new("with_body", label), &req, |b, req| {
@@ -88,14 +73,14 @@ fn bench_request_serialization(c: &mut Criterion) {
             path_params.insert(format!("param{}", i), format!("val{}", i));
         }
 
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/api/v1/users/{userId}/orders/{orderId}".to_string(),
-            query: Some("include=items&sort=date&limit=10".to_string()),
-            headers,
-            body: Some(vec![b'x'; 1024]),
-            client_ip: "192.168.1.100".to_string(),
-            path_params,
+        let req = {
+            let mut req = Request::new("POST", "/api/v1/users/{userId}/orders/{orderId}")
+                .with_query("include=items&sort=date&limit=10")
+                .with_body(vec![b'x'; 1024])
+                .with_client_ip("192.168.1.100");
+            req.headers = headers;
+            req.path_params = path_params;
+            req
         };
         b.iter(|| black_box(serde_json::to_vec(&req).unwrap()));
     });
@@ -111,20 +96,14 @@ fn bench_response_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("response_serialization");
 
     group.bench_function("minimal", |b| {
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        };
+        let resp = Response::new(200);
         b.iter(|| black_box(serde_json::to_vec(&resp).unwrap()));
     });
 
     for (label, size) in [("1KB", 1024), ("10KB", 10 * 1024)] {
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
-            body: Some(vec![b'x'; size]),
-        };
+        let resp = Response::new(200)
+            .with_header("content-type", "application/json")
+            .with_body(vec![b'x'; size]);
 
         group.bench_with_input(BenchmarkId::new("with_body", label), &resp, |b, resp| {
             b.iter(|| black_box(serde_json::to_vec(resp).unwrap()));

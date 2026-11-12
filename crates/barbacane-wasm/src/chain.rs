@@ -487,21 +487,11 @@ mod tests {
     #[test]
     fn parse_continue_with_request_metadata() {
         use barbacane_plugin_sdk::types::Request;
-        use std::collections::BTreeMap;
 
-        let req = Request {
-            method: "POST".into(),
-            path: "/upload".into(),
-            query: None,
-            headers: {
-                let mut h = BTreeMap::new();
-                h.insert("content-type".into(), "application/octet-stream".into());
-                h
-            },
-            body: None, // Body travels via side-channel, not in JSON
-            client_ip: "127.0.0.1".into(),
-            path_params: BTreeMap::new(),
-        };
+        // The body travels via the side-channel, not in JSON.
+        let req = Request::new("POST", "/upload")
+            .with_header("content-type", "application/octet-stream")
+            .with_client_ip("127.0.0.1");
 
         // Build the structured output the macro produces
         let output = serde_json::to_vec(&json!({
@@ -526,17 +516,9 @@ mod tests {
     #[test]
     fn parse_short_circuit_with_response_metadata() {
         use barbacane_plugin_sdk::types::Response;
-        use std::collections::BTreeMap;
 
-        let resp = Response {
-            status: 403,
-            headers: {
-                let mut h = BTreeMap::new();
-                h.insert("content-type".into(), "application/json".into());
-                h
-            },
-            body: None, // Body travels via side-channel
-        };
+        // The body travels via the side-channel, not in JSON.
+        let resp = Response::new(403).with_header("content-type", "application/json");
 
         let output = serde_json::to_vec(&json!({
             "action": 1,

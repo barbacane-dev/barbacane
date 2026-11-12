@@ -157,27 +157,13 @@ mod tests {
         if let Some(g) = groups {
             headers.insert("x-auth-consumer-groups".to_string(), g.to_string());
         }
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     fn request_without_consumer() -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test").with_client_ip("127.0.0.1")
     }
 
     // --- Config tests ---
@@ -427,11 +413,7 @@ mod tests {
     #[test]
     fn on_response_passthrough() {
         let mut acl = default_acl();
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"ok".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"ok".to_vec());
         let result = acl.on_response(response.clone());
         assert_eq!(result.status, 200);
         assert_eq!(result.body, response.body);

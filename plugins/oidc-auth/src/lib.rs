@@ -775,6 +775,7 @@ impl OidcAuth {
             HttpError::Unreachable | HttpError::Unsupported => "connection failed".to_string(),
             HttpError::Empty | HttpError::ReadFailed => "failed to read response".to_string(),
             HttpError::InvalidResponse => "invalid response format".to_string(),
+            _ => "request failed".to_string(),
         })?;
 
         Ok((response.status, response.body))
@@ -814,11 +815,9 @@ impl OidcAuth {
             "detail": error.description()
         });
 
-        Response {
-            status,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        Response::new(status)
+            .with_headers(headers)
+            .with_body(body.to_string().into_bytes())
     }
 }
 
@@ -901,15 +900,9 @@ mod tests {
         if let Some(value) = auth_value {
             headers.insert("authorization".to_string(), value.to_string());
         }
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     fn create_test_jwk_rsa() -> Jwk {
@@ -990,15 +983,9 @@ mod tests {
             "Authorization".to_string(),
             "Bearer cap.token.here".to_string(),
         );
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
         let token = config.extract_token(&req).unwrap();
         assert_eq!(token, "cap.token.here");
     }
@@ -1006,14 +993,10 @@ mod tests {
     // --- Query parameter token tests (RFC 6750 §2.3) ---
 
     fn create_query_request(query: Option<&str>) -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: query.map(|q| q.to_string()),
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
+        {
+            let mut req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
+            req.query = query.map(|q| q.to_string());
+            req
         }
     }
 
@@ -1043,15 +1026,10 @@ mod tests {
             "authorization".to_string(),
             "Bearer header.token.here".to_string(),
         );
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: Some("access_token=query.token.here".to_string()),
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_query("access_token=query.token.here")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
         let token = config.extract_token(&req).unwrap();
         assert_eq!(token, "header.token.here");
     }
@@ -1650,11 +1628,7 @@ mod tests {
     #[test]
     fn on_response_passthrough() {
         let mut config = create_test_config();
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test body".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"test body".to_vec());
 
         let result = config.on_response(response.clone());
         assert_eq!(result.status, response.status);

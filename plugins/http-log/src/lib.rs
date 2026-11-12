@@ -11,6 +11,7 @@ use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::http;
 #[cfg(target_arch = "wasm32")]
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -206,18 +207,17 @@ impl HttpLog {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), self.content_type.clone());
 
-        let request = http::HttpRequest {
-            method: self.method.clone(),
-            url: self.endpoint.clone(),
-            headers,
-            timeout_ms: Some(self.timeout_ms),
-            ..Default::default()
-        };
+        let mut request = http::HttpRequest::new(self.method.clone(), self.endpoint.clone())
+            .timeout_ms(self.timeout_ms);
+        request.headers = headers;
 
         // Best-effort: the payload travels via the side-channel inside
         // `http::call`; a failure is logged but never affects the response.
         if host::http_call(&request, Some(payload.as_bytes())).is_err() {
-            log_message(2, "http-log: failed to send log entry (connection error)");
+            log_message(
+                Level::Info,
+                "http-log: failed to send log entry (connection error)",
+            );
         }
     }
 }
@@ -264,8 +264,8 @@ mod host {
         TIME_MS.with(|t| t.get())
     }
 
-    pub fn log_message(level: i32, msg: &str) {
-        LOG_MESSAGES.with(|logs| logs.borrow_mut().push((level, msg.to_string())));
+    pub fn log_message(level: barbacane_plugin_sdk::log::Level, msg: &str) {
+        LOG_MESSAGES.with(|logs| logs.borrow_mut().push((level as i32, msg.to_string())));
     }
 
     #[cfg(test)]
@@ -317,7 +317,7 @@ fn host_time_now_ms() -> u64 {
     host::time_now_ms()
 }
 #[cfg(not(target_arch = "wasm32"))]
-fn log_message(level: i32, msg: &str) {
+fn log_message(level: Level, msg: &str) {
     host::log_message(level, msg);
 }
 
@@ -340,25 +340,19 @@ mod tests {
     fn test_request() -> Request {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
-        Request {
-            method: "POST".to_string(),
-            path: "/users".to_string(),
-            query: Some("page=1".to_string()),
-            headers,
-            body: Some(br#"{"name":"alice"}"#.to_vec()),
-            client_ip: "10.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        }
+        Request::new("POST", "/users")
+            .with_query("page=1")
+            .with_body(br#"{"name":"alice"}"#.to_vec())
+            .with_client_ip("10.0.0.1")
+            .with_headers(headers)
     }
 
     fn test_response() -> Response {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
-        Response {
-            status: 201,
-            headers,
-            body: Some(br#"{"id":42}"#.to_vec()),
-        }
+        Response::new(201)
+            .with_headers(headers)
+            .with_body(br#"{"id":42}"#.to_vec())
     }
 
     // ==================== Config deserialization ====================

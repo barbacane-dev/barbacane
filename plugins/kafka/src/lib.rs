@@ -188,11 +188,9 @@ impl KafkaDispatcher {
             self.default_ack_body(result)
         };
 
-        Response {
-            status: 202,
-            headers,
-            body: Some(body.into_bytes()),
-        }
+        Response::new(202)
+            .with_headers(headers)
+            .with_body(body.into_bytes())
     }
 
     /// Build the default acknowledgment body.
@@ -263,14 +261,13 @@ mod tests {
         let mut path_params = BTreeMap::new();
         path_params.insert("id".to_string(), "user-789".to_string());
 
-        Request {
-            method: "POST".to_string(),
-            path: "/api/users".to_string(),
-            headers,
-            body: Some(br#"{"name":"test"}"#.to_vec()),
-            query: None,
-            path_params,
-            client_ip: "127.0.0.1".to_string(),
+        {
+            let mut req = Request::new("POST", "/api/users")
+                .with_body(br#"{"name":"test"}"#.to_vec())
+                .with_client_ip("127.0.0.1");
+            req.headers = headers;
+            req.path_params = path_params;
+            req
         }
     }
 

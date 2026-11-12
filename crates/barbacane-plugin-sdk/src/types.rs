@@ -44,8 +44,12 @@ pub mod base64_body {
 
 /// An HTTP request as seen by plugins.
 ///
+/// Build one with [`Request::new`] and the `with_*` methods; the fields are
+/// public to read and assign. A minor release may add fields.
+///
 /// Uses BTreeMap instead of HashMap to avoid WASI random dependency in WASM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Request {
     pub method: String,
     pub path: String,
@@ -60,6 +64,56 @@ pub struct Request {
 }
 
 impl Request {
+    /// A request with a method and a path: no query, no headers, no body, an
+    /// empty client address and no path parameters.
+    pub fn new(method: impl Into<String>, path: impl Into<String>) -> Self {
+        Self {
+            method: method.into(),
+            path: path.into(),
+            query: None,
+            headers: BTreeMap::new(),
+            body: None,
+            client_ip: String::new(),
+            path_params: BTreeMap::new(),
+        }
+    }
+
+    /// Set the query string (without the `?`).
+    pub fn with_query(mut self, query: impl Into<String>) -> Self {
+        self.query = Some(query.into());
+        self
+    }
+
+    /// Add a header. Header names are lower-case on the wire.
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(name.into(), value.into());
+        self
+    }
+
+    /// Replace the headers.
+    pub fn with_headers(mut self, headers: BTreeMap<String, String>) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    /// Set the body.
+    pub fn with_body(mut self, body: impl Into<Vec<u8>>) -> Self {
+        self.body = Some(body.into());
+        self
+    }
+
+    /// Set the client address.
+    pub fn with_client_ip(mut self, client_ip: impl Into<String>) -> Self {
+        self.client_ip = client_ip.into();
+        self
+    }
+
+    /// Add a path parameter.
+    pub fn with_path_param(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.path_params.insert(name.into(), value.into());
+        self
+    }
+
     /// Return the body as a UTF-8 string slice, or `None` if absent or not
     /// valid UTF-8.
     pub fn body_str(&self) -> Option<&str> {
@@ -82,8 +136,12 @@ impl Request {
 
 /// An HTTP response as produced by plugins.
 ///
+/// Build one with [`Response::new`] and the `with_*` methods; the fields are
+/// public to read and assign. A minor release may add fields.
+///
 /// Uses BTreeMap instead of HashMap to avoid WASI random dependency in WASM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Response {
     pub status: u16,
     pub headers: BTreeMap<String, String>,
@@ -94,6 +152,33 @@ pub struct Response {
 }
 
 impl Response {
+    /// A response with a status, no headers and no body.
+    pub fn new(status: u16) -> Self {
+        Self {
+            status,
+            headers: BTreeMap::new(),
+            body: None,
+        }
+    }
+
+    /// Add a header. Header names are lower-case on the wire.
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(name.into(), value.into());
+        self
+    }
+
+    /// Replace the headers.
+    pub fn with_headers(mut self, headers: BTreeMap<String, String>) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    /// Set the body.
+    pub fn with_body(mut self, body: impl Into<Vec<u8>>) -> Self {
+        self.body = Some(body.into());
+        self
+    }
+
     /// Return the body as a UTF-8 string slice, or `None` if absent or not
     /// valid UTF-8.
     pub fn body_str(&self) -> Option<&str> {
@@ -117,6 +202,13 @@ impl Response {
     }
 }
 
+impl Default for Response {
+    /// `200` with no headers and no body.
+    fn default() -> Self {
+        Self::new(200)
+    }
+}
+
 /// The action a middleware returns from `on_request`.
 #[derive(Debug, Clone)]
 pub enum Action<T> {
@@ -136,11 +228,7 @@ pub enum Action<T> {
 /// observability (logging, metrics), but any header/body modifications are
 /// silently discarded since the response was already sent.
 pub fn streamed_response() -> Response {
-    Response {
-        status: 0,
-        headers: BTreeMap::new(),
-        body: None,
-    }
+    Response::new(0)
 }
 
 /// Constant-time byte-slice equality, for comparing secrets (API keys,

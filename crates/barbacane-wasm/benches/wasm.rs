@@ -12,7 +12,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 
 use barbacane_wasm::{
     execute_on_request_with_metrics, execute_on_response_with_metrics, ChainResult, PluginInstance,
-    PluginLimits, RequestContext, WasmEngine,
+    PluginLimits, Request, RequestContext, Response, WasmEngine,
 };
 
 /// Noop WASM middleware: accepts calls, returns 0 (continue), produces no output.
@@ -39,25 +39,22 @@ fn create_test_request() -> Vec<u8> {
     headers.insert("content-type".to_string(), "application/json".to_string());
     headers.insert("authorization".to_string(), "Bearer token123".to_string());
 
-    let request = barbacane_wasm::Request {
-        method: "GET".to_string(),
-        path: "/api/users/12345".to_string(),
-        query: Some("limit=10&offset=0".to_string()),
-        headers,
-        body: None,
-        client_ip: "127.0.0.1".to_string(),
-        path_params: BTreeMap::from([("id".to_string(), "12345".to_string())]),
+    let request = {
+        let mut req = Request::new("GET", "/api/users/12345")
+            .with_query("limit=10&offset=0")
+            .with_client_ip("127.0.0.1");
+        req.headers = headers;
+        req.path_params = BTreeMap::from([("id".to_string(), "12345".to_string())]);
+        req
     };
 
     serde_json::to_vec(&request).unwrap()
 }
 
 fn create_test_response() -> Vec<u8> {
-    let response = barbacane_wasm::Response {
-        status: 200,
-        headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
-        body: Some(br#"{"id":"12345","name":"test"}"#.to_vec()),
-    };
+    let response = Response::new(200)
+        .with_header("content-type", "application/json")
+        .with_body(br#"{"id":"12345","name":"test"}"#.to_vec());
 
     serde_json::to_vec(&response).unwrap()
 }

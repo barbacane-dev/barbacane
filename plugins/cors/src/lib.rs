@@ -5,6 +5,7 @@
 
 use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -67,7 +68,7 @@ impl Cors {
         // the misconfiguration is visible (behavior already fails closed above).
         if self.allow_credentials && self.allowed_origins.iter().any(|o| o == "*") {
             log_message(
-                3,
+                Level::Debug,
                 "CORS: allowed_origins contains '*' with allow_credentials=true; \
                  the wildcard is ignored. List explicit origins instead.",
             );
@@ -75,7 +76,10 @@ impl Cors {
 
         // Validate origin
         if !self.is_origin_allowed(&origin) {
-            log_message(2, &format!("CORS: origin not allowed: {}", origin));
+            log_message(
+                Level::Info,
+                &format!("CORS: origin not allowed: {}", origin),
+            );
             return Action::ShortCircuit(self.forbidden_response(&origin));
         }
 
@@ -234,7 +238,7 @@ impl Cors {
         // Check if the requested method is allowed
         if !self.is_method_allowed(requested_method) {
             log_message(
-                2,
+                Level::Info,
                 &format!("CORS: method not allowed: {}", requested_method),
             );
             return self.forbidden_response(origin);
@@ -249,7 +253,7 @@ impl Cors {
 
         if !self.are_headers_allowed(requested_headers) {
             log_message(
-                2,
+                Level::Info,
                 &format!("CORS: headers not allowed: {}", requested_headers),
             );
             return self.forbidden_response(origin);
@@ -295,11 +299,7 @@ impl Cors {
             "Origin, Access-Control-Request-Method, Access-Control-Request-Headers".to_string(),
         );
 
-        Response {
-            status: 204,
-            headers,
-            body: None,
-        }
+        Response::new(204).with_headers(headers)
     }
 
     /// Generate forbidden response for invalid CORS request.
@@ -355,15 +355,9 @@ mod tests {
             headers.insert("origin".to_string(), o.to_string());
         }
 
-        Request {
-            method: method.to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new(method.to_string(), "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     #[test]
@@ -588,11 +582,7 @@ mod tests {
         let mut cors = create_test_cors(vec!["https://app.example.com".to_string()]);
         cors.allow_credentials = true;
         let _ = cors.on_request(create_request("GET", Some("https://app.example.com")));
-        let resp = cors.on_response(Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        });
+        let resp = cors.on_response(Response::new(200));
         assert_eq!(
             resp.headers.get("access-control-allow-origin"),
             Some(&"https://app.example.com".to_string())
@@ -691,11 +681,7 @@ mod tests {
     fn test_on_response_wildcard_origin() {
         mock_host::reset();
         let mut cors = create_test_cors(vec!["*".to_string()]);
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"test".to_vec());
 
         let modified = cors.on_response(response);
         assert_eq!(
@@ -708,11 +694,7 @@ mod tests {
     fn test_on_response_with_expose_headers() {
         let mut cors = create_test_cors(vec!["*".to_string()]);
         cors.expose_headers = vec!["x-custom".to_string(), "x-other".to_string()];
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"test".to_vec());
 
         let modified = cors.on_response(response);
         assert_eq!(
@@ -725,11 +707,7 @@ mod tests {
     fn test_on_response_with_credentials() {
         let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
         cors.allow_credentials = true;
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"test".to_vec());
 
         let modified = cors.on_response(response);
         assert_eq!(
@@ -743,11 +721,7 @@ mod tests {
         mock_host::reset();
         let mut cors = create_test_cors(vec!["*".to_string()]);
         cors.allow_credentials = true;
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"test".to_vec());
 
         let modified = cors.on_response(response);
         // Should not add wildcard ACAO when credentials are enabled

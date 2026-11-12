@@ -7,6 +7,8 @@
 //! [`differential`] lists where the two still differ, and a test holds every
 //! YAML and JSON file in the repository to that list.
 
+/// The YAML differential gate: fuzz and test tooling, not an API.
+#[doc(hidden)]
 pub mod differential;
 mod measure;
 mod value;

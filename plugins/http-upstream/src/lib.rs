@@ -57,8 +57,8 @@ impl HttpUpstreamDispatcher {
             query,
             headers: req_headers,
             body,
-            client_ip: _,
             path_params,
+            ..
         } = req;
 
         // Build the upstream path
@@ -125,15 +125,11 @@ impl HttpUpstreamDispatcher {
 
         // Body travels via the side-channel; `http::call` sends it and reads the
         // response body back the same way.
-        let http_request = http::HttpRequest {
-            method,
-            url,
-            headers,
-            timeout_ms: Some(timeout_ms),
-            tls: self.tls.clone(),
-            endpoints: self.endpoints.clone().unwrap_or_default(),
-            retries: self.retries,
-        };
+        let mut http_request = http::HttpRequest::new(method, url).timeout_ms(timeout_ms);
+        http_request.headers = headers;
+        http_request.tls = self.tls.clone();
+        http_request.endpoints = self.endpoints.clone().unwrap_or_default();
+        http_request.retries = self.retries;
 
         let result = if http_request.endpoints.is_empty() {
             http::call(&http_request, body.as_deref())
@@ -166,6 +162,14 @@ impl HttpUpstreamDispatcher {
                     "failed to parse upstream response",
                 );
             }
+            Err(_) => {
+                return self.error_response(
+                    502,
+                    "Bad Gateway",
+                    "upstream connection failed",
+                    "host_http_call failed",
+                );
+            }
         };
 
         // Build the response, filtering hop-by-hop headers
@@ -180,10 +184,10 @@ impl HttpUpstreamDispatcher {
             }
         }
 
-        Response {
-            status: http_response.status,
-            headers: response_headers,
-            body: http_response.body,
+        {
+            let mut resp = Response::new(http_response.status).with_headers(response_headers);
+            resp.body = http_response.body;
+            resp
         }
     }
 
@@ -224,14 +228,14 @@ mod tests {
         query: Option<String>,
         path_params: BTreeMap<String, String>,
     ) -> Request {
-        Request {
-            method: method.to_string(),
-            path: path.to_string(),
-            headers,
-            body,
-            query,
-            path_params,
-            client_ip: "127.0.0.1".to_string(),
+        {
+            let mut req =
+                Request::new(method.to_string(), path.to_string()).with_client_ip("127.0.0.1");
+            req.headers = headers;
+            req.body = body;
+            req.query = query;
+            req.path_params = path_params;
+            req
         }
     }
 
@@ -492,15 +496,7 @@ mod tests {
     fn a_config_without_url_or_endpoints_answers_500() {
         let mut dispatcher: HttpUpstreamDispatcher =
             serde_json::from_str(r#"{"timeout": 60.0}"#).unwrap();
-        let response = dispatcher.dispatch(Request {
-            method: "GET".to_string(),
-            path: "/x".to_string(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: None,
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        });
+        let response = dispatcher.dispatch(Request::new("GET", "/x").with_client_ip("127.0.0.1"));
         assert_eq!(response.status, 500);
     }
 

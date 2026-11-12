@@ -62,10 +62,10 @@ impl MockDispatcher {
             Some(interpolate(&self.body, &req, encode).into_bytes())
         };
 
-        Response {
-            status: self.status,
-            headers,
-            body,
+        {
+            let mut resp = Response::new(self.status).with_headers(headers);
+            resp.body = body;
+            resp
         }
     }
 }
@@ -167,15 +167,7 @@ mod tests {
     use super::*;
 
     fn test_request() -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test").with_client_ip("127.0.0.1")
     }
 
     #[test]

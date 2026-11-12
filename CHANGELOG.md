@@ -24,6 +24,10 @@ The breaking changes below are gathered, with what to do and in which order, in 
 
 ### Changed
 
+- **plugin SDK**: `Request`, `Response`, `HttpRequest`, `HttpResponse`, `Endpoint`, `TlsSettings`, `ldap::Connection`, `ldap::SearchRequest` and `ldap::Entry` are `#[non_exhaustive]`, as are `HttpError`, `LdapError` and `JwtDecodeError`, so a minor release can add fields and variants. A plugin builds them with `Request::new(method, path)`, `Response::new(status)`, `Endpoint::new(url)`, `TlsSettings::new()`, `Entry::new(dn, attrs)` and the `with_*` methods, or assigns the public fields after construction; a `match` on the error enums needs a `_` arm. `log::log` takes a `log::Level` (`Error`, `Warn`, `Info`, `Debug`) in place of an `i32`; the `LEVEL_*` constants are gone.
+
+  > **Upgrade note (breaking):** a custom plugin that builds an SDK type as a struct literal, or calls `log::log` with a number, does not compile until it uses the constructors and `log::Level`.
+
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
 
   > **Upgrade note (breaking):** recompile every artifact with this release's compiler before upgrading a data plane.

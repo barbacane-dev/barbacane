@@ -64,13 +64,9 @@ impl LambdaDispatcher {
 
         // Build the HTTP request to Lambda. The request body travels via the
         // SDK side-channel inside `http::call`, not embedded in JSON.
-        let http_request = HttpRequest {
-            method: req.method.clone(),
-            url: self.url.clone(),
-            headers,
-            timeout_ms: Some((self.timeout * 1000.0) as u64),
-            ..Default::default()
-        };
+        let mut http_request = HttpRequest::new(req.method.clone(), self.url.clone())
+            .timeout_ms((self.timeout * 1000.0) as u64);
+        http_request.headers = headers;
 
         // Call Lambda via the shared SDK HTTP helper.
         let http_response = match http::call(&http_request, req.body.as_deref()) {
@@ -96,6 +92,13 @@ impl LambdaDispatcher {
                     "failed to parse response",
                 );
             }
+            Err(_) => {
+                return self.error_response(
+                    502,
+                    "Lambda invocation failed",
+                    "host_http_call failed",
+                );
+            }
         };
 
         // Read response body attached by `http::call` via the side-channel.
@@ -109,10 +112,10 @@ impl LambdaDispatcher {
             response_headers.insert("content-type".to_string(), "application/json".to_string());
         }
 
-        Response {
-            status: http_response.status,
-            headers: response_headers,
-            body: response_body,
+        {
+            let mut resp = Response::new(http_response.status).with_headers(response_headers);
+            resp.body = response_body;
+            resp
         }
     }
 
@@ -255,15 +258,7 @@ mod tests {
             pass_through_headers: true,
         };
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let response = config.dispatch(req);
 
@@ -300,15 +295,10 @@ mod tests {
         headers.insert("x-custom-header".to_string(), "custom-value".to_string());
         headers.insert("authorization".to_string(), "Bearer token".to_string());
 
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: Some(br#"{"key": "value"}"#.to_vec()),
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("POST", "/test")
+            .with_body(br#"{"key": "value"}"#.to_vec())
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         let response = config.dispatch(req);
 
@@ -332,15 +322,10 @@ mod tests {
         headers.insert("x-custom-header".to_string(), "custom-value".to_string());
         headers.insert("authorization".to_string(), "Bearer token".to_string());
 
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: Some(br#"{"key": "value"}"#.to_vec()),
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("POST", "/test")
+            .with_body(br#"{"key": "value"}"#.to_vec())
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         let response = config.dispatch(req);
 
@@ -359,15 +344,9 @@ mod tests {
             pass_through_headers: false,
         };
 
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: Some(br#"{"key": "value"}"#.to_vec()),
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("POST", "/test")
+            .with_body(br#"{"key": "value"}"#.to_vec())
+            .with_client_ip("127.0.0.1");
 
         let response = config.dispatch(req);
 
@@ -388,15 +367,10 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "text/plain".to_string());
 
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: Some(b"plain text body".to_vec()),
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("POST", "/test")
+            .with_body(b"plain text body".to_vec())
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         let response = config.dispatch(req);
 
@@ -414,15 +388,7 @@ mod tests {
             pass_through_headers: false,
         };
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let response = config.dispatch(req);
 

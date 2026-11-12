@@ -89,29 +89,18 @@ mod tests {
     fn request_with_body(body: &str) -> Request {
         let mut headers = BTreeMap::new();
         headers.insert("content-length".to_string(), body.len().to_string());
-        Request {
-            method: "POST".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: Some(body.as_bytes().to_vec()),
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("POST", "/test")
+            .with_body(body.as_bytes().to_vec())
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     fn request_with_content_length(content_length: u64) -> Request {
         let mut headers = BTreeMap::new();
         headers.insert("content-length".to_string(), content_length.to_string());
-        Request {
-            method: "POST".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("POST", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     #[test]
@@ -169,15 +158,7 @@ mod tests {
     #[test]
     fn test_no_body_passes() {
         let mut plugin = test_plugin();
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
         assert!(matches!(plugin.on_request(req), Action::Continue(_)));
     }
 
@@ -202,11 +183,7 @@ mod tests {
     #[test]
     fn test_on_response_passthrough() {
         let mut plugin = test_plugin();
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"ok".to_vec()),
-        };
+        let resp = Response::new(200).with_body(b"ok".to_vec());
         let result = plugin.on_response(resp);
         assert_eq!(result.status, 200);
     }

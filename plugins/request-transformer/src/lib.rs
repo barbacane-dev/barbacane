@@ -14,6 +14,7 @@
 
 use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use form_urlencoded::{parse as parse_urlencoded, Serializer};
 use jsonptr::{Assign, Delete, Pointer};
@@ -138,7 +139,7 @@ impl RequestTransformer {
                         Ok(re) => self.compiled_replace = Some(re),
                         Err(e) => {
                             log_message(
-                                0,
+                                Level::Error,
                                 &format!(
                                     "Invalid regex pattern '{}': {}",
                                     replace_config.pattern, e
@@ -525,7 +526,10 @@ fn transform_body(
     let mut json: Value = match serde_json::from_slice(body_bytes) {
         Ok(v) => v,
         Err(_) => {
-            log_message(1, "Body is not valid JSON, skipping body transformations");
+            log_message(
+                Level::Warn,
+                "Body is not valid JSON, skipping body transformations",
+            );
             return body.clone();
         }
     };
@@ -536,7 +540,10 @@ fn transform_body(
                 json.delete(ptr);
             }
             Err(e) => {
-                log_message(1, &format!("Invalid JSON Pointer '{}': {}", pointer_str, e));
+                log_message(
+                    Level::Warn,
+                    &format!("Invalid JSON Pointer '{}': {}", pointer_str, e),
+                );
             }
         }
     }
@@ -549,14 +556,14 @@ fn transform_body(
             (Ok(old), Ok(new)) => (old, new),
             (Err(e), _) => {
                 log_message(
-                    1,
+                    Level::Warn,
                     &format!("Invalid old pointer '{}': {}", old_pointer_str, e),
                 );
                 continue;
             }
             (_, Err(e)) => {
                 log_message(
-                    1,
+                    Level::Warn,
                     &format!("Invalid new pointer '{}': {}", new_pointer_str, e),
                 );
                 continue;
@@ -572,7 +579,7 @@ fn transform_body(
 
             if let Err(e) = json.assign(new_ptr, value_clone) {
                 log_message(
-                    1,
+                    Level::Warn,
                     &format!(
                         "Failed to rename '{}' to '{}': {}",
                         old_pointer_str, new_pointer_str, e
@@ -602,11 +609,17 @@ fn transform_body(
         match Pointer::parse(pointer_str) {
             Ok(ptr) => {
                 if let Err(e) = json.assign(ptr, json_value) {
-                    log_message(1, &format!("Failed to add '{}': {}", pointer_str, e));
+                    log_message(
+                        Level::Warn,
+                        &format!("Failed to add '{}': {}", pointer_str, e),
+                    );
                 }
             }
             Err(e) => {
-                log_message(1, &format!("Invalid JSON Pointer '{}': {}", pointer_str, e));
+                log_message(
+                    Level::Warn,
+                    &format!("Invalid JSON Pointer '{}': {}", pointer_str, e),
+                );
             }
         }
     }
@@ -615,7 +628,7 @@ fn transform_body(
         Ok(v) => Some(v),
         Err(e) => {
             log_message(
-                0,
+                Level::Error,
                 &format!("Failed to serialize JSON after transformation: {}", e),
             );
             body.clone()
@@ -671,14 +684,13 @@ mod tests {
         path_params.insert("id".to_string(), "123".to_string());
         path_params.insert("name".to_string(), "test".to_string());
 
-        Request {
-            method: "GET".to_string(),
-            path: "/users/123".to_string(),
-            query: Some("page=2&limit=10".to_string()),
-            headers,
-            body: None,
-            client_ip: "192.168.1.1".to_string(),
-            path_params,
+        {
+            let mut req = Request::new("GET", "/users/123")
+                .with_query("page=2&limit=10")
+                .with_client_ip("192.168.1.1");
+            req.headers = headers;
+            req.path_params = path_params;
+            req
         }
     }
 
@@ -1279,14 +1291,13 @@ mod tests {
         let mut path_params = BTreeMap::new();
         path_params.insert("id".to_string(), "123".to_string());
 
-        Request {
-            method: "POST".to_string(),
-            path: "/users/123".to_string(),
-            query: Some("page=2".to_string()),
-            headers: BTreeMap::new(),
-            body: Some(br#"{"user":"john","age":30}"#.to_vec()),
-            client_ip: "192.168.1.1".to_string(),
-            path_params,
+        {
+            let mut req = Request::new("POST", "/users/123")
+                .with_query("page=2")
+                .with_body(br#"{"user":"john","age":30}"#.to_vec())
+                .with_client_ip("192.168.1.1");
+            req.path_params = path_params;
+            req
         }
     }
 
@@ -1599,15 +1610,10 @@ mod tests {
             compiled_replace: None,
         };
 
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/query-to-body".to_string(),
-            query: Some("userId=42".to_string()),
-            headers: BTreeMap::new(),
-            body: Some(br#"{"existing":"data"}"#.to_vec()),
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("POST", "/query-to-body")
+            .with_query("userId=42")
+            .with_body(br#"{"existing":"data"}"#.to_vec())
+            .with_client_ip("127.0.0.1");
 
         let result = plugin.on_request(req);
         if let Action::Continue(modified) = result {
@@ -1645,15 +1651,7 @@ mod tests {
 
         assert!(plugin.compiled_replace.is_none());
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/api/v2/users".to_string(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: None,
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("GET", "/api/v2/users").with_client_ip("127.0.0.1");
 
         let result = plugin.on_request(req);
         if let Action::Continue(modified) = result {
@@ -1718,17 +1716,14 @@ mod tests {
     /// A request with only the given headers (names lowercased, as the host
     /// delivers them) and query string.
     fn request_with(headers: &[(&str, &str)], query: Option<&str>) -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/items".to_string(),
-            query: query.map(str::to_string),
-            headers: headers
+        {
+            let mut req = Request::new("GET", "/items").with_client_ip("10.0.0.1");
+            req.query = query.map(str::to_string);
+            req.headers = headers
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            body: None,
-            client_ip: "10.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
+                .collect();
+            req
         }
     }
 

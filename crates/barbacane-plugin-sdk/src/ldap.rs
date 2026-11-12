@@ -13,8 +13,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// Connection parameters shared by bind and search.
+/// Connection parameters shared by bind and search. Build with
+/// [`Connection::new`]; a minor release may add fields.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct Connection {
     /// `ldap://host[:port]` or `ldaps://host[:port]`.
     pub url: String,
@@ -77,8 +79,10 @@ pub enum Scope {
     Sub,
 }
 
-/// A search request.
+/// A search request. Build with [`SearchRequest::new`]; a minor release may
+/// add fields.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct SearchRequest {
     #[serde(flatten)]
     pub conn: Connection,
@@ -128,6 +132,7 @@ impl SearchRequest {
 
 /// One directory entry. Binary attributes are not returned.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Entry {
     pub dn: String,
     #[serde(default)]
@@ -135,6 +140,14 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// An entry with these attributes (for tests).
+    pub fn new(dn: impl Into<String>, attrs: BTreeMap<String, Vec<String>>) -> Self {
+        Self {
+            dn: dn.into(),
+            attrs,
+        }
+    }
+
     /// First value of `attr`, matched case-insensitively (attribute names are
     /// case-insensitive in LDAP).
     pub fn first(&self, attr: &str) -> Option<&str> {
@@ -152,8 +165,9 @@ impl Entry {
     }
 }
 
-/// Failure modes of [`bind`] and [`search`].
+/// Failure modes of [`bind`] and [`search`]. A minor release may add variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LdapError {
     /// The directory rejected the DN/password pair.
     InvalidCredentials,
