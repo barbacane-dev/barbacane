@@ -180,9 +180,9 @@ pub static KNOWN: &[KnownDivergence] = &[
     },
     KnownDivergence {
         name: "block scalars ending the input without a line break",
-        reason: "YAML 1.2 keeps no final line break when a block scalar's last line ends the \
-                 input, and libyaml returns `text`; serde-saphyr adds one, `text\\n`, to a \
-                 value or a key (bourumir-wyngs/serde-saphyr#270)",
+        reason: "the yaml-test-suite reads the end of the input as a line break (JEF9/02, \
+                 L24T/01; yaml/yaml-test-suite#118), so a block scalar whose last line ends \
+                 the input keeps one, `text\\n`, in a value or a key; libyaml returns `text`",
         example: "a: |\n  text",
         matches: |input, d| {
             !input.ends_with(['\n', '\r'])
