@@ -256,8 +256,8 @@ mod host {
 
     thread_local! {
         static TIME_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-        static HTTP_CALLS: RefCell<Vec<Vec<u8>>> = RefCell::new(Vec::new());
-        static LOG_MESSAGES: RefCell<Vec<(i32, String)>> = RefCell::new(Vec::new());
+        static HTTP_CALLS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+        static LOG_MESSAGES: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
     }
 
     pub fn time_now_ms() -> u64 {

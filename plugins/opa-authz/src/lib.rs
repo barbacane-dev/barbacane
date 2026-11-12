@@ -402,14 +402,14 @@ mod tests {
     fn parse_decision_allowed() {
         let config = create_config();
         let body = br#"{"result": true}"#;
-        assert_eq!(config.parse_decision(body).unwrap(), true);
+        assert!(config.parse_decision(body).unwrap());
     }
 
     #[test]
     fn parse_decision_denied() {
         let config = create_config();
         let body = br#"{"result": false}"#;
-        assert_eq!(config.parse_decision(body).unwrap(), false);
+        assert!(!config.parse_decision(body).unwrap());
     }
 
     #[test]
@@ -417,7 +417,7 @@ mod tests {
         let config = create_config();
         // OPA returns empty object when document is undefined
         let body = br#"{}"#;
-        assert_eq!(config.parse_decision(body).unwrap(), false);
+        assert!(!config.parse_decision(body).unwrap());
     }
 
     #[test]
@@ -425,7 +425,7 @@ mod tests {
         let config = create_config();
         // Partial rule returning an object instead of boolean
         let body = br#"{"result": {"allow": true, "reason": "admin"}}"#;
-        assert_eq!(config.parse_decision(body).unwrap(), false);
+        assert!(!config.parse_decision(body).unwrap());
     }
 
     #[test]
