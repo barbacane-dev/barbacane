@@ -611,6 +611,11 @@ enum Commands {
         #[arg(long)]
         allow_plaintext_upstream: bool,
 
+        /// Allow a plaintext ws:// control plane link to a host other than
+        /// loopback. The link carries the data plane's API key; use wss://.
+        #[arg(long)]
+        allow_plaintext_control_plane: bool,
+
         /// Load artifacts no trusted key has signed, when BARBACANE_TRUSTED_PUBKEY
         /// is unset (development and testing only; logged at every load).
         #[arg(long)]
@@ -1343,11 +1348,10 @@ impl Gateway {
                 let content_type = headers.get("content-type").map(|s| s.as_str());
 
                 // For WebSocket upgrade requests (ADR-0026), extract the upgrade
-                // handle before consuming the body. The body is empty for GET
-                // upgrade requests, so we skip collection.
-                let is_ws_upgrade = headers
-                    .get("upgrade")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+                // handle before consuming the body. Only a request shaped as a
+                // handshake (RFC 6455 section 4.1) counts: anything else keeps
+                // its body, which is read, validated and inspected as usual.
+                let is_ws_upgrade = is_websocket_handshake(&method_str, &headers);
 
                 let (body_bytes, upgrade_handle) = if is_ws_upgrade {
                     (Bytes::new(), Some(hyper::upgrade::on(req)))
@@ -4570,6 +4574,46 @@ struct ConnectedModeConfig {
     initial_artifact_id: Option<uuid::Uuid>,
 }
 
+/// Whether a request is a WebSocket handshake (RFC 6455 section 4.1): a GET
+/// with `Upgrade: websocket`, `Connection` naming `upgrade`, and a
+/// `Sec-WebSocket-Key`. `headers` holds lower-case names.
+fn is_websocket_handshake(method: &str, headers: &HashMap<String, String>) -> bool {
+    method.eq_ignore_ascii_case("GET")
+        && headers
+            .get("upgrade")
+            .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+        && headers.get("connection").is_some_and(|v| {
+            v.split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        && headers.contains_key("sec-websocket-key")
+}
+
+/// Whether the control plane link may be used: a `wss://` link, a `ws://`
+/// link to loopback, or any link when `allow_plaintext` is set. The link
+/// carries the data plane's API key in its first frame.
+fn control_plane_link_allowed(url: &str, allow_plaintext: bool) -> Result<(), String> {
+    let Some(rest) = url.strip_prefix("ws://") else {
+        return Ok(());
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = authority
+        .rsplit_once(':')
+        .map_or(authority, |(host, _port)| host)
+        .trim_matches(['[', ']']);
+    let loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if loopback || allow_plaintext {
+        Ok(())
+    } else {
+        Err(format!(
+            "the control plane link {url} is plaintext to a host other than loopback and would carry the API key in clear; use wss://, or --allow-plaintext-control-plane"
+        ))
+    }
+}
+
 /// Convert a WebSocket URL to an HTTP base URL.
 ///
 /// E.g., `ws://host:9090/ws/data-plane` → `http://host:9090`
@@ -5274,6 +5318,7 @@ async fn main() -> ExitCode {
             max_header_size,
             max_uri_length,
             allow_plaintext_upstream,
+            allow_plaintext_control_plane,
             allow_unsigned,
             tls_cert,
             tls_key,
@@ -5348,6 +5393,10 @@ async fn main() -> ExitCode {
             // Validate connected mode options
             let connected_mode = match (&control_plane, &project_id, &api_key) {
                 (Some(cp), Some(pid), Some(key)) => {
+                    if let Err(e) = control_plane_link_allowed(cp, allow_plaintext_control_plane) {
+                        eprintln!("error: {e}");
+                        return ExitCode::from(1);
+                    }
                     // Parse project_id as UUID
                     let project_uuid = match uuid::Uuid::parse_str(pid) {
                         Ok(u) => u,
@@ -6147,5 +6196,47 @@ mod request_id_tests {
         ] {
             assert_eq!(trace_id_from_traceparent(value), None, "{value:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod trust_boundary_tests {
+    use super::*;
+
+    fn headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_handshake_is_a_get_with_upgrade_connection_and_key() {
+        let handshake = headers(&[
+            ("upgrade", "websocket"),
+            ("connection", "keep-alive, Upgrade"),
+            ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="),
+        ]);
+        assert!(is_websocket_handshake("GET", &handshake));
+        assert!(!is_websocket_handshake("POST", &handshake));
+        assert!(!is_websocket_handshake(
+            "GET",
+            &headers(&[("upgrade", "websocket"), ("connection", "upgrade")])
+        ));
+        assert!(!is_websocket_handshake(
+            "GET",
+            &headers(&[("upgrade", "websocket"), ("sec-websocket-key", "x")])
+        ));
+    }
+
+    #[test]
+    fn a_plaintext_control_plane_link_is_allowed_to_loopback_only() {
+        assert!(control_plane_link_allowed("wss://control:9090/ws/data-plane", false).is_ok());
+        assert!(control_plane_link_allowed("ws://localhost:9090/ws/data-plane", false).is_ok());
+        assert!(control_plane_link_allowed("ws://127.0.0.1:9090/ws/data-plane", false).is_ok());
+        assert!(control_plane_link_allowed("ws://[::1]:9090/ws/data-plane", false).is_ok());
+        assert!(control_plane_link_allowed("ws://control:9090/ws/data-plane", false).is_err());
+        assert!(control_plane_link_allowed("ws://10.0.0.5:9090/ws/data-plane", false).is_err());
+        assert!(control_plane_link_allowed("ws://control:9090/ws/data-plane", true).is_ok());
     }
 }

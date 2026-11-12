@@ -398,6 +398,7 @@ services:
     command: >
       serve
       --control-plane ws://control-plane:9090/ws/data-plane
+      --allow-plaintext-control-plane
       --project-id ${PROJECT_ID}
       --api-key ${DATA_PLANE_API_KEY}
     environment:
