@@ -30,3 +30,13 @@ jobs:
 
       - name: Run supply-chain checks (advisories, licenses, bans, sources)
         run: cargo deny check
+
+      # The plugins are their own Cargo workspaces, so the check above does not
+      # see their dependency trees; each is checked against the same policy.
+      - name: Run cargo-deny on every plugin
+        run: |
+          for manifest in plugins/*/Cargo.toml; do
+            echo "::group::$manifest"
+            cargo deny --manifest-path "$manifest" --config deny.toml check
+            echo "::endgroup::"
+          done

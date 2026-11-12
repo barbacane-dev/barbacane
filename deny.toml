@@ -5,6 +5,10 @@
 
 [advisories]
 ignore = [
+    # paste unmaintained; a proc-macro used at compile time only, pulled by
+    # cel-interpreter in the cel plugin. No runtime code, no safe replacement.
+    "RUSTSEC-2024-0436",
+
     # rustls-pemfile unmaintained — pinned by rustls-pemfile 2.x (transitive dep, no safe upgrade)
     "RUSTSEC-2025-0134",
 

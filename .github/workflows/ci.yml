@@ -282,6 +282,16 @@ jobs:
       - name: Run supply-chain checks (advisories, licenses, bans, sources)
         run: cargo deny check
 
+      # The plugins are their own Cargo workspaces, so the check above does not
+      # see their dependency trees; each is checked against the same policy.
+      - name: Run cargo-deny on every plugin
+        run: |
+          for manifest in plugins/*/Cargo.toml; do
+            echo "::group::$manifest"
+            cargo deny --manifest-path "$manifest" --config deny.toml check
+            echo "::endgroup::"
+          done
+
   # Build workspace and plugins, upload artifacts for test job
   build:
     name: Build
@@ -430,6 +440,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -441,12 +453,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-plugins-
 
-      - name: Run plugin tests
+      # The plugins sit outside the workspace, so the format, lint and test
+      # gates above do not reach them; each gets the same three here.
+      - name: Check plugin formatting, lints and tests
         run: |
           failed=0
           for p in plugins/*/; do
             name=$(basename "$p")
             echo "::group::$name"
+            if ! (cd "$p" && cargo fmt --check 2>&1); then
+              echo "::error::Plugin $name is not formatted"
+              failed=1
+            fi
+            if ! (cd "$p" && cargo clippy --locked --all-targets -- -D warnings 2>&1); then
+              echo "::error::Plugin $name has lint warnings"
+              failed=1
+            fi
             if ! (cd "$p" && cargo test --locked 2>&1); then
               echo "::error::Plugin $name tests failed"
               failed=1
