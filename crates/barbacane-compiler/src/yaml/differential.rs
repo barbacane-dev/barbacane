@@ -140,12 +140,14 @@ pub static KNOWN: &[KnownDivergence] = &[
     KnownDivergence {
         name: "under-indented quoted scalars",
         reason: "YAML 1.2 requires the continuation lines of a quoted scalar in block context \
-                 to be indented past the node that holds it (yaml-test-suite QB6E); libyaml \
-                 reads them, the module refuses the document",
+                 to be indented past the node that holds it (yaml-test-suite QB6E), and a tab \
+                 does not count as indentation; libyaml reads them, the module refuses the \
+                 document",
         example: "quoted: \"a\nb\nc\"\n",
         matches: |_, d| {
             matches!(d, Difference::OnlyOursFailed { error }
-                if error.contains("invalid indentation in multiline quoted scalar"))
+                if error.contains("invalid indentation in multiline quoted scalar")
+                    || error.contains("tab cannot be used as indentation"))
         },
     },
     KnownDivergence {
@@ -166,17 +168,14 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
-        name: "document markers after a byte order mark",
-        reason: "YAML 1.2 lets a byte order mark start the stream before `---`; libyaml then \
-                 takes `---` for content, reading the string `---` or refusing the document",
-        example: "\u{feff}---\na: 1\n",
-        matches: |input, d| {
-            input.starts_with("\u{feff}---")
-                && matches!(
-                    d,
-                    Difference::Value { .. } | Difference::OnlyReferenceFailed { .. }
-                )
-        },
+        name: "byte order marks starting the stream",
+        reason: "YAML 1.2 lets a byte order mark start the stream; libyaml counts it as a \
+                 column of the first line, so it takes a `---` after it for content and the \
+                 first key for one indented past the keys after it, refusing a block mapping \
+                 with more than one key. The shift can change any construct on that line, so \
+                 every difference on such a document belongs here",
+        example: "\u{feff}a: 1\nb: 2\n",
+        matches: |input, _| input.starts_with('\u{feff}'),
     },
     KnownDivergence {
         name: "block scalars ending the input without a line break",
