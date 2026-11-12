@@ -27,6 +27,9 @@ async fn test_asyncapi_spec_compilation() {
     let resp = gateway.get("/__barbacane/health").await.unwrap();
     assert_eq!(resp.status(), 200);
 
+    // The admin API's health carries the route count
+    let resp = gateway.admin_get("/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     // Should have routes from AsyncAPI operations
     assert!(body.get("routes_count").is_some());

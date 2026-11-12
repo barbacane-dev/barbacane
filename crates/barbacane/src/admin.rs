@@ -13,7 +13,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -27,6 +27,38 @@ pub struct AdminState {
     pub metrics: Arc<MetricsRegistry>,
     pub drift_detected: Arc<AtomicBool>,
     pub started_at: Instant,
+}
+
+/// Maximum number of concurrent HTTP/2 streams per connection, bounding a
+/// single client's ability to multiplex a flood of streams.
+pub const HTTP2_MAX_CONCURRENT_STREAMS: u32 = 256;
+
+/// The admin listener's header-read deadline and idle keep-alive timeout.
+const ADMIN_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Connections the admin listener serves at once. A scraper and a probe need
+/// a few; the cap keeps a flood on the port from holding tasks.
+const ADMIN_MAX_CONNECTIONS: usize = 64;
+
+/// Apply ingress hardening to a connection builder: a header-read deadline
+/// (slowloris defense, doubling as the HTTP/1 idle keep-alive timeout), an
+/// HTTP/2 keep-alive probe + timeout, and a per-connection stream cap.
+pub fn configure_conn_builder(
+    builder: &mut auto::Builder<TokioExecutor>,
+    keepalive: std::time::Duration,
+) {
+    builder
+        .http1()
+        // A timer is required for `header_read_timeout` to function.
+        .timer(TokioTimer::new())
+        .keep_alive(true)
+        .header_read_timeout(keepalive);
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .keep_alive_interval(Some(std::time::Duration::from_secs(20)))
+        .keep_alive_timeout(keepalive)
+        .max_concurrent_streams(HTTP2_MAX_CONCURRENT_STREAMS);
 }
 
 /// Start the admin HTTP server on an already-bound listener.
@@ -55,6 +87,7 @@ pub async fn start_admin_server(
         );
     }
 
+    let connections = Arc::new(tokio::sync::Semaphore::new(ADMIN_MAX_CONNECTIONS));
     loop {
         tokio::select! {
             _ = shutdown_rx.changed() => {
@@ -74,13 +107,21 @@ pub async fn start_admin_server(
                         continue;
                     }
                 };
+                let Ok(permit) = Arc::clone(&connections).try_acquire_owned() else {
+                    tracing::warn!("admin connection cap reached; dropping connection");
+                    continue;
+                };
                 let state = state.clone();
                 tokio::spawn(async move {
+                    // Held for the connection's lifetime; released on drop.
+                    let _permit = permit;
                     let service = service_fn(move |req| {
                         let state = state.clone();
                         async move { handle_request(req, &state) }
                     });
-                    let _ = auto::Builder::new(TokioExecutor::new())
+                    let mut builder = auto::Builder::new(TokioExecutor::new());
+                    configure_conn_builder(&mut builder, ADMIN_KEEPALIVE);
+                    let _ = builder
                         .serve_connection(TokioIo::new(stream), service)
                         .await;
                 });

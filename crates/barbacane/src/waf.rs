@@ -1,11 +1,12 @@
 //! The WAF pipeline stage.
 //!
-//! Runs after spec validation and before the middleware chain, which is the
-//! order the two models want: the spec is a positive model that says what a
-//! request may look like, and the rule set is a negative model that recognises
-//! attack shapes regardless of whether they are schema-valid. A schema-valid
-//! `?q=1' OR 1=1--` passes validation and is exactly what the rule set exists
-//! to catch.
+//! Runs once the route is known and the body is read, before spec validation
+//! and the middleware chain. The two models are independent: the spec is a
+//! positive model that says what a request may look like, and the rule set is
+//! a negative model that recognises attack shapes whether or not they are
+//! schema-valid. A schema-valid `?q=1' OR 1=1--` is exactly what the rule set
+//! exists to catch, and an attack shape is refused before anything else runs
+//! on the request.
 //!
 //! The rule set arrives already parsed and validated from the artifact, so
 //! this module compiles it once at startup and evaluates it per request.
