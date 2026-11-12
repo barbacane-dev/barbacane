@@ -595,10 +595,11 @@ The examples below assume the key is set.
 
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
-| `--control-plane` | No | - | Control plane WebSocket URL (e.g., `ws://control:9090/ws/data-plane`) |
+| `--control-plane` | No | - | Control plane WebSocket URL (e.g., `wss://control:9090/ws/data-plane`). A `ws://` link to a host other than loopback is refused unless `--allow-plaintext-control-plane` is set |
 | `--project-id` | No | - | Project UUID for control plane registration. Required if `--control-plane` is set |
 | `--api-key` | No | - | The data plane API key the control plane issued for the project. Also read from `BARBACANE_CONTROL_API_KEY` |
 | `--data-plane-name` | No | - | Name of this instance in the control plane, at most 128 characters |
+| `--allow-plaintext-control-plane` | No | `false` | Allow a `ws://` control plane link to a host other than loopback; the link carries the API key |
 
 ### Examples
 
