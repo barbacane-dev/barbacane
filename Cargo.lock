@@ -477,6 +477,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "toml 0.8.23",
  "tower",
  "tower-http",

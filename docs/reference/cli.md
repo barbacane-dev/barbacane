@@ -598,7 +598,7 @@ The examples below assume the key is set.
 | `--control-plane` | No | - | Control plane WebSocket URL (e.g., `ws://control:9090/ws/data-plane`) |
 | `--project-id` | No | - | Project UUID for control plane registration. Required if `--control-plane` is set |
 | `--api-key` | No | - | The data plane API key the control plane issued for the project. Also read from `BARBACANE_CONTROL_API_KEY` |
-| `--data-plane-name` | No | - | Name for this instance in the control plane UI |
+| `--data-plane-name` | No | - | Name of this instance in the control plane, at most 128 characters |
 
 ### Examples
 

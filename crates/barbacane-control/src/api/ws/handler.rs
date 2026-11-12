@@ -11,7 +11,10 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::protocol::{ControlPlaneMessage, DataPlaneMessage, DEFAULT_HEARTBEAT_INTERVAL_SECS};
+use super::protocol::{
+    check_artifact_hash, check_registration, ControlPlaneMessage, DataPlaneMessage,
+    DEFAULT_HEARTBEAT_INTERVAL_SECS, MAX_MESSAGE_BYTES,
+};
 
 /// Serialize a control plane message into a WebSocket text frame.
 fn to_ws_message(msg: &ControlPlaneMessage) -> Message {
@@ -26,7 +29,9 @@ use crate::db::{ApiKeysRepository, DataPlanesRepository, NewDataPlane};
 
 /// WebSocket endpoint handler.
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_socket(socket, state))
+    ws.max_message_size(MAX_MESSAGE_BYTES)
+        .max_frame_size(MAX_MESSAGE_BYTES)
+        .on_upgrade(|socket| handle_socket(socket, state))
 }
 
 /// Handle an individual WebSocket connection.
@@ -46,7 +51,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
     // Wait for registration message
     let registration = match wait_for_registration(&mut receiver).await {
-        Some(reg) => reg,
+        Some(Ok(reg)) => reg,
+        Some(Err(reason)) => {
+            tracing::warn!(reason, "Registration refused");
+            let msg = ControlPlaneMessage::RegistrationFailed {
+                reason: "invalid registration".to_string(),
+            };
+            let _ = sender.send(to_ws_message(&msg)).await;
+            return;
+        }
         None => {
             tracing::warn!("WebSocket closed before registration");
             return;
@@ -262,10 +275,11 @@ struct RegistrationInfo {
     metadata: serde_json::Value,
 }
 
-/// Wait for the registration message from the data plane.
+/// Wait for the registration message from the data plane. A registration
+/// whose fields exceed what the control plane stores is refused.
 async fn wait_for_registration(
     receiver: &mut futures_util::stream::SplitStream<WebSocket>,
-) -> Option<RegistrationInfo> {
+) -> Option<Result<RegistrationInfo, &'static str>> {
     // Timeout after 30 seconds
     let timeout = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         while let Some(result) = receiver.next().await {
@@ -278,13 +292,18 @@ async fn wait_for_registration(
                         artifact_id,
                         metadata,
                     }) => {
-                        return Some(RegistrationInfo {
+                        if let Err(reason) =
+                            check_registration(&api_key, name.as_deref(), &metadata)
+                        {
+                            return Some(Err(reason));
+                        }
+                        return Some(Ok(RegistrationInfo {
                             project_id,
                             api_key,
                             name,
                             artifact_id,
                             metadata,
-                        });
+                        }));
                     }
                     Ok(_) => {
                         tracing::warn!("Expected register message, got something else");
@@ -322,6 +341,7 @@ async fn handle_message(
             uptime_secs,
             requests_total,
         } => {
+            check_artifact_hash(artifact_hash.as_deref())?;
             tracing::debug!(
                 data_plane_id = %data_plane_id,
                 ?artifact_id,

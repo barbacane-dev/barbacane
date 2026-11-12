@@ -940,6 +940,11 @@ paths:
         - `{"type": "register", "project_id": "uuid", "api_key": "bbk_...", "name": "optional-name"}`
         - `{"type": "heartbeat", "artifact_id": "uuid"}`
 
+        A message is at most 64 KiB. A registration's `name` is at most 128
+        characters and its `metadata` at most 4 KiB as JSON; a heartbeat's
+        `artifact_hash` is at most 128 characters. A larger registration is
+        refused; a larger message ends the connection.
+
         **Messages (Control Plane → Data Plane):**
         - `{"type": "registered", "data_plane_id": "uuid", "heartbeat_interval_secs": 30}`
         - `{"type": "artifact_available", "artifact_id": "uuid", "download_url": "/artifacts/{id}/download", "sha256": "..."}`
