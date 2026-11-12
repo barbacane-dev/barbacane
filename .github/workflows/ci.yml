@@ -846,10 +846,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-fuzz-
 
+      # The fuzz crate is its own workspace with its own committed lockfile,
+      # built as committed.
       - name: Build the fuzz targets
-        run: |
-          cp Cargo.lock fuzz/Cargo.lock
-          cd fuzz && cargo build --locked --bins
+        run: cd fuzz && cargo build --locked --bins
 
   # Single required status check. Aggregates every gating job into one stable
   # context, so branch protection needs just "CI" regardless of matrix sharding
