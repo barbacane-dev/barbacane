@@ -21,7 +21,7 @@ COPY crates/ crates/
 ENV CARGO_BUILD_JOBS=2
 
 # Build the data plane binary
-RUN cargo build --release --package barbacane && \
+RUN cargo build --locked --release --package barbacane && \
     cp target/release/barbacane /usr/local/bin/barbacane
 
 # Runtime stage - distroless for minimal attack surface

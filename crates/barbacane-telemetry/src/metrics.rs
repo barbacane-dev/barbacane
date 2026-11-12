@@ -768,7 +768,7 @@ impl MetricsRegistry {
     }
 
     /// Observe a plugin histogram, `barbacane_plugin_<plugin>_<name>`, with
-    /// the labels in `labels_json`. Its buckets are [`DURATION_BUCKETS`],
+    /// the labels in `labels_json`. Its buckets are `DURATION_BUCKETS`,
     /// for observations in seconds.
     pub fn plugin_histogram_observe(
         &self,

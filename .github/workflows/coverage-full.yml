@@ -27,6 +27,7 @@ jobs:
   coverage-full:
     name: Coverage (full)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16
@@ -72,7 +73,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
-          tool: cargo-llvm-cov
+          tool: cargo-llvm-cov@0.9.1
 
       # Raise the floor when the real number rises. Never lower it to turn a
       # red build green.

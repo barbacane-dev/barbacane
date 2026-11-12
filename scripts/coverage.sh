@@ -77,7 +77,7 @@ fi
 source <(cargo llvm-cov show-env --export-prefix)
 cargo llvm-cov clean --workspace
 
-cargo test --workspace --lib --bins --exclude barbacane-test
+cargo test --locked --workspace --exclude barbacane-test --lib --bins --tests
 
 if [[ "$unit_only" -eq 0 ]]; then
   # Build every binary instrumented before the suite runs. The CLI tests and

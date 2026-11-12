@@ -247,7 +247,7 @@ impl RequestLimits {
         Ok(())
     }
 
-    /// Validate the raw header count. Unlike [`validate_headers`], which operates
+    /// Validate the raw header count. Unlike `validate_headers`, which operates
     /// on a name→value map that collapses duplicate names, this counts the total
     /// number of header lines so repeated names cannot undercount the limit.
     pub fn validate_header_count(&self, count: usize) -> Result<(), ValidationError2> {

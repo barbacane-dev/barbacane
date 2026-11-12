@@ -19,7 +19,7 @@ pub struct PluginManifest {
     pub capabilities: Capabilities,
 }
 
-/// Plugin metadata from the [plugin] section.
+/// Plugin metadata from the `[plugin]` section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginMeta {
     /// Unique identifier, lowercase, kebab-case.
@@ -60,7 +60,7 @@ impl PluginType {
     }
 }
 
-/// Plugin capabilities from the [capabilities] section.
+/// Plugin capabilities from the `[capabilities]` section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Capabilities {
     /// List of host functions this plugin requires.

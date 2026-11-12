@@ -519,12 +519,14 @@ components:
         .parent()
         .and_then(Path::parent)
         .expect("repository root");
+    let mock = repo.join("plugins/mock/mock.wasm");
+    if !mock.exists() {
+        eprintln!("skipping: {} is not built", mock.display());
+        return;
+    }
     std::fs::write(
         &manifest_path,
-        format!(
-            "plugins:\n  mock:\n    path: {}\n",
-            repo.join("plugins/mock/mock.wasm").display()
-        ),
+        format!("plugins:\n  mock:\n    path: {}\n", mock.display()),
     )
     .expect("write manifest");
 
