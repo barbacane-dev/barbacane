@@ -435,11 +435,15 @@ if let Some(token) = jwt::bearer_token(auth_header) {
 
 With the `telemetry` capability, `host_metric_counter_inc(name, labels, value)` and `host_metric_histogram_observe(name, labels, value)` record a metric, `labels` being a JSON object such as `{"status": 200}`. The gateway exports it as `barbacane_plugin_<plugin>_<name>` with those labels; observe histograms in seconds. Keep labels bounded: a value per request, such as a duration or an ID, makes a series per request, and each plugin may create 1,000. The [observability guide](../guide/observability.md#plugin-metrics) gives the naming rules and what is refused.
 
+The same capability grants `host_span_start(name)`, `host_span_end()` and `host_span_set_attribute(key, value)`. The gateway records them as debug log events and answers `host_span_start` with the id `1`; they do not create spans in the request's trace.
+
 ### Clock, secrets (host imports)
 
-These host functions do not have SDK wrappers — declare the capability and
-import the function directly. See any official plugin (e.g. `oidc-auth` for
-secrets, `ldap-auth` for the clock) for the exact `extern "C"` binding pattern.
+With the `clock_now` capability, `barbacane_plugin_sdk::clock::now_ms()` reads a
+monotonic clock in milliseconds (only differences are meaningful) and
+`clock::unix_time()` the seconds since the Unix epoch. Secrets have no SDK
+wrapper: declare `get_secret` and import `host_get_secret` directly (see
+`oidc-auth` for the `extern "C"` binding pattern).
 
 ```toml
 [capabilities]
@@ -499,6 +503,20 @@ randomness (`getrandom`, `HashMap`), the clock, and `println!` are covered, but
 reading files, environment variables or command-line arguments, and threads,
 are not. To see what a build imports, run
 `wasm-tools print my_plugin.wasm | grep import`.
+
+### ABI version
+
+The plugin ABI is the set of exports the gateway calls (`memory`, `alloc`, `init`, and `on_request` and `on_response` or `dispatch`), the host functions above with their signatures, and the WASI functions. It has a version, `1`. The SDK macros embed it in a `barbacane_abi` custom section (a little-endian `u32`, `barbacane_plugin_sdk::ABI_VERSION`); the compiler refuses a plugin without the section or built for another version (`E1045`), and the data plane refuses it again when it loads an artifact. A plugin built with an SDK before 1.0 carries no section: rebuild it.
+
+A minor release may add host functions, capabilities and exports it calls when present; it keeps the version at `1`. The version changes only when a plugin built for the previous one would no longer run, which is a major release of Barbacane.
+
+### Deprecated host functions
+
+A host function on its way out stays importable until the release named here, and a plugin importing it compiles with the warning `E1016` and loads with a warning in the gateway's log.
+
+| Function | Use instead | Removed in |
+|----------|-------------|------------|
+| `host_time_now` | `host_clock_now` (`clock::now_ms()` in the SDK) | 1.2.0 at the earliest |
 
 ## Using Plugins in Specs
 

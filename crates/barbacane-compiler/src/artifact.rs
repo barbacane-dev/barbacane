@@ -345,6 +345,8 @@ pub struct PluginCapabilities {
 pub struct LoadedPlugin {
     /// Plugin version.
     pub version: String,
+    /// Plugin type (`middleware` or `dispatcher`).
+    pub plugin_type: String,
     /// WASM binary content.
     pub wasm_bytes: Vec<u8>,
     /// Whether this plugin needs the request body.
@@ -878,6 +880,7 @@ impl ArtifactArchive {
                 plugin.name.clone(),
                 LoadedPlugin {
                     version: plugin.version.clone(),
+                    plugin_type: plugin.plugin_type.clone(),
                     wasm_bytes: take(&path)?,
                     body_access: plugin.capabilities.body_access,
                 },
@@ -1499,6 +1502,30 @@ fn compile_inner(
     );
 
     for plugin in plugins {
+        // E1045: the plugin is built for this ABI and exports what the gateway calls.
+        if let Some(mismatch) = crate::abi::check(&plugin.wasm_bytes, &plugin.plugin_type)
+            .map_err(|e| CompileError::PluginResolution(format!("plugin '{}': {e}", plugin.name)))?
+        {
+            return Err(CompileError::IncompatibleAbi {
+                plugin: plugin.name.clone(),
+                reason: mismatch.to_string(),
+            });
+        }
+
+        // E1016: a deprecated host function still loads, with a warning.
+        for deprecated in crate::abi::deprecated_imports(&plugin.wasm_bytes)
+            .map_err(|e| CompileError::PluginResolution(format!("plugin '{}': {e}", plugin.name)))?
+        {
+            warnings.push(CompileWarning {
+                code: "E1016".to_string(),
+                message: format!(
+                    "plugin '{}' imports `{}`, deprecated in favour of `{}` and removed in {} at the earliest",
+                    plugin.name, deprecated.name, deprecated.replacement, deprecated.removal
+                ),
+                location: None,
+            });
+        }
+
         // E1043: a plugin may import only what the gateway provides.
         if let Some((module, name)) = crate::wasi::unsupported_import(&plugin.wasm_bytes)
             .map_err(|e| CompileError::PluginResolution(format!("plugin '{}': {e}", plugin.name)))?
@@ -4417,11 +4444,7 @@ paths:
         let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
         let output_path = temp.path().join("artifact.bca");
 
-        // Create a fake plugin (minimal valid WASM)
-        let fake_wasm = vec![
-            0x00, 0x61, 0x73, 0x6d, // magic
-            0x01, 0x00, 0x00, 0x00, // version
-        ];
+        let fake_wasm = crate::abi::test_module("middleware");
 
         let plugins = vec![PluginBundle {
             name: "test-plugin".to_string(),
@@ -4480,7 +4503,7 @@ paths:
             plugin_type: "middleware".to_string(),
             category: None,
             implements: vec![],
-            wasm_bytes: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+            wasm_bytes: crate::abi::test_module("middleware"),
             body_access: true,
             host_functions: vec!["log".to_string()],
             limits: DeclaredLimits {
@@ -6882,8 +6905,10 @@ paths:
         name: mock
 "#;
 
-    /// A minimal module: the WASM magic number and version.
-    const WASM: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+    /// A minimal module that passes the ABI check.
+    fn wasm() -> Vec<u8> {
+        crate::abi::test_module("middleware")
+    }
 
     fn compiled(temp: &TempDir) -> PathBuf {
         let spec = temp.path().join("api.yaml");
@@ -6895,7 +6920,7 @@ paths:
             plugin_type: "middleware".to_string(),
             category: None,
             implements: vec![],
-            wasm_bytes: WASM.to_vec(),
+            wasm_bytes: wasm(),
             body_access: false,
             host_functions: vec![],
             limits: DeclaredLimits::default(),
@@ -6943,7 +6968,7 @@ paths:
 
     /// The module with a custom section appended: valid, different bytes.
     fn other_module() -> Vec<u8> {
-        let mut wasm = WASM.to_vec();
+        let mut wasm = wasm();
         wasm.extend_from_slice(&[0x00, 0x03, 0x02, b'x', b'y']);
         wasm
     }
@@ -6953,7 +6978,7 @@ paths:
         let verified = rewritten(|_| {}).expect("verifies");
         assert_eq!(verified.routes.operations.len(), 1);
         assert!(verified.specs.contains_key("api.yaml"));
-        assert_eq!(verified.plugins["probe"].wasm_bytes, WASM);
+        assert_eq!(verified.plugins["probe"].wasm_bytes, wasm());
     }
 
     #[test]

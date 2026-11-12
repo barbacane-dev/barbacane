@@ -165,11 +165,7 @@ impl Observability {
 /// Get current time in milliseconds.
 #[cfg(target_arch = "wasm32")]
 fn host_time_now_ms() -> u64 {
-    #[link(wasm_import_module = "barbacane")]
-    extern "C" {
-        fn host_time_now() -> i64;
-    }
-    unsafe { host_time_now() as u64 }
+    barbacane_plugin_sdk::clock::now_ms()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

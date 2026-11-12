@@ -28,6 +28,7 @@ A plugin built against `barbacane-plugin-sdk` 1.x runs on any later 1.x gateway.
 - the `plugin.toml` format, including `[capabilities]` and `[limits]`, the defaults a plugin gets when it declares no limit, and the ceilings the gateway enforces;
 - the plugin contract: `init(config)` runs once per plugin and config, each request runs in a fresh instance starting from the memory `init` left, and nothing carries from one request to the next ([plugin guide](../contributing/plugins.md#instances-and-state));
 - the WASI functions a plugin may import ([plugin guide](../contributing/plugins.md#wasi));
+- the plugin ABI version, `1` for every 1.x release ([plugin guide](../contributing/plugins.md#abi-version)): the macros embed it, and the compiler and the gateway refuse a plugin built for another;
 - the public Rust API of `barbacane-plugin-sdk` and the attributes of `barbacane-plugin-macros`, under semantic versioning. The SDK's data types and error enums are `#[non_exhaustive]`, so a minor release may add a field or a variant: build the types with their constructors and give a `match` on the enums a `_` arm.
 
 A minor release may add host functions, capabilities and SDK items.

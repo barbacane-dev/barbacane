@@ -9,6 +9,7 @@ use barbacane_test::TestGateway;
 
 /// A dispatcher whose `dispatch` traps on `unreachable`.
 const TRAPPING_DISPATCHER: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))
@@ -146,6 +147,7 @@ async fn the_ids_stay_on_the_failure_log_when_only_errors_are_logged() {
 
 /// A middleware that lets every request through and traps in `on_response`.
 const RESPONSE_TRAPPING_MIDDLEWARE: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))
@@ -255,12 +257,102 @@ async fn a_response_middleware_that_traps_after_a_short_circuit_is_answered_with
 
 /// A dispatcher importing a WASI function the gateway does not provide.
 const UNSUPPORTED_WASI_DISPATCHER: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (import "wasi_snapshot_preview1" "fd_close" (func (param i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))
   (func (export "dispatch") (param i32 i32) (result i32) (i32.const 0))
 )"#;
+
+/// A dispatcher built without the SDK macros: no `barbacane_abi` section.
+const DISPATCHER_WITHOUT_ABI_VERSION: &str = r#"(module
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+  (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "dispatch") (param i32 i32) (result i32) (i32.const 0))
+)"#;
+
+/// Compile a spec dispatching to a plugin built from `wat`.
+async fn compile_dispatcher(wat: &str) -> Result<TestGateway, String> {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let plugin_dir = dir.path().join("probe");
+    std::fs::create_dir(&plugin_dir).expect("plugin dir");
+    std::fs::write(
+        plugin_dir.join("probe.wasm"),
+        wat::parse_str(wat).expect("valid WAT"),
+    )
+    .expect("wasm");
+    std::fs::write(
+        plugin_dir.join("plugin.toml"),
+        "[plugin]\nname = \"probe\"\nversion = \"0.1.0\"\ntype = \"dispatcher\"\nwasm = \"probe.wasm\"\n\n[capabilities]\nhost_functions = []\n",
+    )
+    .expect("plugin.toml");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  probe:\n    path: {}\n",
+            plugin_dir.join("probe.wasm").display()
+        ),
+    )
+    .expect("manifest");
+    let spec = dir.path().join("api.yaml");
+    std::fs::write(
+        &spec,
+        "openapi: \"3.1.0\"\ninfo: { title: Probe, version: \"1.0.0\" }\npaths:\n  /x:\n    get:\n      operationId: x\n      x-barbacane-dispatch:\n        name: probe\n      responses:\n        \"200\": { description: never }\n",
+    )
+    .expect("spec");
+    let gateway = TestGateway::from_spec(spec.to_str().expect("utf-8"))
+        .await
+        .map_err(|e| e.to_string())?;
+    // Keep the directory alive for the gateway's lifetime.
+    std::mem::forget(dir);
+    Ok(gateway)
+}
+
+/// The compiler refuses a plugin without an ABI version (E1045), and says to
+/// rebuild it; the same module with the section compiles.
+#[tokio::test]
+async fn a_plugin_without_an_abi_version_does_not_compile() {
+    let error = match compile_dispatcher(DISPATCHER_WITHOUT_ABI_VERSION).await {
+        Ok(_) => panic!("compiled a plugin without an ABI version"),
+        Err(e) => e,
+    };
+    assert!(
+        error.contains("E1045")
+            && error.contains("no plugin ABI version")
+            && error.contains("barbacane-plugin-sdk 1.x"),
+        "{error}"
+    );
+
+    let with_version = DISPATCHER_WITHOUT_ABI_VERSION.replacen(
+        "(module\n",
+        "(module\n  (@custom \"barbacane_abi\" \"\\01\\00\\00\\00\")\n",
+        1,
+    );
+    let gateway = compile_dispatcher(&with_version)
+        .await
+        .expect("positive control: the same module with the section compiles");
+    assert!(gateway.get("/x").await.is_ok(), "the gateway serves");
+}
+
+/// A plugin built for a later ABI is refused with the version it names.
+#[tokio::test]
+async fn a_plugin_for_another_abi_version_does_not_compile() {
+    let other = DISPATCHER_WITHOUT_ABI_VERSION.replacen(
+        "(module\n",
+        "(module\n  (@custom \"barbacane_abi\" \"\\02\\00\\00\\00\")\n",
+        1,
+    );
+    let error = match compile_dispatcher(&other).await {
+        Ok(_) => panic!("compiled a plugin for ABI 2"),
+        Err(e) => e,
+    };
+    assert!(
+        error.contains("E1045") && error.contains("ABI 2") && error.contains("supports ABI 1"),
+        "{error}"
+    );
+}
 
 #[tokio::test]
 async fn a_plugin_importing_an_unsupported_wasi_function_does_not_compile() {

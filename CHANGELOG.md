@@ -11,6 +11,8 @@ The breaking changes below are gathered, with what to do and in which order, in 
 
 ### Added
 
+- **plugin ABI**: a plugin carries the ABI version it is built for, `1`, in a `barbacane_abi` custom section the SDK macros embed (`barbacane_plugin_sdk::ABI_VERSION`). The compiler refuses a plugin without the section, built for another version, or lacking an export the gateway calls (`E1045`, saying to rebuild it with `barbacane-plugin-sdk` 1.x); the data plane refuses such a plugin when it loads an artifact. The [plugin guide](docs/contributing/plugins.md#abi-version) states what the version covers and when it changes.
+- **plugin SDK**: `clock::now_ms()` and `clock::unix_time()` wrap the `clock_now` host functions, with the process clocks on native targets.
 - **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares. The artifact format does not change.
 - **vacuum ruleset**: five rules for `enabled: false` on middleware entries. Three fail where compilation does (`barbacane-global-middleware-disabled`, `barbacane-middleware-disabled-with-config`, `barbacane-middleware-disabled-unmatched`, mirroring `E1014`, `E1012`, `E1013`). `barbacane-global-auth-disabled` (info) lists every operation that disables a global authentication plugin, and `barbacane-auth-plugins-stacked` (warn) flags an operation that adds an authentication plugin while a different global one keeps running, so a request needs both credentials. The download commands in the vacuum guide include the new `barbacane-disabled-middlewares.js`.
 - **artifact signing**: `barbacane key generate --out <FILE>` writes an Ed25519 signing key as PKCS#8, readable by its owner only and never over an existing file, and prints its public key. `barbacane key public --key <FILE>` prints the public key of a signing key in the form `BARBACANE_TRUSTED_PUBKEY` takes. Signing keys are read as PKCS#8 v1 or v2, DER or PEM, so keys from `openssl genpkey -algorithm ed25519` work. An empty `BARBACANE_SIGNING_KEY` means no key.
@@ -28,6 +30,7 @@ The breaking changes below are gathered, with what to do and in which order, in 
 
   > **Upgrade note (breaking):** a custom plugin that builds an SDK type as a struct literal, or calls `log::log` with a number, does not compile until it uses the constructors and `log::Level`.
 
+- **plugins**: a plugin must export `alloc`; the gateway no longer grows memory on its own to write the configuration and requests into a plugin without one. Every plugin built with the SDK macros exports it.
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
 
   > **Upgrade note (breaking):** recompile every artifact with this release's compiler before upgrading a data plane.
@@ -75,6 +78,10 @@ The breaking changes below are gathered, with what to do and in which order, in 
 - **barbacane.yaml**: a key the format does not have, at the top level or in a plugin entry, fails with an error naming it, where it was ignored. A plugin entry has `path` or `url`, not both, and `sha256` only with `url`.
 
   > **Upgrade note (breaking):** a `barbacane.yaml` with a misspelled or unknown key (`spec:` for `specs:`, a stray key in a plugin entry) no longer compiles; fix or remove the key.
+
+### Deprecated
+
+- **plugins**: the host function `host_time_now`, in favour of `host_clock_now` (`clock::now_ms()` in the SDK), which returns the same clock. A plugin importing it compiles with the warning `E1016` and loads with a warning in the gateway's log. It is removed in 1.2.0 at the earliest.
 
 ### Removed
 

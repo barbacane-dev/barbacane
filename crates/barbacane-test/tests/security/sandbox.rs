@@ -13,6 +13,7 @@ use tempfile::TempDir;
 
 /// A dispatcher importing `host_log` and `host_http_call`.
 const LOGS_AND_CALLS_OUT: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (import "barbacane" "host_log" (func (param i32 i32 i32)))
   (import "barbacane" "host_http_call" (func (param i32 i32) (result i32)))
   (memory (export "memory") 1)

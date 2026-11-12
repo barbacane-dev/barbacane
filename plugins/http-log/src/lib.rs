@@ -231,11 +231,7 @@ impl HttpLog {
 mod host {
     /// Get current time in milliseconds.
     pub fn time_now_ms() -> u64 {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_time_now() -> i64;
-        }
-        unsafe { host_time_now() as u64 }
+        barbacane_plugin_sdk::clock::now_ms()
     }
 
     /// Send the log entry through the shared SDK HTTP helper. The response is

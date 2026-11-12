@@ -253,6 +253,7 @@ plugins and builds an artifact.
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
 | E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
+| E1016 | Plugin | A plugin imports a deprecated host function; it still loads until the release named in the [plugin guide](../contributing/plugins.md#deprecated-host-functions) (warning) |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 | E1031 | Extension | Plaintext HTTP URL not allowed (use `--allow-plaintext` to override) |
 | E1032 | Security | An operation runs an authentication middleware that reads none of the schemes its `security` requirement names |
@@ -260,6 +261,7 @@ plugins and builds an artifact.
 | E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
 | E1043 | Plugin | A plugin imports a function the gateway does not provide: anything outside the `barbacane` host functions and the supported WASI functions (see the [plugin guide](../contributing/plugins.md#wasi)) |
 | E1044 | Plugin | Limits for a plugin, in its `plugin.toml`, in `barbacane.yaml` or on the control plane, name an unknown key, or a value below 1 or above the gateway's ceiling (see the [plugin guide](../contributing/plugins.md#resource-limits)) |
+| E1045 | Plugin | A plugin is not built for this gateway's plugin ABI: it carries no ABI version, names another one, or lacks an export the gateway calls (see the [plugin guide](../contributing/plugins.md#abi-version)); rebuild it with `barbacane-plugin-sdk` 1.x |
 | E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
 | E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
 | E1059 | Schema | A request schema cannot be enforced: its `$schema` names neither a JSON Schema draft nor an OpenAPI dialect, it refers to a resource outside the spec, or it does not compile (an invalid `pattern`, for one) |

@@ -8,6 +8,7 @@ use tempfile::TempDir;
 /// A middleware that grows its memory to 3 MiB, trapping when that is refused,
 /// then answers 204.
 const NEEDS_3_MIB: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (import "barbacane" "host_set_output" (func $set_output (param i32 i32)))
   (memory (export "memory") 1)
   (data (i32.const 49152) "{\"action\":1,\"data\":{\"status\":204,\"headers\":{}}}")
@@ -24,6 +25,7 @@ const NEEDS_3_MIB: &str = r#"(module
 
 /// A dispatcher the middleware's answer keeps from running.
 const UNREACHED_DISPATCHER: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))

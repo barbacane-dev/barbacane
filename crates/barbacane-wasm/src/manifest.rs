@@ -51,11 +51,20 @@ pub enum PluginType {
 }
 
 impl PluginType {
+    /// The type named `middleware` or `dispatcher`.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "middleware" => Some(Self::Middleware),
+            "dispatcher" => Some(Self::Dispatcher),
+            _ => None,
+        }
+    }
+
     /// Get the required WASM exports for this plugin type.
     pub fn required_exports(&self) -> &'static [&'static str] {
         match self {
-            PluginType::Middleware => &["init", "on_request", "on_response"],
-            PluginType::Dispatcher => &["init", "dispatch"],
+            PluginType::Middleware => &["alloc", "init", "on_request", "on_response"],
+            PluginType::Dispatcher => &["alloc", "init", "dispatch"],
         }
     }
 }

@@ -491,6 +491,7 @@ fn artifact_with_mock_plugin(dir: &Path, wat: &str) -> PathBuf {
 fn dispatcher_importing(wasi_function: &str, signature: &str) -> String {
     format!(
         r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (import "wasi_snapshot_preview1" "{wasi_function}" (func {signature}))
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
@@ -523,6 +524,36 @@ async fn a_plugin_importing_an_unsupported_wasi_function_is_refused_on_load() {
         &dispatcher_importing("fd_close", "(param i32) (result i32)"),
     );
     assert!(!gateway_loads_artifact(&unsupported).await);
+}
+
+/// The compiler refuses a plugin without an ABI version (E1045); the data
+/// plane refuses it too, in an artifact built some other way.
+#[tokio::test]
+async fn a_plugin_without_an_abi_version_is_refused_on_load() {
+    if find_barbacane_binary().is_none() {
+        eprintln!("skip: barbacane binary not built");
+        return;
+    }
+    let tagged = dispatcher_importing("random_get", "(param i32 i32) (result i32)");
+    let untagged = tagged.replacen(
+        "  (@custom \"barbacane_abi\" \"\\01\\00\\00\\00\")\n",
+        "",
+        1,
+    );
+    assert_ne!(tagged, untagged, "the fixture carries the section to strip");
+
+    let dir = TempDir::new().unwrap();
+    assert!(
+        gateway_loads_artifact(&artifact_with_mock_plugin(dir.path(), &tagged)).await,
+        "positive control: the tagged module loads"
+    );
+
+    let dir = TempDir::new().unwrap();
+    assert!(!gateway_loads_artifact(&artifact_with_mock_plugin(dir.path(), &untagged)).await);
+
+    let other_version = tagged.replacen("\\01\\00\\00\\00", "\\02\\00\\00\\00", 1);
+    let dir = TempDir::new().unwrap();
+    assert!(!gateway_loads_artifact(&artifact_with_mock_plugin(dir.path(), &other_version)).await);
 }
 
 /// The mock plugin's recorded limits replaced by `limits`, with

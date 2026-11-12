@@ -49,6 +49,17 @@ fn manifest_section_tokens() -> proc_macro2::TokenStream {
     }
 }
 
+/// Tokens that embed the SDK's ABI version into a custom WASM section named
+/// `barbacane_abi`, as a little-endian `u32`. The compiler and the gateway read
+/// it to refuse a plugin built for another ABI.
+fn abi_section_tokens() -> proc_macro2::TokenStream {
+    quote! {
+        #[used]
+        #[link_section = "barbacane_abi"]
+        static BARBACANE_ABI: [u8; 4] = barbacane_plugin_sdk::ABI_VERSION.to_le_bytes();
+    }
+}
+
 /// Tokens that embed the plugin's `config-schema.json` into a custom WASM
 /// section named `barbacane_config_schema`, so the annotations saying which
 /// request headers the plugin reads travel inside the `.wasm` with no sidecar
@@ -95,6 +106,7 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
     let struct_name = &input.ident;
     let manifest_section = manifest_section_tokens();
     let config_schema_section = config_schema_section_tokens();
+    let abi_section = abi_section_tokens();
 
     let expanded = quote! {
         #input
@@ -106,6 +118,7 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
         mod __barbacane_wasm_abi {
             use super::*;
 
+            #abi_section
             #manifest_section
             #config_schema_section
 
@@ -284,6 +297,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
     let struct_name = &input.ident;
     let manifest_section = manifest_section_tokens();
     let config_schema_section = config_schema_section_tokens();
+    let abi_section = abi_section_tokens();
 
     let expanded = quote! {
         #input
@@ -293,6 +307,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
         mod __barbacane_wasm_abi {
             use super::*;
 
+            #abi_section
             #manifest_section
             #config_schema_section
 
