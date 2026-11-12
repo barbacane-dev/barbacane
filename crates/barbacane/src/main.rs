@@ -1742,7 +1742,7 @@ impl Gateway {
         // Execute middleware on_request chain
         let (final_request_json, final_body, middleware_instances, middleware_context) =
             if !operation.middlewares.is_empty() {
-                match self.execute_middleware_on_request(
+                match self.run_middleware_on_request(
                     &operation.middlewares,
                     &request_json,
                     raw_body,
@@ -1787,6 +1787,29 @@ impl Gateway {
         };
 
         Ok(dispatch_outcome)
+    }
+
+    /// Run the on_request chain on this thread as blocking work: WASM and its
+    /// host calls (HTTP, LDAP, brokers) block, and the runtime hands the
+    /// worker's other tasks to another thread meanwhile.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    fn run_middleware_on_request(
+        &self,
+        middlewares: &[barbacane_compiler::MiddlewareConfig],
+        request_json: &[u8],
+        raw_body: Option<Vec<u8>>,
+    ) -> Result<
+        (
+            Vec<u8>,
+            Option<Vec<u8>>,
+            Vec<barbacane_wasm::PluginInstance>,
+            barbacane_wasm::RequestContext,
+        ),
+        Response<Full<Bytes>>,
+    > {
+        tokio::task::block_in_place(|| {
+            self.execute_middleware_on_request(middlewares, request_json, raw_body)
+        })
     }
 
     /// Execute middleware on_request chain.
@@ -2431,11 +2454,13 @@ impl Gateway {
                             headers: std::collections::BTreeMap::new(),
                             body: None,
                         };
-                        self.execute_middleware_on_response(
-                            middleware_instances,
-                            sentinel_response,
-                            post_dispatch_context.clone(),
-                        )?;
+                        tokio::task::block_in_place(|| {
+                            self.execute_middleware_on_response(
+                                middleware_instances,
+                                sentinel_response,
+                                post_dispatch_context.clone(),
+                            )
+                        })?;
                     }
 
                     // Spawn the WebSocket relay as a background task.
@@ -2485,11 +2510,13 @@ impl Gateway {
                 // context so middlewares can observe keys written by the
                 // dispatcher.
                 let final_response = if !middleware_instances.is_empty() {
-                    self.execute_middleware_on_response(
-                        middleware_instances,
-                        plugin_response,
-                        post_dispatch_context,
-                    )?
+                    tokio::task::block_in_place(|| {
+                        self.execute_middleware_on_response(
+                            middleware_instances,
+                            plugin_response,
+                            post_dispatch_context,
+                        )
+                    })?
                 } else {
                     plugin_response
                 };
@@ -2766,7 +2793,7 @@ impl Gateway {
 
         // Execute only the CORS middleware
         let middlewares = vec![cors_middleware.clone()];
-        match self.execute_middleware_on_request(&middlewares, &request_json, None) {
+        match self.run_middleware_on_request(&middlewares, &request_json, None) {
             Ok((_, _, _, _)) => {
                 // CORS middleware didn't short-circuit, return empty 204
                 // (This shouldn't happen for valid preflights, but handle it gracefully)
