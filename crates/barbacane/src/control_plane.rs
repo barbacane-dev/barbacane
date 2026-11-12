@@ -328,7 +328,7 @@ impl ControlPlaneClient {
 
         // Start heartbeat timer
         let mut heartbeat_interval =
-            tokio::time::interval(Duration::from_secs(heartbeat_interval_secs as u64));
+            tokio::time::interval(heartbeat_period(heartbeat_interval_secs));
         let start_time = std::time::Instant::now();
 
         // Main message loop — we are now registered, so any disconnect
@@ -494,9 +494,28 @@ impl ControlPlaneClient {
     }
 }
 
+/// The heartbeat period the control plane asked for, at least one second: a
+/// zero period is not a valid timer interval, and would end the connection
+/// task.
+fn heartbeat_period(interval_secs: u32) -> Duration {
+    Duration::from_secs(u64::from(interval_secs.max(1)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zero_heartbeat_interval_becomes_one_second() {
+        assert_eq!(heartbeat_period(0), Duration::from_secs(1));
+        assert_eq!(heartbeat_period(30), Duration::from_secs(30));
+        // A timer with this period must exist: a zero period panics.
+        let _ = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async { tokio::time::interval(heartbeat_period(0)) });
+    }
 
     #[test]
     fn test_data_plane_message_register_serialization() {
