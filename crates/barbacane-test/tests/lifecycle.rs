@@ -375,11 +375,15 @@ async fn test_multi_spec_health_from_both() {
     .await
     .expect("failed to start gateway");
 
-    // Built-in health endpoint should work
+    // The public health endpoint reports the status and nothing else.
     let resp = gateway.get("/__barbacane/health").await.unwrap();
     assert_eq!(resp.status(), 200);
-
     let body: serde_json::Value = resp.json().await.unwrap();
-    // Should show combined routes count
-    assert!(body.get("routes_count").is_some());
+    assert_eq!(body, serde_json::json!({"status": "healthy"}));
+
+    // The admin API's health counts the operations of both specs: 3 + 4.
+    let resp = gateway.admin_get("/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["routes_count"], 7);
 }
