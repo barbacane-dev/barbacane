@@ -192,6 +192,9 @@ pub struct RequestLimits {
     pub max_header_size: usize,
     /// Maximum URI length in characters (default: 8KB).
     pub max_uri_length: usize,
+    /// Longest a request body may take to arrive in full (default: 60 s).
+    /// A body still incomplete at the deadline is answered 408.
+    pub body_read_timeout: std::time::Duration,
 }
 
 impl Default for RequestLimits {
@@ -201,6 +204,7 @@ impl Default for RequestLimits {
             max_headers: 100,
             max_header_size: 8 * 1024, // 8 KB
             max_uri_length: 8 * 1024,  // 8 KB
+            body_read_timeout: std::time::Duration::from_secs(60),
         }
     }
 }
