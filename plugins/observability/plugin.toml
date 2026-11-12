@@ -8,3 +8,4 @@ wasm = "observability.wasm"
 
 [capabilities]
 host_functions = ["log", "context_get", "context_set", "telemetry", "clock_now"]
+body_access = true

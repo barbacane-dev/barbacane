@@ -436,3 +436,91 @@ async fn test_cel_routing_stacked_instances_both_continue() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["area"], "routing-stacked");
 }
+
+/// A spec with one POST route behind opa-authz pointed at `opa_url`, with
+/// `include_body` on.
+fn create_opa_body_spec(opa_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+    let plugins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("plugins");
+    std::fs::write(
+        temp_dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  mock:\n    path: {}\n  opa-authz:\n    path: {}\n",
+            plugins_dir.join("mock/mock.wasm").display(),
+            plugins_dir.join("opa-authz/opa-authz.wasm").display()
+        ),
+    )
+    .expect("failed to write manifest file");
+    let spec_path = temp_dir.path().join("opa-body.yaml");
+    std::fs::write(
+        &spec_path,
+        format!(
+            r#"openapi: "3.1.0"
+info:
+  title: OPA Body Test API
+  version: "1.0.0"
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      x-barbacane-middlewares:
+        - name: opa-authz
+          config:
+            opa_url: "{opa_url}"
+            include_body: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+          body: '{{"created":true}}'
+      responses:
+        "201":
+          description: Created
+"#
+        ),
+    )
+    .expect("failed to write spec file");
+    (temp_dir, spec_path)
+}
+
+/// With `include_body`, the OPA input carries the request body, which needs
+/// the middleware to receive it.
+#[tokio::test]
+async fn opa_input_includes_the_request_body_when_enabled() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let opa = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/data/authz/allow"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": true})))
+        .mount(&opa)
+        .await;
+
+    let (_temp_dir, spec_path) =
+        create_opa_body_spec(&format!("{}/v1/data/authz/allow", opa.uri()));
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let body = r#"{"item":"book","quantity":2}"#;
+    let resp = gateway.post("/orders", body).await.unwrap();
+    assert_eq!(resp.status(), 201);
+
+    let received = opa.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1, "one policy query");
+    let query: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(query["input"]["method"], "POST", "{query}");
+    assert_eq!(query["input"]["body"], body, "{query}");
+}

@@ -8,3 +8,4 @@ wasm = "opa-authz.wasm"
 
 [capabilities]
 host_functions = ["http_call"]
+body_access = true
