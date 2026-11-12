@@ -24,18 +24,9 @@
       "description": "Skip signature validation. TEST ONLY: ignored by the compiled plugin, so it cannot disable verification in production.",
       "default": false
     },
-    "jwks_url": {
-      "type": "string",
-      "description": "JWKS URL. Not handled by jwt-auth; use the oidc-auth plugin for JWKS-based verification.",
-      "format": "uri"
-    },
     "groups_claim": {
       "type": "string",
       "description": "Claim name to extract consumer groups from (e.g. 'roles', 'groups'). Value is set as x-auth-consumer-groups (comma-separated)."
-    },
-    "public_key_pem": {
-      "type": "string",
-      "description": "Inline public key in PEM format. Not handled by jwt-auth; supply public_key_jwk instead, or use oidc-auth."
     },
     "public_key_jwk": {
       "type": "object",

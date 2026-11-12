@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 /// JWT authentication middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JwtAuth {
     /// Expected issuer (iss claim). If set, tokens must match.
     #[serde(default)]
@@ -38,18 +39,6 @@ pub struct JwtAuth {
     /// production deployment can never be configured to accept unsigned tokens.
     #[serde(default)]
     skip_signature_validation: bool,
-
-    /// JWKS URL for fetching public keys. Not handled by `jwt-auth`; use the
-    /// `oidc-auth` plugin for JWKS-based verification.
-    #[allow(dead_code)]
-    #[serde(default)]
-    jwks_url: Option<String>,
-
-    /// Inline public key in PEM format. Not handled by `jwt-auth`; supply
-    /// `public_key_jwk` instead, or use `oidc-auth`.
-    #[allow(dead_code)]
-    #[serde(default)]
-    public_key_pem: Option<String>,
 
     /// Inline public key as a JWK, used to verify the token signature via the
     /// host `verify_signature` capability. Supports RSA (`RS256/384/512`) and
@@ -318,7 +307,7 @@ impl JwtAuth {
     /// Validate the JWT algorithm.
     fn validate_algorithm(&self, header: &JwtHeader) -> Result<(), JwtError> {
         match header.alg.as_str() {
-            "RS256" | "RS384" | "RS512" | "ES256" | "ES384" | "ES512" => Ok(()),
+            "RS256" | "RS384" | "RS512" | "ES256" | "ES384" => Ok(()),
             "none" => Err(JwtError::UnsupportedAlgorithm("none".to_string())),
             "HS256" | "HS384" | "HS512" => {
                 // HMAC algorithms are not recommended for distributed systems
@@ -354,7 +343,7 @@ impl JwtAuth {
         }
         let expected_kty = match parsed.header.alg.as_str() {
             "RS256" | "RS384" | "RS512" => "RSA",
-            "ES256" | "ES384" | "ES512" => "EC",
+            "ES256" | "ES384" => "EC",
             other => return Err(JwtError::UnsupportedAlgorithm(other.to_string())),
         };
         if jwk.kty != expected_kty {
@@ -549,8 +538,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let req = create_test_request(Some("Bearer my.jwt.token"));
@@ -566,8 +553,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let req = create_test_request(Some("bearer my.jwt.token"));
@@ -583,8 +568,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let req = create_test_request(Some("Bearer  my.jwt.token  "));
@@ -600,8 +583,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let req = create_test_request(None);
@@ -617,8 +598,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let req = create_test_request(Some("Basic dXNlcjpwYXNz"));
@@ -634,8 +613,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let token = create_test_jwt(
@@ -656,8 +633,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let result = config.parse_jwt("header.payload");
@@ -672,8 +647,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let result = config.parse_jwt("invalid!!!.payload.sig");
@@ -688,8 +661,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let header_b64 = URL_SAFE_NO_PAD.encode(b"not json");
@@ -707,8 +678,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let header = JwtHeader {
@@ -727,8 +696,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let header = JwtHeader {
@@ -747,8 +714,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let header = JwtHeader {
@@ -768,8 +733,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let header = JwtHeader {
@@ -790,8 +753,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let claims = JwtClaims {
@@ -816,8 +777,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let claims = JwtClaims {
@@ -843,8 +802,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let claims = JwtClaims {
@@ -870,8 +827,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let claims = JwtClaims {
@@ -897,8 +852,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let claims = JwtClaims {
@@ -925,8 +878,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let claims = JwtClaims {
@@ -969,8 +920,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let error = JwtError::MissingAuthHeader;
@@ -1030,8 +979,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1072,8 +1019,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: false,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let token = create_test_jwt(
@@ -1095,8 +1040,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1119,8 +1062,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1148,8 +1089,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1172,8 +1111,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
         let mut headers = BTreeMap::new();
@@ -1203,8 +1140,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: None,
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1232,8 +1167,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: Some("roles".to_string()),
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1264,8 +1197,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: Some("roles".to_string()),
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1293,8 +1224,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: Some("permissions".to_string()),
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1325,8 +1254,6 @@ mod tests {
             clock_skew_seconds: 60,
             groups_claim: Some("roles".to_string()),
             skip_signature_validation: true,
-            jwks_url: None,
-            public_key_pem: None,
             public_key_jwk: None,
         };
 
@@ -1354,5 +1281,29 @@ mod tests {
         }"#;
         let config: JwtAuth = serde_json::from_str(json).unwrap();
         assert_eq!(config.groups_claim, Some("roles".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod config_shape_tests {
+    use super::JwtAuth;
+
+    #[test]
+    fn a_key_the_plugin_does_not_use_is_refused() {
+        for json in [
+            r#"{"public_key_pem": "-----BEGIN PUBLIC KEY-----"}"#,
+            r#"{"jwks_url": "https://issuer.example/.well-known/jwks.json"}"#,
+        ] {
+            assert!(serde_json::from_str::<JwtAuth>(json).is_err(), "{json}");
+        }
+        assert!(serde_json::from_str::<JwtAuth>(r#"{"issuer": "test-issuer"}"#).is_ok());
+    }
+
+    #[test]
+    fn es512_is_not_an_accepted_algorithm() {
+        let plugin: JwtAuth = serde_json::from_str("{}").unwrap();
+        let header: super::JwtHeader =
+            serde_json::from_str(r#"{"alg": "ES512", "typ": "JWT"}"#).unwrap();
+        assert!(plugin.validate_algorithm(&header).is_err());
     }
 }
