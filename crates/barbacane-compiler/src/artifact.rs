@@ -548,7 +548,7 @@ pub struct CompiledOperation {
 ///
 /// This function does NOT validate that spec-referenced plugins are present
 /// in `plugins` — the caller is responsible for validation (see
-/// [`extract_plugin_names`] and [`ProjectManifest::validate_specs`]).
+/// `extract_plugin_names` and [`ProjectManifest::validate_specs`]).
 /// For manifest-based compilation with built-in validation, use
 /// [`compile_with_manifest`].
 pub fn compile(

@@ -20,6 +20,7 @@ jobs:
   corpus:
     name: Published specs
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
         with:
@@ -63,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           for plugin in mock rate-limit basic-auth http-upstream; do
-            (cd "plugins/$plugin" && cargo build --release --target wasm32-unknown-unknown)
+            (cd "plugins/$plugin" && cargo build --locked --release --target wasm32-unknown-unknown)
             # The crate name is not the directory name, so glob for it. Exactly
             # one artifact is expected; cp rejects more than one.
             built=("plugins/$plugin/target/wasm32-unknown-unknown/release/"*.wasm)

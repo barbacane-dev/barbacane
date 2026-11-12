@@ -20,7 +20,7 @@ COPY crates/ crates/
 ENV CARGO_BUILD_JOBS=2
 
 # Build the control plane binary
-RUN cargo build --release --package barbacane-control && \
+RUN cargo build --locked --release --package barbacane-control && \
     cp target/release/barbacane-control /usr/local/bin/barbacane-control
 
 # Runtime stage - Debian slim (needs libc for control plane dependencies)

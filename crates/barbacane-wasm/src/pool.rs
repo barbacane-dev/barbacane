@@ -270,7 +270,7 @@ impl InstancePool {
     /// A new instance for `key`, in the state its plugin's `init(config)` left.
     ///
     /// The first instance for a key runs `init`. When the module allows it
-    /// ([`CompiledModule`] reports whether), what `init` wrote to memory is kept,
+    /// (`CompiledModule` reports whether), what `init` wrote to memory is kept,
     /// and every later instance is a fresh one with that memory written back,
     /// without running `init` again. Either way no instance carries anything
     /// from an earlier request.

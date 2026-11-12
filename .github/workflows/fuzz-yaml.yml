@@ -18,6 +18,7 @@ jobs:
   fuzz:
     name: YAML differential
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
         with:
@@ -39,7 +40,7 @@ jobs:
             ${{ runner.os }}-fuzz-yaml-
 
       - name: Install cargo-fuzz
-        run: command -v cargo-fuzz || cargo install cargo-fuzz --locked
+        run: command -v cargo-fuzz || cargo install cargo-fuzz@0.13.2 --locked
 
       # The seed corpus is the differential test's inputs: the edge-case
       # fixtures and every YAML and JSON file in the repository.

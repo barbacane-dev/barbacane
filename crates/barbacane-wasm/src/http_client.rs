@@ -966,7 +966,7 @@ pub enum HttpClientError {
     TlsConfig(#[source] TlsConfigError),
 }
 
-/// Custom serde for Option<Duration> in seconds.
+/// Custom serde for `Option<Duration>` in seconds.
 mod option_duration_serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::time::Duration;

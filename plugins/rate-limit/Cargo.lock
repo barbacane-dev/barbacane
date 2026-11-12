@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.12.1"
+version = "0.12.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.12.1"
+version = "0.12.3"
 dependencies = [
  "barbacane-plugin-macros",
  "base64",

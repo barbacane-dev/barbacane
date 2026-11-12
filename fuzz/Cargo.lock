@@ -390,6 +390,7 @@ dependencies = [
  "opentelemetry_sdk",
  "parking_lot",
  "prometheus-client",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",

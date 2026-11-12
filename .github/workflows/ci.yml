@@ -26,10 +26,12 @@ jobs:
     name: Detect Changes
     if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       code: ${{ steps.filter.outputs.code }}
       plugins: ${{ steps.filter.outputs.plugins }}
       images: ${{ steps.filter.outputs.images }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -43,6 +45,14 @@ jobs:
               - '**/Cargo.toml'
               - '**/Cargo.lock'
               - 'plugins/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'deny.toml'
+              - '.github/workflows/ci.yml'
+            docs:
+              - 'docs/**'
+              - 'book.toml'
+              - '**/*.rs'
               - '.github/workflows/ci.yml'
             plugins:
               - 'plugins/**'
@@ -59,6 +69,7 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
@@ -84,6 +95,7 @@ jobs:
   duplication:
     name: Duplication
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     env:
@@ -120,6 +132,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
@@ -144,14 +157,14 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run Clippy (lib + bins, deny unwrap/panic in production code)
-        run: cargo clippy --workspace --lib --bins -- -D warnings
+        run: cargo clippy --locked --workspace --lib --bins -- -D warnings
 
       - name: Run Clippy (all targets incl. tests/benches)
         # Lints test/bench/example code too. unwrap/expect/panic are acceptable in
         # tests, so they're allowed here while the lib/bins step above still denies
         # them in production code.
         run: >-
-          cargo clippy --workspace --all-targets --
+          cargo clippy --locked --workspace --all-targets --
           -D warnings
           -A clippy::unwrap_used
           -A clippy::expect_used
@@ -168,6 +181,7 @@ jobs:
     name: Workflows
     if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -185,6 +199,7 @@ jobs:
     name: API spec
     if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -217,6 +232,7 @@ jobs:
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
@@ -249,6 +265,7 @@ jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
@@ -260,7 +277,7 @@ jobs:
         # Third-party actions are pinned to a commit, as elsewhere in this repo.
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.20.2
 
       - name: Run supply-chain checks (advisories, licenses, bans, sources)
         run: cargo deny check
@@ -269,6 +286,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
@@ -305,7 +323,7 @@ jobs:
           key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'plugins/**/plugin.toml', 'plugins/**/config-schema.json', 'crates/barbacane-plugin-sdk/**') }}
 
       - name: Build workspace
-        run: cargo build --workspace --all-targets
+        run: cargo build --locked --workspace --all-targets
 
       - name: Build WASM plugins
         if: steps.plugin-cache.outputs.cache-hit != 'true'
@@ -324,6 +342,7 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes, fmt, clippy, build]
     if: needs.changes.outputs.code == 'true'
     steps:
@@ -347,12 +366,16 @@ jobs:
 
       - name: Run unit tests
         # Exclude barbacane-test as it contains integration tests requiring gateway binary
-        run: cargo test --workspace --lib --bins --exclude barbacane-test -- --test-threads=4
+        run: cargo test --locked --workspace --exclude barbacane-test --lib --bins --tests -- --test-threads=4
+
+      - name: Doc tests
+        run: cargo test --locked --workspace --exclude barbacane-test --doc
 
   # Control plane API tests (require PostgreSQL)
   control-plane-tests:
     name: Control Plane Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes, fmt, clippy, build]
     if: needs.changes.outputs.code == 'true'
     services:
@@ -391,12 +414,13 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run control plane tests
-        run: cargo test -p barbacane-control -- --test-threads=4
+        run: cargo test --locked -p barbacane-control -- --test-threads=4
 
   # Plugin unit tests (only when plugin or SDK code changes)
   plugin-tests:
     name: Plugin Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes, fmt]
     if: needs.changes.outputs.plugins == 'true'
     steps:
@@ -423,7 +447,7 @@ jobs:
           for p in plugins/*/; do
             name=$(basename "$p")
             echo "::group::$name"
-            if ! (cd "$p" && cargo test 2>&1); then
+            if ! (cd "$p" && cargo test --locked 2>&1); then
               echo "::error::Plugin $name tests failed"
               failed=1
             fi
@@ -435,6 +459,7 @@ jobs:
   integration-tests:
     name: Integration Tests (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [changes, unit-tests]
     if: needs.changes.outputs.code == 'true'
     # The suite drives the gateway as a child process on OS-assigned ports, so
@@ -513,7 +538,7 @@ jobs:
           fi
           echo "Shard $SHARD_INDEX/$SHARD_TOTAL targets: $lib $targets"
           # --no-fail-fast so one binary's failure doesn't hide later ones.
-          cargo test -p barbacane-test $lib $targets --no-fail-fast -- --test-threads=2
+          cargo test --locked -p barbacane-test $lib $targets --no-fail-fast -- --test-threads=2
 
   # Line coverage over the unit tests plus the integration suite. The
   # integration suite drives the gateway as a child process, and the harness
@@ -522,6 +547,7 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [changes, unit-tests]
     if: needs.changes.outputs.code == 'true'
     # Fast, unit-only coverage for a per-pull-request signal. The full
@@ -555,7 +581,7 @@ jobs:
         # Third-party actions are pinned to a commit, as elsewhere in this repo.
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
-          tool: cargo-llvm-cov
+          tool: cargo-llvm-cov@0.9.1
 
       # Unit-only, report-only: a quick per-PR number without the integration
       # suite or a database. The floor is enforced by the full run in
@@ -587,6 +613,7 @@ jobs:
   security-suite:
     name: Security Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes, unit-tests]
     if: needs.changes.outputs.code == 'true'
     services:
@@ -637,20 +664,21 @@ jobs:
       - name: Build control-plane binary
         # The authz category boots the barbacane-control binary; the rest of the
         # suite uses the data-plane binary downloaded above.
-        run: cargo build -p barbacane-control
+        run: cargo build --locked -p barbacane-control
 
       - name: Run security suite
-        run: cargo test -p barbacane-test --test security -- --test-threads=2
+        run: cargo test --locked -p barbacane-test --test security -- --test-threads=2
 
       # `barbacane control` against a control plane on the same database.
       - name: Run the control CLI tests
-        run: cargo test -p barbacane-test --test control_cli -- --test-threads=2
+        run: cargo test --locked -p barbacane-test --test control_cli -- --test-threads=2
 
   # Benchmark regression check
   # Triggered by: adding the "run-benchmarks" label, or commenting "/bench" on a PR.
   benchmarks:
     name: Benchmark Check
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # The issue_comment path checks out and runs PR-head code, so restrict the
     # "/bench" trigger to trusted commenters (OWNER/MEMBER/COLLABORATOR); a
     # drive-by comment from an outside contributor must not run arbitrary code.
@@ -761,6 +789,7 @@ jobs:
   images:
     name: Image (${{ matrix.image }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.images == 'true'
     strategy:
@@ -795,6 +824,7 @@ jobs:
   fuzz-build:
     name: Fuzz Targets
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     steps:
@@ -819,13 +849,42 @@ jobs:
       - name: Build the fuzz targets
         run: |
           cp Cargo.lock fuzz/Cargo.lock
-          cd fuzz && cargo build --bins
+          cd fuzz && cargo build --locked --bins
 
   # Single required status check. Aggregates every gating job into one stable
   # context, so branch protection needs just "CI" regardless of matrix sharding
   # or which jobs a given change skips. Passes when every needed job succeeded
   # or was skipped; fails if any failed or was cancelled. Not run on
   # issue_comment (which exists only for the /bench command).
+  # The book and the crate docs build without warnings, so a broken link or
+  # a bad SUMMARY.md entry is found on the pull request, not after the merge.
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.docs == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup mdBook
+        uses: peaceiris/actions-mdbook@ee69d230fe19748b7abf22df32acaa93833fad08 # v2
+        with:
+          mdbook-version: '0.5.4'
+
+      - name: Build the book
+        run: mdbook build
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the crate docs
+        run: cargo doc --locked --no-deps --workspace --exclude barbacane-test
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   ci-success:
     name: CI
     if: ${{ always() && github.event_name != 'issue_comment' }}
@@ -850,7 +909,9 @@ jobs:
       - security-suite
       - images
       - fuzz-build
+      - docs
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Fail if any needed job failed or was cancelled
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
