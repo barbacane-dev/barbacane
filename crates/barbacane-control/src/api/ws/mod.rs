@@ -9,3 +9,5 @@ pub use manager::ConnectionManager;
 
 #[cfg(test)]
 mod socket_tests;
+#[cfg(test)]
+mod registration_tests;

@@ -25,7 +25,8 @@ fn to_ws_message(msg: &ControlPlaneMessage) -> Message {
     )
 }
 use crate::api::router::AppState;
-use crate::db::{ApiKeysRepository, DataPlanesRepository, NewDataPlane};
+use crate::db::{ApiKeysRepository, ArtifactsRepository, DataPlanesRepository, NewDataPlane};
+use sqlx::PgPool;
 
 /// WebSocket endpoint handler.
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -74,10 +75,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     {
         Ok(Some(key)) => key,
         Ok(None) => {
-            let msg = ControlPlaneMessage::RegistrationFailed {
-                reason: "Invalid or expired API key".to_string(),
-            };
-            let _ = sender.send(to_ws_message(&msg)).await;
+            tracing::warn!(project_id = %registration.project_id, "Registration refused: invalid or expired API key");
+            let _ = sender.send(to_ws_message(&registration_refused())).await;
             return;
         }
         Err(e) => {
@@ -92,10 +91,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
     // Verify project_id matches
     if api_key.project_id != registration.project_id {
-        let msg = ControlPlaneMessage::RegistrationFailed {
-            reason: "API key does not match project".to_string(),
-        };
-        let _ = sender.send(to_ws_message(&msg)).await;
+        tracing::warn!(project_id = %registration.project_id, key_id = %api_key.id, "Registration refused: API key of another project");
+        let _ = sender.send(to_ws_message(&registration_refused())).await;
         return;
     }
 
@@ -105,12 +102,29 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         &api_key.scopes,
         crate::api::auth::scopes::DATA_PLANE_CONNECT,
     ) {
-        let msg = ControlPlaneMessage::RegistrationFailed {
-            reason: "API key lacks the data-plane:connect scope".to_string(),
-        };
-        let _ = sender.send(to_ws_message(&msg)).await;
+        tracing::warn!(project_id = %registration.project_id, key_id = %api_key.id, "Registration refused: API key lacks the data-plane:connect scope");
+        let _ = sender.send(to_ws_message(&registration_refused())).await;
         return;
     }
+
+    // A data plane may claim artifacts of its project only.
+    let claimed_artifact = match owned_artifact(
+        &state.pool,
+        registration.project_id,
+        registration.artifact_id,
+    )
+    .await
+    {
+        Ok(artifact) => artifact,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to check the claimed artifact");
+            let msg = ControlPlaneMessage::RegistrationFailed {
+                reason: "Internal error".to_string(),
+            };
+            let _ = sender.send(to_ws_message(&msg)).await;
+            return;
+        }
+    };
 
     // Create data plane record
     let data_planes_repo = DataPlanesRepository::new(state.pool.clone());
@@ -118,7 +132,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         .create(NewDataPlane {
             project_id: registration.project_id,
             name: registration.name.clone(),
-            artifact_id: registration.artifact_id,
+            artifact_id: claimed_artifact,
             metadata: registration.metadata.clone(),
         })
         .await
@@ -214,6 +228,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         if let Err(e) = handle_message(
                             &text,
                             data_plane_id,
+                            project_id,
+                            &state.pool,
                             &data_planes_repo,
                             &mut sender,
                         ).await {
@@ -247,6 +263,34 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     tracing::info!(data_plane_id = %data_plane_id, "Data plane disconnected");
+}
+
+/// The one answer to a registration the control plane refuses, whatever the
+/// cause: the cause is logged, not told to the holder of the key.
+fn registration_refused() -> ControlPlaneMessage {
+    ControlPlaneMessage::RegistrationFailed {
+        reason: "registration refused".to_string(),
+    }
+}
+
+/// `artifact_id` when the artifact exists and belongs to `project_id`. A
+/// data plane claims what it runs; a claim outside its project is ignored.
+async fn owned_artifact(
+    pool: &PgPool,
+    project_id: Uuid,
+    artifact_id: Option<Uuid>,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let Some(id) = artifact_id else {
+        return Ok(None);
+    };
+    let owned = ArtifactsRepository::new(pool.clone())
+        .get(id)
+        .await?
+        .is_some_and(|artifact| artifact.project_id == Some(project_id));
+    if !owned {
+        tracing::warn!(%project_id, artifact_id = %id, "Artifact claimed by a data plane is not in its project; ignored");
+    }
+    Ok(owned.then_some(id))
 }
 
 /// Tell the data plane why its session ends, then close the socket.
@@ -329,6 +373,8 @@ async fn wait_for_registration(
 async fn handle_message(
     text: &str,
     data_plane_id: Uuid,
+    project_id: Uuid,
+    pool: &PgPool,
     data_planes_repo: &DataPlanesRepository,
     sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -351,8 +397,8 @@ async fn handle_message(
                 "Heartbeat received"
             );
 
-            // Sync artifact_id if reported, otherwise just update last_seen
-            if let Some(aid) = artifact_id {
+            // Sync artifact_id if reported and in the project, otherwise just update last_seen
+            if let Some(aid) = owned_artifact(pool, project_id, artifact_id).await? {
                 data_planes_repo.update_artifact(data_plane_id, aid).await?;
             } else {
                 data_planes_repo.update_last_seen(data_plane_id).await?;
@@ -407,9 +453,9 @@ async fn handle_message(
                 "Artifact download reported"
             );
             if success {
-                data_planes_repo
-                    .update_artifact(data_plane_id, artifact_id)
-                    .await?;
+                if let Some(aid) = owned_artifact(pool, project_id, Some(artifact_id)).await? {
+                    data_planes_repo.update_artifact(data_plane_id, aid).await?;
+                }
             }
         }
         DataPlaneMessage::Register { .. } => {

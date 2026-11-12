@@ -970,6 +970,12 @@ paths:
         `artifact_hash` is at most 128 characters. A larger registration is
         refused; a larger message ends the connection.
 
+        A refused registration (unknown, expired or revoked key, key of another
+        project, key without the `data-plane:connect` scope) is answered
+        `{"type": "registration_failed", "reason": "registration refused"}`;
+        the cause is in the control plane's log. An `artifact_id` a data plane
+        claims is recorded only when the artifact belongs to its project.
+
         **Messages (Control Plane → Data Plane):**
         - `{"type": "registered", "data_plane_id": "uuid", "heartbeat_interval_secs": 30}`
         - `{"type": "artifact_available", "artifact_id": "uuid", "download_url": "/artifacts/{id}/download", "sha256": "..."}`
