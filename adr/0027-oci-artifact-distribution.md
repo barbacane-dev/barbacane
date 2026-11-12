@@ -1,6 +1,6 @@
 # ADR-0027: OCI Artifact Distribution for .bca Artifacts
 
-**Status:** Accepted
+**Status:** Proposed (not implemented: the data plane loads artifacts from a file path or from the control plane)
 **Date:** 2026-03-09
 
 ## Context

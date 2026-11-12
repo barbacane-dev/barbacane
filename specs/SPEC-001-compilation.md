@@ -6,6 +6,8 @@
 
 ---
 
+> **Historical.** This spec describes an earlier compiler and artifact format. The current facts are in the [CLI reference](../docs/reference/cli.md), the [artifact format](../docs/reference/artifact.md) and the [extensions reference](../docs/reference/extensions.md).
+
 ## 1. Overview
 
 The compiler transforms OpenAPI 3.x and AsyncAPI 3.x specifications into a self-contained binary artifact (`.bca`) that the data plane loads at startup. This spec defines the compiler's inputs, validation rules, output format, and CLI interface.

@@ -8,10 +8,10 @@ Barbacane ships a dedicated security testing framework with three layers:
    memory surfaces, and
 3. this documentation plus a `make security-test` entry point.
 
-The suite is designed to be **red today, green as fixes land**: every test
-asserts the *secure* (hardened) behaviour, so a failing test is a real, tracked
-security gap. Each red test carries a comment of the form
-`// EXPECTED TO FAIL until <FINDING-ID> is fixed`.
+Every test asserts the *secure* (hardened) behaviour, so a failing test is a
+real security gap. The suite passes, and CI runs it in the **Security Suite**
+job on every pull request. A test that needs a code change before it can
+assert anything is `#[ignore]`d with a `BLOCKED: ...` reason.
 
 ## Threat model categories
 
@@ -38,6 +38,7 @@ crates/barbacane-test/tests/
     sandbox.rs                      # BARB-SEC-004
     crypto_auth.rs                  # BARB-SEC-005
     artifact_integrity.rs           # BARB-SEC-006
+    artifact_signing.rs             # BARB-SEC-006: Ed25519 signature checks
 ```
 
 Fixtures specific to security tests live in `tests/fixtures/security/` (with
@@ -67,24 +68,18 @@ suite — see [Development setup](development.md)):
   When PostgreSQL or the binary is unavailable the authz tests **skip** (they
   print a `skip:` line and return) rather than fail spuriously.
 
-It is expected that security tests **fail at runtime today** — that is the
-point. They turn green as each finding is fixed. A handful are `#[ignore]`d
-because they need an src-side change first (see below); each carries a
-`// BLOCKED: …` comment explaining exactly what.
+The suite must pass: a red test blocks the merge. Two tests are `#[ignore]`d,
+each with a `BLOCKED: ...` reason naming what it waits for:
 
-### What needs to be exposed for the parked tests
-
-A few tests are `#[ignore]`d with a precise blocker:
-
-- **Crypto (BARB-SEC-005)** — real signature verification now exists: `jwt-auth`
-  performs RS256/384/512 verification via the host `verify_signature` capability
-  against an inline `public_key_jwk`. The remaining gap for the "validly-signed
-  JWT is accepted" case is only a test fixture — a matching private key plus a
-  token signed with it to exercise the positive path.
-- **DoS slowloris (BARB-SEC-003)** — needs a configurable + observable
-  read/header timeout to assert against without flaky wall-clock sleeps.
-- **Authz IDOR phase 2 (BARB-SEC-001)** — needs per-project credentials and
+- **Crypto (BARB-SEC-005)**: `jwt-auth` verifies RS256/384/512 signatures
+  through the host `verify_signature` capability against an inline
+  `public_key_jwk`. The "validly-signed JWT is accepted" case waits for a test
+  fixture: a private key plus a token signed with it.
+- **Authz IDOR phase 2 (BARB-SEC-001)**: waits for per-project credentials and
   ownership checks on the global `/specs/{id}` and `/artifacts/{id}` routes.
+
+The slowloris test (BARB-SEC-003) runs: `--keepalive-timeout` is the deadline
+for a request's headers and body, and the test asserts the connection is closed.
 
 ## Layer 2 — Fuzz targets (cargo-fuzz)
 
@@ -100,6 +95,7 @@ fuzz/
     spec_parser.rs       # barbacane_compiler::parse_spec  — hostile OpenAPI/AsyncAPI
     artifact_loader.rs   # .bca gzip/tar loaders — decompression bombs / malformed archives
     validator.rs         # OperationValidator::validate_request (+ percent-decoder)
+    yaml_differential.rs # barbacane_compiler::yaml against a reference YAML parser
     wasm_host_memory.rs  # guest-slice bounds — BLOCKED, see below
 ```
 
@@ -114,6 +110,7 @@ cd fuzz
 cargo +nightly fuzz run spec_parser
 cargo +nightly fuzz run artifact_loader
 cargo +nightly fuzz run validator
+cargo +nightly fuzz run yaml_differential
 # cargo +nightly fuzz run wasm_host_memory   # currently inert — see below
 ```
 
@@ -152,10 +149,10 @@ cargo +nightly fuzz run validator
 2. Add the test to the matching category file under
    `crates/barbacane-test/tests/security/`, or create a new category module and
    register it in the `mod security { … }` block in `tests/security.rs`.
-3. Assert the **secure** behaviour. Add the marker comment:
-   `// EXPECTED TO FAIL until BARB-SEC-007 is fixed`.
-4. If the test cannot compile/run against current APIs, mark it `#[ignore]` with
-   a `// BLOCKED: needs <X> exposed` comment rather than leaving it broken.
+3. Assert the **secure** behaviour. The test must pass on `main`: fix the
+   finding in the same pull request, or park the test (next step).
+4. If the test cannot compile/run against current APIs, mark it
+   `#[ignore = "BLOCKED: needs <X>"]` rather than leaving it broken.
 5. Put any new fixtures under `tests/fixtures/security/` and declare the plugins
    they use in `tests/fixtures/security/barbacane.yaml`.
 6. Keep tests deterministic — avoid wall-clock sleeps; note any that are

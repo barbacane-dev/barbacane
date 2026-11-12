@@ -7,6 +7,8 @@
 
 ---
 
+> **Historical.** This spec describes an earlier plugin runtime. The plugin contract 1.0 freezes (instances and state, `[limits]`, capabilities, body access) is in the [plugin development guide](../docs/contributing/plugins.md).
+
 ## 1. Overview
 
 All extensibility in Barbacane (middlewares and dispatchers) is delivered through WebAssembly plugins running in `wasmtime`. This spec defines the exact contract a plugin must follow: the manifest format, the WASM ABI, the host functions available, and the config-to-plugin data flow.
@@ -65,7 +67,7 @@ If the plugin takes no config, the schema should be:
 
 ### 2.3 WASM binary
 
-The `.wasm` file compiled from the plugin's source code. Must target `wasm32-unknown-unknown` (not `wasm32-wasip1` — WASI imports cause init failures in the Barbacane WASM runtime). The binary must export the functions defined in section 3.
+The `.wasm` file compiled from the plugin's source code. Must target `wasm32-unknown-unknown`. The only WASI imports a plugin may carry are the seven `wasi_snapshot_preview1` functions listed in the plugin development guide; any other import fails compilation with `E1043`. The binary must export the functions defined in section 3.
 
 ---
 
@@ -77,7 +79,7 @@ The `.wasm` file compiled from the plugin's source code. Must target `wasm32-unk
 init(config_ptr: i32, config_len: i32) -> i32
 ```
 
-Called once at data plane startup per plugin instance. The `config_ptr` / `config_len` pair points to a JSON-encoded byte buffer in linear memory containing the plugin's config from the spec.
+Called once per plugin and config; every request then runs in a new instance started from the memory `init` leaves (see the plugin development guide). The `config_ptr` / `config_len` pair points to a JSON-encoded byte buffer in linear memory containing the plugin's config from the spec.
 
 **Return value:**
 - `0` — initialization succeeded
@@ -348,7 +350,7 @@ WASM memory scales automatically based on the configured `max_body_size`. If a p
 
 ### 6.3 Concurrency
 
-WASM instances are **not** shared across threads. The data plane maintains a pool of instances per plugin. Under load, instances are cloned from the AOT-compiled module (cheap — no recompilation).
+WASM instances are **not** shared across threads or requests: each request runs in a new instance started from the post-`init` memory snapshot, so nothing one request writes reaches another.
 
 ### 6.4 Error handling
 

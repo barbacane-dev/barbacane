@@ -30,7 +30,7 @@ Metadata about the artifact.
 {
   "barbacane_artifact_version": 8,
   "compiled_at": "2026-07-10T10:30:00Z",
-  "compiler_version": "0.8.0",
+  "compiler_version": "1.0.0",
   "source_specs": [
     {
       "file": "api.yaml",
@@ -91,10 +91,6 @@ Metadata about the artifact.
 declared `host_functions` / `body_access` / `limits` / type / version, so a tampered artifact cannot flip the sandbox off while still passing signature
 verification. The data plane recomputes and verifies `artifact_hash` on **every**
 load, independent of signing.
-
-> **Migration to 0.8:** the `artifact_hash` inputs changed in 0.8, so **any `.bca`
-> built before 0.8 fails to load** (`artifact integrity check failed`). Recompile
-> every artifact with 0.8 (`barbacane compile`); re-sign any signed artifacts.
 
 #### source_specs entry
 

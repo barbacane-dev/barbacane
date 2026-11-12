@@ -8,6 +8,9 @@ Complete reference for all `x-barbacane-*` OpenAPI extensions.
 |-----------|----------|----------|---------|
 | [`x-barbacane-dispatch`](#x-barbacane-dispatch) | Operation | Yes | Route to dispatcher |
 | [`x-barbacane-middlewares`](#x-barbacane-middlewares) | Root / Operation | No | Apply middleware chain |
+| [`x-barbacane-waf`](#x-barbacane-waf) | Root | No | Web application firewall rule set and policy |
+
+Any other `x-barbacane-*` key compiles with the `E1015` unknown-extension warning and has no effect.
 
 ---
 
@@ -54,10 +57,20 @@ Reverse proxy to HTTP/HTTPS backend.
 x-barbacane-dispatch:
   name: http-upstream
   config:
-    url: string       # Required. Base URL (HTTPS required in production)
+    url: string       # One of url, endpoints. Base URL (HTTPS required in production)
+    endpoints:        # One of url, endpoints. Instances balanced by weighted round-robin
+      - url: string   #   Required. Base URL of the instance
+        weight: integer # Optional. Relative share of requests (default: 1)
+    retries: integer  # Optional, with endpoints. Other endpoints a failed request may be sent to (default: 1)
     path: string      # Optional. Upstream path template (default: operation path)
     timeout: number   # Optional. Timeout in seconds (default: 30.0)
+    tls:              # Optional. PEM files under BARBACANE_SECRETS_DIR
+      client_cert: string # Client certificate for mutual TLS; requires client_key
+      client_key: string  # Private key of the client certificate; requires client_cert
+      ca: string          # CA the upstream certificate is verified against, in place of the system roots
 ```
+
+`url` and `endpoints` are exclusive, and `retries` requires `endpoints` (`E1023`). See the [dispatchers guide](../guide/dispatchers.md#http-upstream) for load balancing, retries and TLS.
 
 ### Dispatcher: `kafka`
 
@@ -304,6 +317,27 @@ paths:
 
 ---
 
+## x-barbacane-waf
+
+Declares the web application firewall for the whole API: the rule set directory, paranoia level, mode, anomaly thresholds, audit logging and response body cap. One block at the spec root.
+
+```yaml
+x-barbacane-waf:
+  ruleset: string              # Required. Directory of SecLang .conf files
+  paranoia_level: integer      # Optional. 1-4 (default: 1)
+  mode: string                 # Optional. blocking | detection-only
+  thresholds:
+    inbound: integer           # Anomaly score that blocks a request
+    outbound: integer          # Anomaly score that blocks a response
+  max_response_body: integer   # Optional. Response body inspection cap in bytes (default: 1 MiB)
+  audit: string                # Optional. off | relevant-only (default) | on
+  unsupported_rules: string    # Optional. fail (default) | skip
+```
+
+See the [WAF guide](../guide/waf.md) for the full reference.
+
+---
+
 ## Available Middlewares
 
 ### jwt-auth
@@ -477,4 +511,4 @@ Per-operation observability middleware for SLO monitoring, detailed logging, and
 | Code | Message | Cause |
 |------|---------|-------|
 | E1010 | Routing conflict | Same path+method in multiple specs |
-| E1020 | Missing dispatch | Operation has no `x-barbacane-dispatch` |
+| E1020 | Missing dispatch | Operation has no `x-barbacane-dispatch`. Compilation fails; `barbacane validate` reports it as a warning |

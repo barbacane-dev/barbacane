@@ -6,6 +6,8 @@
 
 ---
 
+> **Historical.** This spec describes an earlier data plane. The current request pipeline is in the [architecture guide](../docs/contributing/architecture.md) and the [configuration reference](../docs/reference/configuration.md).
+
 ## 1. Overview
 
 The data plane (`barbacane`) is a stateless HTTP proxy that loads a compiled artifact (SPEC-001) at startup and processes requests through a fixed pipeline: route, validate, middleware chain, dispatch, respond. This spec defines every phase of that pipeline and the exact behavior at each step.

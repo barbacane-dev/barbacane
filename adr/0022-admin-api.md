@@ -1,6 +1,6 @@
-# ADR-022: Dedicated listening server for the admin API
+# ADR-0022: Dedicated listening server for the admin API
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-02-25
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR-0021: Spec-to-Run configuration provenance and drift detection
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-02-20
 
 ## Context

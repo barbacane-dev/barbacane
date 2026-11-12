@@ -6,7 +6,6 @@ This guide helps you set up a development environment for contributing to Barbac
 
 - **Rust 1.95+** - Install via [rustup](https://rustup.rs/). This is the project MSRV (enforced by CI); the dependency floor (wasmtime/cranelift) requires it.
 - **Git** - For version control
-- **Node.js 20+** - For the UI (if working on the web interface)
 - **PostgreSQL 14+** - For the control plane (or use Docker)
 - **Docker** - For running PostgreSQL locally (optional)
 
@@ -39,6 +38,7 @@ make control-plane
 | `make test` | Run all workspace tests |
 | `make test-verbose` | Run tests with output |
 | `make test-one TEST=name` | Run specific test |
+| `make security-test` | Run the adversarial security suite |
 | `make clippy` | Run clippy lints |
 | `make fmt` | Format all code |
 | `make check` | Run fmt-check + clippy |
@@ -59,6 +59,7 @@ make control-plane
 | `make docker-build` | Build both Docker images |
 | `make docker-build-gateway` | Build data plane image |
 | `make docker-build-control` | Build control plane image |
+| `make docker-build-standalone` | Build the standalone image (gateway plus every official plugin) |
 | `make docker-up` | Start full stack (compose) |
 | `make docker-down` | Stop full stack |
 | `make docker-run` | Run data plane standalone |
@@ -78,7 +79,7 @@ make control-plane DATABASE_URL=postgres://user:pass@host/db
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/barbacane/barbacane.git
+git clone https://github.com/barbacane-dev/barbacane.git
 cd barbacane
 ```
 
@@ -170,16 +171,16 @@ barbacane/
 ├── Makefile                # Development shortcuts
 ├── Dockerfile              # Data plane container image
 ├── Dockerfile.control      # Control plane container image
-├── docker-compose.yml      # PostgreSQL for local dev
-├── docker/                 # Docker support files
-│   ├── nginx-control.conf  # Nginx config for control plane UI
-│   └── control-entrypoint.sh
+├── Dockerfile.standalone   # Gateway plus every official plugin
+├── docker-compose.yml      # PostgreSQL and control plane for local dev
+├── docker/
+│   └── plugins.yaml        # Plugin manifest bundled in the standalone image
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── README.md
 │
 ├── crates/
-│   ├── barbacane/          # Data-plane binary + CLI (serve/compile/validate/dev)
+│   ├── barbacane/          # Data-plane binary + CLI (key/compile/validate/init/dev/serve/control)
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs
@@ -207,27 +208,12 @@ barbacane/
 │   ├── barbacane-sigv4/    # AWS SigV4 signing (s3 / lambda dispatchers)
 │   └── barbacane-test/     # Integration tests (+ adversarial security suite)
 │
-├── plugins/                # Built-in WASM plugins
-│   ├── http-upstream/      # HTTP reverse proxy dispatcher
-│   ├── mock/               # Mock response dispatcher
-│   ├── lambda/             # AWS Lambda dispatcher
-│   ├── kafka/              # Kafka dispatcher (AsyncAPI)
-│   ├── nats/               # NATS dispatcher (AsyncAPI)
-│   ├── rate-limit/         # Rate limiting middleware
-│   ├── cors/               # CORS middleware
-│   ├── cache/              # Caching middleware
-│   ├── jwt-auth/           # JWT authentication
-│   ├── apikey-auth/        # API key authentication
-│   └── oauth2-auth/        # OAuth2 token introspection
+├── plugins/                # The 29 official WASM plugins, one directory each
+│   ├── http-upstream/      # (the plugin guide lists them all)
+│   ├── mock/
+│   └── ...
 │
-├── ui/                     # React web interface
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── src/
-│       ├── pages/          # Page components
-│       ├── components/     # UI components
-│       ├── hooks/          # Custom React hooks
-│       └── lib/            # API client, utilities
+├── specs/                  # Component specifications (SPEC-00x)
 │
 ├── tests/
 │   └── fixtures/           # Test spec files
@@ -522,7 +508,7 @@ cargo doc --workspace --open
 
 1. Update version in workspace `Cargo.toml`
 2. Update CHANGELOG.md
-3. Create git tag: `git tag v0.1.0`
+3. Create git tag: `git tag v1.0.0`
 4. Push: `git push origin main --tags`
 5. CI builds and publishes
 

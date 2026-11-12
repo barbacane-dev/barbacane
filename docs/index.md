@@ -89,10 +89,13 @@ The gateway serves only artifacts signed by the key it pins; see [artifact signi
 - [Web application firewall](guide/waf.md) - Run OWASP CRS as a native pipeline stage
 - [Observability](guide/observability.md) - Metrics, logging, and distributed tracing
 - [Control Plane](guide/control-plane.md) - REST API for spec and artifact management
+- [Linting with Vacuum](guide/vacuum.md) - Lint specs against the Barbacane ruleset
+- [FIPS 140-3](guide/fips.md) - Cryptography with the FIPS-validated module
 
 ### Reference
 
 - [CLI Reference](reference/cli.md) - Command-line tools
+- [Configuration & environment variables](reference/configuration.md) - Environment variables and secure defaults
 - [Spec Extensions](reference/extensions.md) - Complete `x-barbacane-*` reference
 - [Artifact Format](reference/artifact.md) - `.bca` file format
 - [Reserved Endpoints](reference/endpoints.md) - `/__barbacane/*` endpoints
@@ -103,6 +106,7 @@ The gateway serves only artifacts signed by the key it pins; see [artifact signi
 - [Architecture](contributing/architecture.md) - System design and crate structure
 - [Development Guide](contributing/development.md) - Setting up and building
 - [Plugin Development](contributing/plugins.md) - Creating WASM plugins
+- [Security testing](contributing/security-testing.md) - Adversarial suite and fuzz targets
 
 ## Supported Spec Versions
 
@@ -120,4 +124,4 @@ Barbacane supports AsyncAPI 3.x for event-driven APIs. AsyncAPI `send` operation
 
 ## License
 
-GNU AGPLv3 (with a commercial license option for AGPL-incompatible use) - See [LICENSE](../LICENSE)
+GNU AGPLv3 (with a commercial license option for AGPL-incompatible use) - See [LICENSING.md](https://github.com/barbacane-dev/barbacane/blob/main/LICENSING.md)

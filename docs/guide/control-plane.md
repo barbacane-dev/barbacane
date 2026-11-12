@@ -71,7 +71,7 @@ This allows clients to detect the API version and handle future breaking changes
 
 ## API Reference
 
-Full OpenAPI specification is available at [crates/barbacane-control/openapi.yaml](../../crates/barbacane-control/openapi.yaml).
+Full OpenAPI specification is available at [crates/barbacane-control/openapi.yaml](https://github.com/barbacane-dev/barbacane/blob/main/crates/barbacane-control/openapi.yaml), and a running control plane serves it at `GET /openapi` (browsable at `/docs`).
 
 ### Specs
 
@@ -324,7 +324,12 @@ Migrations run automatically on startup with `--migrate` (enabled by default).
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string |
+| `BARBACANE_CONTROL_ADMIN_TOKEN` | **Required.** Bearer token every API request carries, except `GET /health` and the data-plane WebSocket. The server refuses to start without it |
+| `BARBACANE_SIGNING_KEY` | Path to the Ed25519 key that signs every artifact the control plane compiles; unset, artifacts are built unsigned |
+| `BARBACANE_CONTROL_ALLOWED_ORIGINS` | Comma-separated allowlist of browser origins for CORS; unset means no cross-origin access |
 | `RUST_LOG` | Log level (trace, debug, info, warn, error) |
+
+The [configuration reference](../reference/configuration.md) describes each variable.
 
 ### CLI Options
 
@@ -363,9 +368,9 @@ Images are available for:
 
 Tags:
 - `latest` - Latest stable release
-- `x.y.z` - Specific version (e.g., `0.2.0`)
-- `x.y` - Latest patch for minor version (e.g., `0.2`)
-- `x` - Latest minor for major version (e.g., `0`)
+- `x.y.z` - Specific version (e.g., `1.0.0`)
+- `x.y` - Latest patch for minor version (e.g., `1.0`)
+- `x` - Latest minor for major version (e.g., `1`)
 - `x.y.z-rc.n` - A pre-release (e.g., `1.0.0-rc.1`), published under its own tag only: `latest`, `x.y` and `x` stay on the last stable release
 
 ### Docker Compose Example
@@ -416,7 +421,7 @@ volumes:
 
 1. **Database backups** - Regular PostgreSQL backups for spec and plugin data
 2. **Connection pooling** - Consider PgBouncer for high-traffic deployments
-3. **Authentication** - Add a reverse proxy with authentication (not built-in)
+3. **Authentication** - Every API request carries the admin token (`BARBACANE_CONTROL_ADMIN_TOKEN`), and data planes present a project API key; keep the token in a secret store and rotate the keys from `api-keys`
 4. **TLS** - Terminate TLS at the load balancer or reverse proxy
 
 ## What's Next?

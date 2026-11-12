@@ -4,9 +4,12 @@
 #   docker compose up -d postgres       # Database only (for cargo run dev)
 #   docker compose up -d                # Full stack (postgres + control plane)
 #
-# Data plane requires a pre-compiled artifact:
-#   make compile                                  # Uses tests/fixtures/minimal.yaml
-#   make compile SPEC=path/to/api.yaml            # Custom spec
+# The data plane serves only artifacts signed by the key it pins, so compile
+# with a signing key and pin its public key:
+#   barbacane key generate --out signing.pk8
+#   BARBACANE_SIGNING_KEY=signing.pk8 make compile          # Uses tests/fixtures/minimal.yaml
+#   BARBACANE_SIGNING_KEY=signing.pk8 make compile SPEC=path/to/api.yaml
+#   export BARBACANE_TRUSTED_PUBKEY=$(barbacane key public --key signing.pk8)
 #   docker compose --profile with-data-plane up -d
 
 services:
