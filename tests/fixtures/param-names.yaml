@@ -1,0 +1,57 @@
+openapi: "3.1.0"
+info:
+  title: Parameter names per route
+  version: "1.0.0"
+paths:
+  /users/{id}:
+    get:
+      operationId: getUser
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"user"}'
+  /users/{userId}/orders:
+    get:
+      operationId: getUserOrders
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"orders"}'
+  /files/{name}:
+    get:
+      operationId: getFile
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"file"}'
+  /files/archive/latest:
+    get:
+      operationId: getLatestArchive
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"latest"}'

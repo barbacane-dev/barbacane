@@ -17,14 +17,21 @@ struct Node {
     /// Only valid at a terminal position (no further trie nodes after it).
     wildcard_child: Option<Box<WildcardNode>>,
     /// Method-to-route mapping at this terminal node.
-    methods: HashMap<String, RouteEntry>,
+    methods: HashMap<String, Route>,
+}
+
+/// A route at a terminal node.
+#[derive(Debug)]
+struct Route {
+    entry: RouteEntry,
+    /// The route's own parameter names, in path order. Templates that share a
+    /// trie node can name its parameter differently.
+    param_names: Vec<String>,
 }
 
 /// A parameter segment node.
 #[derive(Debug)]
 struct ParamNode {
-    /// Parameter name (e.g. "id").
-    name: String,
     /// The subtree below this parameter.
     node: Node,
 }
@@ -35,8 +42,6 @@ struct ParamNode {
 /// as a single parameter value.
 #[derive(Debug)]
 struct WildcardNode {
-    /// Parameter name (e.g. "path" from `{path+}`).
-    name: String,
     /// Terminal node — holds the method map.
     node: Node,
 }
@@ -83,8 +88,16 @@ impl Router {
     /// Method should be uppercase (e.g. "GET", "POST").
     pub fn insert(&mut self, path: &str, method: &str, entry: RouteEntry) {
         let segments = parse_path_template(path);
+        let param_names = segments
+            .iter()
+            .filter_map(|segment| match segment {
+                Segment::Param(name) | Segment::Wildcard(name) => Some(name.clone()),
+                Segment::Static(_) => None,
+            })
+            .collect();
         let node = self.traverse_or_create(&segments);
-        node.methods.insert(method.to_uppercase(), entry);
+        node.methods
+            .insert(method.to_uppercase(), Route { entry, param_names });
     }
 
     /// Look up a request path and method.
@@ -95,24 +108,22 @@ impl Router {
         let normalized = normalize_path(path);
         let segments: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
 
-        let mut params = Vec::new();
-        match self.traverse_and_match(&self.root, &segments, &mut params) {
+        let mut values = Vec::new();
+        match self.traverse_and_match(&self.root, &segments, &mut values) {
             Some(node) => {
                 let method = method.to_uppercase();
                 // A resource that answers GET answers HEAD the same way, with
                 // no body (RFC 9110 section 9.1); the server drops the body.
-                let entry = node.methods.get(&method).or_else(|| {
+                let route = node.methods.get(&method).or_else(|| {
                     (method == "HEAD")
                         .then(|| node.methods.get("GET"))
                         .flatten()
                 });
-                if let Some(entry) = entry {
+                if let Some(route) = route {
                     RouteMatch::Found {
-                        entry: entry.clone(),
-                        params,
+                        entry: route.entry.clone(),
+                        params: route.param_names.iter().cloned().zip(values).collect(),
                     }
-                } else if node.methods.is_empty() {
-                    RouteMatch::NotFound
                 } else {
                     let mut allowed: Vec<String> = node.methods.keys().cloned().collect();
                     allowed.sort();
@@ -130,19 +141,17 @@ impl Router {
         for segment in segments {
             current = match segment {
                 Segment::Static(name) => current.static_children.entry(name.clone()).or_default(),
-                Segment::Param(name) => {
+                Segment::Param(_) => {
                     if current.param_child.is_none() {
                         current.param_child = Some(Box::new(ParamNode {
-                            name: name.clone(),
                             node: Node::default(),
                         }));
                     }
                     &mut current.param_child.as_mut().expect("just set above").node
                 }
-                Segment::Wildcard(name) => {
+                Segment::Wildcard(_) => {
                     if current.wildcard_child.is_none() {
                         current.wildcard_child = Some(Box::new(WildcardNode {
-                            name: name.clone(),
                             node: Node::default(),
                         }));
                     }
@@ -158,16 +167,18 @@ impl Router {
         current
     }
 
-    /// Traverse the trie matching actual path segments, capturing parameters.
-    /// Returns the terminal node if the path matches, None otherwise.
+    /// Traverse the trie matching actual path segments, capturing parameter
+    /// values in path order. Returns the node holding a route for the whole
+    /// path, trying static children, then a parameter, then a wildcard, and
+    /// backtracking from a branch that ends on a node without a route.
     fn traverse_and_match<'a>(
         &'a self,
         node: &'a Node,
         segments: &[&str],
-        params: &mut Vec<(String, String)>,
+        params: &mut Vec<String>,
     ) -> Option<&'a Node> {
         if segments.is_empty() {
-            return Some(node);
+            return (!node.methods.is_empty()).then_some(node);
         }
 
         let segment = segments[0];
@@ -183,7 +194,7 @@ impl Router {
         // Try single-segment parameter child.
         if let Some(param_child) = &node.param_child {
             let param_len = params.len();
-            params.push((param_child.name.clone(), segment.to_string()));
+            params.push(segment.to_string());
 
             if let Some(result) = self.traverse_and_match(&param_child.node, remaining, params) {
                 return Some(result);
@@ -200,7 +211,7 @@ impl Router {
                 .collect::<Vec<_>>()
                 .join("/");
             let param_len = params.len();
-            params.push((wildcard_child.name.clone(), joined));
+            params.push(joined);
 
             if let Some(result) = self.traverse_and_match(&wildcard_child.node, &[], params) {
                 return Some(result);
@@ -288,6 +299,58 @@ mod tests {
     }
 
     // === Routing tests ===
+
+    /// Two templates naming the parameter at the same position differently:
+    /// each route captures it under its own name.
+    #[test]
+    fn each_route_names_its_own_parameters() {
+        let mut router = Router::new();
+        router.insert("/users/{id}", "GET", RouteEntry { operation_index: 0 });
+        router.insert(
+            "/users/{userId}/orders",
+            "GET",
+            RouteEntry { operation_index: 1 },
+        );
+        router.insert("/users/{uid}", "DELETE", RouteEntry { operation_index: 2 });
+
+        let found = |path: &str, method: &str| match router.lookup(path, method) {
+            RouteMatch::Found { entry, params } => (entry.operation_index, params),
+            other => panic!("{method} {path}: {other:?}"),
+        };
+        assert_eq!(
+            found("/users/5", "GET"),
+            (0, vec![("id".into(), "5".into())])
+        );
+        assert_eq!(
+            found("/users/5/orders", "GET"),
+            (1, vec![("userId".into(), "5".into())])
+        );
+        assert_eq!(
+            found("/users/5", "DELETE"),
+            (2, vec![("uid".into(), "5".into())])
+        );
+    }
+
+    /// A static branch that holds no route at the request's end gives way to a
+    /// parameter at the same position.
+    #[test]
+    fn a_static_branch_without_a_route_falls_back_to_a_parameter() {
+        let mut router = Router::new();
+        router.insert("/a/{x}", "GET", RouteEntry { operation_index: 0 });
+        router.insert("/a/b/c", "GET", RouteEntry { operation_index: 1 });
+
+        match router.lookup("/a/b", "GET") {
+            RouteMatch::Found { entry, params } => {
+                assert_eq!(entry.operation_index, 0);
+                assert_eq!(params, vec![("x".to_string(), "b".to_string())]);
+            }
+            other => panic!("expected /a/{{x}}, got {other:?}"),
+        }
+        match router.lookup("/a/b/c", "GET") {
+            RouteMatch::Found { entry, .. } => assert_eq!(entry.operation_index, 1),
+            other => panic!("expected /a/b/c, got {other:?}"),
+        }
+    }
 
     #[test]
     fn route_static_path() {
