@@ -152,13 +152,13 @@ A compilation reads each plugin's capabilities, category and config schema from 
 barbacane control health check
 ```
 
-`/health` needs no token, so a probe can call it directly.
+`/health` needs no token, so a probe can call it directly. It says the process is up and makes no database query: use it as a liveness probe. `/ready`, which needs no token either, answers `200` when the database answers and `503` otherwise, so it serves as a readiness probe; its answer is cached for one second.
 
 Response:
 ```json
 {
   "status": "healthy",
-  "version": "0.8.0"
+  "version": "1.0.0"
 }
 ```
 

@@ -41,19 +41,44 @@ paths:
   /health:
     get:
       tags: [Health]
-      summary: Health check
-      description: Returns the health status of the control plane and database connectivity.
+      summary: Liveness probe
+      description: |
+        The control plane process is up. No database query is made, so a
+        database outage does not fail this probe; `/ready` tells whether
+        requests can be served.
       operationId: healthCheck
       x-cli: { name: check }
       responses:
         '200':
-          description: Service is healthy
+          description: The process is up
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      description: |
+        The control plane can serve requests: its database answers. The
+        answer is cached for one second, so probes cannot occupy the
+        connection pool.
+      operationId: readinessCheck
+      x-cli: { skip: true }
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
         '503':
-          description: Service unavailable (database connection failed)
+          description: The database does not answer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
 
   /init:
     post:
@@ -1289,6 +1314,15 @@ components:
         version:
           type: string
           description: Control plane version
+
+    ReadyResponse:
+      description: Whether the control plane can serve requests
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready, unavailable]
 
     Spec:
       description: An API specification held by the control plane, with its latest revision

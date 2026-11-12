@@ -469,6 +469,7 @@ dependencies = [
  "hex",
  "http-body-util",
  "jsonschema",
+ "parking_lot",
  "rand 0.9.4",
  "scalar_api_reference",
  "serde",

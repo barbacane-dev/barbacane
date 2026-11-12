@@ -45,6 +45,17 @@ async fn make_app() -> Option<Router> {
     ))
 }
 
+/// Build the control-plane router with a pool that never connects: for the
+/// routes that answer before any query.
+fn make_app_without_db() -> Router {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(1))
+        .connect_lazy("postgres://nobody@127.0.0.1:1/unreachable")
+        .expect("a lazy pool needs no server");
+    let conn_mgr = Arc::new(crate::api::ConnectionManager::new());
+    crate::api::create_router(pool, None, conn_mgr, crate::api::AdminAuth::Disabled)
+}
+
 /// Send one request through the router and return the status + body bytes.
 /// The response is checked against what `openapi.yaml` says the operation
 /// answers with that status.
@@ -154,6 +165,34 @@ fn empty_req(method: Method, uri: &str) -> Request<Body> {
 // ---------------------------------------------------------------------------
 // Health
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn health_is_liveness_and_needs_no_database() {
+    let (status, body) = send(make_app_without_db(), empty_req(Method::GET, "/health")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&body)["status"], "healthy");
+}
+
+#[tokio::test]
+async fn ready_is_503_without_a_database() {
+    let (status, body) = send(make_app_without_db(), empty_req(Method::GET, "/ready")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json_body(&body)["status"], "unavailable");
+}
+
+#[tokio::test]
+async fn ready_is_200_with_a_database() {
+    let app = match make_app().await {
+        Some(a) => a,
+        None => {
+            eprintln!("skip: database not available");
+            return;
+        }
+    };
+    let (status, body) = send(app, empty_req(Method::GET, "/ready")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&body)["status"], "ready");
+}
 
 #[tokio::test]
 async fn health_check_returns_200() {
