@@ -739,18 +739,12 @@ struct Gateway {
     _wasm_engine: Arc<WasmEngine>,
     /// Plugin instance pool.
     plugin_pool: Arc<InstancePool>,
-    /// Plugin resource limits (kept for future dynamic limit adjustment).
-    _plugin_limits: PluginLimits,
-    /// HTTP client for plugins making outbound calls (kept alive for pool lifetime).
-    _http_client: Arc<HttpClient>,
     /// Endpoint pool state, handed to the next artifact's gateway.
     balancer: Arc<Balancer>,
     /// Metrics registry for observability.
     metrics: Arc<MetricsRegistry>,
     /// API name from the first spec's title (for metrics labels).
     api_name: String,
-    /// Request counter for generating request IDs (fallback if UUID too slow).
-    _request_counter: AtomicU64,
 }
 
 impl Gateway {
@@ -1037,8 +1031,8 @@ impl Gateway {
         // Create pool with all options: HTTP client, secrets, rate limiter, cache, NATS, Kafka, and LDAP
         let plugin_pool = InstancePool::with_all_options(
             wasm_engine.clone(),
-            plugin_limits.clone(),
-            Some(http_client.clone()),
+            plugin_limits,
+            Some(http_client),
             Some(secrets_store),
             Some(rate_limiter),
             Some(response_cache),
@@ -1055,6 +1049,20 @@ impl Gateway {
             plugin_pool.register_module(module);
             if dev_mode {
                 tracing::debug!(plugin = %name, version = %version, "loaded plugin from artifact");
+            }
+        }
+
+        // Register every (plugin, config) pair the routes use, once.
+        for op in &resolved_operations {
+            let entries = op
+                .middlewares
+                .iter()
+                .map(|mw| (&mw.name, &mw.config))
+                .chain(std::iter::once((&op.dispatch.name, &op.dispatch.config)));
+            for (name, config) in entries {
+                let key = barbacane_wasm::InstanceKey::new(name, config);
+                let config_json = serde_json::to_vec(config).unwrap_or_default();
+                plugin_pool.register_config(key, config_json);
             }
         }
 
@@ -1153,12 +1161,9 @@ impl Gateway {
             allow_internal_egress,
             _wasm_engine: wasm_engine,
             plugin_pool: Arc::new(plugin_pool),
-            _plugin_limits: plugin_limits,
-            _http_client: http_client,
             balancer,
             metrics,
             api_name,
-            _request_counter: AtomicU64::new(0),
         })
     }
 
@@ -1946,9 +1951,6 @@ impl Gateway {
             }
 
             let instance_key = barbacane_wasm::InstanceKey::new(&mw.name, &mw.config);
-            let config_json = serde_json::to_vec(&mw.config).unwrap_or_default();
-            self.plugin_pool
-                .register_config(instance_key.clone(), config_json);
 
             match self.plugin_pool.get_instance(&instance_key) {
                 Ok(instance) => instances.push(instance),
@@ -2239,11 +2241,8 @@ impl Gateway {
         use barbacane_wasm::StreamEvent;
         use futures_util::stream;
 
-        // Create instance key for this (plugin, config) pair
+        // The (plugin, config) pair was registered when the artifact loaded.
         let instance_key = barbacane_wasm::InstanceKey::new(plugin_name, config);
-        let config_json = serde_json::to_vec(config).unwrap_or_default();
-        self.plugin_pool
-            .register_config(instance_key.clone(), config_json);
 
         // Get a plugin instance
         let mut instance = match self.plugin_pool.get_instance(&instance_key) {

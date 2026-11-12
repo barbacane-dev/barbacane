@@ -37,6 +37,7 @@ The breaking changes below are gathered, with what to do and in which order, in 
 - **cel**: the expression is compiled when the plugin is initialised, so an expression that does not parse fails init (logged by the gateway) rather than answering every request with a `500`.
 - **plugins**: every official plugin refuses a configuration with a key it does not know, as the vacuum ruleset already did; a configuration that reaches a plugin without vacuum (the control plane's API, a hand-built artifact) is refused at init rather than ignored in part.
 - **middlewares**: a middleware whose `on_response` returns a non-zero code (the SDK macros do when they cannot parse the response) fails the request with a `500`, as a trap does; the response it could not read is not served in its place.
+- **data plane**: every (plugin, configuration) pair an artifact uses is registered with the plugin pool when the artifact loads, once, rather than on every request.
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
 
   > **Upgrade note (breaking):** recompile every artifact with this release's compiler before upgrading a data plane.

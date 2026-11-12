@@ -42,29 +42,6 @@ impl TrapResult {
     }
 }
 
-/// Classify a wasmtime trap into a human-readable category.
-#[allow(dead_code)] // Public API for error reporting
-pub fn classify_trap(trap: &wasmtime::Trap) -> &'static str {
-    // wasmtime::Trap is now opaque, so we examine the message
-    let msg = trap.to_string();
-
-    if msg.contains("out of fuel") {
-        "execution timeout"
-    } else if msg.contains("unreachable") {
-        "unreachable code executed (likely panic)"
-    } else if msg.contains("memory") {
-        "memory access error"
-    } else if msg.contains("stack overflow") {
-        "stack overflow"
-    } else if msg.contains("indirect call") {
-        "invalid indirect call"
-    } else if msg.contains("integer") {
-        "integer overflow or division error"
-    } else {
-        "unknown trap"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
