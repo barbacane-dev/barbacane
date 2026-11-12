@@ -112,6 +112,20 @@ enum SpecType {
 }
 
 /// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
+/// The specs of `kind` in `specs` merged with `merge`, or `None` when there
+/// is none.
+fn merged_specs(
+    specs: &HashMap<String, String>,
+    kind: SpecType,
+    merge: fn(&[(&String, &String)]) -> serde_json::Value,
+) -> Option<serde_json::Value> {
+    let of_kind: Vec<_> = specs
+        .iter()
+        .filter(|(_, content)| detect_spec_type(content) == kind)
+        .collect();
+    (!of_kind.is_empty()).then(|| merge(&of_kind))
+}
+
 fn detect_spec_type(content: &str) -> SpecType {
     // Try to parse as YAML (also handles JSON)
     let parsed: Result<serde_json::Value, _> = barbacane_compiler::yaml::from_str(content);
@@ -669,6 +683,11 @@ enum Commands {
         /// Set to "off" to disable.
         #[arg(long, default_value = "127.0.0.1:8081")]
         admin_bind: String,
+
+        /// Do not serve the embedded specs at /__barbacane/specs; the paths
+        /// answer 404.
+        #[arg(long)]
+        no_introspection: bool,
     },
 }
 
@@ -678,6 +697,11 @@ enum Commands {
 
 /// Shared gateway state that can be atomically swapped for hot-reload.
 type SharedGateway = Arc<ArcSwap<Gateway>>;
+
+/// Whether `/__barbacane/specs*` serves the embedded specs. Off with
+/// `--no-introspection`, for the life of the process.
+static INTROSPECTION_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
 
 // Re-export from library for local use
 use hot_reload::HotReloadResult;
@@ -698,6 +722,11 @@ struct Gateway {
     waf: Option<waf::WafStage>,
     /// Source specs embedded in the artifact (filename -> content).
     specs: HashMap<String, String>,
+    /// All embedded OpenAPI specs merged, for `/__barbacane/specs/openapi`;
+    /// none when the artifact holds no OpenAPI spec.
+    merged_openapi: Option<serde_json::Value>,
+    /// All embedded AsyncAPI specs merged, for `/__barbacane/specs/asyncapi`.
+    merged_asyncapi: Option<serde_json::Value>,
     /// Request limits (body size, headers, URI length).
     limits: RequestLimits,
     dev_mode: bool,
@@ -849,15 +878,13 @@ impl Gateway {
             }
         }
 
-        // WA-1: capability enforcement applies to artifacts whose per-plugin
-        // capabilities are authoritative: those built by the CLI from plugin.toml
-        // and by the control plane from each plugin's embedded manifest. An
-        // artifact from `barbacane_compiler::compile` loads without it.
-        let enforce_capabilities = manifest.capabilities_enforced;
-        if !enforce_capabilities {
-            tracing::warn!(
-                "plugin capability enforcement disabled: artifact has no authoritative capabilities"
-            );
+        // WA-1: capability enforcement needs per-plugin capabilities that are
+        // authoritative: those the CLI reads from plugin.toml and the control
+        // plane from each plugin's embedded manifest. The host links every host
+        // function, so the import check below is what keeps a plugin to its
+        // declared capabilities; an artifact without them is not loaded.
+        if !manifest.capabilities_enforced {
+            return Err("the artifact carries no authoritative plugin capabilities (it was compiled without a manifest); compile it with `barbacane compile --manifest barbacane.yaml`".to_string());
         }
 
         // Compile all plugin modules first (we'll register them after creating the final pool)
@@ -881,20 +908,18 @@ impl Gateway {
             // host functions covered by the capabilities it declared in
             // plugin.toml (carried in the artifact manifest); anything else is a
             // hard load failure (default-deny).
-            if enforce_capabilities {
-                let declared = manifest
-                    .plugins
-                    .iter()
-                    .find(|p| p.name == name)
-                    .map(|p| p.capabilities.host_functions.clone())
-                    .unwrap_or_default();
-                barbacane_wasm::validate_imports(module.module(), &declared).map_err(|e| {
-                    format!(
-                        "plugin '{}' violates its declared capabilities: {}",
-                        name, e
-                    )
-                })?;
-            }
+            let declared = manifest
+                .plugins
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.capabilities.host_functions.clone())
+                .unwrap_or_default();
+            barbacane_wasm::validate_imports(module.module(), &declared).map_err(|e| {
+                format!(
+                    "plugin '{}' violates its declared capabilities: {}",
+                    name, e
+                )
+            })?;
 
             compiled_modules.push((name, loaded.version, module));
         }
@@ -1071,7 +1096,14 @@ impl Gateway {
             .collect();
         balancer.retain(&pools);
 
+        // The merged specs are built once here, not on each introspection
+        // request.
+        let merged_openapi = merged_specs(&specs, SpecType::OpenApi, merge_openapi_specs);
+        let merged_asyncapi = merged_specs(&specs, SpecType::AsyncApi, merge_asyncapi_specs);
+
         Ok(Gateway {
+            merged_openapi,
+            merged_asyncapi,
             manifest,
             router,
             operations: resolved_operations,
@@ -2594,6 +2626,9 @@ impl Gateway {
 
         let mut response = match path {
             "/__barbacane/health" => self.health_response(),
+            _ if !INTROSPECTION_ENABLED.load(std::sync::atomic::Ordering::Relaxed) => {
+                self.not_found_response()
+            }
             "/__barbacane/specs" => self.specs_index_response(),
             "/__barbacane/specs/openapi" => self.merged_openapi_response(format),
             "/__barbacane/specs/asyncapi" => self.merged_asyncapi_response(format),
@@ -2652,40 +2687,20 @@ impl Gateway {
             .expect("valid response")
     }
 
-    /// Serve merged OpenAPI spec (all OpenAPI specs combined).
+    /// Serve the merged OpenAPI spec, merged once at load.
     fn merged_openapi_response(&self, format: &str) -> Response<Full<Bytes>> {
-        // Collect all OpenAPI specs
-        let openapi_specs: Vec<_> = self
-            .specs
-            .iter()
-            .filter(|(_, content)| matches!(detect_spec_type(content), SpecType::OpenApi))
-            .collect();
-
-        if openapi_specs.is_empty() {
-            return self.not_found_response();
+        match &self.merged_openapi {
+            Some(merged) => self.serve_spec_content(merged, format),
+            None => self.not_found_response(),
         }
-
-        // Merge specs
-        let merged = merge_openapi_specs(&openapi_specs);
-        self.serve_spec_content(&merged, format)
     }
 
-    /// Serve merged AsyncAPI spec (all AsyncAPI specs combined).
+    /// Serve the merged AsyncAPI spec, merged once at load.
     fn merged_asyncapi_response(&self, format: &str) -> Response<Full<Bytes>> {
-        // Collect all AsyncAPI specs
-        let asyncapi_specs: Vec<_> = self
-            .specs
-            .iter()
-            .filter(|(_, content)| matches!(detect_spec_type(content), SpecType::AsyncApi))
-            .collect();
-
-        if asyncapi_specs.is_empty() {
-            return self.not_found_response();
+        match &self.merged_asyncapi {
+            Some(merged) => self.serve_spec_content(merged, format),
+            None => self.not_found_response(),
         }
-
-        // Merge specs
-        let merged = merge_asyncapi_specs(&asyncapi_specs);
-        self.serve_spec_content(&merged, format)
     }
 
     /// Serve spec content in requested format.
@@ -5330,6 +5345,7 @@ async fn main() -> ExitCode {
             api_key,
             data_plane_name,
             admin_bind,
+            no_introspection,
         } => {
             // Initialize telemetry
             let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
@@ -5389,6 +5405,10 @@ async fn main() -> ExitCode {
                 // A body gets the deadline headers get.
                 body_read_timeout: Duration::from_secs(keepalive_timeout.max(1)),
             };
+
+            if no_introspection {
+                INTROSPECTION_ENABLED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
 
             // Validate connected mode options
             let connected_mode = match (&control_plane, &project_id, &api_key) {
