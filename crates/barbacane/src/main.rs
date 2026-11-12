@@ -1789,15 +1789,10 @@ impl Gateway {
         Ok(dispatch_outcome)
     }
 
-    /// Execute middleware on_request chain.
-    /// Returns the final request JSON, body, middleware instances, and context
-    /// (for on_response), or a short-circuit response.
-    #[allow(clippy::result_large_err, clippy::type_complexity)]
     /// Run the on_request chain on this thread as blocking work: WASM and its
     /// host calls (HTTP, LDAP, brokers) block, and the runtime hands the
     /// worker's other tasks to another thread meanwhile.
-    // The Err variant is an HTTP response, as for dispatch.
-    #[allow(clippy::result_large_err)]
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     fn run_middleware_on_request(
         &self,
         middlewares: &[barbacane_compiler::MiddlewareConfig],
@@ -1817,6 +1812,10 @@ impl Gateway {
         })
     }
 
+    /// Execute middleware on_request chain.
+    /// Returns the final request JSON, body, middleware instances, and context
+    /// (for on_response), or a short-circuit response.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
     fn execute_middleware_on_request(
         &self,
         middlewares: &[barbacane_compiler::MiddlewareConfig],
