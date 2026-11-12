@@ -1192,6 +1192,7 @@ impl Gateway {
         client_addr: Option<SocketAddr>,
     ) -> Result<Response<AnyBody>, Infallible> {
         let start_time = Instant::now();
+        control_plane::REQUESTS_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // The client's request id and trace id are kept when well-formed;
         // otherwise new ones are generated. Both go into every log line of the
@@ -3856,20 +3857,9 @@ async fn perform_hot_reload(
 ) -> HotReloadResult {
     let artifact_id = notification.artifact_id;
 
-    // Acquire lock to prevent concurrent hot-reloads
-    let _guard = match hot_reload::HOT_RELOAD_LOCK.try_lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            tracing::warn!(
-                artifact_id = %artifact_id,
-                "Hot-reload already in progress, skipping"
-            );
-            return HotReloadResult::Failed {
-                artifact_id,
-                error: "hot-reload already in progress".to_string(),
-            };
-        }
-    };
+    // One reload at a time; a deployment that arrives during a reload waits
+    // for it and is applied next.
+    let _guard = hot_reload::HOT_RELOAD_LOCK.lock().await;
 
     tracing::info!(
         artifact_id = %artifact_id,
@@ -3946,6 +3936,11 @@ async fn perform_hot_reload(
     // Drop old gateway on a blocking thread to avoid panic when wasmtime's
     // runtime is dropped inside an async context.
     tokio::task::spawn_blocking(move || drop(old_gateway));
+
+    // The gateway runs the new artifact: it becomes the one a restart loads.
+    if let Err(e) = hot_reload::promote(artifact_dir).await {
+        tracing::warn!(artifact_id = %artifact_id, error = %e, "the deployed artifact could not be kept for a restart");
+    }
 
     HotReloadResult::Success { artifact_id }
 }
@@ -4478,14 +4473,14 @@ async fn run_dev(
 
                 metrics.connection_opened();
 
-                let gateway_snapshot = gateway.load_full();
+                let gateway_swap = Arc::clone(&gateway);
                 let conn_metrics = metrics.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
                 let client_addr = Some(canonical_peer(peer_addr));
 
                 tokio::spawn(async move {
                     let service = service_fn(move |req| {
-                        let gateway = Arc::clone(&gateway_snapshot);
+                        let gateway = gateway_swap.load_full();
                         let client_addr = client_addr;
                         async move { gateway.handle_request(req, client_addr).await }
                     });
@@ -4747,8 +4742,25 @@ async fn run_serve(
         .unwrap_or(Path::new("."))
         .to_path_buf();
 
+    // In connected mode the last deployed artifact, kept next to the
+    // `--artifact` file, is what a restart serves.
+    let initial_artifact = match connected_mode
+        .as_ref()
+        .and_then(|_| hot_reload::current_artifact(&artifact_dir))
+    {
+        Some(current) => {
+            eprintln!(
+                "barbacane: loading the last deployed artifact {} in place of {}",
+                current.display(),
+                artifact_path.display()
+            );
+            current
+        }
+        None => artifact_path.to_path_buf(),
+    };
+
     let gateway: SharedGateway = match Gateway::load(
-        artifact_path,
+        &initial_artifact,
         dev,
         limits.clone(),
         allow_plaintext_upstream,
@@ -4832,6 +4844,7 @@ async fn run_serve(
     // Artifact hash watch channel for drift detection
     let initial_hash = gateway.load().manifest.artifact_hash.clone();
     let (artifact_hash_tx, artifact_hash_rx) = watch::channel(Some(initial_hash));
+    let (artifact_id_tx, artifact_id_rx) = watch::channel(None::<uuid::Uuid>);
 
     // Shared manifest for admin API (updated on hot-reload)
     let admin_manifest: Arc<ArcSwap<barbacane_compiler::Manifest>> = {
@@ -4861,6 +4874,7 @@ async fn run_serve(
         let (rx, tx) = client.start(
             shutdown_rx.clone(),
             artifact_hash_rx,
+            artifact_id_rx,
             drift_detected.clone(),
         );
         (Some(rx), Some(tx), Some(http_base))
@@ -4964,6 +4978,7 @@ async fn run_serve(
                 let metrics_clone = metrics.clone();
                 let response_tx_clone = response_tx.clone();
                 let artifact_hash_tx_clone = artifact_hash_tx.clone();
+                let artifact_id_tx_clone = artifact_id_tx.clone();
                 let admin_manifest_clone = admin_manifest.clone();
                 let trust_clone = trust.clone();
                 let download_token = download_token.clone();
@@ -4993,6 +5008,7 @@ async fn run_serve(
                             let gw = gateway_clone.load();
                             let _ =
                                 artifact_hash_tx_clone.send(Some(gw.manifest.artifact_hash.clone()));
+                            let _ = artifact_id_tx_clone.send(Some(*artifact_id));
                             // Update admin API manifest
                             admin_manifest_clone.store(Arc::new(gw.manifest.clone()));
 
@@ -5052,10 +5068,10 @@ async fn run_serve(
                 metrics.connection_opened();
                 active_connections.fetch_add(1, Ordering::SeqCst);
 
-                // Get a snapshot of the gateway for this connection.
-                // All requests on this connection will use this version,
-                // allowing in-flight requests to complete during hot-reload.
-                let gateway_snapshot = gateway.load_full();
+                // Each request looks the gateway up, so a hot-reload is
+                // observed by the next request on every connection; a request
+                // in flight keeps the gateway it started with.
+                let gateway_swap = Arc::clone(&gateway);
                 let tls_acceptor = tls_acceptor.clone();
                 let conn_metrics = metrics.clone();
                 let conn_counter = active_connections.clone();
@@ -5067,7 +5083,7 @@ async fn run_serve(
                     // Held for the connection's lifetime; released on drop.
                     let _permit = permit;
                     let service = service_fn(move |req| {
-                        let gateway = Arc::clone(&gateway_snapshot);
+                        let gateway = gateway_swap.load_full();
                         let client_addr = client_addr;
                         async move { gateway.handle_request(req, client_addr).await }
                     });
