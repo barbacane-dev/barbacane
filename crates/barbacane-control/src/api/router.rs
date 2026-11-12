@@ -51,6 +51,8 @@ pub struct AppState {
     pub connection_manager: Arc<ConnectionManager>,
     /// The admin credential, for the routes that also take a data-plane key.
     pub admin_auth: AdminAuth,
+    /// The readiness probe's cached answer.
+    pub readiness: Arc<health::Readiness>,
 }
 
 /// Handler to serve the OpenAPI specification.
@@ -104,7 +106,7 @@ fn cors_layer() -> CorsLayer {
 
 /// Create the API router with all routes.
 ///
-/// `admin_auth` is enforced on every route except `/health` and the data-plane
+/// `admin_auth` is enforced on every route except `/health`, `/ready` and the data-plane
 /// WebSocket (`/ws/data-plane`), which authenticates with its own per-data-plane
 /// API key.
 pub fn create_router(
@@ -118,6 +120,7 @@ pub fn create_router(
         compilation_tx,
         connection_manager,
         admin_auth: admin_auth.clone(),
+        readiness: Arc::new(health::Readiness::default()),
     };
 
     // Public routes: liveness, and the data-plane WebSocket (which performs its
@@ -127,6 +130,7 @@ pub fn create_router(
     // publishes with its own key.
     let public = Router::new()
         .route("/health", get(health::health_check))
+        .route("/ready", get(health::readiness_check))
         // WebSocket for data plane connections
         .route("/ws/data-plane", get(ws::ws_handler))
         .route(
