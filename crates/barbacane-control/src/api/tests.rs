@@ -970,3 +970,124 @@ async fn a_projects_limits_for_a_plugin_are_set_replaced_removed_and_checked() {
         "an empty object removes them"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Operability: public docs, registration shapes, key validation
+// ---------------------------------------------------------------------------
+
+/// The router with a real admin token and a pool that never connects.
+fn make_app_with_token() -> Router {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(1))
+        .connect_lazy("postgres://nobody@127.0.0.1:1/unreachable")
+        .expect("a lazy pool needs no server");
+    let conn_mgr = Arc::new(crate::api::ConnectionManager::new());
+    crate::api::create_router(
+        pool,
+        None,
+        conn_mgr,
+        crate::api::AdminAuth::from_tokens("an-admin-token-of-at-least-32-bytes!!", None),
+    )
+}
+
+/// A request through the router, outside the spec contract: for the routes
+/// that are not operations of the API.
+async fn raw(app: Router, req: Request<Body>) -> (StatusCode, bytes::Bytes) {
+    let resp: Response = app.oneshot(req).await.expect("router returned error");
+    let status = resp.status();
+    let body = resp.into_body().collect().await.expect("body").to_bytes();
+    (status, body)
+}
+
+#[tokio::test]
+async fn the_api_description_and_its_page_need_no_token() {
+    let (status, body) = raw(make_app_with_token(), empty_req(Method::GET, "/openapi")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("openapi: 3.1.0"));
+    let (status, body) = raw(make_app_with_token(), empty_req(Method::GET, "/docs")).await;
+    assert_eq!(status, StatusCode::OK);
+    let page = String::from_utf8_lossy(&body);
+    assert!(
+        page.contains("\"/openapi\""),
+        "the page loads the description from /openapi"
+    );
+    assert!(!page.contains("/api/openapi"));
+    let (status, _) = raw(make_app_with_token(), empty_req(Method::GET, "/projects")).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "everything else keeps its token"
+    );
+}
+
+/// A `multipart/form-data` plugin registration.
+fn plugin_req(name: &str, version: &str, file: &[u8]) -> Request<Body> {
+    let boundary = "barbacane-plugin-boundary";
+    let mut body = Vec::new();
+    for (field, value) in [("name", name), ("version", version), ("type", "middleware")] {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n")
+                .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"p.wasm\"\r\nContent-Type: application/wasm\r\n\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(file);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    Request::builder()
+        .method(Method::POST)
+        .uri("/plugins")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_plugin_registration_with_a_bad_name_version_or_file_is_refused() {
+    for (name, version, file, why) in [
+        ("Bad/Name", "1.0.0", &b"\0asm\x01\0\0\0"[..], "name"),
+        ("ok-name", "latest", &b"\0asm\x01\0\0\0"[..], "version"),
+        ("ok-name", "1.0.0", &b"not wasm"[..], "file"),
+    ] {
+        let (status, body) = send(make_app_without_db(), plugin_req(name, version, file)).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{why}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_api_key_with_an_unknown_scope_or_a_past_expiry_is_refused() {
+    let project = Uuid::new_v4();
+    for (payload, why) in [
+        (json!({"name": "k", "scopes": ["admin:all"]}), "scope"),
+        (
+            json!({"name": "k", "expires_at": "2001-01-01T00:00:00Z"}),
+            "expiry",
+        ),
+    ] {
+        let (status, body) = send(
+            make_app_without_db(),
+            json_req(
+                Method::POST,
+                &format!("/projects/{project}/api-keys"),
+                payload,
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{why}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+}

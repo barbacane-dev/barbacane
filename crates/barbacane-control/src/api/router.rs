@@ -13,7 +13,6 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
-    set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
 use uuid::Uuid;
@@ -29,9 +28,6 @@ use super::{
 
 /// OpenAPI spec content embedded at compile time.
 const OPENAPI_SPEC: &str = include_str!("../../openapi.yaml");
-
-/// API version header value.
-const API_VERSION: &str = "application/vnd.barbacane.v1+json";
 
 /// Body-size ceiling for ordinary JSON API requests. Bounds how much a caller
 /// can make the control plane buffer in memory per request.
@@ -64,11 +60,26 @@ async fn openapi_spec() -> impl IntoResponse {
     )
 }
 
+/// One line at INFO for each request that changes something: method, path
+/// and status. Reads and probes stay at the tracing layer's debug level.
+async fn log_mutations(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let response = next.run(req).await;
+    if !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        tracing::info!(%method, %path, status = response.status().as_u16(), "control plane request");
+    }
+    response
+}
+
 /// Handler to serve the Scalar API documentation UI.
 async fn api_docs() -> Html<String> {
     let config = serde_json::json!({
         "spec": {
-            "url": "/api/openapi"
+            "url": "/openapi"
         },
         "theme": "purple",
         "layout": "modern",
@@ -123,14 +134,18 @@ pub fn create_router(
         readiness: Arc::new(health::Readiness::default()),
     };
 
-    // Public routes: liveness, and the data-plane WebSocket (which performs its
-    // own API-key authentication inside the handler). The artifact download
+    // Public routes: liveness and readiness, the API's description and docs
+    // page, and the data-plane WebSocket (which performs its own API-key
+    // authentication inside the handler). The artifact download
     // authenticates in its handler too: the admin token, or the data-plane key
     // of the artifact's project, since a data plane fetches what `deploy`
     // publishes with its own key.
     let public = Router::new()
         .route("/health", get(health::health_check))
         .route("/ready", get(health::readiness_check))
+        // The API's own description and its browsable page carry no data.
+        .route("/openapi", get(openapi_spec))
+        .route("/docs", get(api_docs))
         // WebSocket for data plane connections
         .route("/ws/data-plane", get(ws::ws_handler))
         .route(
@@ -140,9 +155,6 @@ pub fn create_router(
 
     // Protected routes: everything else requires the admin bearer token.
     let protected = Router::new()
-        // OpenAPI spec and documentation
-        .route("/openapi", get(openapi_spec))
-        .route("/docs", get(api_docs))
         // Init
         .route("/init", post(init::init_project))
         // Specs
@@ -270,11 +282,7 @@ pub fn create_router(
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY))
         // Middleware applied to all routes
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(log_mutations))
         .layer(cors_layer())
-        // API versioning: set Content-Type to versioned media type for JSON responses
-        .layer(SetResponseHeaderLayer::if_not_present(
-            axum::http::header::CONTENT_TYPE,
-            HeaderValue::from_static(API_VERSION),
-        ))
         .with_state(state)
 }

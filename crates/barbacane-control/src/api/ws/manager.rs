@@ -102,9 +102,11 @@ impl ConnectionManager {
         closed
     }
 
-    /// Remove a connection.
+    /// Remove a connection and end its session, so a data plane whose record
+    /// is deleted stops receiving deployments at once.
     pub fn remove(&self, data_plane_id: Uuid) {
         if let Some((_, conn)) = self.connections.remove(&data_plane_id) {
+            conn.close.notify_one();
             // Remove from project index
             if let Some(mut ids) = self.project_connections.get_mut(&conn.project_id) {
                 ids.retain(|id| *id != data_plane_id);

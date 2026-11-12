@@ -471,6 +471,7 @@ dependencies = [
  "jsonschema",
  "parking_lot",
  "rand 0.9.4",
+ "reqwest 0.12.28",
  "scalar_api_reference",
  "serde",
  "serde_json",

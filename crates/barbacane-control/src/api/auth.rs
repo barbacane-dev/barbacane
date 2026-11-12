@@ -36,11 +36,16 @@ pub fn key_has_scope(scopes: &[String], required: &str) -> bool {
     scopes.iter().any(|s| s == required)
 }
 
+/// Shortest admin token accepted, in bytes: a token is the one credential
+/// to every administrative operation, so a short one is refused at start.
+pub const MIN_ADMIN_TOKEN_BYTES: usize = 32;
+
 /// Authentication policy applied to protected control-plane routes.
 #[derive(Clone)]
 pub enum AdminAuth {
-    /// Require a bearer token whose SHA-256 digest matches this value.
-    Token(Arc<[u8; 32]>),
+    /// Require a bearer token whose SHA-256 digest is one of these: the
+    /// current token, and the previous one while a rotation is under way.
+    Token(Arc<Vec<[u8; 32]>>),
     /// Authentication disabled. **Test only** — the production binary never
     /// constructs this variant; `barbacane-control serve` always uses
     /// [`AdminAuth::from_token`] and fails to start without a token. Only
@@ -50,16 +55,50 @@ pub enum AdminAuth {
 }
 
 impl AdminAuth {
-    /// Build a policy that requires the given token.
-    pub fn from_token(token: &str) -> Self {
-        AdminAuth::Token(Arc::new(sha256(token.as_bytes())))
+    /// Build a policy that accepts `current`, and `previous` while clients
+    /// move to the new token.
+    pub fn from_tokens(current: &str, previous: Option<&str>) -> Self {
+        let mut digests = vec![sha256(current.as_bytes())];
+        if let Some(previous) = previous {
+            digests.push(sha256(previous.as_bytes()));
+        }
+        AdminAuth::Token(Arc::new(digests))
+    }
+
+    /// The policy `BARBACANE_CONTROL_ADMIN_TOKEN` and the optional
+    /// `BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS` describe: each must be at
+    /// least [`MIN_ADMIN_TOKEN_BYTES`] long, the current one must be set.
+    pub fn from_env_values(current: Option<&str>, previous: Option<&str>) -> Result<Self, String> {
+        let current = current
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or("BARBACANE_CONTROL_ADMIN_TOKEN must be set to a non-empty value; the control-plane API refuses to start unauthenticated")?;
+        let previous = previous.map(str::trim).filter(|t| !t.is_empty());
+        for (name, token) in [
+            ("BARBACANE_CONTROL_ADMIN_TOKEN", Some(current)),
+            ("BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS", previous),
+        ] {
+            if token.is_some_and(|t| t.len() < MIN_ADMIN_TOKEN_BYTES) {
+                return Err(format!(
+                    "{name} is shorter than {MIN_ADMIN_TOKEN_BYTES} bytes; use a token of at least that length, such as `openssl rand -hex 32`"
+                ));
+            }
+        }
+        Ok(Self::from_tokens(current, previous))
     }
 
     /// Whether `presented` is an acceptable credential under this policy.
+    /// Every accepted digest is compared, so the time taken does not say
+    /// which one matched.
     pub(crate) fn accepts(&self, presented: &str) -> bool {
         match self {
             AdminAuth::Disabled => true,
-            AdminAuth::Token(expected) => ct_eq(&sha256(presented.as_bytes()), expected),
+            AdminAuth::Token(expected) => {
+                let digest = sha256(presented.as_bytes());
+                expected
+                    .iter()
+                    .fold(false, |found, candidate| ct_eq(&digest, candidate) | found)
+            }
         }
     }
 }
@@ -127,6 +166,28 @@ pub(crate) fn unauthorized(detail: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CURRENT: &str = "current-admin-token-of-thirty-two-bytes!";
+    const PREVIOUS: &str = "previous-admin-token-of-thirty-two-bytes";
+
+    #[test]
+    fn a_previous_token_is_accepted_during_a_rotation() {
+        let auth = AdminAuth::from_tokens(CURRENT, Some(PREVIOUS));
+        assert!(auth.accepts(CURRENT));
+        assert!(auth.accepts(PREVIOUS));
+        assert!(!auth.accepts("some-other-token-of-thirty-two-bytes!!"));
+        assert!(!AdminAuth::from_tokens(CURRENT, None).accepts(PREVIOUS));
+    }
+
+    #[test]
+    fn a_short_or_missing_token_refuses_to_start() {
+        assert!(AdminAuth::from_env_values(None, None).is_err());
+        assert!(AdminAuth::from_env_values(Some("  "), None).is_err());
+        assert!(AdminAuth::from_env_values(Some("short"), None).is_err());
+        assert!(AdminAuth::from_env_values(Some(CURRENT), Some("short")).is_err());
+        assert!(AdminAuth::from_env_values(Some(CURRENT), None).is_ok());
+        assert!(AdminAuth::from_env_values(Some(CURRENT), Some(PREVIOUS)).is_ok());
+    }
 
     #[test]
     fn key_has_scope_matches_exactly() {

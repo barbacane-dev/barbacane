@@ -222,7 +222,11 @@ pub async fn download_spec_content(
         [
             (
                 axum::http::header::CONTENT_TYPE,
-                "application/yaml".to_string(),
+                if revision.content.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{') {
+                    "application/json".to_string()
+                } else {
+                    "application/yaml".to_string()
+                },
             ),
             (
                 axum::http::header::CONTENT_DISPOSITION,

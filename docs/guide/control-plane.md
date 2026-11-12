@@ -256,7 +256,7 @@ The control plane includes interactive API documentation powered by Scalar:
 http://localhost:9090/docs
 ```
 
-This provides a browsable interface for exploring and testing all API endpoints directly from your browser.
+This provides a browsable interface for exploring and testing all API endpoints directly from your browser. `/docs` and the description it loads from `/openapi` need no token; the calls made from the page do.
 
 ## Seeding the Plugin Registry
 
@@ -324,10 +324,13 @@ Migrations run automatically on startup with `--migrate` (enabled by default).
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `BARBACANE_CONTROL_ADMIN_TOKEN` | **Required.** Bearer token every API request carries, except `GET /health` and the data-plane WebSocket. The server refuses to start without it |
+| `BARBACANE_CONTROL_ADMIN_TOKEN` | **Required**, at least 32 bytes. Bearer token every API request carries, except `GET /health`, `GET /ready`, `GET /openapi`, `GET /docs` and the data-plane WebSocket. The server refuses to start without it |
+| `BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS` | The token being replaced, accepted during a rotation |
 | `BARBACANE_SIGNING_KEY` | Path to the Ed25519 key that signs every artifact the control plane compiles; unset, artifacts are built unsigned |
 | `BARBACANE_CONTROL_ALLOWED_ORIGINS` | Comma-separated allowlist of browser origins for CORS; unset means no cross-origin access |
-| `RUST_LOG` | Log level (trace, debug, info, warn, error) |
+| `RUST_LOG` | Log level (trace, debug, info, warn, error); every request that changes something is logged at `info` with its method, path and status |
+
+To rotate the admin token: start the control plane with the new token in `BARBACANE_CONTROL_ADMIN_TOKEN` and the old one in `BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS`, move every client to the new token, then restart without the previous one.
 
 The [configuration reference](../reference/configuration.md) describes each variable.
 
