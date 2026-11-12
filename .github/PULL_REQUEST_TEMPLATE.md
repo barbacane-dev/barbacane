@@ -46,10 +46,6 @@ Describe any specific testing scenarios here.
 - [ ] I have updated documentation as needed
 - [ ] My commits are signed off (DCO)
 
-## Screenshots (if applicable)
-
-Add screenshots to help explain your changes.
-
 ## Additional Notes
 
 Any additional information that reviewers should know.

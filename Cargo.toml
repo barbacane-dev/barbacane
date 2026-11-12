@@ -25,8 +25,10 @@ edition = "2021"
 # requires rustc 1.95. Enforced by the `msrv` CI job.
 rust-version = "1.95"
 license = "AGPL-3.0-only"
-repository = "https://github.com/barbacane-dev/Barbacane"
-homepage = "https://github.com/barbacane-dev/Barbacane"
+# Shown on each crate's crates.io page; the path is relative to the workspace root.
+readme = "README.md"
+repository = "https://github.com/barbacane-dev/barbacane"
+homepage = "https://github.com/barbacane-dev/barbacane"
 keywords = ["api-gateway", "openapi", "wasm", "proxy", "middleware"]
 categories = ["web-programming::http-server", "network-programming"]
 

@@ -6,7 +6,10 @@ We take security seriously. If you discover a security vulnerability in Barbacan
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, please email us at: **security@barbacane.dev**
+Report it privately through GitHub, with
+[Report a vulnerability](https://github.com/barbacane-dev/barbacane/security/advisories/new),
+or by email at **security@barbacane.dev**. Each report becomes a private
+security advisory, fixed there before anything is published.
 
 ### What to Include
 
@@ -25,11 +28,15 @@ When reporting a vulnerability, please include:
 
 ### Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| Version | Supported |
+| ------- | --------- |
+| 1.x, latest minor release | yes |
+| 1.x, earlier minor releases | no: upgrade to the latest minor |
+| 0.12 | until 1.0.0 is released |
 
-As the project matures, we will update this table to reflect our security support policy.
+Security fixes are released for the latest 1.x minor release only, as the
+[stability policy](https://github.com/barbacane-dev/barbacane/blob/main/docs/reference/stability.md)
+states. An advisory names the affected versions and the release that fixes them.
 
 ### Disclosure Policy
 

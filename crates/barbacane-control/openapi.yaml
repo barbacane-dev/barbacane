@@ -4,10 +4,16 @@ info:
   description: |
     REST API for managing API specifications, plugins, artifacts, and compilations
     in the Barbacane API Gateway control plane.
-  version: 0.1.0
+  version: 1.0.0-rc.1
   license:
-    name: MIT
-    url: https://opensource.org/licenses/MIT
+    name: AGPL-3.0-only
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+# Every operation takes the admin bearer token (BARBACANE_CONTROL_ADMIN_TOKEN)
+# unless it says `security: []`: the liveness probe and the data-plane
+# WebSocket, which authenticates with its API key inside the connection.
+security:
+  - adminToken: []
 
 servers:
   - url: http://localhost:9090
@@ -40,6 +46,7 @@ tags:
 paths:
   /health:
     get:
+      security: []
       tags: [Health]
       summary: Liveness probe
       description: |
@@ -97,6 +104,8 @@ paths:
             schema:
               $ref: '#/components/schemas/InitRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Project files generated
           content:
@@ -129,6 +138,8 @@ paths:
           schema:
             type: string
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of specs
           content:
@@ -159,6 +170,8 @@ paths:
                   format: binary
                   description: The OpenAPI or AsyncAPI specification file (YAML or JSON)
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '201':
           description: Spec uploaded successfully
           content:
@@ -181,6 +194,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/specId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Spec metadata
           content:
@@ -202,6 +217,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/specId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: Spec deleted
         '404':
@@ -220,6 +237,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/specId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Revision history
           content:
@@ -249,6 +268,8 @@ paths:
           schema:
             type: integer
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Spec file content
           content:
@@ -275,6 +296,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/specId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Compliance warnings (empty array if fully compliant)
           content:
@@ -307,6 +330,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CompileRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '202':
           description: Compilation started
           content:
@@ -329,6 +354,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/specId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of compilations
           content:
@@ -353,6 +380,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/compilationId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Compilation status
           content:
@@ -374,6 +403,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/compilationId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: Compilation deleted
         '404':
@@ -402,6 +433,8 @@ paths:
           schema:
             type: string
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of plugins
           content:
@@ -449,6 +482,8 @@ paths:
                   format: binary
                   description: WASM binary file
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '201':
           description: Plugin registered
           content:
@@ -477,6 +512,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/pluginName'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of plugin versions
           content:
@@ -502,6 +539,8 @@ paths:
         - $ref: '#/components/parameters/pluginName'
         - $ref: '#/components/parameters/pluginVersion'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Plugin metadata
           content:
@@ -524,6 +563,8 @@ paths:
         - $ref: '#/components/parameters/pluginName'
         - $ref: '#/components/parameters/pluginVersion'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: Plugin deleted
         '404':
@@ -549,6 +590,8 @@ paths:
         - $ref: '#/components/parameters/pluginName'
         - $ref: '#/components/parameters/pluginVersion'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Plugin WASM binary
           content:
@@ -570,6 +613,8 @@ paths:
       description: List all compiled artifacts.
       operationId: listArtifacts
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of artifacts
           content:
@@ -588,6 +633,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/artifactId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Artifact metadata
           content:
@@ -609,6 +656,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/artifactId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: Artifact deleted
         '404':
@@ -658,6 +707,8 @@ paths:
       description: List all projects.
       operationId: listProjects
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of projects
           content:
@@ -680,6 +731,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateProjectRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '201':
           description: Project created
           content:
@@ -708,6 +761,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Project details
           content:
@@ -736,6 +791,8 @@ paths:
             schema:
               $ref: '#/components/schemas/UpdateProjectRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Project updated
           content:
@@ -757,6 +814,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: Project deleted
         '404':
@@ -776,6 +835,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of connected data planes
           content:
@@ -801,6 +862,8 @@ paths:
         - $ref: '#/components/parameters/projectId'
         - $ref: '#/components/parameters/dataPlaneId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Data plane details
           content:
@@ -823,6 +886,8 @@ paths:
         - $ref: '#/components/parameters/projectId'
         - $ref: '#/components/parameters/dataPlaneId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: Data plane disconnected
         '404':
@@ -851,6 +916,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DeployRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Deployment initiated
           content:
@@ -874,6 +941,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: List of API keys
           content:
@@ -906,6 +975,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateApiKeyRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '201':
           description: API key created (full key returned only once)
           content:
@@ -935,6 +1006,8 @@ paths:
         - $ref: '#/components/parameters/projectId'
         - $ref: '#/components/parameters/apiKeyId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: API key revoked
         '404':
@@ -947,6 +1020,7 @@ paths:
   # WebSocket endpoint (documented for reference)
   /ws/data-plane:
     get:
+      security: []
       tags: [DataPlanes]
       summary: Data plane WebSocket connection
       description: |
@@ -997,6 +1071,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The project's specs
           content:
@@ -1030,6 +1106,8 @@ paths:
                   format: binary
                   description: The OpenAPI or AsyncAPI specification file (YAML or JSON)
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '201':
           description: Spec uploaded
           content:
@@ -1050,6 +1128,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The project's compilations
           content:
@@ -1070,6 +1150,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The project's artifacts
           content:
@@ -1090,6 +1172,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The project's plugin configurations
           content:
@@ -1115,6 +1199,8 @@ paths:
             schema:
               $ref: '#/components/schemas/AddProjectPluginRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '201':
           description: Plugin added
           content:
@@ -1149,6 +1235,8 @@ paths:
             schema:
               $ref: '#/components/schemas/UpdateProjectPluginRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: Plugin updated
           content:
@@ -1167,6 +1255,8 @@ paths:
         - $ref: '#/components/parameters/projectId'
         - $ref: '#/components/parameters/pluginName'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '204':
           description: Plugin removed
         '404':
@@ -1183,6 +1273,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The operations, grouped by spec
           content:
@@ -1211,6 +1303,8 @@ paths:
             schema:
               $ref: '#/components/schemas/PatchSpecOperationsRequest'
       responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '200':
           description: The spec's operations after the change
           content:
@@ -1223,6 +1317,11 @@ paths:
           $ref: '#/components/responses/NotFound'
 
 components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+      description: The control plane's admin token, `BARBACANE_CONTROL_ADMIN_TOKEN`.
   parameters:
     specId:
       name: id
@@ -1295,6 +1394,16 @@ components:
         format: uuid
 
   responses:
+    Unauthorized:
+      description: No valid admin bearer token
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
     NotFound:
       description: The resource does not exist
       content:

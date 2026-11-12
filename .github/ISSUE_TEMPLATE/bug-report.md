@@ -28,7 +28,7 @@ What actually happened.
 
 - **Barbacane version**: [e.g., 0.1.0]
 - **OS**: [e.g., Ubuntu 22.04, macOS 14]
-- **Rust version** (if building from source): [e.g., 1.75.0]
+- **Rust version** (if building from source): [e.g., 1.95.0]
 
 ## Configuration
 
