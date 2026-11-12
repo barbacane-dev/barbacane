@@ -98,7 +98,15 @@ impl Router {
         let mut params = Vec::new();
         match self.traverse_and_match(&self.root, &segments, &mut params) {
             Some(node) => {
-                if let Some(entry) = node.methods.get(&method.to_uppercase()) {
+                let method = method.to_uppercase();
+                // A resource that answers GET answers HEAD the same way, with
+                // no body (RFC 9110 section 9.1); the server drops the body.
+                let entry = node.methods.get(&method).or_else(|| {
+                    (method == "HEAD")
+                        .then(|| node.methods.get("GET"))
+                        .flatten()
+                });
+                if let Some(entry) = entry {
                     RouteMatch::Found {
                         entry: entry.clone(),
                         params,
@@ -566,5 +574,30 @@ mod tests {
             }
             _ => panic!("expected Found for wildcard"),
         }
+    }
+}
+
+#[cfg(test)]
+mod head_tests {
+    use super::*;
+
+    #[test]
+    fn head_is_served_by_the_get_route_and_by_its_own_when_declared() {
+        let mut router = Router::new();
+        router.insert("/users", "GET", RouteEntry { operation_index: 0 });
+        router.insert("/items", "GET", RouteEntry { operation_index: 1 });
+        router.insert("/items", "HEAD", RouteEntry { operation_index: 2 });
+        router.insert("/orders", "POST", RouteEntry { operation_index: 3 });
+
+        assert!(
+            matches!(router.lookup("/users", "HEAD"), RouteMatch::Found { entry, .. } if entry.operation_index == 0)
+        );
+        assert!(
+            matches!(router.lookup("/items", "HEAD"), RouteMatch::Found { entry, .. } if entry.operation_index == 2)
+        );
+        assert!(matches!(
+            router.lookup("/orders", "HEAD"),
+            RouteMatch::MethodNotAllowed { .. }
+        ));
     }
 }

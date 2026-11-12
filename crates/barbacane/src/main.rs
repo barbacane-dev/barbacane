@@ -2760,6 +2760,14 @@ impl Gateway {
     /// else; the artifact's version, compiler and route count are on the
     /// admin API's `/health`, which is not public.
     fn health_response(&self) -> Response<Full<Bytes>> {
+        if admin::DRAINING.load(Ordering::Relaxed) {
+            return Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("content-type", "application/json")
+                .header("connection", "close")
+                .body(Full::new(Bytes::from_static(br#"{"status":"draining"}"#)))
+                .expect("valid response");
+        }
         let body = serde_json::json!({ "status": "healthy" });
 
         Response::builder()
@@ -4263,12 +4271,8 @@ async fn run_dev(
         match TcpListener::bind(admin_addr).await {
             Ok(admin_listener) => {
                 let admin_bound = admin_listener.local_addr().unwrap_or(admin_addr);
-                let admin_shutdown_rx = shutdown_rx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        admin::start_admin_server(admin_listener, admin_state, admin_shutdown_rx)
-                            .await
-                    {
+                    if let Err(e) = admin::start_admin_server(admin_listener, admin_state).await {
                         tracing::error!(error = %e, "Admin server failed");
                     }
                 });
@@ -4902,12 +4906,8 @@ async fn run_serve(
         match TcpListener::bind(admin_addr).await {
             Ok(admin_listener) => {
                 let admin_bound = admin_listener.local_addr().unwrap_or(admin_addr);
-                let admin_shutdown_rx = shutdown_rx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        admin::start_admin_server(admin_listener, admin_state, admin_shutdown_rx)
-                            .await
-                    {
+                    if let Err(e) = admin::start_admin_server(admin_listener, admin_state).await {
                         tracing::error!(error = %e, "Admin server failed");
                     }
                 });
@@ -4942,6 +4942,7 @@ async fn run_serve(
             // Check for shutdown signal
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
+                    admin::DRAINING.store(true, Ordering::Relaxed);
                     break;
                 }
             }
@@ -5164,6 +5165,10 @@ async fn run_serve(
             }
         }
     }
+
+    // No new connection is accepted while the ones in flight finish: a
+    // client or a probe that connects now is refused, not queued and reset.
+    drop(listener);
 
     // Wait for active connections to drain (with timeout)
     let drain_start = Instant::now();

@@ -143,3 +143,18 @@ async fn test_wildcard_path_missing_key_segment() {
     let resp = gateway.get("/storage/my-bucket").await.unwrap();
     assert_eq!(resp.status().as_u16(), 404);
 }
+
+/// A resource that answers GET answers HEAD the same way, with no body.
+#[tokio::test]
+async fn head_is_answered_by_the_get_route_without_a_body() {
+    let gateway = TestGateway::from_spec(&fixture("minimal.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway
+        .request_builder(reqwest::Method::HEAD, "/users/42")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().len(), 0);
+}

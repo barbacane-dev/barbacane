@@ -289,3 +289,83 @@ fn serves_http(port: u16, path: &str, limit: Duration) -> bool {
     }
     false
 }
+
+/// Once SIGTERM arrives, the gateway finishes the requests in flight and
+/// takes no new connection; its health endpoints say it is draining.
+#[test]
+fn a_draining_gateway_refuses_new_connections_and_reports_it() {
+    use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT};
+    use std::io::{Read, Write};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
+    let mut cmd = Command::new(gateway_binary());
+    cmd.arg("serve")
+        .arg("--artifact")
+        .arg(&artifact)
+        .args(["--listen", LISTEN_ANY_PORT, "--admin-bind", LISTEN_ANY_PORT])
+        .arg("--allow-unsigned")
+        .env_remove("BARBACANE_TRUSTED_PUBKEY");
+    let mut process = LoggedChild::spawn(&mut cmd).expect("spawn the gateway");
+    let port = process
+        .announced_port("barbacane: listening on", Duration::from_secs(30))
+        .expect("the gateway announced its port");
+    let admin_port = process
+        .announced_port("barbacane: admin API on", Duration::from_secs(30))
+        .expect("the gateway announced its admin port");
+
+    // A request whose body never completes keeps a connection in flight.
+    let mut in_flight = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    in_flight
+        .write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nabc")
+        .expect("send a partial request");
+
+    unsafe {
+        libc::kill(process.id().expect("pid") as i32, libc::SIGTERM);
+    }
+    assert!(
+        process
+            .log()
+            .wait_for("draining connections", Duration::from_secs(10)),
+        "the gateway did not start draining"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !process.has_exited(),
+        "the in-flight request keeps the gateway up"
+    );
+
+    // No new connection on the main port.
+    assert!(
+        std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            Duration::from_secs(2)
+        )
+        .is_err(),
+        "a draining gateway must refuse new connections"
+    );
+
+    // The admin health says so.
+    let mut admin = std::net::TcpStream::connect(("127.0.0.1", admin_port)).expect("admin connect");
+    admin
+        .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .expect("admin request");
+    let mut reply = String::new();
+    admin.read_to_string(&mut reply).expect("admin reply");
+    assert!(reply.starts_with("HTTP/1.1 503"), "{reply}");
+    assert!(reply.contains("draining"), "{reply}");
+
+    // Ending the in-flight request lets the gateway exit cleanly.
+    drop(in_flight);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !process.has_exited() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        process.has_exited(),
+        "the gateway did not exit once drained"
+    );
+    let (mut child, log) = process.into_parts();
+    let status = child.wait().expect("wait");
+    assert_eq!(status.code(), Some(0), "{}", log.text());
+}

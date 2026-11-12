@@ -16,7 +16,6 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
 
 use barbacane_compiler::Manifest;
 use barbacane_telemetry::MetricsRegistry;
@@ -61,6 +60,11 @@ pub fn configure_conn_builder(
         .max_concurrent_streams(HTTP2_MAX_CONCURRENT_STREAMS);
 }
 
+/// Set once the gateway received its shutdown signal: it finishes the
+/// requests in flight and accepts no new connection. Both health endpoints
+/// answer 503 meanwhile, so a probe reports the instance as going away.
+pub static DRAINING: AtomicBool = AtomicBool::new(false);
+
 /// Start the admin HTTP server on an already-bound listener.
 ///
 /// Serves `/health`, `/metrics`, and `/provenance` on a dedicated port. The
@@ -69,7 +73,6 @@ pub fn configure_conn_builder(
 pub async fn start_admin_server(
     listener: TcpListener,
     state: Arc<AdminState>,
-    mut shutdown_rx: watch::Receiver<bool>,
 ) -> Result<(), String> {
     let addr = listener
         .local_addr()
@@ -87,46 +90,40 @@ pub async fn start_admin_server(
         );
     }
 
+    // Serves through the drain, so a probe gets the 503 that says the
+    // instance is going away; the task ends with the process.
     let connections = Arc::new(tokio::sync::Semaphore::new(ADMIN_MAX_CONNECTIONS));
     loop {
-        tokio::select! {
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    return Ok(());
-                }
+        let result = listener.accept().await;
+        // A failed accept is retried after a pause; the admin API
+        // keeps serving health and metrics through a descriptor
+        // shortage rather than stopping until restart.
+        let (stream, _) = match result {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::warn!(error = %e, "admin accept failed");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
             }
-            result = listener.accept() => {
-                // A failed accept is retried after a pause; the admin API
-                // keeps serving health and metrics through a descriptor
-                // shortage rather than stopping until restart.
-                let (stream, _) = match result {
-                    Ok(conn) => conn,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "admin accept failed");
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        continue;
-                    }
-                };
-                let Ok(permit) = Arc::clone(&connections).try_acquire_owned() else {
-                    tracing::warn!("admin connection cap reached; dropping connection");
-                    continue;
-                };
+        };
+        let Ok(permit) = Arc::clone(&connections).try_acquire_owned() else {
+            tracing::warn!("admin connection cap reached; dropping connection");
+            continue;
+        };
+        let state = state.clone();
+        tokio::spawn(async move {
+            // Held for the connection's lifetime; released on drop.
+            let _permit = permit;
+            let service = service_fn(move |req| {
                 let state = state.clone();
-                tokio::spawn(async move {
-                    // Held for the connection's lifetime; released on drop.
-                    let _permit = permit;
-                    let service = service_fn(move |req| {
-                        let state = state.clone();
-                        async move { handle_request(req, &state) }
-                    });
-                    let mut builder = auto::Builder::new(TokioExecutor::new());
-                    configure_conn_builder(&mut builder, ADMIN_KEEPALIVE);
-                    let _ = builder
-                        .serve_connection(TokioIo::new(stream), service)
-                        .await;
-                });
-            }
-        }
+                async move { handle_request(req, &state) }
+            });
+            let mut builder = auto::Builder::new(TokioExecutor::new());
+            configure_conn_builder(&mut builder, ADMIN_KEEPALIVE);
+            let _ = builder
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
     }
 }
 
@@ -155,6 +152,9 @@ fn handle_request(
 }
 
 fn health_response(state: &AdminState) -> Response<Full<Bytes>> {
+    if DRAINING.load(Ordering::Relaxed) {
+        return json_response(StatusCode::SERVICE_UNAVAILABLE, r#"{"status":"draining"}"#);
+    }
     let manifest = state.manifest.load();
     let uptime_secs = state.started_at.elapsed().as_secs();
 

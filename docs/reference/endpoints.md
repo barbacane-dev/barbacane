@@ -41,6 +41,8 @@ livenessProbe:
 curl -f http://localhost:8080/__barbacane/health
 ```
 
+Once the gateway receives `SIGTERM` it finishes the requests in flight and accepts no new connection; a probe that still reaches it over a connection already open gets `503` with `{"status":"draining"}` and `Connection: close`. The admin API's `/health` answers the same 503 for the whole drain, so a probe on the admin port sees the instance go away before it exits.
+
 ---
 
 ## API Specs
