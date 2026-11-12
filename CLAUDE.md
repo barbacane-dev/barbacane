@@ -4,7 +4,7 @@ Barbacane is a spec-driven API gateway that compiles OpenAPI/AsyncAPI specs into
 
 ## Architecture
 
-8 workspace crates + an out-of-workspace `plugins/` directory:
+9 workspace crates + an out-of-workspace `plugins/` directory:
 
 | Crate | Role |
 |-------|------|
@@ -15,6 +15,7 @@ Barbacane is a spec-driven API gateway that compiles OpenAPI/AsyncAPI specs into
 | `barbacane-telemetry` | OpenTelemetry tracing, Prometheus metrics |
 | `barbacane-plugin-sdk` | Plugin SDK — `Request`, `Response`, `Action` types |
 | `barbacane-plugin-macros` | Proc macros — `#[barbacane_middleware]`, `#[barbacane_dispatcher]` |
+| `barbacane-sigv4` | AWS Signature Version 4 signing, used by the `s3` plugin |
 | `barbacane-test` | Integration tests (excluded from `cargo test --workspace`) |
 
 ## Rust Conventions
@@ -89,27 +90,33 @@ host_functions = ["log", "context_get"]
 
 ### Available Capabilities
 
+`crates/barbacane-wasm/src/manifest.rs` (`capability_to_imports`) is the source of truth for this table.
+
 | Capability | Host Functions |
 |-----------|----------------|
 | `log` | `host_log` |
 | `context_get` | `host_context_get`, `host_context_read_result` |
 | `context_set` | `host_context_set` |
-| `clock_now` | `host_clock_now` |
+| `clock_now` | `host_clock_now`, `host_get_unix_timestamp`, `host_time_now` (deprecated, removed in 1.2.0 at the earliest) |
 | `get_secret` | `host_get_secret`, `host_secret_read_result` |
-| `http_call` | `host_http_call`, `host_http_read_result` |
-| `http_pool` | `host_http_pool_call`, `host_http_read_result` |
+| `http_call` | `host_http_call`, `host_http_stream`, `host_http_read_result`, `host_http_request_body_set`, `host_http_response_body_len`, `host_http_response_body_read` |
+| `http_pool` | `host_http_pool_call`, `host_http_read_result`, `host_http_request_body_set`, `host_http_response_body_len`, `host_http_response_body_read` |
+| `ws_upgrade` | `host_ws_upgrade`, `host_http_read_result` |
 | `kafka_publish` | `host_kafka_publish`, `host_broker_read_result` |
 | `nats_publish` | `host_nats_publish`, `host_broker_read_result` |
 | `ldap` | `host_ldap_bind`, `host_ldap_search`, `host_ldap_read_result` |
-| `telemetry` | `host_metric_counter_inc`, `host_metric_histogram_observe`, `host_span_*` |
+| `telemetry` | `host_metric_counter_inc`, `host_metric_histogram_observe`, `host_span_start`, `host_span_end`, `host_span_set_attribute` |
 | `generate_uuid` | `host_uuid_generate`, `host_uuid_read_result` |
 | `verify_signature` | `host_verify_signature` |
 | `hash` | `host_sha256` |
 | `rate_limit` | `host_rate_limit_check`, `host_rate_limit_read_result` |
 | `cache` | `host_cache_get`, `host_cache_set`, `host_cache_read_result` |
-| `body_access` | *(none — controls whether `on_request` receives the request body)* |
 
-`body_access` is not a host function capability — it's a manifest-level flag (SPEC-008). When `false` (default for middleware), the host strips the request body before calling `on_request`, reducing WASM memory usage. Dispatchers always receive the body regardless. Set `body_access = true` only for middleware that reads or modifies `request.body`.
+Every plugin may import, without a capability, `host_set_output` and the body side-channel (`host_body_len`, `host_body_read`, `host_body_set`, `host_body_clear`), and seven WASI functions from `wasi_snapshot_preview1`: `random_get`, `clock_time_get`, `fd_write`, `sched_yield`, `environ_get`, `environ_sizes_get`, `proc_exit`. Any other import fails compilation with `E1043`.
+
+`body_access` is not a host function capability: it is a manifest-level flag (SPEC-008). When `false` (default for middleware), the host withholds the request body from `on_request` and the response body from `on_response`, reducing WASM memory usage. Dispatchers always receive the body regardless. Set `body_access = true` for middleware that reads or modifies a body.
+
+The SDK macros embed the plugin ABI version in a `barbacane_abi` custom section; the compiler and the data plane refuse a plugin without it or built for another version (`E1045`). Plugins export `memory`, `alloc`, `init`, and `on_request` + `on_response` (middleware) or `dispatch` (dispatcher).
 
 ### Building Plugins
 
