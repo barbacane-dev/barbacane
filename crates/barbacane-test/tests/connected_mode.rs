@@ -203,13 +203,8 @@ async fn a_deployed_artifact_reaches_a_connected_data_plane() {
         .wait_for_line("barbacane: hot-reload ", Duration::from_secs(60))
         .unwrap_or_else(|| panic!("no hot-reload outcome:\n{}", gateway.log().text()));
     assert!(outcome.contains("hot-reload successful"), "{outcome}");
-    // A connection serves the artifact it was accepted with, so the new
-    // artifact is observed from a new connection.
-    let resp = reqwest::Client::new()
-        .get(format!("{}/v2/status", gateway.base_url()))
-        .send()
-        .await
-        .unwrap();
+    // The same keep-alive connection as the earlier 404 observes the reload.
+    let resp = gateway.get("/v2/status").await.unwrap();
     let status = resp.status();
     let body = resp.text().await.unwrap();
     assert_eq!(status, 200, "{body}");

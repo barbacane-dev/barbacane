@@ -5,7 +5,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -70,6 +70,24 @@ pub enum ControlPlaneMessage {
     Error { message: String },
 }
 
+/// Requests the data plane has handled since it started, reported in each
+/// heartbeat. Process-wide, so a hot-reload does not reset it.
+pub static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// The heartbeat sent every period.
+fn heartbeat_message(
+    artifact_id: Option<Uuid>,
+    artifact_hash: Option<String>,
+    uptime_secs: u64,
+) -> DataPlaneMessage {
+    DataPlaneMessage::Heartbeat {
+        artifact_id,
+        artifact_hash,
+        uptime_secs,
+        requests_total: REQUESTS_TOTAL.load(Ordering::Relaxed),
+    }
+}
+
 /// Configuration for the control plane client.
 #[derive(Clone)]
 pub struct ControlPlaneConfig {
@@ -123,6 +141,7 @@ impl ControlPlaneClient {
         self,
         shutdown_rx: watch::Receiver<bool>,
         artifact_hash_rx: watch::Receiver<Option<String>>,
+        artifact_id_rx: watch::Receiver<Option<Uuid>>,
         drift_flag: Arc<AtomicBool>,
     ) -> (
         mpsc::Receiver<ArtifactNotification>,
@@ -137,6 +156,7 @@ impl ControlPlaneClient {
                 artifact_tx,
                 response_rx,
                 artifact_hash_rx,
+                artifact_id_rx,
                 drift_flag,
             )
             .await;
@@ -152,6 +172,7 @@ impl ControlPlaneClient {
         artifact_tx: mpsc::Sender<ArtifactNotification>,
         mut response_rx: mpsc::Receiver<ArtifactDownloadedResponse>,
         artifact_hash_rx: watch::Receiver<Option<String>>,
+        artifact_id_rx: watch::Receiver<Option<Uuid>>,
         drift_flag: Arc<AtomicBool>,
     ) {
         const INITIAL_BACKOFF_MS: u64 = 1000;
@@ -175,6 +196,7 @@ impl ControlPlaneClient {
                     &artifact_tx,
                     &mut response_rx,
                     &artifact_hash_rx,
+                    &artifact_id_rx,
                     &drift_flag,
                 )
                 .await
@@ -222,6 +244,7 @@ impl ControlPlaneClient {
         artifact_tx: &mpsc::Sender<ArtifactNotification>,
         response_rx: &mut mpsc::Receiver<ArtifactDownloadedResponse>,
         artifact_hash_rx: &watch::Receiver<Option<String>>,
+        artifact_id_rx: &watch::Receiver<Option<Uuid>>,
         drift_flag: &Arc<AtomicBool>,
     ) -> ConnectOutcome {
         // Connect to WebSocket
@@ -346,12 +369,11 @@ impl ControlPlaneClient {
 
                 // Heartbeat timer
                 _ = heartbeat_interval.tick() => {
-                    let heartbeat = DataPlaneMessage::Heartbeat {
-                        artifact_id: None, // TODO: pass current artifact ID
-                        artifact_hash: artifact_hash_rx.borrow().clone(),
-                        uptime_secs: start_time.elapsed().as_secs(),
-                        requests_total: 0, // TODO: pass actual metrics
-                    };
+                    let heartbeat = heartbeat_message(
+                        *artifact_id_rx.borrow(),
+                        artifact_hash_rx.borrow().clone(),
+                        start_time.elapsed().as_secs(),
+                    );
 
                     let json = match serde_json::to_string(&heartbeat) {
                         Ok(j) => j,
@@ -515,6 +537,24 @@ mod tests {
             .build()
             .unwrap()
             .block_on(async { tokio::time::interval(heartbeat_period(0)) });
+    }
+
+    #[test]
+    fn a_heartbeat_carries_the_artifact_and_the_request_count() {
+        REQUESTS_TOTAL.fetch_add(3, Ordering::Relaxed);
+        let id = Uuid::new_v4();
+        let DataPlaneMessage::Heartbeat {
+            artifact_id,
+            artifact_hash,
+            requests_total,
+            ..
+        } = heartbeat_message(Some(id), Some("abc".into()), 7)
+        else {
+            panic!("a heartbeat");
+        };
+        assert_eq!(artifact_id, Some(id));
+        assert_eq!(artifact_hash.as_deref(), Some("abc"));
+        assert!(requests_total >= 3);
     }
 
     #[test]

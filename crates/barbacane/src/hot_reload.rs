@@ -21,6 +21,39 @@ pub enum HotReloadResult {
 /// Lock to prevent concurrent hot-reloads.
 pub static HOT_RELOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// The last artifact deployed, next to the `--artifact` file. A data plane in
+/// connected mode loads it in place of `--artifact` when it exists.
+pub const CURRENT_ARTIFACT: &str = "current.bca";
+
+/// A downloaded artifact, verified but not yet loaded. Promoted to
+/// [`CURRENT_ARTIFACT`] once the gateway runs it.
+pub const NEXT_ARTIFACT: &str = "current.bca.next";
+
+/// The path of [`CURRENT_ARTIFACT`] in `artifact_dir`, when the file exists.
+pub fn current_artifact(artifact_dir: &Path) -> Option<PathBuf> {
+    let path = artifact_dir.join(CURRENT_ARTIFACT);
+    path.is_file().then_some(path)
+}
+
+/// Make the downloaded artifact the current one, and remove what earlier
+/// downloads left (`artifact-<uuid>.bca`, stale `.next` files).
+pub async fn promote(artifact_dir: &Path) -> Result<PathBuf, String> {
+    let next = artifact_dir.join(NEXT_ARTIFACT);
+    let current = artifact_dir.join(CURRENT_ARTIFACT);
+    tokio::fs::rename(&next, &current)
+        .await
+        .map_err(|e| format!("cannot replace {}: {e}", current.display()))?;
+    if let Ok(mut entries) = tokio::fs::read_dir(artifact_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("artifact-") && name.ends_with(".bca") {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
+    }
+    Ok(current)
+}
+
 /// The client artifacts are downloaded with. It does not decompress, so the
 /// bytes written are the bytes the checksum covers.
 pub fn download_client() -> Result<reqwest::Client, String> {
@@ -115,9 +148,9 @@ pub async fn download_artifact(
         ));
     }
 
-    // Atomic rename to final path
-    let final_filename = format!("artifact-{}.bca", Uuid::new_v4());
-    let final_path = artifact_dir.join(&final_filename);
+    // Atomic rename to the next-artifact path; `promote` makes it current
+    // once the gateway runs it.
+    let final_path = artifact_dir.join(NEXT_ARTIFACT);
     tokio::fs::rename(&temp_path, &final_path)
         .await
         .map_err(|e| format!("rename failed: {}", e))?;
@@ -131,6 +164,35 @@ pub async fn download_artifact(
     );
 
     Ok(final_path)
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn promotion_replaces_the_current_artifact_and_removes_leftovers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(CURRENT_ARTIFACT), b"old").unwrap();
+        std::fs::write(dir.path().join("artifact-1234.bca"), b"legacy").unwrap();
+        std::fs::write(dir.path().join(NEXT_ARTIFACT), b"new").unwrap();
+
+        let current = promote(dir.path()).await.unwrap();
+        assert_eq!(current, dir.path().join(CURRENT_ARTIFACT));
+        assert_eq!(std::fs::read(&current).unwrap(), b"new");
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec![CURRENT_ARTIFACT.to_string()], "{names:?}");
+        assert_eq!(current_artifact(dir.path()), Some(current));
+    }
+
+    #[test]
+    fn no_current_artifact_without_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(current_artifact(dir.path()), None);
+    }
 }
 
 /// Removes the file at its path when dropped, unless disarmed.

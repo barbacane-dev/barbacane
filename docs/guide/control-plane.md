@@ -246,7 +246,7 @@ barbacane control deploy --project <PROJECT_ID> --artifact <ARTIFACT_ID> --wait
 
 Without `--artifact`, the project's latest artifact is deployed. `--wait` returns once every connected data plane runs it, or fails after `--timeout` seconds (120 by default).
 
-The control plane notifies all connected data planes, which download the new artifact with their API key (`GET /artifacts/{id}/download` takes the admin token or the data-plane key of the artifact's project), verify its checksum, and perform a hot-reload.
+The control plane notifies all connected data planes, which download the new artifact with their API key (`GET /artifacts/{id}/download` takes the admin token or the data-plane key of the artifact's project), verify its checksum, and perform a hot-reload. The artifact is kept as `current.bca` next to the `--artifact` file, and a data plane started in connected mode loads it in place of `--artifact` when it exists, so a restart serves the last deployed artifact. A deployment that arrives while a reload runs waits for it.
 
 ## Interactive API Documentation
 
