@@ -8,6 +8,6 @@ pub use handler::ws_handler;
 pub use manager::ConnectionManager;
 
 #[cfg(test)]
-mod socket_tests;
-#[cfg(test)]
 mod registration_tests;
+#[cfg(test)]
+mod socket_tests;
