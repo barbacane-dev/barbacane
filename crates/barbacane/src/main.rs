@@ -1355,11 +1355,38 @@ impl Gateway {
                     // Cap the bytes read while collecting so a chunked body with
                     // no content-length can't be buffered past the limit (DoS).
                     // `Limited` errors as soon as the cap is exceeded.
+                    // The whole body must arrive within `body_read_timeout`, so
+                    // a client trickling bytes cannot hold the request open.
                     let limited =
                         http_body_util::Limited::new(req.into_body(), self.limits.max_body_size);
-                    match limited.collect().await {
-                        Ok(collected) => (collected.to_bytes(), None),
-                        Err(e) => {
+                    let collected =
+                        tokio::time::timeout(self.limits.body_read_timeout, limited.collect())
+                            .await;
+                    match collected {
+                        Ok(Ok(collected)) => (collected.to_bytes(), None),
+                        Err(_elapsed) => {
+                            self.metrics.record_validation_failure(
+                                &method_str,
+                                &route_path,
+                                "body_timeout",
+                            );
+                            let response =
+                                self.request_timeout_response(self.limits.body_read_timeout);
+                            self.record_request_metrics(
+                                &method_str,
+                                &route_path,
+                                response.status().as_u16(),
+                                0,
+                                0,
+                                start_time,
+                            );
+                            return Ok(box_full(Self::add_standard_headers(
+                                response,
+                                &request_id,
+                                &trace_id,
+                            )));
+                        }
+                        Ok(Err(e)) => {
                             let response = if e
                                 .downcast_ref::<http_body_util::LengthLimitError>()
                                 .is_some()
@@ -3039,6 +3066,25 @@ impl Gateway {
         Response::builder()
             .status(StatusCode::PAYLOAD_TOO_LARGE)
             .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .expect("valid response")
+    }
+
+    /// Build a 408 Request Timeout response (RFC 9457): the body did not
+    /// arrive within `deadline`. The connection is closed, since the rest of
+    /// the body is not read.
+    fn request_timeout_response(&self, deadline: Duration) -> Response<Full<Bytes>> {
+        let body = serde_json::json!({
+            "type": "urn:barbacane:error:request-timeout",
+            "title": "Request Timeout",
+            "status": 408,
+            "detail": format!("The request body did not arrive within {} seconds.", deadline.as_secs()),
+        });
+
+        Response::builder()
+            .status(StatusCode::REQUEST_TIMEOUT)
+            .header("content-type", "application/problem+json")
+            .header("connection", "close")
             .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")
     }
@@ -5187,6 +5233,7 @@ async fn main() -> ExitCode {
                 max_headers,
                 max_header_size,
                 max_uri_length,
+                ..RequestLimits::default()
             };
 
             run_dev(
@@ -5285,6 +5332,8 @@ async fn main() -> ExitCode {
                 max_headers,
                 max_header_size,
                 max_uri_length,
+                // A body gets the deadline headers get.
+                body_read_timeout: Duration::from_secs(keepalive_timeout.max(1)),
             };
 
             // Validate connected mode options

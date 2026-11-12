@@ -27,6 +27,15 @@ fn default_connect_timeout_ms() -> u64 {
     5000
 }
 
+/// Longest connect timeout a plugin may choose.
+const MAX_CONNECT_TIMEOUT_MS: u64 = 30_000;
+
+/// The connect timeout a request runs with: the one it asks for, never past
+/// [`MAX_CONNECT_TIMEOUT_MS`].
+fn connect_timeout(requested_ms: u64) -> Duration {
+    Duration::from_millis(requested_ms.min(MAX_CONNECT_TIMEOUT_MS))
+}
+
 /// Connect to an upstream WebSocket endpoint.
 ///
 /// Returns the established WebSocket stream on success, or an error string
@@ -78,7 +87,7 @@ pub async fn connect_upstream(
         }
     }
 
-    let timeout = Duration::from_millis(req.connect_timeout_ms);
+    let timeout = connect_timeout(req.connect_timeout_ms);
     let connect_future = async move {
         // Connect the TCP socket to a vetted address, then run the WebSocket/TLS
         // handshake over that pinned stream.
@@ -96,7 +105,7 @@ pub async fn connect_upstream(
         Ok(result) => result,
         Err(_) => Err(format!(
             "WebSocket connection timed out after {}ms",
-            req.connect_timeout_ms
+            timeout.as_millis()
         )),
     }
 }
@@ -120,6 +129,20 @@ mod tests {
         assert!(
             err.contains("internal address"),
             "expected SSRF block, got: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod connect_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn a_connect_timeout_past_the_cap_is_cut_to_the_cap() {
+        assert_eq!(connect_timeout(5_000), Duration::from_millis(5_000));
+        assert_eq!(
+            connect_timeout(u64::MAX),
+            Duration::from_millis(MAX_CONNECT_TIMEOUT_MS)
         );
     }
 }

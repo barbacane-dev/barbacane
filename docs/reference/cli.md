@@ -587,7 +587,7 @@ The examples below assume the key is set.
 | `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
 | `--tls-key` | No | - | Path to TLS private key file (PEM format) |
 | `--tls-min-version` | No | `1.2` | Minimum TLS version (`1.2` or `1.3`) |
-| `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds |
+| `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds; also the deadline for a request's headers and for its body, answered 408 when missed |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 | `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address for health, metrics, and provenance endpoints. Set to `off` to disable |
 
