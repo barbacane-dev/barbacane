@@ -2100,6 +2100,9 @@ impl Gateway {
         }
     }
 
+    /// Streamed body chunks in flight between `host_http_stream` and the client.
+    const STREAM_CHANNEL_CAPACITY: usize = 16;
+
     /// Dispatch via a WASM plugin (inner function taking pre-serialized request).
     ///
     /// Handles both buffered and streaming (ADR-0023) dispatch paths:
@@ -2152,8 +2155,11 @@ impl Gateway {
 
         // Set up streaming channel (ADR-0023). The sender is injected into the instance so that
         // `host_http_stream` can push `StreamEvent::Headers` then `StreamEvent::Chunk` events
-        // before `dispatch()` returns.
-        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+        // before `dispatch()` returns. The channel is bounded: when the client reads slower
+        // than the upstream sends, it fills and the upstream read waits, so a streamed
+        // response holds at most `STREAM_CHANNEL_CAPACITY` chunks in host memory.
+        let (stream_tx, mut stream_rx) =
+            tokio::sync::mpsc::channel::<StreamEvent>(Self::STREAM_CHANNEL_CAPACITY);
         instance.set_stream_sender(Arc::new(stream_tx));
 
         // Inject request body via side-channel before dispatch.

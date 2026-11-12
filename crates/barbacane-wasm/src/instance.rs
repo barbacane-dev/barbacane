@@ -182,7 +182,7 @@ pub struct PluginState {
     /// Set by the host before calling a streaming-capable dispatcher. The host
     /// function sends `StreamEvent::Headers` once, then `StreamEvent::Chunk` for
     /// each body chunk, then drops the sender to signal end-of-stream.
-    pub stream_sender: Option<Arc<tokio::sync::mpsc::UnboundedSender<StreamEvent>>>,
+    pub stream_sender: Option<Arc<tokio::sync::mpsc::Sender<StreamEvent>>>,
 
     /// Upstream WebSocket upgrade request from `host_ws_upgrade` (ADR-0026).
     ///
@@ -419,10 +419,7 @@ impl PluginState {
     }
 
     /// Set the stream sender for host_http_stream (ADR-0023).
-    pub fn set_stream_sender(
-        &mut self,
-        sender: Arc<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
-    ) {
+    pub fn set_stream_sender(&mut self, sender: Arc<tokio::sync::mpsc::Sender<StreamEvent>>) {
         self.stream_sender = Some(sender);
     }
 
@@ -828,10 +825,7 @@ impl PluginInstance {
     ///
     /// The sender is wrapped in an `Arc` so host functions can clone it for
     /// use inside `std::thread::scope` without lifetime conflicts.
-    pub fn set_stream_sender(
-        &mut self,
-        sender: Arc<tokio::sync::mpsc::UnboundedSender<StreamEvent>>,
-    ) {
+    pub fn set_stream_sender(&mut self, sender: Arc<tokio::sync::mpsc::Sender<StreamEvent>>) {
         self.store.data_mut().set_stream_sender(sender);
     }
 
@@ -1523,10 +1517,13 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
 
     // host_http_stream - streaming HTTP request (ADR-0023)
     //
-    // Same request format as host_http_call. The host immediately begins
-    // forwarding response chunks to the client via the stream_sender channel
-    // while buffering the complete body in last_http_result.
-    // Returns the length of the buffered response, or -1 on error.
+    // Same request format as host_http_call. The host forwards the response
+    // headers, then each body chunk, through the stream_sender channel as the
+    // upstream delivers them; a full channel waits for the client, so the
+    // body is never held in host memory. Without a channel (a call outside a
+    // dispatch), the body is read like host_http_call's, within
+    // max_response_bytes. Returns the length of the metadata-only result
+    // (status and headers, read with host_http_read_result), or -1 on error.
     linker
         .func_wrap(
             "barbacane",
@@ -1615,47 +1612,69 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                                         })
                                         .collect();
 
-                                    // Send headers through the streaming channel.
+                                    // Send headers through the streaming channel. A
+                                    // closed channel means the client is gone: there
+                                    // is no one to stream to.
+                                    let mut client_present = true;
                                     if let Some(tx) = &stream_sender {
-                                        let _ = tx.send(StreamEvent::Headers {
-                                            status,
-                                            headers: upstream_headers.clone(),
-                                        });
+                                        if tx
+                                            .send(StreamEvent::Headers {
+                                                status,
+                                                headers: upstream_headers.clone(),
+                                            })
+                                            .await
+                                            .is_err()
+                                        {
+                                            client_present = false;
+                                        }
                                     }
 
-                                    // Stream body chunks, sending each through the channel
-                                    // while building the complete buffer for last_http_result.
-                                    let mut buffer: Vec<u8> = Vec::new();
+                                    // Forward body chunks as they arrive. Without a
+                                    // channel the body is retained, within the cap.
+                                    let limit = http_client.max_response_bytes();
+                                    let mut retained: Option<Vec<u8>> = None;
                                     let mut byte_stream = upstream.bytes_stream();
 
-                                    while let Some(chunk_result) = byte_stream.next().await {
-                                        match chunk_result {
-                                            Ok(chunk) => {
-                                                if let Some(tx) = &stream_sender {
-                                                    let _ =
-                                                        tx.send(StreamEvent::Chunk(chunk.clone()));
-                                                }
-                                                buffer.extend_from_slice(&chunk);
-                                            }
-                                            Err(e) => {
+                                    while client_present {
+                                        let chunk = match byte_stream.next().await {
+                                            Some(Ok(chunk)) => chunk,
+                                            Some(Err(e)) => {
                                                 tracing::error!(
                                                     "host_http_stream: upstream read error: {}",
                                                     e
                                                 );
                                                 return None;
                                             }
+                                            None => break,
+                                        };
+                                        if let Some(tx) = &stream_sender {
+                                            if tx.send(StreamEvent::Chunk(chunk)).await.is_err() {
+                                                tracing::debug!(
+                                                    "host_http_stream: client went away, upstream read stopped"
+                                                );
+                                                client_present = false;
+                                            }
+                                        } else {
+                                            let body = retained.get_or_insert_with(Vec::new);
+                                            if body.len().saturating_add(chunk.len()) > limit {
+                                                tracing::error!(
+                                                    "host_http_stream: the response is larger than {limit} bytes"
+                                                );
+                                                return None;
+                                            }
+                                            body.extend_from_slice(&chunk);
                                         }
                                     }
 
-                                    // Strip body into side-channel, serialize
-                                    // metadata-only JSON for host_http_read_result.
+                                    // Metadata-only JSON for host_http_read_result; the
+                                    // body, when retained, goes through the side-channel.
                                     let complete = HttpClientResponse {
                                         status,
                                         headers: upstream_headers.into_iter().collect(),
                                         body: None,
                                     };
                                     let json = serde_json::to_vec(&complete).ok();
-                                    Some((json, Some(buffer)))
+                                    Some((json, retained))
                                 }
                                 Err(e) => {
                                     tracing::error!("host_http_stream: request failed: {}", e);
@@ -2851,7 +2870,7 @@ mod tests {
     fn plugin_state_set_stream_sender() {
         let limits = PluginLimits::default();
         let mut state = PluginState::new("test".into(), &limits);
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<crate::instance::StreamEvent>();
+        let (tx, _rx) = tokio::sync::mpsc::channel::<crate::instance::StreamEvent>(1);
         state.set_stream_sender(Arc::new(tx));
         assert!(state.stream_sender.is_some());
     }
@@ -2925,5 +2944,139 @@ mod tests {
         assert!(state.nats_publisher.is_some());
         assert!(state.kafka_publisher.is_some());
         assert!(state.ldap_client.is_none());
+    }
+}
+
+#[cfg(test)]
+mod http_stream_tests {
+    use super::*;
+    use crate::http_client::{HttpClient, HttpClientConfig};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// Serves one chunked HTTP/1.1 response carrying `body`, `chunk` bytes
+    /// per frame. Write errors are expected when the host stops reading.
+    fn serve_once(body: Vec<u8>, chunk: usize) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            );
+            for piece in body.chunks(chunk) {
+                let _ = socket.write_all(format!("{:x}\r\n", piece.len()).as_bytes());
+                let _ = socket.write_all(piece);
+                let _ = socket.write_all(b"\r\n");
+            }
+            let _ = socket.write_all(b"0\r\n\r\n");
+        });
+        (port, handle)
+    }
+
+    /// A dispatcher whose `dispatch` hands its request bytes to
+    /// `host_http_stream`, then returns the retained body's length, or -1
+    /// when the stream failed or nothing was retained.
+    fn streaming_plugin(max_response_bytes: usize) -> (crate::WasmEngine, PluginInstance) {
+        let limits = PluginLimits {
+            max_fuel: 100_000,
+            max_execution_ms: 10_000,
+            ..PluginLimits::default()
+        };
+        let engine = crate::WasmEngine::with_limits(limits.clone()).expect("engine");
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "barbacane" "host_http_stream" (func $stream (param i32 i32) (result i32)))
+                (import "barbacane" "host_http_response_body_len" (func $body_len (result i64)))
+                (memory (export "memory") 1)
+                (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+                (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+                (func (export "dispatch") (param i32 i32) (result i32)
+                    (if (i32.lt_s (call $stream (local.get 0) (local.get 1)) (i32.const 0))
+                        (then (return (i32.const -1))))
+                    (i32.wrap_i64 (call $body_len))))"#,
+        )
+        .expect("valid wat");
+        let module = engine
+            .compile(&wasm, "stream".into(), "0.0.0".into(), false)
+            .expect("compiles");
+        let client = HttpClient::new(HttpClientConfig {
+            allow_plaintext: true,
+            allow_internal_egress: true,
+            max_response_bytes,
+            ..HttpClientConfig::default()
+        })
+        .expect("client");
+        let instance = PluginInstance::new_with_http_client(
+            engine.engine(),
+            &module,
+            limits,
+            Some(Arc::new(client)),
+        )
+        .expect("instance");
+        (engine, instance)
+    }
+
+    fn request(port: u16) -> Vec<u8> {
+        format!(r#"{{"method":"GET","url":"http://127.0.0.1:{port}/","headers":{{}}}}"#)
+            .into_bytes()
+    }
+
+    #[test]
+    fn a_streamed_body_is_forwarded_and_not_retained() {
+        let body: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+        let (port, server) = serve_once(body.clone(), 4096);
+        let (_engine, mut instance) = streaming_plugin(16 * 1024 * 1024);
+        // Two chunks in flight at most: the host waits for the reader.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        instance.set_stream_sender(Arc::new(tx));
+        let reader = std::thread::spawn(move || {
+            let mut status = None;
+            let mut received = Vec::new();
+            while let Some(event) = rx.blocking_recv() {
+                match event {
+                    StreamEvent::Headers { status: s, .. } => status = Some(s),
+                    StreamEvent::Chunk(chunk) => received.extend_from_slice(&chunk),
+                }
+            }
+            (status, received)
+        });
+
+        let retained = instance.dispatch(&request(port)).expect("dispatch runs");
+        assert_eq!(retained, -1, "no body is retained after streaming");
+        let metadata = instance
+            .take_last_http_result()
+            .expect("status and headers");
+        let metadata: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+        assert_eq!(metadata["status"], 200);
+        assert!(metadata["body"].is_null(), "{metadata}");
+
+        drop(instance);
+        let (status, received) = reader.join().unwrap();
+        assert_eq!(status, Some(200));
+        assert_eq!(received, body);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn without_a_receiver_the_body_is_retained_within_the_cap() {
+        let (port, server) = serve_once(vec![7u8; 512], 256);
+        let (_engine, mut instance) = streaming_plugin(1024);
+        assert_eq!(
+            instance.dispatch(&request(port)).expect("dispatch runs"),
+            512
+        );
+        server.join().unwrap();
+
+        let (port, server) = serve_once(vec![7u8; 4096], 1024);
+        let (_engine, mut instance) = streaming_plugin(1024);
+        assert_eq!(
+            instance.dispatch(&request(port)).expect("dispatch runs"),
+            -1
+        );
+        assert!(instance.take_last_http_result().is_none());
+        server.join().unwrap();
     }
 }
