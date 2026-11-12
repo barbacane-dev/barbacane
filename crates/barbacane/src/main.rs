@@ -3757,6 +3757,7 @@ Thumbs.db
 #[allow(clippy::too_many_arguments)]
 async fn perform_hot_reload(
     notification: control_plane::ArtifactNotification,
+    download_token: Option<String>,
     shared_gateway: &SharedGateway,
     artifact_dir: &Path,
     dev_mode: bool,
@@ -3794,6 +3795,7 @@ async fn perform_hot_reload(
             hot_reload::download_artifact(
                 &client,
                 &notification.download_url,
+                download_token.as_deref(),
                 &notification.sha256,
                 artifact_dir,
                 barbacane_compiler::MAX_ARTIFACT_BYTES,
@@ -4705,7 +4707,9 @@ async fn run_serve(
     };
     let drift_detected = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Start control plane client if in connected mode
+    // Start control plane client if in connected mode. Artifacts are downloaded
+    // with the same key the data plane registers with.
+    let download_token = connected_mode.as_ref().map(|config| config.api_key.clone());
     let (mut artifact_rx, response_tx, control_plane_http_base) = if let Some(config) =
         connected_mode
     {
@@ -4829,10 +4833,12 @@ async fn run_serve(
                 let artifact_hash_tx_clone = artifact_hash_tx.clone();
                 let admin_manifest_clone = admin_manifest.clone();
                 let trust_clone = trust.clone();
+                let download_token = download_token.clone();
 
                 tokio::spawn(async move {
                     let result = perform_hot_reload(
                         notification,
+                        download_token,
                         &gateway_clone,
                         &artifact_dir_clone,
                         dev,

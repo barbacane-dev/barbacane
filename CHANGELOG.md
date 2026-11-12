@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **connected mode**: a data plane downloads the artifact `deploy` announces with its own API key, and the control plane accepts the data-plane key of the artifact's project on `GET /artifacts/{id}/download`, besides the admin token. The download took the admin token only, which a data plane does not hold, so every deployment ended in a failed hot-reload.
 - **vacuum ruleset**: `barbacane-no-unknown-extension` accepts `x-barbacane-waf`, so a spec that configures the WAF no longer gets an unknown-extension warning.
 - **docker-compose**: the control-plane service passes `BARBACANE_CONTROL_ADMIN_TOKEN`, and compose stops with a message when it is unset, instead of starting a control plane that exits for want of it.
 - **specs**: a `$ref` stands for the object it names in OpenAPI request bodies and in AsyncAPI channels, channel messages, operation messages and channel parameters; one that does not resolve is `E1003`. In OpenAPI 3.1 and later, keywords beside a schema's `$ref` apply, as JSON Schema 2020-12 defines; OpenAPI 3.0 and AsyncAPI ignore them. The values of `const`, `enum`, `default`, `example` and `examples` are kept as written. An AsyncAPI 3 channel parameter's `enum` is enforced.

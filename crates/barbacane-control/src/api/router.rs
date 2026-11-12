@@ -49,6 +49,8 @@ pub struct AppState {
     pub compilation_tx: Option<mpsc::Sender<Uuid>>,
     /// WebSocket connection manager for data planes.
     pub connection_manager: Arc<ConnectionManager>,
+    /// The admin credential, for the routes that also take a data-plane key.
+    pub admin_auth: AdminAuth,
 }
 
 /// Handler to serve the OpenAPI specification.
@@ -115,14 +117,22 @@ pub fn create_router(
         pool,
         compilation_tx,
         connection_manager,
+        admin_auth: admin_auth.clone(),
     };
 
     // Public routes: liveness, and the data-plane WebSocket (which performs its
-    // own API-key authentication inside the handler).
+    // own API-key authentication inside the handler). The artifact download
+    // authenticates in its handler too: the admin token, or the data-plane key
+    // of the artifact's project, since a data plane fetches what `deploy`
+    // publishes with its own key.
     let public = Router::new()
         .route("/health", get(health::health_check))
         // WebSocket for data plane connections
-        .route("/ws/data-plane", get(ws::ws_handler));
+        .route("/ws/data-plane", get(ws::ws_handler))
+        .route(
+            "/artifacts/{id}/download",
+            get(artifacts::download_artifact),
+        );
 
     // Protected routes: everything else requires the admin bearer token.
     let protected = Router::new()
@@ -164,10 +174,6 @@ pub fn create_router(
         .route("/artifacts", get(artifacts::list_artifacts))
         .route("/artifacts/{id}", get(artifacts::get_artifact))
         .route("/artifacts/{id}", delete(artifacts::delete_artifact))
-        .route(
-            "/artifacts/{id}/download",
-            get(artifacts::download_artifact),
-        )
         // Spec operations (plugin bindings)
         .route(
             "/specs/{id}/operations",
