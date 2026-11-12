@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "barbacane-plugin-sdk",
  "base64",
+ "hmac",
  "serde",
  "serde_json",
  "sha2",
@@ -15,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-macros"
-version = "0.12.1"
+version = "0.12.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -24,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "barbacane-plugin-sdk"
-version = "0.12.1"
+version = "0.12.3"
 dependencies = [
  "barbacane-plugin-macros",
  "base64",
@@ -81,6 +82,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -91,6 +93,15 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
@@ -182,6 +193,12 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
+
+[[package]]
+name = "subtle"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "syn"

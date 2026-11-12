@@ -42,7 +42,6 @@ To verify against keys an identity provider publishes at a JWKS URL, with rotati
 | `clock_skew_seconds` | integer | `60` | Tolerance in seconds for `exp`/`nbf` validation |
 | `groups_claim` | string | - | Claim name to extract consumer groups from (e.g., `"roles"`, `"groups"`). Value is set as `x-auth-consumer-groups` |
 | `skip_signature_validation` | boolean | `false` | Test only: ignored by the compiled plugin, so it cannot disable verification |
-| `jwks_url`, `public_key_pem` | string | - | Accepted but not used by `jwt-auth`; use `oidc-auth` for JWKS, or supply `public_key_jwk` |
 
 ### Context headers
 

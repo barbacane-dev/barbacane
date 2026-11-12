@@ -13,7 +13,7 @@ use barbacane_plugin_sdk::log;
 use barbacane_plugin_sdk::prelude::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::collections::HashMap;
 
 /// Upper bound on cached credentials, so a credential-stuffing run cannot grow
@@ -257,7 +257,7 @@ impl LdapAuth {
         }
 
         let now = clock::now_ms();
-        let password_hash = hash_password(&password);
+        let password_hash = self.hash_password(&password);
 
         let outcome = match self.cache_lookup(&username, &password_hash, now) {
             Some(cached) => cached,
@@ -501,10 +501,47 @@ fn extract_credentials(req: &Request) -> Result<(String, String), AuthError> {
     Ok((username.to_string(), password.to_string()))
 }
 
-fn hash_password(password: &str) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&Sha256::digest(password.as_bytes()));
-    out
+impl LdapAuth {
+    /// The cache's fingerprint of a password: an HMAC keyed with the service
+    /// bind password, so a dump of the cache gives no password hash to crack
+    /// and no two instances share fingerprints.
+    fn hash_password(&self, password: &str) -> [u8; 32] {
+        use hmac::{Hmac, Mac};
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.bind_password.as_bytes())
+            .expect("HMAC takes a key of any length");
+        mac.update(password.as_bytes());
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&mac.finalize().into_bytes());
+        out
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::LdapAuth;
+
+    fn plugin(bind_password: &str) -> LdapAuth {
+        serde_json::from_value(serde_json::json!({
+            "url": "ldap://directory.example:389",
+            "user_base_dn": "ou=people,dc=example,dc=org",
+            "bind_dn": "cn=svc,dc=example,dc=org",
+            "bind_password": bind_password,
+        }))
+        .expect("config")
+    }
+
+    #[test]
+    fn the_fingerprint_is_keyed_so_no_bare_hash_of_the_password_is_held() {
+        use sha2::{Digest, Sha256};
+        let a = plugin("service-secret-a");
+        let b = plugin("service-secret-b");
+        assert_ne!(a.hash_password("hunter2"), b.hash_password("hunter2"));
+        assert_ne!(
+            a.hash_password("hunter2").as_slice(),
+            Sha256::digest(b"hunter2").as_slice()
+        );
+        assert_eq!(a.hash_password("hunter2"), a.hash_password("hunter2"));
+    }
 }
 
 fn map_bind_error(e: LdapError) -> AuthError {
