@@ -3106,6 +3106,10 @@ mod http_stream_tests {
         );
         assert!(instance.take_last_http_result().is_none());
         server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod log_message_tests {
     use super::log_message;
 
