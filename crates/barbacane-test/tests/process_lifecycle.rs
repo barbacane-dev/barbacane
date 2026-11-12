@@ -9,7 +9,7 @@
 //! owns broker and directory clients that each carry one, so the panic fired
 //! whatever the artifact contained.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT, STARTUP_TIMEOUT};
@@ -111,26 +111,25 @@ fn sigterm_on_a_serving_gateway_exits_zero() {
     let dir = tempfile::tempdir().expect("temp dir");
     let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
 
-    let mut child = Command::new(&binary)
-        .arg("serve")
+    let mut cmd = Command::new(&binary);
+    cmd.arg("serve")
         .arg("--artifact")
         .arg(&artifact)
-        .args(["--listen", "127.0.0.1:34201"])
+        .args(["--listen", LISTEN_ANY_PORT])
         .arg("--allow-unsigned")
-        .env_remove("BARBACANE_TRUSTED_PUBKEY")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the gateway");
-
+        .env_remove("BARBACANE_TRUSTED_PUBKEY");
+    let mut process = LoggedChild::spawn(&mut cmd).expect("spawn the gateway");
+    let port = process.announced_port("listening on", STARTUP_TIMEOUT);
     assert!(
-        wait_for_port(34201, Duration::from_secs(30)),
-        "the gateway never accepted a connection"
+        port.is_some_and(|port| wait_for_port(port, Duration::from_secs(30))),
+        "the gateway never accepted a connection:\n{}",
+        process.log().text()
     );
 
     unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
+        libc::kill(process.id().expect("running") as i32, libc::SIGTERM);
     }
+    let (mut child, log) = process.into_parts();
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let status = loop {
@@ -144,11 +143,7 @@ fn sigterm_on_a_serving_gateway_exits_zero() {
         }
     };
 
-    let mut stderr = String::new();
-    if let Some(mut e) = child.stderr.take() {
-        use std::io::Read;
-        let _ = e.read_to_string(&mut stderr);
-    }
+    let stderr = log.text();
 
     assert!(
         !stderr.contains("panicked"),
@@ -173,13 +168,14 @@ fn a_taken_port_reports_the_cause_without_panicking() {
     let dir = tempfile::tempdir().expect("temp dir");
     let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
 
-    let held = std::net::TcpListener::bind("127.0.0.1:34202").expect("hold the port");
+    let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
+    let taken = held.local_addr().expect("local addr").port();
 
     let output = Command::new(&binary)
         .arg("serve")
         .arg("--artifact")
         .arg(&artifact)
-        .args(["--listen", "127.0.0.1:34202"])
+        .args(["--listen", &format!("127.0.0.1:{taken}")])
         .arg("--allow-unsigned")
         .env_remove("BARBACANE_TRUSTED_PUBKEY")
         .output()
