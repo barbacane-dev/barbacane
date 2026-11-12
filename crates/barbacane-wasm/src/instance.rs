@@ -20,6 +20,32 @@ use crate::http_client::{
 };
 use crate::limits::PluginLimits;
 
+/// Longest message `host_log` writes; a longer one is cut and flagged.
+pub const MAX_LOG_MESSAGE_BYTES: usize = 4096;
+
+/// A plugin's log message as written: valid UTF-8, cut to `max` bytes at a
+/// character boundary, with every control character replaced by a space so a
+/// message cannot forge line breaks or terminal sequences. `None` when the
+/// bytes are not UTF-8. The flag says whether the message was cut.
+fn log_message(bytes: &[u8], max: usize) -> Option<(String, bool)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let truncated = text.len() > max;
+    let kept = if truncated {
+        let mut end = max;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        &text[..end]
+    } else {
+        text
+    };
+    let clean = kept
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    Some((clean, truncated))
+}
+
 /// Events sent through the streaming channel by `host_http_stream` (ADR-0023).
 ///
 /// The host function sends `Headers` once (before any chunks), then zero or
@@ -1324,13 +1350,15 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                 let data = memory.data(&caller);
 
                 if end <= data.len() {
-                    if let Ok(message) = std::str::from_utf8(&data[start..end]) {
+                    if let Some((message, truncated)) =
+                        log_message(&data[start..end], MAX_LOG_MESSAGE_BYTES)
+                    {
                         let plugin_name = caller.data().plugin_name.clone();
                         match level {
-                            0 => tracing::error!(plugin = %plugin_name, "{}", message),
-                            1 => tracing::warn!(plugin = %plugin_name, "{}", message),
-                            2 => tracing::info!(plugin = %plugin_name, "{}", message),
-                            _ => tracing::debug!(plugin = %plugin_name, "{}", message),
+                            0 => tracing::error!(plugin = %plugin_name, truncated, "{}", message),
+                            1 => tracing::warn!(plugin = %plugin_name, truncated, "{}", message),
+                            2 => tracing::info!(plugin = %plugin_name, truncated, "{}", message),
+                            _ => tracing::debug!(plugin = %plugin_name, truncated, "{}", message),
                         }
                     }
                 }
@@ -3078,5 +3106,32 @@ mod http_stream_tests {
         );
         assert!(instance.take_last_http_result().is_none());
         server.join().unwrap();
+mod log_message_tests {
+    use super::log_message;
+
+    #[test]
+    fn a_short_message_is_written_as_is() {
+        assert_eq!(log_message(b"hello", 16), Some(("hello".into(), false)));
+    }
+
+    #[test]
+    fn control_characters_become_spaces() {
+        assert_eq!(
+            log_message(b"line\nbreak\x1b[31mred\x7f", 64),
+            Some(("line break [31mred ".into(), false))
+        );
+    }
+
+    #[test]
+    fn a_long_message_is_cut_at_a_character_boundary_and_flagged() {
+        let message = "caf\u{e9}".repeat(4);
+        let (written, truncated) = log_message(message.as_bytes(), 9).unwrap();
+        assert_eq!(written, "caf\u{e9}caf");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_are_not_written() {
+        assert_eq!(log_message(&[0xff, 0xfe], 16), None);
     }
 }
