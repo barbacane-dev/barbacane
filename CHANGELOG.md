@@ -31,6 +31,12 @@ The breaking changes below are gathered, with what to do and in which order, in 
   > **Upgrade note (breaking):** a custom plugin that builds an SDK type as a struct literal, or calls `log::log` with a number, does not compile until it uses the constructors and `log::Level`.
 
 - **plugins**: a plugin must export `alloc`; the gateway no longer grows memory on its own to write the configuration and requests into a plugin without one. Every plugin built with the SDK macros exports it.
+- **cors**: a request from an origin not in `allowed_origins` passes through, and its response carries no CORS headers, where it was answered `403`; a same-origin `POST` from an application served next to the API no longer needs the API's own origin listed. A preflight from such an origin is still refused with `403`.
+- **oauth2-auth**: an introspection endpoint that cannot be reached, or answers something the plugin cannot read, is answered `503` with the problem type `urn:barbacane:error:introspection-unavailable`, where it was `401`; a token the endpoint rejects is still `401`.
+- **basic-auth**, **ldap-auth**, **oidc-auth**: the authentication scheme is matched case-insensitively (`BASIC`, `Bearer`, `bearer`), as the other authentication plugins do.
+- **cel**: the expression is compiled when the plugin is initialised, so an expression that does not parse fails init (logged by the gateway) rather than answering every request with a `500`.
+- **plugins**: every official plugin refuses a configuration with a key it does not know, as the vacuum ruleset already did; a configuration that reaches a plugin without vacuum (the control plane's API, a hand-built artifact) is refused at init rather than ignored in part.
+- **middlewares**: a middleware whose `on_response` returns a non-zero code (the SDK macros do when they cannot parse the response) fails the request with a `500`, as a trap does; the response it could not read is not served in its place.
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
 
   > **Upgrade note (breaking):** recompile every artifact with this release's compiler before upgrading a data plane.

@@ -732,6 +732,35 @@ async fn test_oauth2_auth_valid_token() {
     assert_eq!(body["message"], "Access granted");
 }
 
+/// An introspection endpoint that answers something the plugin cannot read is
+/// a 503 naming the introspection, not a 401 blaming the client.
+#[tokio::test]
+async fn test_oauth2_auth_introspection_unavailable_is_503() {
+    use wiremock::MockServer;
+
+    // No mock mounted: every introspection call is answered 404.
+    let mock_server = MockServer::start().await;
+    let introspection_url = format!("{}/introspect", mock_server.uri());
+    let (_temp_dir, spec_path) = create_oauth2_spec(&introspection_url);
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/protected")
+        .header("Authorization", "Bearer some-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+    assert!(resp.headers().get("www-authenticate").is_none());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["type"],
+        "urn:barbacane:error:introspection-unavailable"
+    );
+}
+
 #[tokio::test]
 async fn test_oauth2_auth_missing_token() {
     use wiremock::MockServer;

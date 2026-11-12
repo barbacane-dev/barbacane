@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 /// Kafka dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KafkaDispatcher {
     /// Kafka broker addresses (comma-separated, e.g. "kafka:9092").
     brokers: String,

@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 /// Mock dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MockDispatcher {
     /// HTTP status code to return (default: 200).
     #[serde(default = "default_status")]

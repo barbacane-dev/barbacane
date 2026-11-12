@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 /// OIDC authentication middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OidcAuth {
     /// OIDC issuer URL (e.g., "https://accounts.google.com").
     issuer_url: String,
@@ -433,10 +434,9 @@ impl OidcAuth {
             .get("authorization")
             .or_else(|| req.headers.get("Authorization"))
         {
-            if !auth_header.starts_with("Bearer ") && !auth_header.starts_with("bearer ") {
-                return Err(OidcError::InvalidAuthHeader);
-            }
-            return Ok(auth_header[7..].trim().to_string());
+            return barbacane_plugin_sdk::jwt::bearer_token(auth_header)
+                .map(|token| token.trim().to_string())
+                .ok_or(OidcError::InvalidAuthHeader);
         }
 
         // RFC 6750 §2.3 — query parameter fallback
@@ -658,14 +658,14 @@ impl OidcAuth {
 
         // Validate expiration
         if let Some(exp) = claims.exp {
-            if now > exp + self.clock_skew_seconds {
+            if now > exp.saturating_add(self.clock_skew_seconds) {
                 return Err(OidcError::TokenExpired);
             }
         }
 
         // Validate not before
         if let Some(nbf) = claims.nbf {
-            if now + self.clock_skew_seconds < nbf {
+            if now.saturating_add(self.clock_skew_seconds) < nbf {
                 return Err(OidcError::TokenNotYetValid);
             }
         }

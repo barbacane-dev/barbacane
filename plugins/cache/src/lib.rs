@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 /// Cache middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cache {
     /// Time-to-live for cached responses in seconds.
     #[serde(default = "default_ttl")]
@@ -366,6 +367,22 @@ fn call_cache_set(key: &str, entry_json: &str, ttl_secs: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configuration with a key the plugin does not know is refused at init
+    /// rather than ignored in part.
+    #[test]
+    fn an_unknown_configuration_key_is_refused() {
+        let err = serde_json::from_str::<Cache>(r#"{"ttl": 60, "nope": 1}"#)
+            .err()
+            .expect("unknown key");
+        assert!(err.to_string().contains("nope"), "{err}");
+    }
+
+    /// A configuration the schema refuses is refused at init too.
+    #[test]
+    fn an_invalid_configuration_is_refused() {
+        assert!(serde_json::from_str::<Cache>(r#"{"ttl": "sixty"}"#).is_err());
+    }
 
     fn setup() {
         #[cfg(not(target_arch = "wasm32"))]

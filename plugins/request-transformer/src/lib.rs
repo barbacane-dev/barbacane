@@ -91,6 +91,7 @@ struct BodyConfig {
 /// Request transformer middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequestTransformer {
     #[serde(default)]
     headers: Option<HeaderConfig>,

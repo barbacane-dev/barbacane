@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 /// API key authentication middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiKeyAuth {
     /// Where to extract the API key from.
     /// Options: "header" (default), "query"

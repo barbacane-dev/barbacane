@@ -12,6 +12,7 @@ use serde::Deserialize;
 /// Rate limit middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RateLimit {
     /// Maximum requests allowed in the window.
     quota: u32,

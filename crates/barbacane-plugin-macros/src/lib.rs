@@ -162,7 +162,11 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
 
                 let mut request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
                     Ok(r) => r,
-                    Err(_) => return 1, // Parse error, short-circuit
+                    Err(_) => {
+                        // Parse error: free the input buffer and fail the request.
+                        dealloc(ptr, len);
+                        return 1;
+                    }
                 };
 
                 // Free the input buffer — data is now owned by `request`.
@@ -213,7 +217,11 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
 
                 let mut response: barbacane_plugin_sdk::prelude::Response = match serde_json::from_slice(response_bytes) {
                     Ok(r) => r,
-                    Err(_) => return 1,
+                    Err(_) => {
+                        // Parse error: free the input buffer and fail the request.
+                        dealloc(ptr, len);
+                        return 1;
+                    }
                 };
 
                 // Free the input buffer.

@@ -68,6 +68,7 @@ mod mock_host {
 /// Observability middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Observability {
     /// Latency SLO threshold in milliseconds.
     /// If set, emits `barbacane_plugin_observability_slo_violation` counter when exceeded.

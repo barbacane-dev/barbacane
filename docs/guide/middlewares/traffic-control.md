@@ -36,8 +36,8 @@ x-barbacane-middlewares:
 ### Partition key sources
 
 - `client_ip` — Client IP from `X-Forwarded-For` or `X-Real-IP`
-- `header:<name>` — Header value (e.g., `header:X-API-Key`)
-- `context:<key>` — Context value set by an upstream middleware (e.g., `context:auth.sub`)
+- `header:<name>` — Header value (e.g., `header:X-API-Key`). The client chooses the value, so a client can spread its requests over as many buckets as it likes; use it for limits the client is meant to scope itself, not for limits per identity
+- `context:<key>` — Context value set by an upstream middleware (e.g., `context:auth.sub`, which every authentication plugin writes and no client can supply): the source for a limit per identity
 - Any static string — same limit for all requests sharing that string
 
 ### Response headers
@@ -122,11 +122,9 @@ Origins can be:
 - Wildcard subdomain: `*.example.com` (matches `sub.example.com` and `a.b.example.com`, but not `example.com` itself or `evilexample.com`)
 - Wildcard: `*` (only when `allow_credentials: false`)
 
-### Error responses
+### Requests from an origin not in the list
 
-- `403 Forbidden` — Origin not in allowed list
-- `403 Forbidden` — Method not allowed (preflight)
-- `403 Forbidden` — Headers not allowed (preflight)
+A request whose `Origin` is not allowed passes through and its response carries no CORS headers, as the Fetch model has it: the browser refuses the response to the page, and a same-origin request (a browser sends `Origin` on every `POST`) or a non-browser client is unaffected. A preflight from such an origin is refused with `403 Forbidden`, as are preflights asking for a method or a header not in the list.
 
 ### Preflight responses
 

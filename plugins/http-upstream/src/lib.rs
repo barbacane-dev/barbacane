@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 /// HTTP upstream dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpUpstreamDispatcher {
     /// Base URL of the upstream (e.g., https://api.example.com). Exclusive
     /// with `endpoints`.

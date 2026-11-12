@@ -733,14 +733,19 @@ impl PluginInstance {
         self.call_handler(func, request_json)
     }
 
-    /// Call on_response with the given response data.
+    /// Call on_response with the given response data. A non-zero result is a
+    /// failure the plugin reports itself (a response it could not parse, an
+    /// instance that was never initialised) and is returned as an error.
     pub fn on_response(&mut self, response_json: &[u8]) -> Result<i32, WasmError> {
         let func = self
             .on_response_func
             .clone()
             .ok_or_else(|| WasmError::MissingExport("on_response".into()))?;
 
-        self.call_handler(func, response_json)
+        match self.call_handler(func, response_json)? {
+            0 => Ok(0),
+            code => Err(WasmError::InvalidReturnCode(code)),
+        }
     }
 
     /// Call dispatch with the given request data.

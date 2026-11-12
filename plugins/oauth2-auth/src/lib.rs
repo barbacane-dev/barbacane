@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 /// OAuth2 token introspection middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OAuth2Auth {
     /// Token introspection endpoint URL (RFC 7662).
     introspection_endpoint: String,
@@ -148,6 +149,7 @@ impl OAuth2Error {
     fn status_code(&self) -> u16 {
         match self {
             OAuth2Error::InsufficientScope => 403,
+            OAuth2Error::IntrospectionFailed(_) => 503,
             _ => 401,
         }
     }
@@ -359,22 +361,34 @@ impl OAuth2Auth {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
 
-        // RFC 6750: WWW-Authenticate header
-        let www_auth = format!(
-            "Bearer realm=\"api\", error=\"{}\", error_description=\"{}\"",
-            error.as_str(),
-            error.description()
-        );
-        headers.insert("www-authenticate".to_string(), www_auth);
+        // RFC 6750: WWW-Authenticate header, on the answers that challenge the client.
+        if status != 503 {
+            let www_auth = format!(
+                "Bearer realm=\"api\", error=\"{}\", error_description=\"{}\"",
+                error.as_str(),
+                error.description()
+            );
+            headers.insert("www-authenticate".to_string(), www_auth);
+        }
 
-        let error_type = match status {
-            403 => "urn:barbacane:error:authorization-failed",
-            _ => "urn:barbacane:error:authentication-failed",
+        let (error_type, title) = match status {
+            403 => (
+                "urn:barbacane:error:authorization-failed",
+                "Authorization failed",
+            ),
+            503 => (
+                "urn:barbacane:error:introspection-unavailable",
+                "Service Unavailable",
+            ),
+            _ => (
+                "urn:barbacane:error:authentication-failed",
+                "Authentication failed",
+            ),
         };
 
         let body = serde_json::json!({
             "type": error_type,
-            "title": if status == 403 { "Authorization failed" } else { "Authentication failed" },
+            "title": title,
             "status": status,
             "detail": error.description()
         });
@@ -870,7 +884,7 @@ mod tests {
         assert_eq!(OAuth2Error::InvalidAuthHeader.status_code(), 401);
         assert_eq!(
             OAuth2Error::IntrospectionFailed("test".to_string()).status_code(),
-            401
+            503
         );
         assert_eq!(OAuth2Error::TokenInactive.status_code(), 401);
         assert_eq!(OAuth2Error::InsufficientScope.status_code(), 403);
