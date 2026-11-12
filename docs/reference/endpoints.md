@@ -14,10 +14,7 @@ Returns the gateway health status.
 
 ```json
 {
-  "status": "healthy",
-  "artifact_version": 1,
-  "compiler_version": "0.1.0",
-  "routes_count": 12
+  "status": "healthy"
 }
 ```
 
@@ -26,9 +23,8 @@ Returns the gateway health status.
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | Always `"healthy"` if responding |
-| `artifact_version` | integer | `.bca` format version |
-| `compiler_version` | string | `barbacane` version that compiled the artifact |
-| `routes_count` | integer | Number of routes loaded |
+
+The artifact's format version, the compiler that produced it and the route count are on the admin API's `/health` (loopback by default), not on this public endpoint.
 
 ### Usage
 

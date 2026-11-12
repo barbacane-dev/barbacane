@@ -758,7 +758,7 @@ Every response includes these standard headers:
 
 | Header | Description |
 |--------|-------------|
-| `Server` | `barbacane/<version>` (e.g., `barbacane/0.1.0`) |
+| `Server` | `barbacane`, with no version |
 | `X-Request-Id` | Request ID: the incoming header when it is at most 128 bytes of visible ASCII, otherwise a generated UUID v4 |
 | `X-Trace-Id` | Trace ID: the trace id of a well-formed W3C `traceparent` header, otherwise generated |
 | `X-Content-Type-Options` | `nosniff` - prevents MIME sniffing attacks |
@@ -768,7 +768,7 @@ Example response headers:
 
 ```
 HTTP/1.1 200 OK
-Server: barbacane/0.1.0
+Server: barbacane
 X-Request-Id: 550e8400-e29b-41d4-a716-446655440000
 X-Trace-Id: 4bf92f3577b34da6a3ce929d0e0e4736
 X-Content-Type-Options: nosniff
@@ -789,7 +789,7 @@ Example for deprecated endpoint:
 
 ```
 HTTP/1.1 200 OK
-Server: barbacane/0.1.0
+Server: barbacane
 Deprecation: true
 Sunset: Sat, 31 Dec 2025 23:59:59 GMT
 Content-Type: application/json

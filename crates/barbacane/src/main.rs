@@ -34,7 +34,7 @@ type AnyBody = BoxBody<Bytes, Infallible>;
 fn box_full(r: Response<Full<Bytes>>) -> Response<AnyBody> {
     r.map(BoxBody::new)
 }
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
@@ -44,8 +44,9 @@ use tokio_rustls::TlsAcceptor;
 use tracing::Instrument;
 use uuid::Uuid;
 
-/// Server version for the Server header.
-const SERVER_VERSION: &str = concat!("barbacane/", env!("CARGO_PKG_VERSION"));
+/// The `Server` header: the product, no version, since a version on every
+/// response tells a scanner what to try. The admin API carries the version.
+const SERVER_HEADER: &str = "barbacane";
 
 /// Metric `path` label used for requests that never matched a declared route
 /// (unmatched, method-not-allowed, or rejected before routing). Using a fixed
@@ -1032,7 +1033,16 @@ impl Gateway {
         let mut router = Router::new();
         let mut validators = Vec::new();
 
-        for op in &resolved_operations {
+        for (position, op) in resolved_operations.iter().enumerate() {
+            // An operation's index is its position: the request path indexes
+            // the validators by it, so a mismatch is refused here rather than
+            // met as an out-of-range index per request.
+            if op.index != position {
+                return Err(format!(
+                    "artifact operation {} {} carries index {} at position {position}",
+                    op.method, op.path, op.index
+                ));
+            }
             // Map AsyncAPI methods to HTTP methods for sync-to-async bridge pattern:
             // - SEND → POST (publish message via HTTP POST, get 202 Accepted)
             // - RECEIVE → GET (for SSE/WebSocket subscriptions, less common)
@@ -1140,7 +1150,7 @@ impl Gateway {
         // Observability headers. `request_id`/`trace_id` may originate from
         // client-supplied headers, so never panic on a value that isn't a legal
         // header value — fall back to a placeholder instead.
-        headers.insert("server", HeaderValue::from_static(SERVER_VERSION));
+        headers.insert("server", HeaderValue::from_static(SERVER_HEADER));
         headers.insert(
             "x-request-id",
             HeaderValue::from_str(request_id)
@@ -2746,13 +2756,11 @@ impl Gateway {
     }
 
     /// Build the health response.
+    /// The public liveness answer. It says the gateway is up and nothing
+    /// else; the artifact's version, compiler and route count are on the
+    /// admin API's `/health`, which is not public.
     fn health_response(&self) -> Response<Full<Bytes>> {
-        let body = serde_json::json!({
-            "status": "healthy",
-            "artifact_version": self.manifest.barbacane_artifact_version,
-            "compiler_version": self.manifest.compiler_version,
-            "routes_count": self.manifest.routes_count,
-        });
+        let body = serde_json::json!({ "status": "healthy" });
 
         Response::builder()
             .status(StatusCode::OK)
@@ -3897,16 +3905,20 @@ async fn perform_hot_reload(
         }
     };
 
-    // Step 2: Load and compile new Gateway
-    let new_gateway = match Gateway::load(
-        &artifact_path,
-        dev_mode,
-        limits,
-        allow_plaintext_upstream,
-        metrics,
-        &trust,
-        Some(Arc::clone(&shared_gateway.load().balancer)),
-    ) {
+    // Step 2: Load and compile new Gateway. Compiling every plugin takes
+    // seconds; the runtime hands this worker's other tasks elsewhere.
+    let balancer = Arc::clone(&shared_gateway.load().balancer);
+    let new_gateway = match tokio::task::block_in_place(|| {
+        Gateway::load(
+            &artifact_path,
+            dev_mode,
+            limits,
+            allow_plaintext_upstream,
+            metrics,
+            &trust,
+            Some(balancer),
+        )
+    }) {
         Ok(g) => g,
         Err(e) => {
             // Clean up downloaded artifact on failure
@@ -4402,16 +4414,19 @@ async fn run_dev(
                     continue;
                 }
 
-                // Load new gateway.
-                match Gateway::load(
-                    &new_path,
-                    true,
-                    limits.clone(),
-                    true,
-                    metrics.clone(),
-                    &trust,
-                    Some(Arc::clone(&gateway.load().balancer)),
-                ) {
+                // Load new gateway, off the async workers.
+                let balancer = Arc::clone(&gateway.load().balancer);
+                match tokio::task::block_in_place(|| {
+                    Gateway::load(
+                        &new_path,
+                        true,
+                        limits.clone(),
+                        true,
+                        metrics.clone(),
+                        &trust,
+                        Some(balancer),
+                    )
+                }) {
                     Ok(new_gw) => {
                         let routes = new_gw.manifest.routes_count;
                         let ms = compile_start.elapsed().as_millis();
@@ -4487,7 +4502,7 @@ async fn run_dev(
 
                     let io = TokioIo::new(stream);
                     let mut builder = auto::Builder::new(TokioExecutor::new());
-                    configure_conn_builder(&mut builder, DEFAULT_KEEPALIVE);
+                    admin::configure_conn_builder(&mut builder, DEFAULT_KEEPALIVE);
                     let conn = builder.serve_connection_with_upgrades(io, service);
 
                     tokio::pin!(conn);
@@ -4538,28 +4553,6 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default idle keep-alive timeout used where no operator value is supplied
 /// (e.g. the dev server). Also the per-request header-read deadline.
 const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(60);
-
-/// Maximum number of concurrent HTTP/2 streams per connection, bounding a
-/// single client's ability to multiplex a flood of streams.
-const HTTP2_MAX_CONCURRENT_STREAMS: u32 = 256;
-
-/// Apply ingress DoS hardening to a connection builder: a header-read deadline
-/// (slowloris defense, doubling as the HTTP/1 idle keep-alive timeout), an
-/// HTTP/2 keep-alive probe + timeout, and a per-connection stream cap.
-fn configure_conn_builder(builder: &mut auto::Builder<TokioExecutor>, keepalive: Duration) {
-    builder
-        .http1()
-        // A timer is required for `header_read_timeout` to function.
-        .timer(TokioTimer::new())
-        .keep_alive(true)
-        .header_read_timeout(keepalive);
-    builder
-        .http2()
-        .timer(TokioTimer::new())
-        .keep_alive_interval(Some(Duration::from_secs(20)))
-        .keep_alive_timeout(keepalive)
-        .max_concurrent_streams(HTTP2_MAX_CONCURRENT_STREAMS);
-}
 
 /// TLS configuration for the server.
 struct TlsConfig {
@@ -5108,7 +5101,7 @@ async fn run_serve(
                         if let Some(tls_stream) = accepted {
                                 let io = TokioIo::new(tls_stream);
                                 let mut builder = auto::Builder::new(TokioExecutor::new());
-                                configure_conn_builder(&mut builder, conn_keepalive);
+                                admin::configure_conn_builder(&mut builder, conn_keepalive);
                                 let conn = builder.serve_connection_with_upgrades(io, service);
 
                                 // Pin the connection for graceful shutdown
@@ -5138,7 +5131,7 @@ async fn run_serve(
                         // Supports both HTTP/1.1 and HTTP/2 prior knowledge (h2c)
                         let io = TokioIo::new(stream);
                         let mut builder = auto::Builder::new(TokioExecutor::new());
-                        configure_conn_builder(&mut builder, conn_keepalive);
+                        admin::configure_conn_builder(&mut builder, conn_keepalive);
                         let conn = builder.serve_connection_with_upgrades(io, service);
 
                         // Pin the connection for graceful shutdown
