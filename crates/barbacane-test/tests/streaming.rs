@@ -225,3 +225,66 @@ async fn middleware_short_circuit_before_streaming_returns_401() {
     let resp = gateway.get("/stream/protected").await.unwrap();
     assert_eq!(resp.status().as_u16(), 401);
 }
+
+// ---------------------------------------------------------------------------
+// Memory: a streamed body is forwarded as the client reads it, not buffered
+// ---------------------------------------------------------------------------
+
+/// A client that reads nothing holds the upstream back: the gateway keeps a
+/// bounded number of chunks in flight instead of reading the whole body.
+#[tokio::test]
+async fn a_slow_client_holds_the_upstream_back() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    const BODY: usize = 64 * 1024 * 1024;
+    const CHUNK: usize = 64 * 1024;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = format!("http://{}", listener.local_addr().unwrap());
+    let (sent_tx, sent_rx) = tokio::sync::oneshot::channel::<usize>();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = socket.read(&mut buf).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let piece = vec![b'x'; CHUNK];
+        let head = format!("{CHUNK:x}\r\n");
+        let mut sent = 0;
+        while sent < BODY {
+            let frame = async {
+                socket.write_all(head.as_bytes()).await?;
+                socket.write_all(&piece).await?;
+                socket.write_all(b"\r\n").await
+            };
+            // A write that stalls means the gateway stopped reading.
+            match tokio::time::timeout(Duration::from_secs(2), frame).await {
+                Ok(Ok(())) => sent += CHUNK,
+                _ => break,
+            }
+        }
+        let _ = sent_tx.send(sent);
+    });
+
+    let (_temp_dir, spec_path) = create_streaming_spec(&upstream);
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    // Read the headers, then nothing: the body stays unread.
+    let resp = gateway.get("/stream").await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let sent = sent_rx.await.unwrap();
+    assert!(
+        sent < 16 * 1024 * 1024,
+        "the upstream was read {sent} bytes ahead of a client that read nothing"
+    );
+    drop(resp);
+}

@@ -558,6 +558,11 @@ impl HttpClient {
         Ok(body)
     }
 
+    /// The most bytes of an upstream response body this client reads into memory.
+    pub fn max_response_bytes(&self) -> usize {
+        self.base_config.max_response_bytes
+    }
+
     /// The pool state this client keeps, to hand to the next artifact's client.
     pub fn balancer(&self) -> Arc<Balancer> {
         Arc::clone(&self.balancer)
@@ -849,10 +854,10 @@ pub struct HttpClientConfig {
     /// disabling the SSRF guard. Off by default; operators opt in for trusted
     /// internal upstreams.
     pub allow_internal_egress: bool,
-    /// Maximum size (bytes) of a buffered upstream response body. A
+    /// Maximum size (bytes) of an upstream response body read into memory. A
     /// plugin-chosen upstream is untrusted, so the buffered `call` path caps the
-    /// body it will read into host memory to avoid an OOM. Streaming dispatchers
-    /// (`stream_raw`) are unaffected.
+    /// body it will read into host memory to avoid an OOM. `stream_raw` hands
+    /// the response back unread; its caller forwards or caps the body.
     pub max_response_bytes: usize,
 }
 

@@ -33,10 +33,10 @@ Behavior:
 
 1. The plugin calls `host_http_stream` with the same `HttpRequest` JSON format used by `host_http_call`.
 2. The host makes the upstream HTTP call.
-3. The host immediately begins forwarding response chunks (SSE events, chunked transfer) to the client.
-4. The host simultaneously buffers the complete response body internally.
-5. When the upstream stream ends, `host_http_stream` returns the length of the complete buffered response (same format as `host_http_call`).
-6. The plugin reads the buffered response via `host_http_read_result` for post-processing (token counting, logging, metrics).
+3. The host forwards the response headers, then each body chunk (SSE events, chunked transfer) to the client as the upstream delivers them. The channel between the host function and the client is bounded: when the client reads slower than the upstream sends, the upstream read waits. The body is not retained in host memory.
+4. When the client goes away, the host stops reading the upstream.
+5. When the upstream stream ends, `host_http_stream` returns the length of a metadata-only response (status and headers, same JSON as `host_http_call` without a body).
+6. The plugin reads the metadata via `host_http_read_result` for post-processing (logging, metrics). Called outside a dispatch, with no client to stream to, `host_http_stream` reads the body like `host_http_call`, within `max_response_bytes`.
 7. The plugin returns a `Response` with a sentinel status `0`, signaling to the host that the response was already streamed. The host ignores this return value.
 
 ### Capability declaration
@@ -52,7 +52,7 @@ Plugins declaring `http_stream` also implicitly get `http_call` (same underlying
 
 When a dispatcher uses `host_http_stream`, the response is already sent to the client by the time the dispatch function returns. The on_response middleware chain still runs for observability (logging, metrics), but with two changes:
 
-1. The `Response` passed to middlewares is the **buffered copy** (complete body), not the sentinel. Middlewares can inspect it for logging/metrics.
+1. The `Response` passed to middlewares carries the upstream status and headers and no body. Middlewares can inspect it for logging/metrics.
 2. Header and body modifications from on_response middlewares are **silently discarded** — the response was already sent. A debug-level log warns when modifications are attempted on a streamed response.
 
 This preserves backward compatibility: existing middlewares (http-log, observability, correlation-id) continue to receive a Response and can log/record metrics from it. They just can't modify what was already sent.
@@ -86,8 +86,8 @@ pub fn streamed_response() -> Response {
 ## Consequences
 
 - **Easier:** Dispatcher plugins can stream SSE, chunked, and large responses to clients without buffering-induced latency. This unblocks the AI gateway plugin (ADR-0024) and future streaming use cases (event relay).
-- **Harder:** On_response middlewares cannot modify streamed responses (headers/body are already sent). Debugging mid-stream errors is harder since the status code is already committed. The host must manage concurrent streaming + buffering.
-- **Trade-offs:** The "buffer everything" approach means memory usage equals response size even during streaming. This is acceptable for LLM responses (typically <100KB of text) but not for large file proxying (multi-GB S3 objects, report downloads). Large file proxying is explicitly **out of scope** for this design — it requires a future "fire-and-forget" stream mode that skips host buffering entirely. On the request side, the data plane already enforces `--max-body-size` (default 1 MB) and the `request-size-limit` middleware plugin provides per-operation control. A similar `response-size-limit` middleware could act as a safety net for unexpectedly large upstream responses, but the fundamental solution for GB-scale proxying is the non-buffering mode.
+- **Harder:** On_response middlewares cannot modify streamed responses (headers/body are already sent), and see no body. Debugging mid-stream errors is harder since the status code is already committed.
+- **Trade-offs:** Memory per streamed response is bounded by the chunks in flight (`STREAM_CHANNEL_CAPACITY` in the data plane), whatever the body size, so a long-lived or large stream costs the same as a short one. A plugin that needs the whole body (token counting) must use `host_http_call`, within `max_response_bytes`. On the request side, the data plane enforces `--max-body-size` (default 1 MB) and the `request-size-limit` middleware plugin provides per-operation control.
 
 ## Alternatives considered
 
