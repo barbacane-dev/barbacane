@@ -1,0 +1,12 @@
+components:
+  schemas:
+    Name: &string
+      type: string
+    Id: &id
+      type: integer
+    Code: &string
+      type: string
+      pattern: "^[A-Z]+$"
+    Flag: &flag
+      type: boolean
+    Label: *string

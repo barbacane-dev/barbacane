@@ -1,0 +1,4 @@
+a: !!foo True
+b: !!foo ~
+c: !!foo .5
+d: !!foo -0

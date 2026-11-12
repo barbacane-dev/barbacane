@@ -1,6 +1,7 @@
 # Fuzzes the YAML module against libyaml (the `yaml_differential` target) for
-# 30 minutes each night. A difference that belongs to no known class, or an
-# input past the time or memory bound, is kept and uploaded as an artifact.
+# 30 minutes each night. Fuzzing goes on after a finding, so one run reports
+# every input that differs in a way no known class covers, or that passes the
+# time or memory bound; each is replayed to print why, and uploaded.
 # Informational: a probabilistic run is not a merge gate; the differential
 # test over the repository's files is.
 name: YAML Fuzz
@@ -55,12 +56,42 @@ jobs:
         working-directory: fuzz
         run: |
           cargo fuzz run yaml_differential corpus/yaml_differential -- \
-            -dict=yaml.dict -max_total_time=1800 -timeout=10 -rss_limit_mb=2048
+            -dict=yaml.dict -max_total_time=1800 -timeout=10 -rss_limit_mb=2048 \
+            -fork=2 -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1
 
       - name: Upload findings
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: yaml-differential-findings
           path: fuzz/artifacts/yaml_differential
           if-no-files-found: ignore
+
+      - name: Report findings
+        if: always()
+        working-directory: fuzz
+        run: |
+          shopt -s nullglob
+          findings=(artifacts/yaml_differential/*)
+          if [ ${#findings[@]} -eq 0 ]; then
+            echo "No findings."
+            exit 0
+          fi
+          binary=target/x86_64-unknown-linux-gnu/release/yaml_differential
+          for finding in "${findings[@]}"; do
+            message=$("$binary" -timeout=10 -rss_limit_mb=2048 "$finding" 2>&1 \
+              | grep -m1 -oE 'a difference of no known class: .{0,160}|ERROR: libFuzzer: [a-z-]+' \
+              || echo "no message")
+            printf '%s\t%s\t%s\n' "$(stat -c %s "$finding")" "$finding" "$message"
+          done > findings.tsv
+          # One line per distinct message, digits normalised, with how many
+          # inputs gave it and the shortest of them.
+          sort -n findings.tsv | awk -F'\t' '{
+              key = $3; gsub(/[0-9]+/, "N", key)
+              count[key]++
+              if (!(key in sample)) sample[key] = $2
+            } END {
+              for (key in count) printf "%6d  %s  %s\n", count[key], sample[key], key
+            }' | sort -rn
+          echo "::error::${#findings[@]} input(s) kept, in $(cut -f3 findings.tsv | sed -E 's/[0-9]+/N/g' | sort -u | wc -l) distinct message(s); see the summary above and the uploaded artifact"
+          exit 1
