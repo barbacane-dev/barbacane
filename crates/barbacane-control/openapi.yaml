@@ -597,8 +597,11 @@ paths:
     get:
       tags: [Artifacts]
       summary: Download artifact
-      description: Download the compiled .bca artifact file.
       operationId: downloadArtifact
+      description: |
+        Download the compiled .bca artifact file. Takes the admin bearer token,
+        or the data-plane API key of the artifact's project: a data plane
+        fetches the artifact `deploy` announces with its own key.
       parameters:
         - $ref: '#/components/parameters/artifactId'
       responses:
@@ -609,8 +612,14 @@ paths:
               schema:
                 type: string
                 format: binary
+        '401':
+          description: No admin token and no valid data-plane API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '404':
-          description: Artifact not found
+          description: Artifact not found, or not in the key's project
           content:
             application/problem+json:
               schema:

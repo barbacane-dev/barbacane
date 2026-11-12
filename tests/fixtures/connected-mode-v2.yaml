@@ -1,0 +1,27 @@
+openapi: "3.1.0"
+info:
+  title: Connected Mode Second Artifact
+  version: "2.0.0"
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"status":"ok"}'
+      responses:
+        "200":
+          description: OK
+  /v2/status:
+    get:
+      operationId: getV2Status
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"artifact":"v2"}'
+      responses:
+        "200":
+          description: Served by the deployed artifact

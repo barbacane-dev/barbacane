@@ -35,6 +35,7 @@ pub fn download_client() -> Result<reqwest::Client, String> {
 /// # Arguments
 /// * `http_client` - The HTTP client to use for downloading
 /// * `download_url` - URL to download the artifact from
+/// * `bearer` - Credential sent as a bearer token, the data plane's API key
 /// * `expected_sha256` - Expected SHA256 hash of the artifact (hex-encoded)
 /// * `artifact_dir` - Directory to store the downloaded artifact
 /// * `max_bytes` - Size past which the download is abandoned
@@ -45,6 +46,7 @@ pub fn download_client() -> Result<reqwest::Client, String> {
 pub async fn download_artifact(
     http_client: &reqwest::Client,
     download_url: &str,
+    bearer: Option<&str>,
     expected_sha256: &str,
     artifact_dir: &Path,
     max_bytes: u64,
@@ -61,8 +63,11 @@ pub async fn download_artifact(
     );
 
     // Start download
-    let response = http_client
-        .get(download_url)
+    let mut request = http_client.get(download_url);
+    if let Some(token) = bearer {
+        request = request.bearer_auth(token);
+    }
+    let response = request
         .send()
         .await
         .map_err(|e| format!("download request failed: {}", e))?;
@@ -206,7 +211,7 @@ mod tests {
 
         let client = download_client().unwrap();
         let sha = compute_sha256(&content);
-        let error = download_artifact(&client, &url, &sha, temp_dir.path(), 1024)
+        let error = download_artifact(&client, &url, None, &sha, temp_dir.path(), 1024)
             .await
             .unwrap_err();
         assert!(error.contains("larger than 1024"), "{error}");
@@ -224,7 +229,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
 
         let client = download_client().unwrap();
-        let result = download_artifact(&client, &url, "dummy", temp_dir.path(), MAX).await;
+        let result = download_artifact(&client, &url, None, "dummy", temp_dir.path(), MAX).await;
         assert!(result.is_err());
         assert!(is_empty(temp_dir.path()), "the partial file is removed");
         server_handle.abort();
@@ -247,11 +252,81 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
 
         let client = download_client().unwrap();
-        let path = download_artifact(&client, &url, &compute_sha256(&sent), temp_dir.path(), MAX)
-            .await
-            .expect("the bytes sent match their checksum");
+        let path = download_artifact(
+            &client,
+            &url,
+            None,
+            &compute_sha256(&sent),
+            temp_dir.path(),
+            MAX,
+        )
+        .await
+        .expect("the bytes sent match their checksum");
         assert_eq!(std::fs::read(path).unwrap(), sent);
         server_handle.abort();
+    }
+
+    /// A server that answers 200 with `content` when the request carries
+    /// `Authorization: Bearer <token>`, and 401 otherwise.
+    async fn start_bearer_server(
+        content: Vec<u8>,
+        token: &str,
+    ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let expected = format!("authorization: Bearer {token}\r\n");
+        let handle = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
+                let response = if head.contains(&expected.to_ascii_lowercase()) {
+                    let mut r = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        content.len()
+                    )
+                    .into_bytes();
+                    r.extend_from_slice(&content);
+                    r
+                } else {
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_vec()
+                };
+                let _ = socket.write_all(&response).await;
+            }
+        });
+        (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn the_bearer_token_is_sent_with_the_download() {
+        let content = b"artifact".to_vec();
+        let sha = compute_sha256(&content);
+        let client = download_client().unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let (addr, server) = start_bearer_server(content.clone(), "bbk_secret").await;
+        let url = format!("http://{}/artifacts/1/download", addr);
+        let path = download_artifact(
+            &client,
+            &url,
+            Some("bbk_secret"),
+            &sha,
+            temp_dir.path(),
+            MAX,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), content);
+        server.abort();
+
+        let (addr, server) = start_bearer_server(content, "bbk_secret").await;
+        let url = format!("http://{}/artifacts/1/download", addr);
+        let error = download_artifact(&client, &url, None, &sha, temp_dir.path(), MAX)
+            .await
+            .unwrap_err();
+        assert!(error.contains("401"), "{error}");
+        server.abort();
     }
 
     #[tokio::test]
@@ -269,7 +344,8 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, &url, &expected_sha256, temp_dir.path(), MAX).await;
+        let result =
+            download_artifact(&client, &url, None, &expected_sha256, temp_dir.path(), MAX).await;
 
         // Verify success
         assert!(result.is_ok(), "download should succeed: {:?}", result);
@@ -299,7 +375,8 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, &url, wrong_sha256, temp_dir.path(), MAX).await;
+        let result =
+            download_artifact(&client, &url, None, wrong_sha256, temp_dir.path(), MAX).await;
 
         // Verify failure
         assert!(
@@ -332,7 +409,7 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, &url, "dummy", temp_dir.path(), MAX).await;
+        let result = download_artifact(&client, &url, None, "dummy", temp_dir.path(), MAX).await;
 
         // Verify failure
         assert!(result.is_err(), "download should fail with HTTP error");
@@ -357,7 +434,7 @@ mod tests {
 
         // Download artifact
         let client = reqwest::Client::new();
-        let result = download_artifact(&client, url, "dummy", temp_dir.path(), MAX).await;
+        let result = download_artifact(&client, url, None, "dummy", temp_dir.path(), MAX).await;
 
         // Verify failure
         assert!(

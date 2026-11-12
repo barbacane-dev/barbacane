@@ -56,7 +56,7 @@ impl AdminAuth {
     }
 
     /// Whether `presented` is an acceptable credential under this policy.
-    fn accepts(&self, presented: &str) -> bool {
+    pub(crate) fn accepts(&self, presented: &str) -> bool {
         match self {
             AdminAuth::Disabled => true,
             AdminAuth::Token(expected) => ct_eq(&sha256(presented.as_bytes()), expected),
@@ -89,32 +89,39 @@ pub async fn require_admin(
         return next.run(req).await;
     }
 
-    let authorized = req
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(|token| auth.accepts(token))
-        .unwrap_or(false);
+    let authorized = bearer_token(req.headers()).is_some_and(|token| auth.accepts(token));
 
     if authorized {
         next.run(req).await
     } else {
-        let mut response = ProblemDetails {
-            error_type: "urn:barbacane:error:unauthorized".into(),
-            title: "Unauthorized".into(),
-            status: StatusCode::UNAUTHORIZED.as_u16(),
-            detail: Some("a valid admin bearer token is required".into()),
-            instance: None,
-            errors: vec![],
-        }
-        .into_response();
-        response.headers_mut().insert(
-            axum::http::header::WWW_AUTHENTICATE,
-            axum::http::HeaderValue::from_static("Bearer"),
-        );
-        response
+        unauthorized("a valid admin bearer token is required")
     }
+}
+
+/// The bearer token of `headers`, if any.
+pub(crate) fn bearer_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+}
+
+/// A 401 problem response with `detail`, asking for a bearer token.
+pub(crate) fn unauthorized(detail: &str) -> Response {
+    let mut response = ProblemDetails {
+        error_type: "urn:barbacane:error:unauthorized".into(),
+        title: "Unauthorized".into(),
+        status: StatusCode::UNAUTHORIZED.as_u16(),
+        detail: Some(detail.into()),
+        instance: None,
+        errors: vec![],
+    }
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        axum::http::HeaderValue::from_static("Bearer"),
+    );
+    response
 }
 
 #[cfg(test)]
