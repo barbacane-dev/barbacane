@@ -4451,7 +4451,8 @@ async fn run_dev(
                 let (stream, peer_addr) = match accept_result {
                     Ok(conn) => conn,
                     Err(e) => {
-                        tracing::debug!(error = %e, "accept failed");
+                        tracing::warn!(error = %e, "accept failed");
+                        tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                         continue;
                     }
                 };
@@ -4511,6 +4512,10 @@ async fn run_dev(
 /// and task growth under a connection flood. Override with
 /// `BARBACANE_MAX_CONNECTIONS`.
 const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
+
+/// Pause after a failed `accept`, so a listener whose accepts keep failing
+/// (file descriptors exhausted) does not spin.
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Maximum time allowed to complete a TLS handshake before the connection is
 /// dropped. Bounds slowloris-style handshake stalls.
@@ -4964,7 +4969,11 @@ async fn run_serve(
                 let (stream, peer_addr) = match accept_result {
                     Ok(conn) => conn,
                     Err(e) => {
+                        // Accept errors (file descriptors exhausted, a reset
+                        // in the backlog) repeat at once; the pause keeps the
+                        // loop from spinning on them.
                         eprintln!("error: accept failed: {}", e);
+                        tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                         continue;
                     }
                 };

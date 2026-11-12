@@ -63,7 +63,17 @@ pub async fn start_admin_server(
                 }
             }
             result = listener.accept() => {
-                let (stream, _) = result.map_err(|e| format!("admin accept: {}", e))?;
+                // A failed accept is retried after a pause; the admin API
+                // keeps serving health and metrics through a descriptor
+                // shortage rather than stopping until restart.
+                let (stream, _) = match result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "admin accept failed");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
                 let state = state.clone();
                 tokio::spawn(async move {
                     let service = service_fn(move |req| {
