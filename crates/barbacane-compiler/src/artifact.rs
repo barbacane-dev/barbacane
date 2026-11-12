@@ -7068,7 +7068,9 @@ mod format_range_tests {
     /// loading it whatever `ARTIFACT_VERSION` becomes.
     #[test]
     fn the_oldest_format_read_is_the_one_1_0_ships_with() {
-        assert_eq!(OLDEST_ARTIFACT_VERSION, 8);
-        assert!(ARTIFACT_VERSION >= OLDEST_ARTIFACT_VERSION);
+        let oldest = std::hint::black_box(OLDEST_ARTIFACT_VERSION);
+        let newest = std::hint::black_box(ARTIFACT_VERSION);
+        assert_eq!(oldest, 8);
+        assert!(newest >= oldest);
     }
 }
