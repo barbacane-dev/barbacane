@@ -33,7 +33,7 @@ async fn test_cache_miss_then_hit() {
     assert_eq!(body1["message"], "cached response");
     assert_eq!(x_cache1, Some("MISS".to_string()));
 
-    // Second request should be a cache hit
+    // Second request should be a cache hit, served with the cached body
     let resp2 = gateway.get("/cached").await.unwrap();
     assert_eq!(resp2.status(), 200);
     let x_cache2 = resp2
@@ -41,6 +41,12 @@ async fn test_cache_miss_then_hit() {
         .get("x-cache")
         .map(|v| v.to_str().unwrap().to_string());
     assert_eq!(x_cache2, Some("HIT".to_string()));
+    let body2 = resp2.text().await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body2).unwrap_or_default(),
+        body1,
+        "the hit serves the cached body, got {body2:?}"
+    );
 }
 
 #[tokio::test]

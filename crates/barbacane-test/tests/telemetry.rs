@@ -178,3 +178,78 @@ async fn a_plugin_metric_is_exported_as_its_own_family_with_real_labels() {
     );
     assert!(!body.contains("labels_json"), "{body}");
 }
+
+/// With `detailed_request_logs`, the observability middleware logs the
+/// request body size, which needs it to receive the body.
+#[tokio::test]
+async fn observability_detailed_request_log_reports_the_body_size() {
+    let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+    let plugins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("plugins");
+    std::fs::write(
+        temp_dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  mock:\n    path: {}\n  observability:\n    path: {}\n",
+            plugins_dir.join("mock/mock.wasm").display(),
+            plugins_dir
+                .join("observability/observability.wasm")
+                .display()
+        ),
+    )
+    .expect("failed to write manifest file");
+    let spec_path = temp_dir.path().join("observability-body.yaml");
+    std::fs::write(
+        &spec_path,
+        r#"openapi: "3.1.0"
+info:
+  title: Observability Body Test API
+  version: "1.0.0"
+paths:
+  /events:
+    post:
+      operationId: postEvent
+      x-barbacane-middlewares:
+        - name: observability
+          config:
+            detailed_request_logs: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 202
+          body: '{"accepted":true}'
+      responses:
+        "202":
+          description: Accepted
+"#,
+    )
+    .expect("failed to write spec file");
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let body = r#"{"event":"signup"}"#;
+    let resp = gateway.post("/events", body).await.unwrap();
+    assert_eq!(resp.status(), 202);
+
+    let needle = format!("body_size={}", body.len());
+    assert!(
+        gateway
+            .log()
+            .wait_for(&needle, std::time::Duration::from_secs(5)),
+        "no request log with {needle}:\n{}",
+        gateway
+            .log()
+            .find_line("observability: request")
+            .unwrap_or_default()
+    );
+}

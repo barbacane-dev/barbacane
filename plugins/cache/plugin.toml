@@ -4,6 +4,8 @@ version = "0.1.0"
 type = "middleware"
 category = "caching"
 description = "Response caching middleware with TTL support"
+wasm = "cache.wasm"
 
 [capabilities]
 host_functions = ["log", "cache"]
+body_access = true

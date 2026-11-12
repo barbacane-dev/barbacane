@@ -784,8 +784,32 @@ paths:
       responses:
         "200":
           description: Success
+    post:
+      summary: Endpoint with HTTP logging and a request body
+      operationId: postLogged
+      x-barbacane-middlewares:
+        - name: http-log
+          config:
+            endpoint: "{}"
+            timeout_ms: 2000
+            include_body: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "OK"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
 "#,
-        log_endpoint
+        log_endpoint, log_endpoint
     );
 
     std::fs::write(&spec_path, spec_content).expect("failed to write spec file");
@@ -1571,4 +1595,40 @@ async fn test_ws_relay_upstream_close_propagates_to_client() {
         Ok(Some(Err(_))) => {}                           // Reset (proxy dropped connection)
         other => panic!("expected close or end-of-stream, got {:?}", other),
     }
+}
+
+/// With `include_body`, the log entry carries the request and response body
+/// sizes, which needs the middleware to receive the bodies.
+#[tokio::test]
+async fn test_http_log_includes_body_sizes() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/logs"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    let log_endpoint = format!("{}/logs", mock_server.uri());
+    let (_temp_dir, spec_path) = create_http_log_spec(&log_endpoint);
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let request_body = r#"{"hello":"world"}"#;
+    let resp = gateway.post("/logged", request_body).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let response_body = resp.text().await.unwrap();
+
+    let received = mock_server.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1, "one log entry");
+    let entry: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(entry["request"]["body_size"], request_body.len(), "{entry}");
+    assert_eq!(
+        entry["response"]["body_size"],
+        response_body.len(),
+        "{entry}"
+    );
 }

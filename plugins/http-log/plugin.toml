@@ -8,3 +8,4 @@ wasm = "http-log.wasm"
 
 [capabilities]
 host_functions = ["log", "context_get", "context_set", "http_call", "clock_now"]
+body_access = true
