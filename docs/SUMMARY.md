@@ -6,6 +6,7 @@
 
 - [Installation](guide/installation.md)
 - [Getting started](guide/getting-started.md)
+- [Migrating from 0.12 to 1.0](guide/migrating-to-1.0.md)
 - [Spec configuration](guide/spec-configuration.md)
 - [Dispatchers (request routing)](guide/dispatchers.md)
 - [Middlewares (auth, rate limit, caching)](guide/middlewares/index.md)
