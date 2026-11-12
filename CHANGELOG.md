@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The breaking changes below are gathered, with what to do and in which order, in the [migration guide](docs/guide/migrating-to-1.0.md). Each is marked **Upgrade note (breaking)** here.
+
 ### Added
 
 - **middlewares**: an operation can drop one global middleware and keep the rest with `enabled: false` on an entry naming it ([ADR-0034](adr/0034-disable-one-global-middleware.md)). A public endpoint under global authentication keeps rate limiting, CORS and logging, and follows later changes to the global chain, where `x-barbacane-middlewares: []` dropped them all. `enabled: false` removes every global entry of that plugin. New compile and `barbacane validate` errors: `E1012` when it is set with a `config`, `E1013` when it matches no global entry, `E1014` on a global entry. The control plane keeps `enabled: false` when it rewrites an operation's middlewares. The artifact format does not change.
@@ -23,8 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
+
+  > **Upgrade note (breaking):** recompile every artifact with this release's compiler before upgrading a data plane.
 - **control-plane image**: `barbacane-control` runs the API alone, as the non-root `barbacane` user, and exposes only port 9090. Port 80 and its `/api/` prefix are gone: clients call the API on port 9090.
+
+  > **Upgrade note (breaking):** clients and compose files that reached the API on port 80 under `/api/` call port 9090 without the prefix.
 - **middlewares**: operation and global entries match by plugin name without the `@version` suffix. A spec naming `rate-limit@0.1.0` globally and `rate-limit` on an operation ran both; the operation entry now replaces the global one.
+
+  > **Upgrade note (breaking):** an operation entry that meant to add a second instance of a plugin in the global chain now replaces it; check such operations.
 - **middlewares**: a middleware that fails in `on_response` stops the chain, and the request is answered with a 500, as a failure in `on_request` or `dispatch` is. This includes the chain run after a short-circuit, and the WebSocket upgrade, which is refused. On a streamed response, which is already sent, the failure is logged. In `barbacane-wasm`, `execute_on_response`, `execute_on_response_with_metrics` and `execute_on_response_partial` return a `Result` naming the middleware, and `TrapResult` is a struct holding the message and phase (`FaultTolerant`, `is_fatal` and `TrapContext::is_fault_tolerant` are removed).
 - **schemas**: no schema makes the compiler, the data plane or the control plane fetch a URL or read a file: `jsonschema` is built without its retrieval features. Request schemas read the OpenAPI 3.1 and 3.2 dialect URIs as JSON Schema 2020-12. A request schema the gateway cannot build (another `$schema` dialect, a reference outside the spec, an invalid `pattern`) fails compilation with `E1059`, and the data plane refuses to load an artifact holding one.
 - **limits**: a YAML document whose aliases make it stand for a value more than 16 times its size (plus 1 MiB) is refused as `E1002`, wherever YAML is read. An artifact may expand to at most 256 MiB when decompressed, archive headers included; the data plane refuses a larger one. A hot reload downloads the artifact as sent, without decompressing it, abandons a download past 256 MiB, and leaves no temporary file behind when a download fails.
@@ -36,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **plugins**: a plugin may import the `barbacane` host functions and seven WASI functions from `wasi_snapshot_preview1`: `random_get`, `clock_time_get`, `fd_write`, `sched_yield`, `environ_get`, `environ_sizes_get` and `proc_exit`. A plugin importing anything else fails compilation with `E1043`, which names the import, and the data plane refuses to load an artifact holding one. Such a plugin loaded and failed on its first request.
 - **plugin SDK**: `HttpRequest` has `tls`, `endpoints` and `retries` fields and implements `Default`. A plugin that builds `HttpRequest` as a struct literal adds `..Default::default()`.
+
+  > **Upgrade note (breaking):** a custom plugin building `HttpRequest` as a struct literal does not compile until it adds `..Default::default()`.
 - **wasm runtime**: circuit breakers belong to `endpoints` pools, one per endpoint. `HttpClient::configure_circuit_breaker`, which nothing called, and `HttpClientError::CircuitOpen` are removed from `barbacane-wasm`.
 - **control plane**: the OpenAPI spec describes every operation the API serves, ten of them for the first time (a project's specs, compilations, artifacts, operations and plugins, and `PATCH /specs/{id}/operations`), and is valid OpenAPI 3.1: a nullable field's type is `[T, 'null']` in place of `nullable: true`. Clients generated from the spec see these types.
 - **control plane**: `GET /projects/{id}/operations` answers `404` for a project that does not exist, as the project's other sub-resources do.
@@ -63,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Upgrade note (breaking):** a `barbacane.yaml` with a misspelled or unknown key (`spec:` for `specs:`, a stray key in a plugin entry) no longer compiles; fix or remove the key.
 
 ### Removed
+
+> **Upgrade note (breaking):** specs that dispatch to `ai-proxy`, use an `ai-*` middleware or set `x-barbacane-mcp`, and tooling that used the web interface, need the steps in the [migration guide](docs/guide/migrating-to-1.0.md#removed-features).
 
 - **AI gateway**: the `ai-proxy` dispatcher and the `ai-prompt-guard`, `ai-token-limit`, `ai-cost-tracker` and `ai-response-guard` middlewares, with the `schemas/ai-gateway.yaml` spec fragment, their guide pages, and the `barbacane-ai-regex-*` lint rules. A spec that dispatches to `ai-proxy` or uses one of these middlewares no longer compiles against the official plugins. Scripts that download the ruleset functions must drop `barbacane-validate-ai-regex.js`. The `host_http_stream` plugin capability (ADR-0023) stays.
 - **MCP server**: the `POST` and `DELETE /__barbacane/mcp` endpoint, the `x-barbacane-mcp` extension, the E1060 and E1061 warnings, and the `barbacane-mcp-requires-operation-id` lint rule. A spec that still sets `x-barbacane-mcp` compiles with the E1015 unknown-extension warning and serves no MCP endpoint. Scripts that download the ruleset functions must drop `barbacane-mcp-requires-fields.js`.

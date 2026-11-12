@@ -81,6 +81,7 @@ The gateway serves only artifacts signed by the key it pins; see [artifact signi
 
 - [Installation](guide/installation.md) - Release binaries, container images, crates.io and source
 - [Getting Started](guide/getting-started.md) - First steps with Barbacane
+- [Migrating from 0.12 to 1.0](guide/migrating-to-1.0.md) - What changes, what to do, in which order
 - [Spec Configuration](guide/spec-configuration.md) - Configure routing and middleware in your OpenAPI spec
 - [Dispatchers](guide/dispatchers.md) - Route requests to backends
 - [Middlewares](guide/middlewares/index.md) - Add authentication, rate limiting, and more
