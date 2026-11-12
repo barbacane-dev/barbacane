@@ -1,6 +1,6 @@
 # ADR-0017: Repository Architecture
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-01-30
 
 ## Context

@@ -6,6 +6,8 @@
 
 ---
 
+> **Historical.** This spec describes an earlier security model. The current one is in the [configuration reference](../docs/reference/configuration.md) and the [secrets guide](../docs/guide/secrets.md).
+
 ## 1. Overview
 
 Barbacane is a security boundary. This spec defines TLS configuration, authentication and authorization plugin conventions, secrets management, and the security defaults enforced by the gateway.

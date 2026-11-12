@@ -593,28 +593,39 @@ async fn test_my_plugin() {
 
 ## Official Plugins
 
-Barbacane includes these official plugins in the `plugins/` directory:
+Barbacane includes these 29 official plugins in the `plugins/` directory:
 
 | Plugin | Type | Description |
 |--------|------|-------------|
 | `mock` | Dispatcher | Return static responses |
-| `http-upstream` | Dispatcher | Reverse proxy to HTTP backends |
+| `http-upstream` | Dispatcher | Reverse proxy to HTTP backends, with load balancing and upstream TLS |
 | `lambda` | Dispatcher | Invoke AWS Lambda functions |
 | `kafka` | Dispatcher | Publish messages to Kafka |
 | `nats` | Dispatcher | Publish messages to NATS |
 | `s3` | Dispatcher | S3 / S3-compatible object storage proxy with SigV4 signing |
+| `ws-upstream` | Dispatcher | WebSocket proxy, with the middleware chain run on the upgrade |
+| `fire-and-forget` | Dispatcher | Forward the request and answer with a static response at once |
 | `jwt-auth` | Middleware | JWT token validation |
 | `apikey-auth` | Middleware | API key authentication |
+| `basic-auth` | Middleware | HTTP Basic authentication |
 | `oauth2-auth` | Middleware | OAuth2 token introspection |
+| `oidc-auth` | Middleware | OpenID Connect token validation against a JWKS |
 | `ldap-auth` | Middleware | LDAP / Active Directory authentication (directory bind, group lookup) |
+| `acl` | Middleware | Group and consumer access control |
+| `opa-authz` | Middleware | Authorization decisions from an OPA server |
+| `cel` | Middleware | CEL policy evaluation and policy-driven routing |
 | `rate-limit` | Middleware | Sliding window rate limiting |
-| `cache` | Middleware | Response caching |
-| `cors` | Middleware | CORS header management |
-| `correlation-id` | Middleware | Request correlation ID propagation |
 | `request-size-limit` | Middleware | Request body size limits |
 | `ip-restriction` | Middleware | IP allowlist/blocklist |
 | `bot-detection` | Middleware | Block bots by User-Agent pattern |
+| `redirect` | Middleware | HTTP redirects |
+| `cache` | Middleware | Response caching |
+| `request-transformer` | Middleware | Header, query, path and body transformations before dispatch |
+| `response-transformer` | Middleware | Status, header and body transformations before delivery |
+| `cors` | Middleware | CORS header management |
+| `correlation-id` | Middleware | Request correlation ID propagation |
 | `observability` | Middleware | SLO monitoring and detailed logging |
+| `http-log` | Middleware | Ship request logs to an HTTP endpoint |
 
 Use these as references for your own plugins.
 

@@ -1,6 +1,6 @@
 # ADR-0026: WebSocket Transparent Proxy
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-08
 
 ## Context

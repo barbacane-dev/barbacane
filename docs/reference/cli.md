@@ -795,7 +795,7 @@ Sunset: Sat, 31 Dec 2025 23:59:59 GMT
 Content-Type: application/json
 ```
 
-See [API Lifecycle](#api-lifecycle) for configuration details.
+See [API Lifecycle](../guide/spec-configuration.md#api-lifecycle) for configuration details.
 
 ### Exit Codes
 
@@ -1002,6 +1002,15 @@ barbacane-control seed-plugins [OPTIONS]
 
 The `--database-url` can also be set via the `DATABASE_URL` environment variable.
 
+The server reads these environment variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `BARBACANE_CONTROL_ADMIN_TOKEN` | Yes | Bearer token every API request carries, except `GET /health` and the data-plane WebSocket. The server refuses to start without it |
+| `BARBACANE_SIGNING_KEY` | No | Path to the Ed25519 key that signs every artifact the control plane compiles (see [artifact signing](configuration.md#artifact-signing-quickstart)) |
+| `BARBACANE_CONTROL_ALLOWED_ORIGINS` | No | Comma-separated allowlist of browser origins for CORS; unset means no cross-origin access |
+| `RUST_LOG` | No | Log filter (`error`, `warn`, `info`, `debug`, `trace`) |
+
 ### Plugin Directory Structure
 
 Each plugin directory should contain:
@@ -1052,7 +1061,7 @@ cargo run -p barbacane-control -- seed-plugins \
 #   Registered rate-limit v0.1.0 (middleware)
 #   Registered cors v0.1.0 (middleware)
 #   ...
-# Seeded 9 plugin(s) into the registry.
+# Seeded 29 plugin(s) into the registry.
 ```
 
 ### Exit Codes
@@ -1185,6 +1194,6 @@ This provides a browsable interface for exploring and testing all API endpoints.
 
 ### Full API Specification
 
-Full OpenAPI specification: [Control Plane OpenAPI](../../crates/barbacane-control/openapi.yaml)
+Full OpenAPI specification: [Control Plane OpenAPI](https://github.com/barbacane-dev/barbacane/blob/main/crates/barbacane-control/openapi.yaml), also served by a running control plane at `GET /openapi`
 
 See the [Control Plane Guide](../guide/control-plane.md) for detailed usage examples.

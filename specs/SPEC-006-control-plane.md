@@ -6,6 +6,8 @@
 
 ---
 
+> **Historical.** This spec describes an earlier control plane. The current API, the `barbacane control` client, projects, data planes, API keys and deployment are in the [control plane guide](../docs/guide/control-plane.md) and the [CLI reference](../docs/reference/cli.md#barbacane-control).
+
 ## 1. Overview
 
 The control plane (`barbacane-control`) manages specs, compiles artifacts, and maintains the plugin registry. It exposes a REST API and a CLI that wraps it. This spec defines every endpoint, request/response format, and the CLI commands.

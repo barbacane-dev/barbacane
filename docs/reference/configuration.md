@@ -1,10 +1,9 @@
 # Configuration & environment variables
 
 Barbacane is configured through CLI flags (see the [CLI reference](cli.md)) and a
-small set of environment variables. The security-related variables below were
-introduced by the security hardening pass and several change default behavior in
-breaking but deliberate ways — Barbacane fails closed rather than running
-insecurely.
+small set of environment variables. Barbacane fails closed rather than running
+insecurely: where a variable is required, the component refuses to start
+without it.
 
 ## Security environment variables
 
@@ -21,13 +20,13 @@ insecurely.
 | `BARBACANE_CONTROL_API_KEY` | Data plane | _unset_ | The API key a data plane presents to the control plane (`barbacane serve --api-key`), created with the project's data plane API keys. Required with `--control-plane`. |
 | `BARBACANE_CONTROL_URL` | CLI | `http://localhost:9090` | Base URL of the control-plane API for `barbacane control` (`--url`). |
 
-## Breaking-by-design defaults
+## Secure defaults
 
-These changes are intentional secure defaults. Adopt them as follows:
+These defaults are deliberate. Adopt them as follows:
 
 1. **The control plane will not start without `BARBACANE_CONTROL_ADMIN_TOKEN`.**
    Generate a strong random token and pass it to every client as
-   `Authorization: Bearer <token>`. Previously the API was unauthenticated.
+   `Authorization: Bearer <token>`.
 
 2. **`file://` secrets require `BARBACANE_SECRETS_DIR`.** If you reference
    secrets like `file:///run/secrets/api-key`, set
@@ -154,16 +153,16 @@ running it:
 cosign verify \
   --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/sign-and-sbom\.yml@refs/(tags/v|heads/main)' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/barbacane-dev/barbacane:0.8.0
+  ghcr.io/barbacane-dev/barbacane:1.0.0
 
 # SBOM attestation (CycloneDX)
 cosign verify-attestation --type cyclonedx \
   --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/sign-and-sbom\.yml@refs/(tags/v|heads/main)' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/barbacane-dev/barbacane:0.8.0
+  ghcr.io/barbacane-dev/barbacane:1.0.0
 ```
 
-The same commands work against Docker Hub (`docker.io/barbacane/barbacane:0.8.0`)
+The same commands work against Docker Hub (`docker.io/barbacane/barbacane:1.0.0`)
 and the other images (`barbacane-control`, `barbacane-standalone`). The identity
 regexp names the one workflow that signs, `sign-and-sbom.yml`, run from a
 release tag or, for a manual re-signing, from `main`; no other workflow's

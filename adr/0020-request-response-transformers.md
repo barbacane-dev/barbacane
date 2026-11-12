@@ -1,6 +1,6 @@
 # ADR-0020: Request/Response Transformers
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-02-11
 **Authors:** Nicolas, Nathan
 

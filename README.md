@@ -10,7 +10,7 @@
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/unit%20tests-517%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-861%20passing-brightgreen" alt="Plugin Tests">
+  <img src="https://img.shields.io/badge/plugin%20tests-759%20passing-brightgreen" alt="Plugin Tests">
   <img src="https://img.shields.io/badge/integration%20tests-294%20passing-brightgreen" alt="Integration Tests">
   <img src="https://img.shields.io/badge/cli%20tests-23%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/rust-1.95%2B-orange" alt="Rust Version">
@@ -130,11 +130,11 @@ docker-compose up -d
 # Grafana: http://localhost:3000 (admin/admin)
 ```
 
-The playground includes a Train Travel API demo with WireMock backend, full observability stack (Prometheus, Loki, Tempo, Grafana), and the control plane UI. See [barbacane-dev/playground](https://github.com/barbacane-dev/playground) for details.
+The playground includes a Train Travel API demo with WireMock backend, full observability stack (Prometheus, Loki, Tempo, Grafana), and the control plane. See [barbacane-dev/playground](https://github.com/barbacane-dev/playground) for details.
 
 ## Official Plugins
 
-34 production-ready plugins ship with Barbacane. They're built as WASM modules and run in a sandbox.
+29 official plugins ship with Barbacane. They're built as WASM modules and run in a sandbox.
 
 ### Dispatchers — where the request goes
 

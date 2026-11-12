@@ -1,6 +1,6 @@
 # ADR-0019: Packaging and Release Strategy
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-02-04
 
 ## Context
@@ -70,7 +70,7 @@ We will publish the following artifacts for each release:
    - Intended for production gateway deployments
 
 2. **`ghcr.io/barbacane-dev/barbacane-control`** — Control plane
-   - Includes web UI assets
+   - Serves the REST API on port 9090
    - Requires external PostgreSQL
    - Intended for management deployments
 

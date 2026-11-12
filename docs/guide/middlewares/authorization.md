@@ -201,7 +201,7 @@ Inline policy evaluation using [CEL (Common Expression Language)](https://cel.de
 Two modes:
 
 - **Access-control mode** (default, no `on_match`): `true` → continue, `false` → **403**.
-- **`on_match` mode** (`on_match` present): on `true`, take the configured actions — write context keys (`set_context`) and/or reject with a configured status + code (`deny`). On `false`, continue unchanged (no 403). Used to drive [policy-driven routing](#policy-driven-routing-cel-stacking) and per-tier resource gating (e.g. block `gpt-4*` for the free tier without standing up a separate target — see [example](#match-and-deny-per-tier-model-gating)).
+- **`on_match` mode** (`on_match` present): on `true`, take the configured actions: write context keys (`set_context`) and/or reject with a configured status + code (`deny`). On `false`, continue unchanged (no 403). Used to drive [policy-driven routing](#policy-driven-routing-cel-stacking) and per-tier resource gating (e.g. reserve one export format for the premium tier without standing up a separate target, see [example](#match-and-deny-per-tier-gating)).
 
 ```yaml
 x-barbacane-middlewares:

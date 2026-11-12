@@ -118,10 +118,14 @@ artifact.bca (tar.gz)
 
 ### barbacane
 
-Main CLI with three subcommands:
+Main CLI, with these subcommands:
+- `key` - Generate the Ed25519 key that signs artifacts, and print its public key
 - `compile` - Compile specs to artifact
 - `validate` - Validate specs without compilation
+- `init` - Scaffold a project
+- `dev` - Compile, serve and hot-reload on file changes
 - `serve` - Run the gateway
+- `control` - Call the control-plane API
 
 ### barbacane (serve)
 
@@ -189,7 +193,7 @@ SDK for developing WASM plugins (dispatchers and middlewares).
 - `#[barbacane_middleware]` macro - generates WASM exports for middlewares
 - `#[barbacane_dispatcher]` macro - generates WASM exports for dispatchers
 - Host function FFI bindings
-- Helper modules (0.8+):
+- Helper modules:
   - `log` - host logging
   - `http` - outbound HTTP via `host_http_call`
   - `errors::ProblemDetails` - RFC 9457 problem+json builder
@@ -373,5 +377,4 @@ cargo test --workspace
 ## Future Directions
 
 - **gRPC passthrough**: Transparent proxying for gRPC services
-- **Hot reload**: Reload artifacts without restart via control plane notifications
 - **Cluster mode**: Distributed configuration across multiple nodes
