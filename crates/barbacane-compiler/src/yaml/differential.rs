@@ -306,13 +306,13 @@ pub static KNOWN: &[KnownDivergence] = &[
     KnownDivergence {
         name: "keys equal as integers",
         reason: "YAML 1.2 makes two keys equal when their tags and canonical forms are, so \
-                 `10` and `0xA`, both the integer 10, are one key, and the last is kept; libyaml \
-                 compares keys by their text and keeps both",
+                 `10`, `+10` and `0xA`, all the integer 10, are one key, and the last is kept; \
+                 libyaml compares keys by their text and keeps each",
         example: "10: a\n0xA: b\n",
         matches: |input, d| {
-            has_radix_key(input)
+            has_keys_equal_as_integers(input)
                 && matches!(d, Difference::Value { pointer, ours: Value::Null, .. }
-                    if pointer.rsplit('/').next().is_some_and(is_integer_literal))
+                    if pointer.rsplit('/').next().and_then(integer_value).is_some())
         },
     },
     KnownDivergence {
@@ -354,16 +354,39 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
-        name: "`?` followed by content in flow collections",
+        name: "`?` without whitespace after it in flow collections",
         reason: "YAML 1.2 takes `?` for an explicit key only when whitespace follows it, so \
-                 `{?a: 1}` has the key `?a`; in a flow collection libyaml takes it for one \
-                 whatever follows, and reads the key `a`",
+                 `{?a: 1}` has the key `?a` and `[?:]` the key `?`, and `[?]]` is invalid; in a \
+                 flow collection libyaml takes `?` for an explicit key whatever follows, reading \
+                 the key `a`, an empty key, and `[?]]` as `[{\"\": null}]`",
         example: "{?a: 1}\n",
         matches: |input, d| {
             input.contains(['{', '['])
-                && matches!(d, Difference::Value { pointer, ours, .. }
-                    if pointer.rsplit('/').next().is_some_and(starts_with_question_mark)
-                        || ours.as_str().is_some_and(starts_with_question_mark))
+                && match d {
+                    Difference::Value { pointer, ours, .. } => {
+                        pointer
+                            .rsplit('/')
+                            .next()
+                            .is_some_and(starts_with_question_mark)
+                            || ours.as_str().is_some_and(starts_with_question_mark)
+                    }
+                    Difference::OnlyOursFailed { error } => {
+                        error.contains("misplaced bracket")
+                            && (input.contains("?]") || input.contains("?}"))
+                    }
+                    Difference::OnlyReferenceFailed { .. } => false,
+                }
+        },
+    },
+    KnownDivergence {
+        name: "plain `-` in flow collections",
+        reason: "YAML 1.2 starts a plain scalar with `-` only when a character it can hold \
+                 follows, so `[-]` and `{a: -}` are invalid (yaml-test-suite G5U8); libyaml \
+                 reads `-` as a string, the module refuses the document",
+        example: "a: [-]\n",
+        matches: |_, d| {
+            matches!(d, Difference::OnlyOursFailed { error }
+                if error.contains("plain scalar cannot start with '-' followed by"))
         },
     },
     KnownDivergence {
@@ -423,11 +446,10 @@ fn has_reused_anchor(input: &str) -> bool {
     })
 }
 
-/// Whether `text` starts with `?` followed by a character other than
-/// whitespace.
+/// Whether `text` starts with `?` not followed by whitespace.
 fn starts_with_question_mark(text: &str) -> bool {
     text.strip_prefix('?')
-        .is_some_and(|rest| rest.starts_with(|c: char| !c.is_whitespace()))
+        .is_some_and(|rest| !rest.starts_with(char::is_whitespace))
 }
 
 /// Whether `text` is written as a decimal float: digits, `.`, `e`, `E`, `+`
@@ -459,31 +481,44 @@ fn has_punctuated_anchor(input: &str) -> bool {
     })
 }
 
-/// Whether `input` has a mapping key written in hexadecimal, octal or binary.
-fn has_radix_key(input: &str) -> bool {
+/// Whether `input` has two mapping keys spelled differently that are the
+/// same integer, such as `10` and `0xA`, or `+1` and `1`.
+fn has_keys_equal_as_integers(input: &str) -> bool {
+    let mut seen = std::collections::HashMap::new();
     input.lines().any(|line| {
         let key = line
             .trim_start_matches([' ', '-', '{', ','])
             .split(':')
             .next()
             .unwrap_or("");
-        ["0x", "0o", "0b", "0X", "0O", "0B"].iter().any(|prefix| {
-            key.strip_prefix(prefix).is_some_and(|digits| {
-                !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
-            })
-        })
+        integer_value(key)
+            .is_some_and(|value| seen.insert(value, key).is_some_and(|other| other != key))
     })
 }
 
-/// Whether `text` is an integer as YAML writes one: decimal, or `0x`, `0o`
-/// or `0b` followed by digits.
-fn is_integer_literal(text: &str) -> bool {
-    let digits = text.strip_prefix('-').unwrap_or(text);
-    let digits = ["0x", "0o", "0b", "0X", "0O", "0B"]
-        .iter()
-        .find_map(|p| digits.strip_prefix(p))
-        .unwrap_or(digits);
-    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
+/// The integer `text` writes: decimal with an optional sign, or `0x`, `0o` or
+/// `0b` (in either case) followed by digits.
+fn integer_value(text: &str) -> Option<i128> {
+    let (negative, unsigned) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let (radix, digits) = [
+        ("0x", 16),
+        ("0o", 8),
+        ("0b", 2),
+        ("0X", 16),
+        ("0O", 8),
+        ("0B", 2),
+    ]
+    .iter()
+    .find_map(|(prefix, radix)| unsigned.strip_prefix(prefix).map(|d| (*radix, d)))
+    .unwrap_or((10, unsigned));
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    let magnitude = i128::from_str_radix(digits, radix).ok()?;
+    Some(if negative { -magnitude } else { magnitude })
 }
 
 /// Whether `difference` is the reference refusing a document the module
