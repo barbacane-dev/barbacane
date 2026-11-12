@@ -1,0 +1,106 @@
+# Runs the spec parser, artifact loader and request validator fuzz targets
+# for 20 minutes each night. The invariant is the same for all three: any
+# input returns, without a panic, a timeout or a memory blow-up. Fuzzing goes
+# on after a finding; each input kept is replayed to print why, and uploaded.
+# Informational: a probabilistic run is not a merge gate; CI builds the
+# targets on every pull request. A pull request that changes this file runs
+# each target for one minute, so the workflow is checked before it is relied on.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/fuzz-nightly.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [spec_parser, artifact_loader, validator]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            fuzz/target
+          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        run: command -v cargo-fuzz || cargo install cargo-fuzz@0.13.2 --locked
+
+      # The spec parser starts from the repository's specs; the other two
+      # targets build their inputs from the fuzzer's bytes.
+      - name: Seed the corpus
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p "fuzz/corpus/$TARGET"
+          if [ "$TARGET" = spec_parser ]; then
+            find tests/fixtures specs docs -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) -size -256k -print \
+              | while read -r file; do
+                  cp "$file" "fuzz/corpus/$TARGET/$(echo "$file" | sha256sum | cut -c1-16)"
+                done
+          fi
+
+      - name: Fuzz
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_TO_RUN: ${{ github.event_name == 'pull_request' && '60' || '1200' }}
+        run: |
+          cargo fuzz run "$TARGET" "corpus/$TARGET" -- \
+            -max_total_time="$SECONDS_TO_RUN" -timeout=10 -rss_limit_mb=2048 \
+            -fork=2 -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-${{ matrix.target }}-findings
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+      - name: Report findings
+        if: always()
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          shopt -s nullglob
+          findings=("artifacts/$TARGET"/*)
+          if [ ${#findings[@]} -eq 0 ]; then
+            echo "No findings."
+            exit 0
+          fi
+          binary="target/x86_64-unknown-linux-gnu/release/$TARGET"
+          for finding in "${findings[@]}"; do
+            message=$("$binary" -timeout=10 -rss_limit_mb=2048 "$finding" 2>&1 \
+              | grep -m1 -oE "panicked at .{0,160}|ERROR: libFuzzer: [a-z-]+" \
+              || echo "no message")
+            printf '%s\t%s\n' "$finding" "$message"
+          done | sort -t$'\t' -k2 | awk -F'\t' '{ count[$2]++; if (!($2 in sample)) sample[$2] = $1 }
+              END { for (m in count) printf "%6d  %s  %s\n", count[m], sample[m], m }' | sort -rn
+          echo "::error::${#findings[@]} input(s) kept for $TARGET; see the summary above and the uploaded artifact"
+          exit 1
