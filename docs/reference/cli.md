@@ -757,8 +757,8 @@ Every response includes these standard headers:
 | Header | Description |
 |--------|-------------|
 | `Server` | `barbacane/<version>` (e.g., `barbacane/0.1.0`) |
-| `X-Request-Id` | Request ID - propagates incoming header or generates UUID v4 |
-| `X-Trace-Id` | Trace ID - extracted from `traceparent` header or generated |
+| `X-Request-Id` | Request ID: the incoming header when it is at most 128 bytes of visible ASCII, otherwise a generated UUID v4 |
+| `X-Trace-Id` | Trace ID: the trace id of a well-formed W3C `traceparent` header, otherwise generated |
 | `X-Content-Type-Options` | `nosniff` - prevents MIME sniffing attacks |
 | `X-Frame-Options` | `DENY` - prevents clickjacking via iframes |
 

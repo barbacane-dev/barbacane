@@ -1156,31 +1156,21 @@ impl Gateway {
     ) -> Result<Response<AnyBody>, Infallible> {
         let start_time = Instant::now();
 
-        // Generate or extract request ID (from incoming header or new UUID).
-        // Only accept a client-supplied id if it is a legal, non-empty header
-        // value; otherwise generate one (prevents header-injection / panics).
+        // The client's request id and trace id are kept when well-formed;
+        // otherwise new ones are generated. Both go into every log line of the
+        // request and into response headers, so their shape is bounded.
         let request_id = req
             .headers()
             .get("x-request-id")
             .and_then(|v| v.to_str().ok())
-            .filter(|s| !s.is_empty() && HeaderValue::from_str(s).is_ok())
-            .map(|s| s.to_string())
+            .and_then(client_request_id)
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        // Generate or extract trace ID (from traceparent header or new UUID)
         let trace_id = req
             .headers()
             .get("traceparent")
             .and_then(|v| v.to_str().ok())
-            .and_then(|tp| {
-                // traceparent format: 00-<trace-id>-<span-id>-<flags>
-                let parts: Vec<&str> = tp.split('-').collect();
-                if parts.len() >= 2 {
-                    Some(parts[1].to_string())
-                } else {
-                    None
-                }
-            })
+            .and_then(trace_id_from_traceparent)
             .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
 
         let span = tracing::error_span!(
@@ -5430,6 +5420,40 @@ fn artifact_trust(
     }
 }
 
+/// Longest client-supplied request id kept.
+const MAX_REQUEST_ID_BYTES: usize = 128;
+
+/// A client-supplied `x-request-id`, when it is at most
+/// [`MAX_REQUEST_ID_BYTES`] of visible ASCII: a request id is written into
+/// log lines and response headers as is.
+fn client_request_id(value: &str) -> Option<String> {
+    let well_formed = !value.is_empty()
+        && value.len() <= MAX_REQUEST_ID_BYTES
+        && value.bytes().all(|b| (0x21..=0x7e).contains(&b));
+    well_formed.then(|| value.to_string())
+}
+
+/// The trace id of a W3C `traceparent` (`00-<trace-id>-<parent-id>-<flags>`,
+/// version 00 and nothing after the flags): 32 lowercase hex digits, not all
+/// zero, followed by a 16-digit parent id and 2-digit flags.
+fn trace_id_from_traceparent(value: &str) -> Option<String> {
+    let mut parts = value.trim().split('-');
+    let (version, trace_id, parent_id, flags) =
+        (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    let lower_hex = |s: &str, len: usize| {
+        s.len() == len
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    let well_formed = version == "00"
+        && parts.next().is_none()
+        && lower_hex(trace_id, 32)
+        && trace_id.bytes().any(|b| b != b'0')
+        && lower_hex(parent_id, 16)
+        && lower_hex(flags, 2);
+    well_formed.then(|| trace_id.to_string())
+}
+
 /// Refuse an artifact format this binary does not read: one older than
 /// [`barbacane_compiler::OLDEST_ARTIFACT_VERSION`], or newer than the format
 /// this binary writes.
@@ -5989,5 +6013,54 @@ mod tests {
             ws_url_to_http_base("ws://localhost:9090"),
             "http://localhost:9090"
         );
+    }
+}
+
+#[cfg(test)]
+mod request_id_tests {
+    use super::*;
+
+    #[test]
+    fn a_short_visible_ascii_request_id_is_kept() {
+        assert_eq!(client_request_id("req-42"), Some("req-42".into()));
+        assert_eq!(
+            client_request_id(&"a".repeat(MAX_REQUEST_ID_BYTES)),
+            Some("a".repeat(MAX_REQUEST_ID_BYTES))
+        );
+    }
+
+    #[test]
+    fn a_long_empty_or_non_printable_request_id_is_replaced() {
+        assert_eq!(client_request_id(""), None);
+        assert_eq!(
+            client_request_id(&"a".repeat(MAX_REQUEST_ID_BYTES + 1)),
+            None
+        );
+        assert_eq!(client_request_id("with space"), None);
+        assert_eq!(client_request_id("tab\there"), None);
+        assert_eq!(client_request_id("caf\u{e9}"), None);
+    }
+
+    #[test]
+    fn a_well_formed_traceparent_gives_its_trace_id() {
+        assert_eq!(
+            trace_id_from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            Some("4bf92f3577b34da6a3ce929d0e0e4736".into())
+        );
+    }
+
+    #[test]
+    fn a_malformed_traceparent_gives_no_trace_id() {
+        for value in [
+            "",
+            "00-zzzz-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736",
+            "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+            "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-and-more-than-fits",
+        ] {
+            assert_eq!(trace_id_from_traceparent(value), None, "{value:?}");
+        }
     }
 }
