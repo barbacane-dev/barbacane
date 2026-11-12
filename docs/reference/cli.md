@@ -590,6 +590,7 @@ The examples below assume the key is set.
 | `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds; also the deadline for a request's headers and for its body, answered 408 when missed |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 | `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address for health, metrics, and provenance endpoints. Set to `off` to disable |
+| `--no-introspection` | No | `false` | Do not serve the embedded specs at `/__barbacane/specs*`; the paths answer 404 |
 
 **Connected mode** (optional — connect to a control plane for centralized management):
 

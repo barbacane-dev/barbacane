@@ -301,7 +301,7 @@ In production, consider:
 
 1. **Keep admin port internal**: The default `127.0.0.1:8081` binding is already safe; if you change it to `0.0.0.0:8081`, ensure firewall rules restrict access
 2. **Network segmentation**: Only expose port 8080 to your load balancer
-3. **Spec access control**: If your API specs contain sensitive information, restrict `/__barbacane/specs` via reverse proxy
+3. **Spec access control**: If your API specs contain sensitive information, start the data plane with `--no-introspection` (every `/__barbacane/specs*` path answers 404) or restrict `/__barbacane/specs` via reverse proxy
 
 Example nginx configuration:
 
