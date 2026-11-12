@@ -21,7 +21,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build the barbacane binary
 # ---------------------------------------------------------------------------
-FROM rust:1.95-slim-bookworm AS binary-builder
+FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS binary-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
@@ -41,7 +41,7 @@ RUN cargo build --locked --release --package barbacane && \
 # ---------------------------------------------------------------------------
 # Stage 2: Build all WASM plugins
 # ---------------------------------------------------------------------------
-FROM rust:1.95-slim-bookworm AS plugin-builder
+FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS plugin-builder
 
 RUN rustup target add wasm32-unknown-unknown
 
@@ -75,7 +75,7 @@ RUN mkdir -p /plugins && \
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 
 # OCI labels
 LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"

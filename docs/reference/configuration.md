@@ -152,20 +152,37 @@ running it:
 ```bash
 # Signature
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/.*' \
+  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/sign-and-sbom\.yml@refs/(tags/v|heads/main)' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/barbacane-dev/barbacane:0.8.0
 
 # SBOM attestation (CycloneDX)
 cosign verify-attestation --type cyclonedx \
-  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/.*' \
+  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/sign-and-sbom\.yml@refs/(tags/v|heads/main)' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/barbacane-dev/barbacane:0.8.0
 ```
 
 The same commands work against Docker Hub (`docker.io/barbacane/barbacane:0.8.0`)
 and the other images (`barbacane-control`, `barbacane-standalone`). The identity
-regexp intentionally matches any workflow under the repo, so it covers both
-tagged-release signing and manual re-signing runs. A successful verification
+regexp names the one workflow that signs, `sign-and-sbom.yml`, run from a
+release tag or, for a manual re-signing, from `main`; no other workflow's
+signature verifies. A successful verification
 confirms the signature was checked against the Rekor transparency log and a
 trusted Fulcio certificate authority.
+
+## Verifying release binaries and plugins
+
+Every file attached to a GitHub release (the binaries, the plugin `.wasm` files,
+the checksum files and the image SBOMs) carries a build provenance attestation
+signed by the release workflow run that produced it. Verify a download before
+using it:
+
+```bash
+gh attestation verify barbacane-x86_64-unknown-linux-gnu.tar.gz \
+  --repo barbacane-dev/barbacane
+```
+
+The command checks the Sigstore signature and that the attested subject digest
+matches the file; it fails on a file that was altered or did not come from a
+release run of this repository.

@@ -351,6 +351,8 @@ jobs:
           format: 'sarif'
           output: 'trivy-data-plane.sarif'
           severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
 
       - name: Scan control plane image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -359,6 +361,8 @@ jobs:
           format: 'sarif'
           output: 'trivy-control-plane.sarif'
           severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
 
       - name: Upload data plane scan results
         uses: github/codeql-action/upload-sarif@v4
@@ -381,6 +385,8 @@ jobs:
           format: 'sarif'
           output: 'trivy-standalone.sarif'
           severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
 
       - name: Upload standalone scan results
         uses: github/codeql-action/upload-sarif@v4
@@ -540,11 +546,13 @@ jobs:
   # Create GitHub Release with all artifacts
   create-release:
     name: Create Release
-    needs: [build-binaries, build-plugins, create-manifests, scan-containers, publish-crates]
+    needs: [build-binaries, build-plugins, create-manifests, scan-containers, publish-crates, sign-and-sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write      # provenance attestation
+      attestations: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -567,6 +575,13 @@ jobs:
           name: plugins
           path: artifacts/plugins
 
+      - name: Download image SBOMs
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/sboms
+          pattern: sbom-*
+          merge-multiple: true
+
       - name: Prepare release artifacts
         run: |
           mkdir -p artifacts/release
@@ -578,6 +593,8 @@ jobs:
           cp artifacts/plugins/*.wasm artifacts/release/
           cp artifacts/plugins/*.plugin.toml artifacts/release/
           cp artifacts/plugins/plugin-checksums.txt artifacts/release/
+          # The images' CycloneDX SBOMs, as attested on the images
+          cp artifacts/sboms/*.cdx.json artifacts/release/
 
       - name: Generate checksums
         run: |
@@ -590,6 +607,13 @@ jobs:
           else
             echo "::warning::No binary files found for checksums"
           fi
+
+      # Every file of the release gets a signed provenance statement naming
+      # this workflow run, verifiable with `gh attestation verify`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/release/*
 
       - name: Extract release notes from changelog
         id: changelog
