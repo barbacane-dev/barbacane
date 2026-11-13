@@ -11,7 +11,8 @@ pub struct PluginLimits {
     /// Maximum linear memory in bytes (default: 16 MB).
     pub max_memory_bytes: usize,
 
-    /// Maximum stack size in bytes (default: 1 MB).
+    /// Maximum stack size in bytes (default: 1 MB). Set on the engine when it
+    /// is built, for every plugin; a plugin's `[limits]` does not change it.
     pub max_stack_bytes: usize,
 
     /// Maximum execution time per call in milliseconds (default: 100 ms).

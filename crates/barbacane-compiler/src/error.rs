@@ -103,6 +103,14 @@ pub enum CompileError {
     #[error("E1044: barbacane.yaml sets invalid limits for plugin '{plugin}': {reason}")]
     InvalidLimitsOverride { plugin: String, reason: String },
 
+    /// E1045: A plugin is not built for this gateway's plugin ABI: no ABI
+    /// version, another version, or a missing export.
+    #[error(
+        "E1045: plugin '{plugin}' is not a plugin this gateway runs: {reason}; \
+         rebuild it with barbacane-plugin-sdk 1.x"
+    )]
+    IncompatibleAbi { plugin: String, reason: String },
+
     /// E1043: A plugin imports a function the gateway does not provide.
     #[error(
         "E1043: plugin '{plugin}' imports {module}::{name}, which the gateway does not provide; \

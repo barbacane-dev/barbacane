@@ -10,6 +10,7 @@ use tempfile::TempDir;
 /// still in memory or in its mutable global, and 412 when `init`'s value is
 /// missing. Each request leaves a mark in both.
 const MARKS_EACH_REQUEST: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (import "barbacane" "host_set_output" (func $set_output (param i32 i32)))
   (memory (export "memory") 1)
   (global $seen (mut i32) (i32.const 0))
@@ -37,6 +38,7 @@ const MARKS_EACH_REQUEST: &str = r#"(module
 
 /// A dispatcher the middleware's answer keeps from running.
 const UNREACHED_DISPATCHER: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))

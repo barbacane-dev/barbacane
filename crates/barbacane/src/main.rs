@@ -891,6 +891,28 @@ impl Gateway {
         // Compile all plugin modules first (we'll register them after creating the final pool)
         let mut compiled_modules = Vec::new();
         for (name, loaded) in bundled_plugins {
+            // The plugin is built for this ABI and exports what the gateway calls.
+            if let Some(mismatch) =
+                barbacane_compiler::abi::check(&loaded.wasm_bytes, &loaded.plugin_type)
+                    .map_err(|e| format!("plugin '{}' cannot be loaded: {}", name, e))?
+            {
+                return Err(format!(
+                    "plugin '{}' cannot be loaded: {}; rebuild it with barbacane-plugin-sdk 1.x",
+                    name, mismatch
+                ));
+            }
+            for deprecated in barbacane_compiler::abi::deprecated_imports(&loaded.wasm_bytes)
+                .map_err(|e| format!("plugin '{}' cannot be loaded: {}", name, e))?
+            {
+                tracing::warn!(
+                    plugin = %name,
+                    import = deprecated.name,
+                    replacement = deprecated.replacement,
+                    removed_in = deprecated.removal,
+                    "plugin imports a deprecated host function"
+                );
+            }
+
             let module = wasm_engine
                 .compile(
                     &loaded.wasm_bytes,
@@ -899,6 +921,12 @@ impl Gateway {
                     loaded.body_access,
                 )
                 .map_err(|e| format!("failed to compile plugin '{}': {}", name, e))?;
+
+            // The exports the gateway calls have the signatures it calls them with.
+            if let Some(plugin_type) = barbacane_wasm::PluginType::parse(&loaded.plugin_type) {
+                barbacane_wasm::validate_exports(module.module(), plugin_type)
+                    .map_err(|e| format!("plugin '{}' cannot be loaded: {}", name, e))?;
+            }
 
             // A plugin imports only what the host provides: `barbacane` host
             // functions and the supported WASI functions.

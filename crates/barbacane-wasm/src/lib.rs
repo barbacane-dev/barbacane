@@ -18,7 +18,6 @@ pub mod crypto;
 mod engine;
 mod error;
 pub mod hash;
-mod host;
 mod http_client;
 mod instance;
 pub mod kafka_client;

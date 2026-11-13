@@ -221,9 +221,67 @@ fn validate_standard_handler_signature(
 mod tests {
     use super::*;
 
-    // These tests require actual WASM modules with proper exports,
-    // which would be created by the plugin SDK. For now, we test
-    // the logic with unit tests on the helper functions.
+    fn module(body: &str) -> Module {
+        let engine = wasmtime::Engine::default();
+        let wasm = wat::parse_str(format!("(module (memory (export \"memory\") 1) {body})"))
+            .expect("valid WAT");
+        Module::new(&engine, wasm).expect("valid module")
+    }
+
+    const ALLOC: &str = r#"(func (export "alloc") (param i32) (result i32) (i32.const 1024))"#;
+    const INIT: &str = r#"(func (export "init") (param i32 i32) (result i32) (i32.const 0))"#;
+    const DISPATCH: &str =
+        r#"(func (export "dispatch") (param i32 i32) (result i32) (i32.const 0))"#;
+
+    #[test]
+    fn a_dispatcher_with_its_exports_passes() {
+        let m = module(&format!("{ALLOC} {INIT} {DISPATCH}"));
+        assert!(validate_exports(&m, PluginType::Dispatcher).is_ok());
+    }
+
+    #[test]
+    fn alloc_is_required() {
+        let m = module(&format!("{INIT} {DISPATCH}"));
+        assert!(matches!(
+            validate_exports(&m, PluginType::Dispatcher),
+            Err(WasmError::MissingExport(name)) if name == "alloc"
+        ));
+    }
+
+    #[test]
+    fn a_middleware_needs_both_hooks() {
+        let m = module(&format!(
+            "{ALLOC} {INIT} (func (export \"on_request\") (param i32 i32) (result i32) (i32.const 0))"
+        ));
+        assert!(matches!(
+            validate_exports(&m, PluginType::Middleware),
+            Err(WasmError::MissingExport(name)) if name == "on_response"
+        ));
+    }
+
+    #[test]
+    fn an_export_with_another_signature_is_refused() {
+        let m = module(&format!(
+            "{ALLOC} {INIT} (func (export \"dispatch\") (param i32) (result i32) (i32.const 0))"
+        ));
+        assert!(matches!(
+            validate_exports(&m, PluginType::Dispatcher),
+            Err(WasmError::InvalidExportSignature { name, .. }) if name == "dispatch"
+        ));
+    }
+
+    #[test]
+    fn plugin_type_parses_its_two_names() {
+        assert_eq!(
+            PluginType::parse("middleware"),
+            Some(PluginType::Middleware)
+        );
+        assert_eq!(
+            PluginType::parse("dispatcher"),
+            Some(PluginType::Dispatcher)
+        );
+        assert_eq!(PluginType::parse("plugin"), None);
+    }
 
     #[test]
     fn capability_to_imports_log() {

@@ -7,6 +7,7 @@
 //! Rust API is not covered by the
 //! [stability policy](https://docs.barbacane.dev/reference/stability.html).
 
+pub mod abi;
 pub mod artifact;
 pub(crate) mod cache;
 pub(crate) mod download;

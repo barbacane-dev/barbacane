@@ -500,7 +500,7 @@ pub struct PluginInstance {
     on_request_func: Option<TypedFunc<(i32, i32), i32>>,
     on_response_func: Option<TypedFunc<(i32, i32), i32>>,
     dispatch_func: Option<TypedFunc<(i32, i32), i32>>,
-    alloc_func: Option<TypedFunc<i32, i32>>,
+    alloc_func: TypedFunc<i32, i32>,
     memory: Memory,
 }
 
@@ -623,7 +623,7 @@ impl PluginInstance {
             .ok();
         let alloc_func = instance
             .get_typed_func::<i32, i32>(&mut store, "alloc")
-            .ok();
+            .map_err(|_| WasmError::MissingExport("alloc".into()))?;
 
         Ok(Self {
             store,
@@ -663,66 +663,32 @@ impl PluginInstance {
 
     /// Write data to the plugin's linear memory and return the pointer.
     ///
-    /// Uses the plugin's exported `alloc` function so that dlmalloc is aware
-    /// of the allocation and will not reuse the region during deserialization.
-    /// Falls back to growing memory directly for legacy plugins that lack the
-    /// `alloc` export (only safe for very small payloads like config JSON).
+    /// The region comes from the plugin's exported `alloc`, so its allocator
+    /// owns it and does not hand it out again while the plugin reads it.
     pub fn write_to_memory(&mut self, data: &[u8]) -> Result<i32, WasmError> {
         if data.is_empty() {
             return Ok(0);
         }
 
-        if let Some(alloc_func) = self.alloc_func.clone() {
-            // Allocate via the plugin's own allocator — dlmalloc tracks this
-            // region and will not hand it out again during deserialization.
-            let fuel = self.store.get_fuel().unwrap_or(self.limits.max_fuel);
-            let ptr = alloc_func
-                .call(&mut self.store, data.len() as i32)
-                .map_err(|e| call_error(e, fuel, self.limits.max_execution_ms.max(1)))?;
+        let fuel = self.store.get_fuel().unwrap_or(self.limits.max_fuel);
+        let ptr = self
+            .alloc_func
+            .call(&mut self.store, data.len() as i32)
+            .map_err(|e| call_error(e, fuel, self.limits.max_execution_ms.max(1)))?;
 
-            if ptr == 0 {
-                let current_size = self.memory.data_size(&self.store);
-                return Err(WasmError::MemoryLimitExceeded {
-                    requested: data.len(),
-                    limit: self.limits.max_memory_bytes.saturating_sub(current_size),
-                });
-            }
-
-            self.memory
-                .write(&mut self.store, ptr as usize, data)
-                .map_err(|e| WasmError::Trap(format!("memory write failed: {}", e)))?;
-
-            Ok(ptr)
-        } else {
-            // Legacy fallback: grow memory and write at the new region.
-            // Only safe for small payloads (e.g. config JSON during init).
+        if ptr == 0 {
             let current_size = self.memory.data_size(&self.store);
-            let needed = current_size + data.len();
-
-            if needed > self.limits.max_memory_bytes {
-                return Err(WasmError::MemoryLimitExceeded {
-                    requested: data.len(),
-                    limit: self.limits.max_memory_bytes.saturating_sub(current_size),
-                });
-            }
-
-            const PAGE_SIZE: usize = 65_536;
-            let pages_needed = data.len().div_ceil(PAGE_SIZE);
-
-            self.memory
-                .grow(&mut self.store, pages_needed as u64)
-                .map_err(|_| WasmError::MemoryLimitExceeded {
-                    requested: data.len(),
-                    limit: self.limits.max_memory_bytes.saturating_sub(current_size),
-                })?;
-
-            let ptr = current_size;
-            self.memory
-                .write(&mut self.store, ptr, data)
-                .map_err(|e| WasmError::Trap(format!("memory write failed: {}", e)))?;
-
-            Ok(ptr as i32)
+            return Err(WasmError::MemoryLimitExceeded {
+                requested: data.len(),
+                limit: self.limits.max_memory_bytes.saturating_sub(current_size),
+            });
         }
+
+        self.memory
+            .write(&mut self.store, ptr as usize, data)
+            .map_err(|e| WasmError::Trap(format!("memory write failed: {}", e)))?;
+
+        Ok(ptr)
     }
 
     /// Reset fuel and the wall-clock deadline to one call's budget.
