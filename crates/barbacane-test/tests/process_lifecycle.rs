@@ -311,11 +311,23 @@ fn a_draining_gateway_refuses_new_connections_and_reports_it() {
         .announced_port("barbacane: admin API on", Duration::from_secs(30))
         .expect("the gateway announced its admin port");
 
-    // A request whose body never completes keeps a connection in flight.
+    // A request whose body never completes keeps a connection in flight. A
+    // complete request first, on the same connection, shows the gateway has
+    // accepted it: a connection still in the listen backlog when SIGTERM
+    // arrives is never served, and the gateway rightly exits at once.
     let mut in_flight = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    in_flight
+        .write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .expect("send a request");
+    assert!(
+        read_until(&mut in_flight, b"pong"),
+        "the gateway answered on the connection"
+    );
     in_flight
         .write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nabc")
         .expect("send a partial request");
+    // Time for the gateway to read the headers and start waiting for the body.
+    std::thread::sleep(Duration::from_millis(300));
 
     unsafe {
         libc::kill(process.id().expect("pid") as i32, libc::SIGTERM);
@@ -365,4 +377,19 @@ fn a_draining_gateway_refuses_new_connections_and_reports_it() {
     let (mut child, log) = process.into_parts();
     let status = child.wait().expect("wait");
     assert_eq!(status.code(), Some(0), "{}", log.text());
+}
+
+/// Read from `stream` until `needle` has arrived, or give up after 10 seconds.
+fn read_until(stream: &mut std::net::TcpStream, needle: &[u8]) -> bool {
+    use std::io::Read;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !seen.windows(needle.len()).any(|window| window == needle) {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => return false,
+            Ok(n) => seen.extend_from_slice(&buf[..n]),
+        }
+    }
+    true
 }
