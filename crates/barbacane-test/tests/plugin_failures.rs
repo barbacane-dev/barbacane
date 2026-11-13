@@ -158,6 +158,7 @@ const RESPONSE_TRAPPING_MIDDLEWARE: &str = r#"(module
 /// A middleware whose `on_response` returns 1 without an output, as the SDK
 /// macros do when the response cannot be parsed.
 const RESPONSE_REFUSING_MIDDLEWARE: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))
