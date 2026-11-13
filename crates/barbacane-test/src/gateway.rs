@@ -734,8 +734,17 @@ impl Drop for TestGateway {
     }
 }
 
-/// Find the barbacane binary in the target directory.
+/// Find the barbacane binary in the target directory, as an absolute path, so
+/// a caller can run it from any working directory.
 pub fn find_barbacane_binary() -> Result<String, TestError> {
+    find_barbacane_binary_relative().map(|path| {
+        std::fs::canonicalize(&path)
+            .map(|absolute| absolute.display().to_string())
+            .unwrap_or(path)
+    })
+}
+
+fn find_barbacane_binary_relative() -> Result<String, TestError> {
     // An explicit path wins, then the active target directory. Both come before
     // the fixed candidates so a build under a redirected CARGO_TARGET_DIR (which
     // is how `cargo llvm-cov` instruments the gateway) runs the binary it just

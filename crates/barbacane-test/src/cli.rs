@@ -16,12 +16,13 @@ use tempfile::TempDir;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Returns an assert_cmd Command wrapping the `barbacane` binary.
+/// Returns an assert_cmd Command wrapping the `barbacane` binary, found as the
+/// gateway harness finds it. `Command::cargo_bin` derives the path from the
+/// test executable's location, which varies between cargo versions.
 fn barbacane() -> Command {
-    // cargo_bin is deprecated for custom build-dir setups; fine for standard workspace use.
-    #[allow(deprecated)]
-    Command::cargo_bin("barbacane")
-        .expect("barbacane binary not found — run `cargo build -p barbacane` first")
+    let binary = crate::gateway::find_barbacane_binary()
+        .expect("barbacane binary not found; run `cargo build -p barbacane` first");
+    Command::new(binary)
 }
 
 /// Absolute path to the shared test fixtures directory.
