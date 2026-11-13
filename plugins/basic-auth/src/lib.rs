@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 /// HTTP Basic authentication middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BasicAuth {
     /// The authentication realm shown in the WWW-Authenticate challenge.
     #[serde(default = "default_realm")]
@@ -160,13 +161,15 @@ impl BasicAuth {
             .or_else(|| req.headers.get("Authorization"))
             .ok_or(BasicAuthError::MissingAuthHeader)?;
 
-        // Must start with "Basic " (case-insensitive)
-        if !auth_header.starts_with("Basic ") && !auth_header.starts_with("basic ") {
-            return Err(BasicAuthError::InvalidAuthHeader);
-        }
+        // The scheme is case-insensitive (RFC 9110 section 11.1).
+        let encoded = auth_header
+            .get(..6)
+            .filter(|scheme| scheme.eq_ignore_ascii_case("basic "))
+            .and_then(|_| auth_header.get(6..))
+            .ok_or(BasicAuthError::InvalidAuthHeader)?
+            .trim();
 
         // Decode base64 (standard encoding per RFC 7617)
-        let encoded = auth_header[6..].trim();
         let decoded_bytes = STANDARD
             .decode(encoded)
             .map_err(|_| BasicAuthError::InvalidBase64)?;

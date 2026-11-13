@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 /// Lambda dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LambdaDispatcher {
     /// Lambda Function URL (e.g., https://<id>.lambda-url.<region>.on.aws/).
     url: String,

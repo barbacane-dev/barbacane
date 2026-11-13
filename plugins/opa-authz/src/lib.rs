@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 /// OPA authorization middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OpaAuthz {
     /// OPA Data API endpoint URL (e.g., `http://opa:8181/v1/data/authz/allow`).
     opa_url: String,

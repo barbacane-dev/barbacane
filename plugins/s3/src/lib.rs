@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 /// S3 dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct S3Dispatcher {
     // ── AWS credentials ────────────────────────────────────────────────────
     /// AWS access key ID.

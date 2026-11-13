@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 /// HTTP logging middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpLog {
     /// URL to send log entries to.
     endpoint: String,
@@ -320,6 +321,24 @@ fn log_message(level: Level, msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configuration with a key the plugin does not know is refused at init
+    /// rather than ignored in part.
+    #[test]
+    fn an_unknown_configuration_key_is_refused() {
+        let err = serde_json::from_str::<HttpLog>(
+            r#"{"endpoint": "http://logs.example/ingest", "nope": 1}"#,
+        )
+        .err()
+        .expect("unknown key");
+        assert!(err.to_string().contains("nope"), "{err}");
+    }
+
+    /// A configuration the schema refuses is refused at init too.
+    #[test]
+    fn an_invalid_configuration_is_refused() {
+        assert!(serde_json::from_str::<HttpLog>(r#"{"method": "POST"}"#).is_err());
+    }
 
     fn test_plugin() -> HttpLog {
         HttpLog {

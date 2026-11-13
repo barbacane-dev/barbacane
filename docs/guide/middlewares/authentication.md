@@ -139,6 +139,7 @@ Sets headers for downstream:
 
 - `401 Unauthorized` — Missing token, invalid token, or inactive token
 - `403 Forbidden` — Token lacks required scopes
+- `503 Service Unavailable` (`urn:barbacane:error:introspection-unavailable`) — The introspection endpoint cannot be reached or answers something the plugin cannot read
 
 Includes RFC 6750 `WWW-Authenticate` header with error details.
 

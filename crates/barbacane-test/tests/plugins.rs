@@ -281,6 +281,31 @@ async fn test_cors_simple_request_with_origin() {
     );
 }
 
+/// A request from an origin outside the list passes through, and its response
+/// carries no CORS headers; a browser refuses it to the page, a same-origin or
+/// non-browser client is unaffected.
+#[tokio::test]
+async fn test_cors_simple_request_from_unlisted_origin_passes_without_cors_headers() {
+    let gateway = TestGateway::from_spec(&fixture("cors.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/cors-specific")
+        .header("Origin", "https://evil-site.com")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200, "the request reaches the dispatcher");
+    assert!(
+        resp.headers().get("access-control-allow-origin").is_none(),
+        "no CORS header for an unlisted origin: {:?}",
+        resp.headers()
+    );
+    assert!(resp.headers().get("vary").is_none());
+}
+
 #[tokio::test]
 async fn test_cors_request_without_origin() {
     let gateway = TestGateway::from_spec(&fixture("cors.yaml"))

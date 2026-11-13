@@ -45,21 +45,29 @@ struct DenyAction {
     message: Option<String>,
 }
 
+/// The configuration as written: compiled into a [`CelPolicy`] at init, so an
+/// expression that does not parse fails init rather than every request.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CelPolicyConfig {
+    expression: String,
+    #[serde(default = "default_deny_message")]
+    deny_message: String,
+    #[serde(default)]
+    on_match: Option<OnMatch>,
+}
+
 /// CEL policy evaluation middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(try_from = "CelPolicyConfig")]
 pub struct CelPolicy {
-    /// CEL expression that must evaluate to a boolean.
-    expression: String,
-
     /// Custom message returned in the 403 response when the expression is false.
     /// Ignored when `on_match` is set (false is a no-op in routing mode).
-    #[serde(default = "default_deny_message")]
     deny_message: String,
 
-    /// Pre-compiled CEL program (lazy-initialized on first request).
-    #[serde(skip)]
-    compiled: Option<cel::Program>,
+    /// The compiled expression.
+    compiled: cel::Program,
 
     /// When present, switches from access-control mode to match-and-act mode:
     /// - true  → take the configured `on_match` actions (`set_context` and/or
@@ -69,8 +77,32 @@ pub struct CelPolicy {
     /// When absent (default), the original access-control behaviour applies:
     /// - true  → continue
     /// - false → 403 Forbidden
-    #[serde(default)]
     on_match: Option<OnMatch>,
+}
+
+impl TryFrom<CelPolicyConfig> for CelPolicy {
+    type Error = String;
+
+    /// Compile the expression and check `on_match.deny.code` against the
+    /// snake_case rule the JSON schema declares (vacuum's generated validator
+    /// only recurses to top-level fields).
+    fn try_from(config: CelPolicyConfig) -> Result<Self, String> {
+        if let Some(deny) = config.on_match.as_ref().and_then(|m| m.deny.as_ref()) {
+            if !is_snake_case_code(&deny.code) {
+                return Err(format!(
+                    "on_match.deny.code must match ^[a-z][a-z0-9_]*$, got {:?}",
+                    deny.code
+                ));
+            }
+        }
+        let compiled = cel::Program::compile(&config.expression)
+            .map_err(|e| format!("CEL parse error: {}", e))?;
+        Ok(Self {
+            deny_message: config.deny_message,
+            compiled,
+            on_match: config.on_match,
+        })
+    }
 }
 
 fn default_deny_message() -> String {
@@ -87,12 +119,7 @@ fn default_deny_status() -> u16 {
 
 impl CelPolicy {
     pub fn on_request(&mut self, req: Request) -> Action<Request> {
-        // Lazy-compile the expression on first request
-        if let Err(msg) = self.ensure_compiled() {
-            return Action::ShortCircuit(self.config_error_response(&msg));
-        }
-
-        let program = self.compiled.as_ref().expect("just compiled above");
+        let program = &self.compiled;
 
         // Build CEL context from request
         let context = self.build_context(&req);
@@ -131,29 +158,6 @@ impl CelPolicy {
 
     pub fn on_response(&mut self, resp: Response) -> Response {
         resp
-    }
-
-    /// Compile the CEL expression once, reuse on subsequent calls. Also
-    /// validates `on_match.deny.code` against the snake_case rule that the
-    /// JSON schema declares — vacuum's auto-generated validator only recurses
-    /// to top-level fields, so nested-field constraints are enforced here.
-    fn ensure_compiled(&mut self) -> Result<(), String> {
-        if self.compiled.is_none() {
-            if let Some(on_match) = &self.on_match {
-                if let Some(deny) = &on_match.deny {
-                    if !is_snake_case_code(&deny.code) {
-                        return Err(format!(
-                            "on_match.deny.code must match ^[a-z][a-z0-9_]*$, got {:?}",
-                            deny.code
-                        ));
-                    }
-                }
-            }
-            let program = cel::Program::compile(&self.expression)
-                .map_err(|e| format!("CEL parse error: {}", e))?;
-            self.compiled = Some(program);
-        }
-        Ok(())
     }
 
     /// Build a CEL evaluation context from the request.
@@ -232,17 +236,6 @@ impl CelPolicy {
         )
         .detail(detail)
         .with("code", action.code.clone())
-        .into_response()
-    }
-
-    /// 500 Internal Server Error for CEL configuration errors (bad expression).
-    fn config_error_response(&self, detail: &str) -> Response {
-        ProblemDetails::new(
-            500,
-            "urn:barbacane:error:cel-config",
-            "Internal Server Error",
-        )
-        .detail(detail)
         .into_response()
     }
 
@@ -437,27 +430,46 @@ mod tests {
     use super::*;
 
     fn create_config(expression: &str) -> CelPolicy {
-        CelPolicy {
+        CelPolicy::try_from(CelPolicyConfig {
             expression: expression.to_string(),
             deny_message: default_deny_message(),
-            compiled: None,
             on_match: None,
-        }
+        })
+        .expect("the expression compiles")
     }
 
     fn create_config_with_on_match(
         expression: &str,
         set_context: BTreeMap<String, String>,
     ) -> CelPolicy {
-        CelPolicy {
+        CelPolicy::try_from(CelPolicyConfig {
             expression: expression.to_string(),
             deny_message: default_deny_message(),
-            compiled: None,
             on_match: Some(OnMatch {
                 set_context,
                 deny: None,
             }),
-        }
+        })
+        .expect("the expression compiles")
+    }
+
+    /// An expression that does not parse fails at init, before any request.
+    #[test]
+    fn an_invalid_expression_fails_at_init() {
+        let err = serde_json::from_value::<CelPolicy>(serde_json::json!({
+            "expression": "this is not valid CEL !!!",
+        }))
+        .err()
+        .expect("does not parse");
+        assert!(err.to_string().contains("CEL parse error"), "{err}");
+
+        let err = serde_json::from_value::<CelPolicy>(serde_json::json!({
+            "expression": "true",
+            "on_match": { "deny": { "code": "Not-Snake" } },
+        }))
+        .err()
+        .expect("bad code");
+        assert!(err.to_string().contains("on_match.deny.code"), "{err}");
     }
 
     fn create_request() -> Request {
@@ -478,9 +490,7 @@ mod tests {
         let json = r#"{"expression": "true"}"#;
         let config: CelPolicy = serde_json::from_str(json).expect("should parse");
 
-        assert_eq!(config.expression, "true");
         assert_eq!(config.deny_message, "Access denied by policy");
-        assert!(config.compiled.is_none());
     }
 
     #[test]
@@ -491,7 +501,6 @@ mod tests {
         }"#;
         let config: CelPolicy = serde_json::from_str(json).expect("should parse");
 
-        assert_eq!(config.expression, "request.method == 'GET'");
         assert_eq!(config.deny_message, "Custom deny");
     }
 
@@ -924,10 +933,9 @@ mod tests {
     #[test]
     fn on_match_deny_falls_back_to_403_for_non_4xx_status() {
         // 500 would mask a policy decision as a server fault — clamp to 403.
-        let mut config = CelPolicy {
+        let mut config = CelPolicy::try_from(CelPolicyConfig {
             expression: "true".to_string(),
             deny_message: default_deny_message(),
-            compiled: None,
             on_match: Some(OnMatch {
                 set_context: BTreeMap::new(),
                 deny: Some(DenyAction {
@@ -936,7 +944,8 @@ mod tests {
                     message: None,
                 }),
             }),
-        };
+        })
+        .expect("compiles");
         match config.on_request(create_request()) {
             Action::Continue(_) => panic!("expected deny"),
             Action::ShortCircuit(resp) => assert_eq!(resp.status, 403),
@@ -1037,10 +1046,9 @@ mod tests {
             "has space",
             "",
         ] {
-            let mut config = CelPolicy {
+            let err = CelPolicy::try_from(CelPolicyConfig {
                 expression: "true".to_string(),
                 deny_message: default_deny_message(),
-                compiled: None,
                 on_match: Some(OnMatch {
                     set_context: BTreeMap::new(),
                     deny: Some(DenyAction {
@@ -1049,26 +1057,19 @@ mod tests {
                         message: None,
                     }),
                 }),
-            };
-            match config.on_request(create_request()) {
-                Action::Continue(_) => panic!("expected 500 for invalid code {:?}", bad),
-                Action::ShortCircuit(resp) => {
-                    assert_eq!(resp.status, 500, "code {:?} should be rejected", bad);
-                    let body: serde_json::Value =
-                        serde_json::from_slice(&resp.body.unwrap()).expect("problem+json");
-                    assert_eq!(body["type"], "urn:barbacane:error:cel-config");
-                }
-            }
+            })
+            .err()
+            .unwrap_or_else(|| panic!("code {:?} should be refused at init", bad));
+            assert!(err.contains("on_match.deny.code"), "{err}");
         }
     }
 
     #[test]
     fn on_match_deny_accepts_valid_snake_case_codes() {
         for ok in ["model_not_permitted", "x", "a1", "z9_a_b_c"] {
-            let mut config = CelPolicy {
+            let mut config = CelPolicy::try_from(CelPolicyConfig {
                 expression: "true".to_string(),
                 deny_message: default_deny_message(),
-                compiled: None,
                 on_match: Some(OnMatch {
                     set_context: BTreeMap::new(),
                     deny: Some(DenyAction {
@@ -1077,7 +1078,8 @@ mod tests {
                         message: None,
                     }),
                 }),
-            };
+            })
+            .expect("compiles");
             match config.on_request(create_request()) {
                 Action::Continue(_) => panic!("expected deny short-circuit for code {:?}", ok),
                 Action::ShortCircuit(resp) => {
@@ -1190,21 +1192,6 @@ mod tests {
     // --- Error handling ---
 
     #[test]
-    fn eval_invalid_expression_returns_500() {
-        let mut config = create_config("this is not valid CEL !!!");
-        let req = create_request();
-        match config.on_request(req) {
-            Action::Continue(_) => panic!("expected error"),
-            Action::ShortCircuit(resp) => {
-                assert_eq!(resp.status, 500);
-                let body: serde_json::Value =
-                    serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
-                assert_eq!(body["type"], "urn:barbacane:error:cel-config");
-            }
-        }
-    }
-
-    #[test]
     fn eval_non_bool_result_returns_500() {
         let mut config = create_config("request.method");
         let req = create_request();
@@ -1252,18 +1239,6 @@ mod tests {
     }
 
     #[test]
-    fn config_error_response_format() {
-        let config = create_config("bad");
-        let resp = config.config_error_response("CEL parse error: unexpected token");
-
-        assert_eq!(resp.status, 500);
-        let body: serde_json::Value =
-            serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
-        assert_eq!(body["type"], "urn:barbacane:error:cel-config");
-        assert_eq!(body["title"], "Internal Server Error");
-    }
-
-    #[test]
     fn eval_error_response_format() {
         let config = create_config("bad");
         let resp = config.eval_error_response("expression returned string, expected bool");
@@ -1272,23 +1247,6 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(resp.body.as_ref().expect("body")).expect("json");
         assert_eq!(body["type"], "urn:barbacane:error:cel-evaluation");
-    }
-
-    // --- Lazy compilation ---
-
-    #[test]
-    fn lazy_compilation_reuses_program() {
-        let mut config = create_config("true");
-        assert!(config.compiled.is_none());
-
-        let req = create_request();
-        let _ = config.on_request(req);
-        assert!(config.compiled.is_some());
-
-        // Second request reuses compiled program
-        let req2 = create_request();
-        let _ = config.on_request(req2);
-        assert!(config.compiled.is_some());
     }
 
     // --- JSON to CEL conversion ---

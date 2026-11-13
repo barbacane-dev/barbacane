@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 /// CORS middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cors {
     /// Allowed origins. Use ["*"] to allow any origin.
     /// Default: [] (no origins allowed)
@@ -74,25 +75,31 @@ impl Cors {
             );
         }
 
-        // Validate origin
+        let preflight = req.method.eq_ignore_ascii_case("OPTIONS")
+            && req.headers.contains_key("access-control-request-method");
+
+        // An origin outside the list gets no CORS headers, as the Fetch model
+        // has it: a browser then refuses the response to the page, and a
+        // same-origin or non-browser client is unaffected. A preflight from
+        // such an origin is refused outright, as it exists only to ask.
         if !self.is_origin_allowed(&origin) {
             log_message(
                 Level::Info,
                 &format!("CORS: origin not allowed: {}", origin),
             );
-            return Action::ShortCircuit(self.forbidden_response(&origin));
+            if preflight {
+                return Action::ShortCircuit(self.forbidden_response(&origin));
+            }
+            return Action::Continue(req);
         }
 
-        // Check if this is a preflight request
-        if req.method.eq_ignore_ascii_case("OPTIONS") {
-            if let Some(requested_method) = req.headers.get("access-control-request-method") {
-                // This is a preflight request
-                return Action::ShortCircuit(self.preflight_response(
-                    &origin,
-                    requested_method,
-                    &req,
-                ));
-            }
+        if preflight {
+            let requested_method = req
+                .headers
+                .get("access-control-request-method")
+                .cloned()
+                .unwrap_or_default();
+            return Action::ShortCircuit(self.preflight_response(&origin, &requested_method, &req));
         }
 
         // Regular CORS request: stash the validated origin in request context so
@@ -562,16 +569,21 @@ mod tests {
         }
     }
 
-    // PL-3 regression: `*` with credentials must NOT allow an arbitrary origin.
+    // PL-3 regression: `*` with credentials must NOT allow an arbitrary origin:
+    // the request passes with no origin recorded, so the response carries no
+    // CORS headers.
     #[test]
     fn wildcard_with_credentials_denies_arbitrary_origin() {
+        context::clear();
         let mut cors = create_test_cors(vec!["*".to_string()]);
         cors.allow_credentials = true;
         assert!(!cors.is_origin_allowed("https://evil.com"));
         match cors.on_request(create_request("GET", Some("https://evil.com"))) {
-            Action::ShortCircuit(r) => assert_eq!(r.status, 403),
-            Action::Continue(_) => panic!("wildcard+credentials must not allow arbitrary origins"),
+            Action::Continue(_) => assert_eq!(context::get("cors.origin"), None),
+            Action::ShortCircuit(_) => panic!("a request from an unlisted origin passes through"),
         }
+        let resp = cors.on_response(Response::text(200, BTreeMap::new(), ""));
+        assert!(!resp.headers.contains_key("access-control-allow-origin"));
     }
 
     // With credentials, an explicitly-listed origin is allowed and echoed back
@@ -594,10 +606,31 @@ mod tests {
         );
     }
 
+    /// A request from an unlisted origin passes through with no CORS headers.
     #[test]
     fn test_on_request_disallowed_origin() {
+        context::clear();
         let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
         let req = create_request("GET", Some("https://evil.com"));
+
+        match cors.on_request(req) {
+            Action::Continue(_) => assert_eq!(context::get("cors.origin"), None),
+            Action::ShortCircuit(_) => panic!("Expected Continue, got ShortCircuit"),
+        }
+        let resp = cors.on_response(Response::text(200, BTreeMap::new(), ""));
+        assert!(!resp.headers.contains_key("access-control-allow-origin"));
+        assert!(!resp.headers.contains_key("vary"));
+    }
+
+    /// A preflight from an unlisted origin is refused.
+    #[test]
+    fn preflight_from_a_disallowed_origin_is_refused() {
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        let mut req = create_request("OPTIONS", Some("https://evil.com"));
+        req.headers.insert(
+            "access-control-request-method".to_string(),
+            "GET".to_string(),
+        );
 
         match cors.on_request(req) {
             Action::ShortCircuit(response) => {

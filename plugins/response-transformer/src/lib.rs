@@ -59,6 +59,7 @@ struct BodyConfig {
 /// Response transformer middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResponseTransformer {
     /// Status code mapping (original → replacement).
     #[serde(default)]
@@ -284,6 +285,16 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configuration with a key the plugin does not know is refused at init
+    /// rather than ignored in part.
+    #[test]
+    fn an_unknown_configuration_key_is_refused() {
+        let err = serde_json::from_str::<ResponseTransformer>(r#"{"nope": 1}"#)
+            .err()
+            .expect("unknown key");
+        assert!(err.to_string().contains("nope"), "{err}");
+    }
 
     fn create_test_response() -> Response {
         let mut headers = BTreeMap::new();

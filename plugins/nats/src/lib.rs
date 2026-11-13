@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 /// NATS dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NatsDispatcher {
     /// NATS server URL (e.g., nats://localhost:4222).
     url: String,

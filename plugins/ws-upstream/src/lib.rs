@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 /// WebSocket upstream dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WsUpstreamDispatcher {
     /// Upstream WebSocket URL (e.g., ws://service:8080/ws or wss://service:443/ws).
     url: String,

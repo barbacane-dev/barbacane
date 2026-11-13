@@ -155,15 +155,26 @@ const RESPONSE_TRAPPING_MIDDLEWARE: &str = r#"(module
   (func (export "on_response") (param i32 i32) (result i32) unreachable)
 )"#;
 
-/// `/served` runs the response trapper on a mock response; `/refused` runs it
-/// after `ip-restriction` short-circuits.
-fn spec_with_response_trapper() -> (tempfile::TempDir, std::path::PathBuf) {
+/// A middleware whose `on_response` returns 1 without an output, as the SDK
+/// macros do when the response cannot be parsed.
+const RESPONSE_REFUSING_MIDDLEWARE: &str = r#"(module
+  (@custom "barbacane_abi" "\01\00\00\00")
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+  (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "on_request") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "on_response") (param i32 i32) (result i32) (i32.const 1))
+)"#;
+
+/// `/served` runs the response middleware built from `wat` on a mock response;
+/// `/refused` runs it after `ip-restriction` short-circuits.
+fn spec_with_response_trapper(wat: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let plugin_dir = dir.path().join("response-trapper");
     std::fs::create_dir(&plugin_dir).expect("plugin dir");
     std::fs::write(
         plugin_dir.join("response-trapper.wasm"),
-        wat::parse_str(RESPONSE_TRAPPING_MIDDLEWARE).expect("valid WAT"),
+        wat::parse_str(wat).expect("valid WAT"),
     )
     .expect("wasm");
     std::fs::write(
@@ -225,7 +236,11 @@ paths:
 }
 
 async fn assert_response_trap_is_answered_with_500(path: &str) {
-    let (_dir, spec) = spec_with_response_trapper();
+    assert_response_failure_is_answered_with_500(RESPONSE_TRAPPING_MIDDLEWARE, path).await;
+}
+
+async fn assert_response_failure_is_answered_with_500(wat: &str, path: &str) {
+    let (_dir, spec) = spec_with_response_trapper(wat);
     let gateway = TestGateway::from_spec(spec.to_str().expect("utf-8"))
         .await
         .expect("starts");
@@ -253,6 +268,13 @@ async fn a_response_middleware_that_traps_is_answered_with_500() {
 #[tokio::test]
 async fn a_response_middleware_that_traps_after_a_short_circuit_is_answered_with_500() {
     assert_response_trap_is_answered_with_500("/refused").await;
+}
+
+/// A non-zero `on_response` result fails the request as a trap does; the
+/// upstream body is not served in its place.
+#[tokio::test]
+async fn a_response_middleware_that_returns_an_error_is_answered_with_500() {
+    assert_response_failure_is_answered_with_500(RESPONSE_REFUSING_MIDDLEWARE, "/served").await;
 }
 
 /// A dispatcher importing a WASI function the gateway does not provide.

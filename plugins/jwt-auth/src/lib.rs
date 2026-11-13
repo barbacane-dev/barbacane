@@ -375,14 +375,14 @@ impl JwtAuth {
 
         // Validate expiration (exp)
         if let Some(exp) = claims.exp {
-            if now > exp + self.clock_skew_seconds {
+            if now > exp.saturating_add(self.clock_skew_seconds) {
                 return Err(JwtError::TokenExpired);
             }
         }
 
         // Validate not before (nbf)
         if let Some(nbf) = claims.nbf {
-            if now + self.clock_skew_seconds < nbf {
+            if now.saturating_add(self.clock_skew_seconds) < nbf {
                 return Err(JwtError::TokenNotYetValid);
             }
         }

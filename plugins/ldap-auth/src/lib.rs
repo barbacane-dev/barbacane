@@ -32,6 +32,7 @@ const IDENTITY_HEADERS: [&str; 4] = [
 /// LDAP authentication middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LdapAuth {
     /// Directory URL: `ldap://host[:port]` or `ldaps://host[:port]`.
     url: String,
@@ -480,9 +481,11 @@ fn extract_credentials(req: &Request) -> Result<(String, String), AuthError> {
         .or_else(|| req.headers.get("Authorization"))
         .ok_or(AuthError::MissingAuthHeader)?;
 
+    // The scheme is case-insensitive (RFC 9110 section 11.1).
     let encoded = auth_header
-        .strip_prefix("Basic ")
-        .or_else(|| auth_header.strip_prefix("basic "))
+        .get(..6)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("basic "))
+        .and_then(|_| auth_header.get(6..))
         .ok_or(AuthError::InvalidAuthHeader)?
         .trim();
 

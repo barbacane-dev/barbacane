@@ -9,6 +9,7 @@ use serde::Deserialize;
 /// Request size limit middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequestSizeLimit {
     /// Maximum allowed request body size in bytes.
     /// Default: 1048576 (1 MiB)

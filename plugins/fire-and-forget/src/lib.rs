@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 /// Fire-and-forget dispatcher configuration.
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FireAndForgetDispatcher {
     /// Upstream URL to forward the request to.
     url: String,

@@ -10,6 +10,7 @@ use std::net::IpAddr;
 /// IP restriction middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IpRestriction {
     /// List of allowed IPs or CIDR ranges.
     /// If non-empty, only these IPs are allowed (allowlist mode).

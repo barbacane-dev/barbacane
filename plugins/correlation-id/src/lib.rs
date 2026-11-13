@@ -13,6 +13,7 @@ use serde::Deserialize;
 /// Correlation ID middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CorrelationId {
     /// Header name for the correlation ID.
     /// Default: "x-correlation-id"

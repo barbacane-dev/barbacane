@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 /// ACL middleware configuration.
 #[barbacane_middleware]
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Acl {
     /// Group names that are allowed access.
     /// If non-empty, consumer must belong to at least one.
