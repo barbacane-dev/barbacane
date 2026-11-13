@@ -735,7 +735,7 @@ impl Drop for TestGateway {
 }
 
 /// Find the barbacane binary in the target directory.
-fn find_barbacane_binary() -> Result<String, TestError> {
+pub fn find_barbacane_binary() -> Result<String, TestError> {
     // An explicit path wins, then the active target directory. Both come before
     // the fixed candidates so a build under a redirected CARGO_TARGET_DIR (which
     // is how `cargo llvm-cov` instruments the gateway) runs the binary it just

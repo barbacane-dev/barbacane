@@ -14,16 +14,13 @@ use std::time::{Duration, Instant};
 
 use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT, STARTUP_TIMEOUT};
 
-/// The gateway binary built alongside these tests.
-///
-/// A test executable lives at `target/<profile>/deps/<name>-<hash>`, so the
-/// gateway is two levels up: one pop drops the file name, the second drops
-/// `deps`.
+/// The gateway binary these tests drive, found as the test harness finds it.
+/// Where cargo puts the test executable itself varies between cargo versions,
+/// so the path is not derived from it.
 fn gateway_binary() -> std::path::PathBuf {
-    let mut dir = std::env::current_exe().expect("test binary path");
-    dir.pop(); // the test executable's own file name
-    dir.pop(); // deps/
-    dir.join("barbacane")
+    barbacane_test::gateway::find_barbacane_binary()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("target/debug/barbacane"))
 }
 
 /// The smallest artifact the repository can build: one mock route.
