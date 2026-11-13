@@ -58,45 +58,9 @@ impl PluginLimits {
     }
 }
 
-/// Resource limiter for wasmtime that enforces memory limits.
-#[allow(dead_code)] // Implements wasmtime::ResourceLimiter, will be passed to Store
-pub struct PluginResourceLimiter {
-    limits: PluginLimits,
-}
-
-#[allow(dead_code)]
-impl PluginResourceLimiter {
-    /// Create a new resource limiter with the given limits.
-    pub fn new(limits: PluginLimits) -> Self {
-        Self { limits }
-    }
-}
-
-impl wasmtime::ResourceLimiter for PluginResourceLimiter {
-    fn memory_growing(
-        &mut self,
-        _current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> Result<bool, wasmtime::Error> {
-        Ok(desired <= self.limits.max_memory_bytes)
-    }
-
-    fn table_growing(
-        &mut self,
-        _current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> Result<bool, wasmtime::Error> {
-        // Allow reasonable table growth (for function references, etc.)
-        Ok(desired <= 10_000)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wasmtime::ResourceLimiter;
 
     #[test]
     fn default_limits() {
@@ -116,24 +80,5 @@ mod tests {
         assert_eq!(limits.max_memory_bytes, 32 * 1024 * 1024);
         assert_eq!(limits.max_stack_bytes, 2 * 1024 * 1024);
         assert_eq!(limits.max_execution_ms, 200);
-    }
-
-    #[test]
-    fn resource_limiter_allows_within_limits() {
-        let limits = PluginLimits::default();
-        let mut limiter = PluginResourceLimiter::new(limits);
-
-        // Should allow allocation within limits
-        assert!(limiter.memory_growing(0, 1024 * 1024, None).unwrap());
-        assert!(limiter.memory_growing(0, 16 * 1024 * 1024, None).unwrap());
-    }
-
-    #[test]
-    fn resource_limiter_denies_over_limit() {
-        let limits = PluginLimits::default();
-        let mut limiter = PluginResourceLimiter::new(limits);
-
-        // Should deny allocation over limits
-        assert!(!limiter.memory_growing(0, 17 * 1024 * 1024, None).unwrap());
     }
 }

@@ -52,19 +52,6 @@ fn compute_hash(s: &str) -> String {
     hex::encode(&result[..8])
 }
 
-/// A resolved plugin ready for instantiation.
-#[allow(dead_code)] // Public API for plugin resolution pipeline
-pub struct ResolvedPlugin {
-    /// The compiled WASM module.
-    pub module: CompiledModule,
-
-    /// The plugin config (JSON).
-    pub config: serde_json::Value,
-
-    /// Pre-serialized config for passing to init.
-    pub config_json: Vec<u8>,
-}
-
 /// Pool of WASM plugin instances.
 ///
 /// Maintains a cache of compiled modules and manages instance creation.
@@ -102,9 +89,6 @@ pub struct InstancePool {
     /// Cache of compiled modules by plugin name.
     modules: DashMap<String, CompiledModule>,
 
-    /// Registered instance keys.
-    instances: DashMap<InstanceKey, ()>,
-
     /// The memory `init` left, by key, for modules that can start from it.
     snapshots: DashMap<InstanceKey, Arc<MemorySnapshot>>,
 
@@ -135,60 +119,6 @@ impl InstancePool {
             kafka_publisher: None,
             ldap_client: None,
             modules: DashMap::new(),
-            instances: DashMap::new(),
-            snapshots: DashMap::new(),
-            configs: DashMap::new(),
-            secret_refs_by_plugin: HashMap::new(),
-            plugin_limits: HashMap::new(),
-            metrics: None,
-        }
-    }
-
-    /// Create a new instance pool with an HTTP client for outbound calls.
-    pub fn with_http_client(
-        engine: Arc<WasmEngine>,
-        limits: PluginLimits,
-        http_client: Arc<HttpClient>,
-    ) -> Self {
-        Self {
-            engine,
-            limits,
-            http_client: Some(http_client),
-            secrets: None,
-            rate_limiter: None,
-            response_cache: None,
-            nats_publisher: None,
-            kafka_publisher: None,
-            ldap_client: None,
-            modules: DashMap::new(),
-            instances: DashMap::new(),
-            snapshots: DashMap::new(),
-            configs: DashMap::new(),
-            secret_refs_by_plugin: HashMap::new(),
-            plugin_limits: HashMap::new(),
-            metrics: None,
-        }
-    }
-
-    /// Create a new instance pool with HTTP client and secrets store.
-    pub fn with_http_client_and_secrets(
-        engine: Arc<WasmEngine>,
-        limits: PluginLimits,
-        http_client: Arc<HttpClient>,
-        secrets: SecretsStore,
-    ) -> Self {
-        Self {
-            engine,
-            limits,
-            http_client: Some(http_client),
-            secrets: Some(secrets),
-            rate_limiter: None,
-            response_cache: None,
-            nats_publisher: None,
-            kafka_publisher: None,
-            ldap_client: None,
-            modules: DashMap::new(),
-            instances: DashMap::new(),
             snapshots: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
@@ -221,7 +151,6 @@ impl InstancePool {
             kafka_publisher,
             ldap_client,
             modules: DashMap::new(),
-            instances: DashMap::new(),
             snapshots: DashMap::new(),
             configs: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
@@ -263,8 +192,7 @@ impl InstancePool {
 
     /// Register a plugin config.
     pub fn register_config(&self, key: InstanceKey, config_json: Vec<u8>) {
-        self.configs.insert(key.clone(), config_json);
-        self.instances.insert(key, ());
+        self.configs.insert(key, config_json);
     }
 
     /// A new instance for `key`, in the state its plugin's `init(config)` left.
@@ -355,11 +283,6 @@ impl InstancePool {
     pub fn module_count(&self) -> usize {
         self.modules.len()
     }
-
-    /// Get the number of registered instance keys.
-    pub fn instance_key_count(&self) -> usize {
-        self.instances.len()
-    }
 }
 
 #[cfg(test)]
@@ -394,7 +317,6 @@ mod tests {
         let pool = InstancePool::new(engine, PluginLimits::default());
 
         assert_eq!(pool.module_count(), 0);
-        assert_eq!(pool.instance_key_count(), 0);
     }
 
     /// A middleware whose `init` grows its memory to 3 MiB and returns 1 when

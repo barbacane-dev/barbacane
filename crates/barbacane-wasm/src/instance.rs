@@ -240,7 +240,6 @@ pub struct PluginState {
     pub http_request_body: Option<Vec<u8>>,
 }
 
-#[allow(dead_code)] // Constructors used by different pool configurations
 impl PluginState {
     /// Create new plugin state.
     pub fn new(plugin_name: String, limits: &PluginLimits) -> Self {
@@ -263,166 +262,6 @@ impl PluginState {
             nats_publisher: None,
             last_broker_result: None,
             ldap_client: None,
-            last_ldap_result: None,
-            last_uuid_result: None,
-            stream_sender: None,
-            ws_upgrade_request: None,
-            request_body: None,
-            output_body: None,
-            http_response_body: None,
-            http_request_body: None,
-        }
-    }
-
-    /// Create new plugin state with HTTP client.
-    pub fn with_http_client(
-        plugin_name: String,
-        limits: &PluginLimits,
-        http_client: Arc<HttpClient>,
-    ) -> Self {
-        Self {
-            plugin_name,
-            output_buffer: Vec::new(),
-            context: RequestContext::default(),
-            max_memory: limits.max_memory_bytes,
-            max_execution_ms: limits.max_execution_ms,
-            http_client: Some(http_client),
-            last_http_result: None,
-            secrets: crate::secrets::SecretsStore::new(),
-            last_secret_result: None,
-            rate_limiter: None,
-            last_rate_limit_result: None,
-            response_cache: None,
-            last_cache_result: None,
-            metrics: None,
-            kafka_publisher: None,
-            nats_publisher: None,
-            last_broker_result: None,
-            ldap_client: None,
-            last_ldap_result: None,
-            last_uuid_result: None,
-            stream_sender: None,
-            ws_upgrade_request: None,
-            request_body: None,
-            output_body: None,
-            http_response_body: None,
-            http_request_body: None,
-        }
-    }
-
-    /// Create new plugin state with HTTP client and secrets.
-    pub fn with_http_client_and_secrets(
-        plugin_name: String,
-        limits: &PluginLimits,
-        http_client: Arc<HttpClient>,
-        secrets: crate::secrets::SecretsStore,
-    ) -> Self {
-        Self {
-            plugin_name,
-            output_buffer: Vec::new(),
-            context: RequestContext::default(),
-            max_memory: limits.max_memory_bytes,
-            max_execution_ms: limits.max_execution_ms,
-            http_client: Some(http_client),
-            last_http_result: None,
-            secrets,
-            last_secret_result: None,
-            rate_limiter: None,
-            last_rate_limit_result: None,
-            response_cache: None,
-            last_cache_result: None,
-            metrics: None,
-            kafka_publisher: None,
-            nats_publisher: None,
-            last_broker_result: None,
-            ldap_client: None,
-            last_ldap_result: None,
-            last_uuid_result: None,
-            stream_sender: None,
-            ws_upgrade_request: None,
-            request_body: None,
-            output_body: None,
-            http_response_body: None,
-            http_request_body: None,
-        }
-    }
-
-    /// Create new plugin state with all options.
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_all_options(
-        plugin_name: String,
-        limits: &PluginLimits,
-        http_client: Option<Arc<HttpClient>>,
-        secrets: crate::secrets::SecretsStore,
-        rate_limiter: Option<crate::rate_limiter::RateLimiter>,
-        response_cache: Option<crate::cache::ResponseCache>,
-        nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
-        kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
-        ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
-    ) -> Self {
-        Self {
-            plugin_name,
-            output_buffer: Vec::new(),
-            context: RequestContext::default(),
-            max_memory: limits.max_memory_bytes,
-            max_execution_ms: limits.max_execution_ms,
-            http_client,
-            last_http_result: None,
-            secrets,
-            last_secret_result: None,
-            rate_limiter,
-            last_rate_limit_result: None,
-            response_cache,
-            last_cache_result: None,
-            metrics: None,
-            kafka_publisher,
-            nats_publisher,
-            last_broker_result: None,
-            ldap_client,
-            last_ldap_result: None,
-            last_uuid_result: None,
-            stream_sender: None,
-            ws_upgrade_request: None,
-            request_body: None,
-            output_body: None,
-            http_response_body: None,
-            http_request_body: None,
-        }
-    }
-
-    /// Create new plugin state with all options including metrics.
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_all_options_and_metrics(
-        plugin_name: String,
-        limits: &PluginLimits,
-        http_client: Option<Arc<HttpClient>>,
-        secrets: crate::secrets::SecretsStore,
-        rate_limiter: Option<crate::rate_limiter::RateLimiter>,
-        response_cache: Option<crate::cache::ResponseCache>,
-        nats_publisher: Option<Arc<crate::nats_client::NatsPublisher>>,
-        kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
-        ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
-        metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>,
-    ) -> Self {
-        Self {
-            plugin_name,
-            output_buffer: Vec::new(),
-            context: RequestContext::default(),
-            max_memory: limits.max_memory_bytes,
-            max_execution_ms: limits.max_execution_ms,
-            http_client,
-            last_http_result: None,
-            secrets,
-            last_secret_result: None,
-            rate_limiter,
-            last_rate_limit_result: None,
-            response_cache,
-            last_cache_result: None,
-            metrics,
-            kafka_publisher,
-            nats_publisher,
-            last_broker_result: None,
-            ldap_client,
             last_ldap_result: None,
             last_uuid_result: None,
             stream_sender: None,
@@ -524,38 +363,8 @@ impl PluginInstance {
         module: &CompiledModule,
         limits: PluginLimits,
     ) -> Result<Self, WasmError> {
-        Self::new_with_options(engine, module, limits, None, None)
-    }
-
-    /// Create a new plugin instance with an HTTP client for outbound calls.
-    pub fn new_with_http_client(
-        engine: &Engine,
-        module: &CompiledModule,
-        limits: PluginLimits,
-        http_client: Option<Arc<HttpClient>>,
-    ) -> Result<Self, WasmError> {
-        Self::new_with_options(engine, module, limits, http_client, None)
-    }
-
-    /// Create a new plugin instance with HTTP client and secrets.
-    pub fn new_with_options(
-        engine: &Engine,
-        module: &CompiledModule,
-        limits: PluginLimits,
-        http_client: Option<Arc<HttpClient>>,
-        secrets: Option<crate::secrets::SecretsStore>,
-    ) -> Result<Self, WasmError> {
         Self::new_with_all_options(
-            engine,
-            module,
-            limits,
-            http_client,
-            secrets,
-            None,
-            None,
-            None,
-            None,
-            None,
+            engine, module, limits, None, None, None, None, None, None, None,
         )
     }
 
@@ -573,17 +382,14 @@ impl PluginInstance {
         kafka_publisher: Option<Arc<crate::kafka_client::KafkaPublisher>>,
         ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
     ) -> Result<Self, WasmError> {
-        let state = PluginState::with_all_options(
-            module.name.clone(),
-            &limits,
-            http_client,
-            secrets.unwrap_or_default(),
-            rate_limiter,
-            response_cache,
-            nats_publisher,
-            kafka_publisher,
-            ldap_client,
-        );
+        let mut state = PluginState::new(module.name.clone(), &limits);
+        state.http_client = http_client;
+        state.secrets = secrets.unwrap_or_default();
+        state.rate_limiter = rate_limiter;
+        state.response_cache = response_cache;
+        state.nats_publisher = nats_publisher;
+        state.kafka_publisher = kafka_publisher;
+        state.ldap_client = ldap_client;
         let mut store = Store::new(engine, state);
 
         // Set fuel for execution limiting
@@ -2922,28 +2728,6 @@ mod tests {
             panic!("expected Chunk variant");
         }
     }
-
-    #[test]
-    fn plugin_state_with_all_options_sets_publishers() {
-        let limits = PluginLimits::default();
-        let nats = Arc::new(crate::nats_client::NatsPublisher::new(true).expect("nats publisher"));
-        let kafka =
-            Arc::new(crate::kafka_client::KafkaPublisher::new(true).expect("kafka publisher"));
-        let state = PluginState::with_all_options(
-            "test".into(),
-            &limits,
-            None,
-            crate::secrets::SecretsStore::new(),
-            None,
-            None,
-            Some(nats),
-            Some(kafka),
-            None,
-        );
-        assert!(state.nats_publisher.is_some());
-        assert!(state.kafka_publisher.is_some());
-        assert!(state.ldap_client.is_none());
-    }
 }
 
 #[cfg(test)]
@@ -3008,11 +2792,17 @@ mod http_stream_tests {
             ..HttpClientConfig::default()
         })
         .expect("client");
-        let instance = PluginInstance::new_with_http_client(
+        let instance = PluginInstance::new_with_all_options(
             engine.engine(),
             &module,
             limits,
             Some(Arc::new(client)),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .expect("instance");
         (engine, instance)
