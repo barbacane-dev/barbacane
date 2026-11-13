@@ -205,6 +205,64 @@ async fn test_format_validation_invalid_uuid() {
     assert_eq!(body["type"], "urn:barbacane:error:validation-failed");
 }
 
+/// Two templates naming the parameter at the same position differently: each
+/// operation validates its own required parameter, so a valid request to the
+/// second one is served.
+#[tokio::test]
+async fn test_routes_sharing_a_parameter_position_keep_their_own_names() {
+    let gateway = TestGateway::from_spec(&fixture("param-names.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let uuid = "550e8400-e29b-41d4-a716-446655440000";
+
+    let resp = gateway.get(&format!("/users/{uuid}")).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["route"], "user");
+
+    let resp = gateway.get(&format!("/users/{uuid}/orders")).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "{}",
+        resp.text().await.unwrap_or_default()
+    );
+    let body: serde_json::Value = gateway
+        .get(&format!("/users/{uuid}/orders"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["route"], "orders");
+
+    let resp = gateway.get("/users/not-a-uuid/orders").await.unwrap();
+    assert_eq!(resp.status(), 400, "userId is still validated");
+}
+
+/// A request path that ends inside a longer static template matches the
+/// parameter template at that position.
+#[tokio::test]
+async fn test_a_partial_static_path_matches_the_parameter_route() {
+    let gateway = TestGateway::from_spec(&fixture("param-names.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/files/archive").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["route"], "file");
+
+    let body: serde_json::Value = gateway
+        .get("/files/archive/latest")
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["route"], "latest");
+}
+
 // ========================
 // M2: Request Limits Tests
 // ========================
