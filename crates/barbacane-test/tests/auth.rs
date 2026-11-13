@@ -1108,3 +1108,180 @@ async fn test_secrets_missing_file_fails_startup() {
         }
     }
 }
+
+// OIDC Authentication Tests
+
+/// A temp spec whose `/protected` route requires oidc-auth against the issuer
+/// at `issuer_url`.
+fn oidc_auth_spec(issuer_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let spec = format!(
+        r#"openapi: "3.0.3"
+info:
+  title: OIDC Auth Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: oidc-auth
+    config:
+      issuer_url: "{issuer_url}"
+      audience: "test-audience"
+      jwks_refresh_seconds: 300
+paths:
+  /protected:
+    get:
+      operationId: getProtected
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"message": "Access granted"}}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized
+security:
+  - OIDC: []
+components:
+  securitySchemes:
+    OIDC:
+      type: openIdConnect
+      openIdConnectUrl: "{issuer_url}/.well-known/openid-configuration"
+"#
+    );
+    std::fs::write(temp.path().join("oidc-auth.yaml"), spec).expect("write spec");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  mock:\n    path: {mock}\n  oidc-auth:\n    path: {oidc}\n",
+            mock = plugin_wasm("mock").display(),
+            oidc = plugin_wasm("oidc-auth").display(),
+        ),
+    )
+    .expect("write manifest");
+    let path = temp.path().join("oidc-auth.yaml");
+    (temp, path)
+}
+
+/// An ES256 token with `kid` signed by [`jwt_signing_key`].
+fn create_oidc_token(iss: &str, kid: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use p256::ecdsa::{signature::Signer, Signature};
+
+    let header = serde_json::json!({"alg": "ES256", "typ": "JWT", "kid": kid});
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = serde_json::json!({
+        "sub": "user-1",
+        "iss": iss,
+        "aud": "test-audience",
+        "exp": now + 3600,
+    });
+    let signing_input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(header.to_string().as_bytes()),
+        URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes())
+    );
+    let signature: Signature = jwt_signing_key().sign(signing_input.as_bytes());
+    format!(
+        "{}.{}",
+        signing_input,
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    )
+}
+
+/// A mock issuer serving discovery and a JWKS holding [`jwt_signing_key`]'s
+/// public key under `kid` `k1`.
+async fn mock_oidc_issuer() -> wiremock::MockServer {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let issuer = server.uri();
+    let (x, y) = jwt_public_jwk_xy();
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "issuer": issuer,
+            "jwks_uri": format!("{issuer}/jwks"),
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "keys": [{"kty": "EC", "crv": "P-256", "alg": "ES256", "kid": "k1", "x": x, "y": y}]
+        })))
+        .mount(&server)
+        .await;
+    server
+}
+
+/// The requests the mock issuer received at `path`.
+async fn issuer_hits(server: &wiremock::MockServer, path: &str) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.url.path() == path)
+        .count()
+}
+
+#[tokio::test]
+async fn test_oidc_auth_valid_token() {
+    let issuer = mock_oidc_issuer().await;
+    let (_temp, spec) = oidc_auth_spec(&issuer.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let token = create_oidc_token(&issuer.uri(), "k1");
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/protected")
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "{}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let resp = gateway.get("/protected").await.unwrap();
+    assert_eq!(resp.status(), 401, "no token");
+}
+
+/// Discovery and the JWKS are fetched once and reused across requests, up to
+/// `jwks_refresh_seconds`, rather than on every request.
+#[tokio::test]
+async fn test_oidc_auth_fetches_discovery_and_jwks_once() {
+    let issuer = mock_oidc_issuer().await;
+    let (_temp, spec) = oidc_auth_spec(&issuer.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let token = create_oidc_token(&issuer.uri(), "k1");
+    for _ in 0..5 {
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/protected")
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    assert_eq!(
+        issuer_hits(&issuer, "/.well-known/openid-configuration").await,
+        1,
+        "discovery fetched once"
+    );
+    assert_eq!(issuer_hits(&issuer, "/jwks").await, 1, "JWKS fetched once");
+}

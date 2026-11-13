@@ -119,12 +119,14 @@ fn percent_decode(input: &str) -> String {
 // --- Internal types ---
 
 /// Cached OIDC discovery document.
+#[derive(Clone, Deserialize, Serialize)]
 struct DiscoveryDoc {
     issuer: String,
     jwks_uri: String,
 }
 
 /// Cached JWKS keys with fetch timestamp.
+#[derive(Clone, Deserialize, Serialize)]
 struct JwksCache {
     keys: Vec<Jwk>,
     fetched_at: u64,
@@ -497,6 +499,10 @@ impl OidcAuth {
         if self.discovery.is_some() {
             return Ok(());
         }
+        if let Some(doc) = shared_cache::get::<DiscoveryDoc>(&self.discovery_key()) {
+            self.discovery = Some(doc);
+            return Ok(());
+        }
 
         let url = format!(
             "{}/.well-known/openid-configuration",
@@ -514,12 +520,29 @@ impl OidcAuth {
         let doc: DiscoveryResponse = serde_json::from_slice(&body)
             .map_err(|e| OidcError::DiscoveryFailed(format!("invalid JSON: {}", e)))?;
 
-        self.discovery = Some(DiscoveryDoc {
+        let doc = DiscoveryDoc {
             issuer: doc.issuer,
             jwks_uri: doc.jwks_uri,
-        });
+        };
+        shared_cache::set(&self.discovery_key(), &doc, self.cache_ttl());
+        self.discovery = Some(doc);
 
         Ok(())
+    }
+
+    /// Host cache key of the discovery document.
+    fn discovery_key(&self) -> String {
+        format!("discovery:{}", self.issuer_url)
+    }
+
+    /// Host cache key of the JWKS fetched from `jwks_uri`.
+    fn jwks_key(jwks_uri: &str) -> String {
+        format!("jwks:{jwks_uri}")
+    }
+
+    /// How long the host cache keeps the discovery document and the JWKS.
+    fn cache_ttl(&self) -> u32 {
+        self.jwks_refresh_seconds.clamp(1, u64::from(u32::MAX)) as u32
     }
 
     /// Ensure JWKS is fetched and not expired.
@@ -529,6 +552,14 @@ impl OidcAuth {
         if let Some(cache) = &self.jwks_cache {
             if now.saturating_sub(cache.fetched_at) < self.jwks_refresh_seconds {
                 return Ok(());
+            }
+        }
+        if let Some(uri) = self.discovery.as_ref().map(|d| d.jwks_uri.clone()) {
+            if let Some(cached) = shared_cache::get::<JwksCache>(&Self::jwks_key(&uri)) {
+                if now.saturating_sub(cached.fetched_at) < self.jwks_refresh_seconds {
+                    self.jwks_cache = Some(cached);
+                    return Ok(());
+                }
             }
         }
 
@@ -556,10 +587,12 @@ impl OidcAuth {
         let doc: JwksDocument = serde_json::from_slice(&body)
             .map_err(|e| OidcError::JwksFetchFailed(format!("invalid JSON: {}", e)))?;
 
-        self.jwks_cache = Some(JwksCache {
+        let cache = JwksCache {
             keys: doc.keys,
             fetched_at: now,
-        });
+        };
+        shared_cache::set(&Self::jwks_key(&jwks_uri), &cache, self.cache_ttl());
+        self.jwks_cache = Some(cache);
 
         Ok(())
     }
@@ -835,6 +868,145 @@ unsafe fn host_verify_signature(_req_ptr: i32, _req_len: i32) -> i32 {
     -1
 }
 
+// --- Host cache ---
+
+/// The discovery document and the JWKS, kept in the host cache across
+/// requests: each request runs in a fresh instance, so a field of the plugin
+/// does not outlive the request that set it. The host namespaces keys by
+/// plugin and expires them after the TTL given at `set`.
+mod shared_cache {
+    use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+    /// The host cache's entry shape; the value travels as the body.
+    #[derive(Deserialize, Serialize)]
+    struct Entry {
+        status: u16,
+        headers: std::collections::BTreeMap<String, String>,
+        #[serde(with = "barbacane_plugin_sdk::types::base64_body")]
+        body: Option<Vec<u8>>,
+    }
+
+    #[derive(Deserialize)]
+    struct Lookup {
+        hit: bool,
+        entry: Option<Entry>,
+    }
+
+    /// The value stored under `key`, if present, unexpired and readable.
+    pub fn get<T: DeserializeOwned>(key: &str) -> Option<T> {
+        let len = host::get(key);
+        if len <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; len as usize];
+        if host::read_result(&mut buf) != len {
+            return None;
+        }
+        let lookup: Lookup = serde_json::from_slice(&buf).ok()?;
+        if !lookup.hit {
+            return None;
+        }
+        serde_json::from_slice(&lookup.entry?.body?).ok()
+    }
+
+    /// Store `value` under `key` for `ttl_secs`. A failure only costs a fetch.
+    pub fn set<T: Serialize>(key: &str, value: &T, ttl_secs: u32) {
+        let Ok(body) = serde_json::to_vec(value) else {
+            return;
+        };
+        let entry = Entry {
+            status: 200,
+            headers: Default::default(),
+            body: Some(body),
+        };
+        if let Ok(json) = serde_json::to_string(&entry) {
+            host::set(key, &json, ttl_secs);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    mod host {
+        #[link(wasm_import_module = "barbacane")]
+        extern "C" {
+            fn host_cache_get(key_ptr: i32, key_len: i32) -> i32;
+            fn host_cache_set(
+                key_ptr: i32,
+                key_len: i32,
+                entry_ptr: i32,
+                entry_len: i32,
+                ttl_secs: u32,
+            ) -> i32;
+            fn host_cache_read_result(buf_ptr: i32, buf_len: i32) -> i32;
+        }
+
+        pub fn get(key: &str) -> i32 {
+            // SAFETY: the pointer and length describe `key`, which outlives the call.
+            unsafe { host_cache_get(key.as_ptr() as i32, key.len() as i32) }
+        }
+
+        pub fn read_result(buf: &mut [u8]) -> i32 {
+            // SAFETY: the host writes at most `buf.len()` bytes into `buf`.
+            unsafe { host_cache_read_result(buf.as_mut_ptr() as i32, buf.len() as i32) }
+        }
+
+        pub fn set(key: &str, entry_json: &str, ttl_secs: u32) {
+            // SAFETY: both pointers and lengths describe live string slices.
+            unsafe {
+                host_cache_set(
+                    key.as_ptr() as i32,
+                    key.len() as i32,
+                    entry_json.as_ptr() as i32,
+                    entry_json.len() as i32,
+                    ttl_secs,
+                );
+            }
+        }
+    }
+
+    /// A thread-local map in place of the host cache, for native unit tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) mod host {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        thread_local! {
+            static CACHE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+            static LAST: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+
+        pub fn get(key: &str) -> i32 {
+            let result = CACHE.with(|c| match c.borrow().get(key) {
+                Some(entry) => format!(r#"{{"hit":true,"entry":{entry}}}"#),
+                None => r#"{"hit":false}"#.to_string(),
+            });
+            let len = result.len() as i32;
+            LAST.with(|l| *l.borrow_mut() = result.into_bytes());
+            len
+        }
+
+        pub fn read_result(buf: &mut [u8]) -> i32 {
+            LAST.with(|l| {
+                let data = l.borrow();
+                let len = data.len().min(buf.len());
+                buf[..len].copy_from_slice(&data[..len]);
+                len as i32
+            })
+        }
+
+        pub fn set(key: &str, entry_json: &str, _ttl_secs: u32) {
+            CACHE.with(|c| {
+                c.borrow_mut()
+                    .insert(key.to_string(), entry_json.to_string())
+            });
+        }
+
+        #[cfg(test)]
+        pub fn clear() {
+            CACHE.with(|c| c.borrow_mut().clear());
+        }
+    }
+}
+
 // --- Time functions ---
 
 #[cfg(target_arch = "wasm32")]
@@ -871,6 +1043,40 @@ fn current_timestamp() -> u64 {
 mod tests {
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    /// A fresh instance (each request runs in one) reads the discovery document
+    /// and the JWKS another instance stored in the host cache, without
+    /// fetching: natively a fetch fails, so success proves the cache was used.
+    #[test]
+    fn a_fresh_instance_reuses_the_cached_discovery_and_jwks() {
+        shared_cache::host::clear();
+        mock_time::set_mock_timestamp(1_000);
+        let first = create_test_config();
+        let doc = DiscoveryDoc {
+            issuer: first.issuer_url.clone(),
+            jwks_uri: "https://idp.example/jwks".to_string(),
+        };
+        shared_cache::set(&first.discovery_key(), &doc, first.cache_ttl());
+        let jwks = JwksCache {
+            keys: vec![],
+            fetched_at: 990,
+        };
+        shared_cache::set(&OidcAuth::jwks_key(&doc.jwks_uri), &jwks, first.cache_ttl());
+
+        let mut fresh = create_test_config();
+        fresh
+            .ensure_discovery()
+            .expect("discovery from the host cache");
+        fresh.ensure_jwks().expect("JWKS from the host cache");
+        assert_eq!(fresh.jwks_cache.as_ref().map(|c| c.fetched_at), Some(990));
+
+        // A cached JWKS older than jwks_refresh_seconds is not used.
+        mock_time::set_mock_timestamp(990 + fresh.jwks_refresh_seconds);
+        let mut late = create_test_config();
+        late.ensure_discovery()
+            .expect("discovery from the host cache");
+        assert!(late.ensure_jwks().is_err(), "a stale JWKS triggers a fetch");
+    }
 
     fn create_test_config() -> OidcAuth {
         OidcAuth {

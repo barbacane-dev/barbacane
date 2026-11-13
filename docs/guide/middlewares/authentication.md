@@ -172,7 +172,7 @@ x-barbacane-middlewares:
 | `required_scopes` | string | - | Space-separated required scopes |
 | `issuer_override` | string | - | Override expected `iss` claim (for split-network setups like Docker). Empty means unset, so an `env://` reference to an empty variable falls back to the discovery issuer |
 | `clock_skew_seconds` | integer | `60` | Clock skew tolerance for `exp`/`nbf` validation |
-| `jwks_refresh_seconds` | integer | `300` | How often to refresh JWKS keys (seconds) |
+| `jwks_refresh_seconds` | integer | `300` | How long the discovery document and the JWKS are kept, shared by every request, before they are fetched again (seconds) |
 | `timeout` | float | `5.0` | HTTP timeout for discovery and JWKS calls (seconds) |
 | `allow_query_token` | boolean | `false` | Allow token extraction from the `access_token` query parameter ([RFC 6750 §2.3](https://datatracker.ietf.org/doc/html/rfc6750#section-2.3)). Use with caution — tokens in URLs risk leaking via logs and referer headers. |
 
