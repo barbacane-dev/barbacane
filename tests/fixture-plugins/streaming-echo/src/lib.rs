@@ -62,19 +62,15 @@ impl StreamingEcho {
 }
 
 fn error_response(status: u16, detail: &str) -> Response {
-    let mut headers = BTreeMap::new();
-    headers.insert("content-type".to_string(), "application/problem+json".to_string());
     let body = serde_json::json!({
         "type": "urn:barbacane:error:upstream-unavailable",
         "title": "Bad Gateway",
         "status": status,
         "detail": detail,
     });
-    Response {
-        status,
-        headers,
-        body: Some(body.to_string().into_bytes()),
-    }
+    Response::new(status)
+        .with_header("content-type", "application/problem+json")
+        .with_body(body.to_string().into_bytes())
 }
 
 // Host function declarations (WASM target)
@@ -108,15 +104,7 @@ mod tests {
         let mut plugin = StreamingEcho {
             url: "http://example.com/stream".into(),
         };
-        let req = Request {
-            method: "GET".into(),
-            path: "/stream".into(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: None,
-            client_ip: "127.0.0.1".into(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("GET", "/stream").with_client_ip("127.0.0.1");
         let resp = plugin.dispatch(req);
         assert_eq!(resp.status, 502);
     }

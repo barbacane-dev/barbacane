@@ -8,7 +8,6 @@
 use barbacane_plugin_sdk::prelude::*;
 use base64::Engine;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 #[barbacane_dispatcher]
 #[derive(Deserialize)]
@@ -28,13 +27,9 @@ impl BodyEcho {
             "body_size": req.body.as_ref().map(|b| b.len()),
         });
 
-        let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-        Response {
-            status: 200,
-            headers,
-            body: Some(echo.to_string().into_bytes()),
-        }
+        Response::new(200)
+            .with_header("content-type", "application/json")
+            .with_body(echo.to_string().into_bytes())
     }
 }
 
@@ -43,19 +38,12 @@ mod tests {
     use super::*;
 
     fn make_request(body: Option<Vec<u8>>) -> Request {
-        Request {
-            method: "POST".into(),
-            path: "/echo".into(),
-            query: Some("foo=bar".into()),
-            headers: {
-                let mut h = BTreeMap::new();
-                h.insert("content-type".into(), "application/octet-stream".into());
-                h
-            },
-            body,
-            client_ip: "127.0.0.1".into(),
-            path_params: BTreeMap::new(),
-        }
+        let mut req = Request::new("POST", "/echo")
+            .with_query("foo=bar")
+            .with_header("content-type", "application/octet-stream")
+            .with_client_ip("127.0.0.1");
+        req.body = body;
+        req
     }
 
     #[test]
