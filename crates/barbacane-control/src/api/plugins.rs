@@ -108,6 +108,21 @@ pub async fn register_plugin(
             "Invalid plugin type. Must be 'middleware' or 'dispatcher'",
         ));
     }
+    if !is_plugin_name(&name) {
+        return Err(ProblemDetails::bad_request(
+            "Invalid plugin name: lower-case letters, digits and '-', starting with a letter or digit, at most 64 characters",
+        ));
+    }
+    if !is_semver(&version) {
+        return Err(ProblemDetails::bad_request(
+            "Invalid plugin version: a semantic version such as 1.2.0 or 1.2.0-rc.1",
+        ));
+    }
+    if !wasm_binary.starts_with(b"\0asm") {
+        return Err(ProblemDetails::bad_request(
+            "The file is not a WebAssembly module",
+        ));
+    }
 
     // Compute SHA256
     let mut hasher = Sha256::new();
@@ -238,5 +253,52 @@ pub async fn delete_plugin(
             "Plugin {}:{} not found",
             name, version
         )))
+    }
+}
+
+/// A plugin name as `barbacane.yaml` and the routes spell it: lower-case
+/// letters, digits and `-`, starting with a letter or digit, at most 64 characters.
+fn is_plugin_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !name.starts_with('-')
+}
+
+/// A semantic version: `major.minor.patch`, optionally `-pre` and `+build`.
+fn is_semver(version: &str) -> bool {
+    let core = version.split(['-', '+']).next().unwrap_or("");
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && version.len() <= 64
+        && version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'+')
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::{is_plugin_name, is_semver};
+
+    #[test]
+    fn names_and_versions_the_registry_takes() {
+        assert!(is_plugin_name("jwt-auth"));
+        assert!(is_plugin_name("s3"));
+        assert!(!is_plugin_name("Jwt-Auth"));
+        assert!(!is_plugin_name("a/b"));
+        assert!(!is_plugin_name("with space"));
+        assert!(!is_plugin_name("-leading"));
+        assert!(!is_plugin_name(""));
+        assert!(is_semver("1.0.0"));
+        assert!(is_semver("1.0.0-rc.1"));
+        assert!(is_semver("0.12.3+build.5"));
+        assert!(!is_semver("1.0"));
+        assert!(!is_semver("latest"));
+        assert!(!is_semver("1.0.0/x"));
     }
 }

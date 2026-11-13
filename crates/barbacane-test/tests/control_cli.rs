@@ -13,7 +13,7 @@ use std::time::Duration;
 use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT, LISTEN_HOST, STARTUP_TIMEOUT};
 use serde_json::Value;
 
-const ADMIN_TOKEN: &str = "test-admin-token-control-cli";
+const ADMIN_TOKEN: &str = "test-admin-token-control-cli-32-bytes-long";
 
 struct ControlPlane {
     process: LoggedChild,

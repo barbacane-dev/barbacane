@@ -17,6 +17,21 @@ pub async fn create_api_key(
     Path(project_id): Path<Uuid>,
     Json(input): Json<NewApiKey>,
 ) -> Result<(StatusCode, Json<ApiKeyCreated>), ProblemDetails> {
+    if let Some(scope) = input
+        .scopes
+        .iter()
+        .find(|scope| scope.as_str() != super::auth::scopes::DATA_PLANE_CONNECT)
+    {
+        return Err(ProblemDetails::bad_request(format!(
+            "Unknown scope '{scope}'; the scopes are: {}",
+            super::auth::scopes::DATA_PLANE_CONNECT
+        )));
+    }
+    if input.expires_at.is_some_and(|at| at <= chrono::Utc::now()) {
+        return Err(ProblemDetails::bad_request(
+            "expires_at is in the past; a key must expire after its creation",
+        ));
+    }
     let repo = ApiKeysRepository::new(state.pool.clone());
 
     // DB errors route through the generic `From<sqlx::Error>` mapper, which logs

@@ -132,16 +132,15 @@ async fn run_server(listen: SocketAddr, database_url: &str, migrate: bool) -> an
     // Admin authentication is mandatory: the control plane can mint API keys,
     // upload plugin WASM, and deploy artifacts, so it must never run without a
     // credential. Fail closed if the token is not configured.
-    let admin_token = std::env::var("BARBACANE_CONTROL_ADMIN_TOKEN")
-        .ok()
-        .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "BARBACANE_CONTROL_ADMIN_TOKEN must be set to a non-empty value; \
-                 the control-plane API refuses to start unauthenticated"
-            )
-        })?;
-    let admin_auth = api::AdminAuth::from_token(&admin_token);
+    let admin_auth = api::AdminAuth::from_env_values(
+        std::env::var("BARBACANE_CONTROL_ADMIN_TOKEN")
+            .ok()
+            .as_deref(),
+        std::env::var("BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS")
+            .ok()
+            .as_deref(),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     // Create database pool
     let pool = db::create_pool(database_url).await?;

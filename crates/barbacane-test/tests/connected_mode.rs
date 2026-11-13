@@ -14,7 +14,7 @@ use barbacane_test::gateway::{
 };
 use serde_json::Value;
 
-const ADMIN_TOKEN: &str = "connected-mode-admin-token";
+const ADMIN_TOKEN: &str = "connected-mode-admin-token-of-32-bytes-plus";
 
 struct ControlPlane {
     process: LoggedChild,
