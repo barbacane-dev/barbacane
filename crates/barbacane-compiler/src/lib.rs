@@ -2,6 +2,10 @@
 //!
 //! Validates specs, resolves extensions, builds routing trie,
 //! and produces a self-contained archive for the data plane.
+//!
+//! The crate is published so the binaries install with `cargo install`; its
+//! Rust API is not covered by the
+//! [stability policy](https://docs.barbacane.dev/reference/stability.html).
 
 pub mod artifact;
 pub(crate) mod cache;

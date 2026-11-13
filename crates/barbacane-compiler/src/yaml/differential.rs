@@ -3,7 +3,7 @@
 //! libyaml, through `yaml_serde`, is the reference. A test reads every YAML
 //! and JSON file in the repository, and each fixture under
 //! `tests/fixtures/yaml-differential/`, with both, and fails on a difference
-//! that belongs to no class in [`KNOWN`], or on a class that no longer
+//! that belongs to no class in `KNOWN`, or on a class that no longer
 //! differs. The `yaml_differential` fuzz target uses the same list.
 
 use serde_json::Value;

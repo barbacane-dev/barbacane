@@ -6,6 +6,7 @@
 
 use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 
@@ -71,7 +72,7 @@ impl CorrelationId {
                 match generate_uuid() {
                     Some(uuid) => uuid,
                     None => {
-                        log_message(0, "correlation-id: failed to generate UUID");
+                        log_message(Level::Error, "correlation-id: failed to generate UUID");
                         return Action::Continue(modified_req);
                     }
                 }
@@ -167,26 +168,13 @@ fn generate_uuid() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     fn create_test_request() -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test").with_client_ip("127.0.0.1")
     }
 
     fn create_test_response() -> Response {
-        Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        }
+        Response::new(200)
     }
 
     #[test]

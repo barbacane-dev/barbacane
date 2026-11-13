@@ -6,6 +6,7 @@
 //! - JSON body (add, remove, rename using JSON Pointer — RFC 6901)
 
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use jsonptr::{Assign, Delete, Pointer};
 use serde::Deserialize;
@@ -95,7 +96,7 @@ impl ResponseTransformer {
             match transform_body(&resp.body, body_config) {
                 Ok(body) => resp.body = body,
                 Err(reason) => {
-                    log_message(0, &format!("refusing the response: {reason}"));
+                    log_message(Level::Error, &format!("refusing the response: {reason}"));
                     return ProblemDetails::new(
                         502,
                         "urn:barbacane:error:response-transform-failed",
@@ -184,7 +185,10 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Result<Option<
             ));
         }
         Err(_) => {
-            log_message(1, "Body is not valid JSON, skipping body transformations");
+            log_message(
+                Level::Warn,
+                "Body is not valid JSON, skipping body transformations",
+            );
             return Ok(body.clone());
         }
     };
@@ -203,14 +207,14 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Result<Option<
             (Ok(old), Ok(new)) => (old, new),
             (Err(e), _) => {
                 log_message(
-                    1,
+                    Level::Warn,
                     &format!("Invalid old pointer '{}': {}", old_pointer_str, e),
                 );
                 continue;
             }
             (_, Err(e)) => {
                 log_message(
-                    1,
+                    Level::Warn,
                     &format!("Invalid new pointer '{}': {}", new_pointer_str, e),
                 );
                 continue;
@@ -226,7 +230,7 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Result<Option<
 
             if let Err(e) = json.assign(new_ptr, value_clone) {
                 log_message(
-                    1,
+                    Level::Warn,
                     &format!(
                         "Failed to rename '{}' to '{}': {}",
                         old_pointer_str, new_pointer_str, e
@@ -245,11 +249,17 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Result<Option<
         match Pointer::parse(pointer_str) {
             Ok(ptr) => {
                 if let Err(e) = json.assign(ptr, json_value) {
-                    log_message(1, &format!("Failed to add '{}': {}", pointer_str, e));
+                    log_message(
+                        Level::Warn,
+                        &format!("Failed to add '{}': {}", pointer_str, e),
+                    );
                 }
             }
             Err(e) => {
-                log_message(1, &format!("Invalid JSON Pointer '{}': {}", pointer_str, e));
+                log_message(
+                    Level::Warn,
+                    &format!("Invalid JSON Pointer '{}': {}", pointer_str, e),
+                );
             }
         }
     }
@@ -259,7 +269,7 @@ fn transform_body(body: &Option<Vec<u8>>, config: &BodyConfig) -> Result<Option<
         Err(e) if removes => Err(format!("the transformed body cannot be serialized: {e}")),
         Err(e) => {
             log_message(
-                0,
+                Level::Error,
                 &format!("Failed to serialize JSON after transformation: {}", e),
             );
             Ok(body.clone())
@@ -281,11 +291,9 @@ mod tests {
         headers.insert("server".to_string(), "upstream/1.0".to_string());
         headers.insert("x-powered-by".to_string(), "Express".to_string());
 
-        Response {
-            status: 200,
-            headers,
-            body: Some(br#"{"user":"john","age":30}"#.to_vec()),
-        }
+        Response::new(200)
+            .with_headers(headers)
+            .with_body(br#"{"user":"john","age":30}"#.to_vec())
     }
 
     // -- Status code mapping tests ------------------------------------------
@@ -875,11 +883,9 @@ mod tests {
         headers.insert("content-type".to_string(), "application/json".to_string());
         headers.insert("server".to_string(), "nginx".to_string());
 
-        let resp = Response {
-            status: 200,
-            headers,
-            body: Some(br#"{"data":"value","internal":"secret"}"#.to_vec()),
-        };
+        let resp = Response::new(200)
+            .with_headers(headers)
+            .with_body(br#"{"data":"value","internal":"secret"}"#.to_vec());
 
         let result = plugin.on_response(resp);
 
@@ -938,15 +944,7 @@ mod tests {
             body: None,
         };
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: None,
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let result = plugin.on_request(req.clone());
         let Action::Continue(modified) = result else {
@@ -1017,29 +1015,17 @@ mod tests {
             body: None,
         };
 
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        };
+        let resp = Response::new(200);
 
         let result = plugin.on_response(resp);
         assert_eq!(result.status, 201);
 
-        let resp2 = Response {
-            status: 400,
-            headers: BTreeMap::new(),
-            body: None,
-        };
+        let resp2 = Response::new(400);
 
         let result2 = plugin.on_response(resp2);
         assert_eq!(result2.status, 422);
 
-        let resp3 = Response {
-            status: 500,
-            headers: BTreeMap::new(),
-            body: None,
-        };
+        let resp3 = Response::new(500);
 
         let result3 = plugin.on_response(resp3);
         assert_eq!(result3.status, 500);

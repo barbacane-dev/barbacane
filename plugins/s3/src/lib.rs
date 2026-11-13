@@ -205,13 +205,10 @@ impl S3Dispatcher {
             headers.insert("content-type".to_string(), ct.clone());
         }
 
-        HttpRequest {
-            method: method.to_string(),
-            url: full_url,
-            headers,
-            timeout_ms: Some((self.timeout * 1000.0) as u64),
-            ..Default::default()
-        }
+        let mut request =
+            HttpRequest::new(method, full_url).timeout_ms((self.timeout * 1000.0) as u64);
+        request.headers = headers;
+        request
     }
 
     /// Execute a signed S3 request and return the raw `HttpResponse` + body.
@@ -257,6 +254,14 @@ impl S3Dispatcher {
                     "failed to parse response",
                 ));
             }
+            Err(_) => {
+                return Err(self.error_response(
+                    502,
+                    "Bad Gateway",
+                    "S3 connection failed",
+                    "host_http_call failed",
+                ));
+            }
         };
 
         let response_body = http_response.body.take();
@@ -276,10 +281,10 @@ impl S3Dispatcher {
             }
         }
 
-        Response {
-            status: http_response.status,
-            headers: response_headers,
-            body,
+        {
+            let mut resp = Response::new(http_response.status).with_headers(response_headers);
+            resp.body = body;
+            resp
         }
     }
 
@@ -412,14 +417,10 @@ mod tests {
     }
 
     fn make_get_request(path_params: BTreeMap<String, String>) -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params,
-            client_ip: "127.0.0.1".to_string(),
+        {
+            let mut req = Request::new("GET", "/").with_client_ip("127.0.0.1");
+            req.path_params = path_params;
+            req
         }
     }
 
@@ -542,14 +543,12 @@ mod tests {
         d.fallback_key = Some("index.html".to_string());
         let mut params = BTreeMap::new();
         params.insert("key".to_string(), "callback".to_string());
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/callback".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: Some("code=abc123&state=xyz".to_string()),
-            path_params: params,
-            client_ip: "127.0.0.1".to_string(),
+        let req = {
+            let mut req = Request::new("GET", "/callback")
+                .with_query("code=abc123&state=xyz")
+                .with_client_ip("127.0.0.1");
+            req.path_params = params;
+            req
         };
         // Native stub → 502, but proves the query-bearing request didn't blow up.
         // The real assertion is at the build_s3_request level below.
@@ -652,14 +651,10 @@ mod tests {
         d.fallback_key = Some("index.html".to_string());
         let mut params = BTreeMap::new();
         params.insert("key".to_string(), "api/data".to_string());
-        let req = Request {
-            method: "POST".to_string(),
-            path: "/".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: params,
-            client_ip: "127.0.0.1".to_string(),
+        let req = {
+            let mut req = Request::new("POST", "/").with_client_ip("127.0.0.1");
+            req.path_params = params;
+            req
         };
         let resp = d.dispatch(req);
         // Still 502 from native stub — but fallback was not attempted

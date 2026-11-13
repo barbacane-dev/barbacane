@@ -206,11 +206,9 @@ impl BasicAuth {
             "detail": error.description()
         });
 
-        Response {
-            status: 401,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        Response::new(401)
+            .with_headers(headers)
+            .with_body(body.to_string().into_bytes())
     }
 }
 
@@ -242,15 +240,9 @@ mod tests {
 
     /// Helper: build a minimal request with the given headers.
     fn request_with_headers(headers: BTreeMap<String, String>) -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            query: None,
-            headers,
-            body: None,
-            client_ip: "127.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        }
+        Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     /// Helper: build an Authorization: Basic header value.

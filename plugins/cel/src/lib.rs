@@ -465,15 +465,10 @@ mod tests {
         headers.insert("x-auth-consumer".to_string(), "alice".to_string());
         headers.insert("content-type".to_string(), "application/json".to_string());
 
-        Request {
-            method: "GET".to_string(),
-            path: "/api/users".to_string(),
-            headers,
-            body: None,
-            query: Some("page=1".to_string()),
-            path_params: BTreeMap::new(),
-            client_ip: "10.0.0.1".to_string(),
-        }
+        Request::new("GET", "/api/users")
+            .with_query("page=1")
+            .with_client_ip("10.0.0.1")
+            .with_headers(headers)
     }
 
     // --- Config deserialization ---
@@ -1323,11 +1318,7 @@ mod tests {
     #[test]
     fn on_response_passthrough() {
         let mut config = create_config("true");
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"ok".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"ok".to_vec());
 
         let result = config.on_response(response);
         assert_eq!(result.status, 200);

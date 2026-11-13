@@ -10,6 +10,7 @@
 use barbacane_plugin_sdk::http;
 #[cfg(target_arch = "wasm32")]
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -99,20 +100,16 @@ impl FireAndForgetDispatcher {
     /// Forward the incoming request to the configured upstream URL.
     /// Errors are logged but never affect the client response.
     fn forward_to_upstream(&self, req: &Request) {
-        let request = http::HttpRequest {
-            method: req.method.clone(),
-            url: self.url.clone(),
-            headers: req.headers.clone(),
-            timeout_ms: Some(self.timeout_ms),
-            ..Default::default()
-        };
+        let mut request = http::HttpRequest::new(req.method.clone(), self.url.clone())
+            .timeout_ms(self.timeout_ms);
+        request.headers = req.headers.clone();
 
         // Best-effort: the request body travels via the side-channel inside
         // `http::call`, and the response is ignored (fire-and-forget). A
         // connection failure is logged but never affects the client response.
         if host::http_call(&request, req.body.as_deref()).is_err() {
             log_message(
-                2, // WARN
+                Level::Info, // WARN
                 "fire-and-forget: upstream call failed (connection error)",
             );
         }
@@ -132,10 +129,10 @@ impl FireAndForgetDispatcher {
             Some(self.response.body.as_bytes().to_vec())
         };
 
-        Response {
-            status: self.response.status,
-            headers,
-            body,
+        {
+            let mut resp = Response::new(self.response.status).with_headers(headers);
+            resp.body = body;
+            resp
         }
     }
 }
@@ -184,8 +181,8 @@ mod host {
         Ok(())
     }
 
-    pub fn log_message(level: i32, msg: &str) {
-        LOG_MESSAGES.with(|logs| logs.borrow_mut().push((level, msg.to_string())));
+    pub fn log_message(level: barbacane_plugin_sdk::log::Level, msg: &str) {
+        LOG_MESSAGES.with(|logs| logs.borrow_mut().push((level as i32, msg.to_string())));
     }
 
     // ==================== Test helpers ====================
@@ -214,7 +211,7 @@ mod host {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn log_message(level: i32, msg: &str) {
+fn log_message(level: Level, msg: &str) {
     host::log_message(level, msg);
 }
 
@@ -225,15 +222,10 @@ mod tests {
     fn test_request() -> Request {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
-        Request {
-            method: "POST".to_string(),
-            path: "/webhooks/ingest".to_string(),
-            query: None,
-            headers,
-            body: Some(br#"{"event":"order.created"}"#.to_vec()),
-            client_ip: "10.0.0.1".to_string(),
-            path_params: BTreeMap::new(),
-        }
+        Request::new("POST", "/webhooks/ingest")
+            .with_body(br#"{"event":"order.created"}"#.to_vec())
+            .with_client_ip("10.0.0.1")
+            .with_headers(headers)
     }
 
     fn minimal_plugin() -> FireAndForgetDispatcher {

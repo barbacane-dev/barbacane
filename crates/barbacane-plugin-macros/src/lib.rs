@@ -333,18 +333,9 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                     Err(_) => {
                         // Free input buffer before returning error.
                         dealloc(ptr, len);
-                        let error_resp = barbacane_plugin_sdk::prelude::Response {
-                            status: 500,
-                            headers: std::collections::BTreeMap::new(),
-                            body: Some(br#"{"error":"failed to parse request"}"#.to_vec()),
-                        };
-                        // Send error body via side-channel.
-                        if let Some(ref body) = error_resp.body {
-                            barbacane_plugin_sdk::body::set_response_body(body);
-                        }
-                        let mut err_resp_for_json = error_resp;
-                        err_resp_for_json.body = None;
-                        if let Ok(output) = serde_json::to_vec(&err_resp_for_json) {
+                        barbacane_plugin_sdk::body::set_response_body(br#"{"error":"failed to parse request"}"#);
+                        let error_resp = barbacane_plugin_sdk::prelude::Response::new(500);
+                        if let Ok(output) = serde_json::to_vec(&error_resp) {
                             set_output(&output);
                         }
                         return 1;
@@ -363,11 +354,7 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                         None => {
                             let error_body = br#"{"error":"plugin not initialized"}"#;
                             barbacane_plugin_sdk::body::set_response_body(error_body);
-                            let error_resp = barbacane_plugin_sdk::prelude::Response {
-                                status: 500,
-                                headers: std::collections::BTreeMap::new(),
-                                body: None,
-                            };
+                            let error_resp = barbacane_plugin_sdk::prelude::Response::new(500);
                             if let Ok(output) = serde_json::to_vec(&error_resp) {
                                 set_output(&output);
                             }

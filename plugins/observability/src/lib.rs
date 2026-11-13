@@ -6,6 +6,7 @@
 //! - Custom latency histogram per operation
 
 use barbacane_plugin_sdk::context;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 
@@ -43,8 +44,8 @@ mod mock_host {
                 .push((name.to_string(), labels.to_string(), value))
         });
     }
-    pub fn log(level: i32, msg: &str) {
-        LOG_MESSAGES.with(|l| l.borrow_mut().push((level, msg.to_string())));
+    pub fn log(level: barbacane_plugin_sdk::log::Level, msg: &str) {
+        LOG_MESSAGES.with(|l| l.borrow_mut().push((level as i32, msg.to_string())));
     }
     pub fn get_counters() -> Vec<(String, String, u64)> {
         COUNTERS.with(|c| c.borrow().clone())
@@ -99,7 +100,7 @@ impl Observability {
             let headers_count = req.headers.len();
             let body_size = req.body.as_ref().map(|b| b.len()).unwrap_or(0);
             log_message(
-                1, // INFO
+                Level::Warn, // INFO
                 &format!(
                     "observability: request method={} path={} headers={} body_size={}",
                     req.method, req.path, headers_count, body_size
@@ -129,7 +130,7 @@ impl Observability {
                 host_metric_counter_inc("slo_violation", &labels, 1);
 
                 log_message(
-                    2, // WARN
+                    Level::Info, // WARN
                     &format!(
                         "observability: SLO violation slo_ms={} actual_ms={}",
                         slo_ms, duration_ms
@@ -149,7 +150,7 @@ impl Observability {
             let headers_count = resp.headers.len();
             let body_size = resp.body.as_ref().map(|b| b.len()).unwrap_or(0);
             log_message(
-                1, // INFO
+                Level::Warn, // INFO
                 &format!(
                     "observability: response status={} headers={} body_size={} duration_ms={}",
                     resp.status, headers_count, body_size, duration_ms
@@ -181,7 +182,7 @@ fn host_time_now_ms() -> u64 {
 use barbacane_plugin_sdk::log::log as log_message;
 
 #[cfg(not(target_arch = "wasm32"))]
-fn log_message(level: i32, msg: &str) {
+fn log_message(level: Level, msg: &str) {
     mock_host::log(level, msg);
 }
 
@@ -246,26 +247,13 @@ fn host_metric_histogram_observe(name: &str, labels_json: &str, value: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     fn create_test_request() -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/api/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/api/test").with_client_ip("127.0.0.1")
     }
 
     fn create_test_response() -> Response {
-        Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test body".to_vec()),
-        }
+        Response::new(200).with_body(b"test body".to_vec())
     }
 
     #[test]

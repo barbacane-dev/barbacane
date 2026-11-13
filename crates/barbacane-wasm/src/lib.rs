@@ -2,6 +2,11 @@
 //!
 //! This crate provides the wasmtime-based runtime for loading and executing
 //! WASM plugins (middlewares and dispatchers) according to SPEC-003.
+//!
+//! The crate is published so the binaries install with `cargo install`; its
+//! Rust API is not covered by the
+//! [stability policy](https://docs.barbacane.dev/reference/stability.html).
+//! The host functions it provides to plugins are.
 
 pub mod balancer;
 mod body_access;

@@ -430,11 +430,9 @@ impl JwtAuth {
             "detail": error.description()
         });
 
-        Response {
-            status: 401,
-            headers,
-            body: Some(body.to_string().into_bytes()),
-        }
+        Response::new(401)
+            .with_headers(headers)
+            .with_body(body.to_string().into_bytes())
     }
 }
 
@@ -519,15 +517,9 @@ mod tests {
         if let Some(value) = auth_value {
             headers.insert("authorization".to_string(), value.to_string());
         }
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers)
     }
 
     #[test]
@@ -1092,11 +1084,7 @@ mod tests {
             public_key_jwk: None,
         };
 
-        let response = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"test body".to_vec()),
-        };
+        let response = Response::new(200).with_body(b"test body".to_vec());
 
         let result = config.on_response(response.clone());
         assert_eq!(result.status, response.status);
@@ -1118,15 +1106,9 @@ mod tests {
             "Authorization".to_string(),
             "Bearer my.jwt.token".to_string(),
         );
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
         let token = config.extract_token(&req).unwrap();
         assert_eq!(token, "my.jwt.token");
     }

@@ -1791,17 +1791,16 @@ impl Gateway {
             Some(request_body.to_vec())
         };
 
-        let plugin_request = barbacane_wasm::Request {
-            method: operation.method.clone(),
-            path: request_path.to_string(),
-            query: query_string,
-            headers: headers_btree,
-            body: None, // Body travels via side-channel
-            client_ip: client_addr
-                .map(|addr| addr.ip().to_string())
-                .unwrap_or_else(|| "0.0.0.0".to_string()),
-            path_params,
-        };
+        // The body travels via the side-channel, not in JSON.
+        let mut plugin_request =
+            barbacane_wasm::Request::new(operation.method.clone(), request_path).with_client_ip(
+                client_addr
+                    .map(|addr| addr.ip().to_string())
+                    .unwrap_or_else(|| "0.0.0.0".to_string()),
+            );
+        plugin_request.query = query_string;
+        plugin_request.headers = headers_btree;
+        plugin_request.path_params = path_params;
 
         let request_json = match serde_json::to_vec(&plugin_request) {
             Ok(j) => j,
@@ -2065,11 +2064,8 @@ impl Gateway {
         context: barbacane_wasm::RequestContext,
     ) -> Result<barbacane_wasm::Response, Response<Full<Bytes>>> {
         // Extract body — it travels via side-channel, not in JSON.
-        let resp_body = response.body;
-        let resp_for_json = barbacane_wasm::Response {
-            body: None,
-            ..response
-        };
+        let mut resp_for_json = response;
+        let resp_body = resp_for_json.body.take();
 
         let response_json = serde_json::to_vec(&resp_for_json).map_err(|e| {
             self.dev_error_response(format_args!("failed to serialize response: {e}"))
@@ -2523,11 +2519,7 @@ impl Gateway {
                     // Run on_response for observability (modifications
                     // discarded). A middleware that fails refuses the upgrade.
                     if !middleware_instances.is_empty() {
-                        let sentinel_response = barbacane_wasm::Response {
-                            status: 101,
-                            headers: std::collections::BTreeMap::new(),
-                            body: None,
-                        };
+                        let sentinel_response = barbacane_wasm::Response::new(101);
                         tokio::task::block_in_place(|| {
                             self.execute_middleware_on_response(
                                 middleware_instances,
@@ -2833,15 +2825,9 @@ impl Gateway {
         let (headers_btree, dropped_headers) = filter_request_headers(&[], headers, self.dev_mode);
         self.metrics.record_request_headers_dropped(dropped_headers);
 
-        let plugin_request = barbacane_wasm::Request {
-            method: "OPTIONS".to_string(),
-            path: String::new(),
-            query: None,
-            headers: headers_btree,
-            body: None,
-            client_ip: "0.0.0.0".to_string(),
-            path_params: std::collections::BTreeMap::new(),
-        };
+        let mut plugin_request =
+            barbacane_wasm::Request::new("OPTIONS", "").with_client_ip("0.0.0.0");
+        plugin_request.headers = headers_btree;
 
         let request_json = match serde_json::to_vec(&plugin_request) {
             Ok(j) => j,
@@ -6147,11 +6133,9 @@ mod tests {
         headers.insert("".to_string(), "empty-name".to_string()); // empty name
         headers.insert("x-inject".to_string(), "a\r\nb".to_string()); // CRLF in value
         headers.insert("content-length".to_string(), "999".to_string()); // framing
-        let plugin_response = barbacane_wasm::Response {
-            status: 200,
-            headers,
-            body: Some(b"hello".to_vec()),
-        };
+        let plugin_response = barbacane_wasm::Response::new(200)
+            .with_headers(headers)
+            .with_body(b"hello".to_vec());
 
         let resp = Gateway::build_response_from_plugin(&plugin_response);
         assert_eq!(resp.status(), StatusCode::OK);

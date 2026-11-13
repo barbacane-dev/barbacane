@@ -5,6 +5,7 @@
 
 use barbacane_plugin_sdk::context;
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 
@@ -96,13 +97,13 @@ impl RateLimit {
                 // fail-open.
                 if self.fail_open {
                     log_message(
-                        1,
+                        Level::Warn,
                         "rate limiter unavailable, failing open (allowing request)",
                     );
                     return Action::Continue(req);
                 }
                 log_message(
-                    3,
+                    Level::Debug,
                     "rate limiter unavailable, failing closed (rejecting request)",
                 );
                 return Action::ShortCircuit(self.unavailable_response());
@@ -346,15 +347,9 @@ mod tests {
             "192.168.1.1, 10.0.0.1".to_string(),
         );
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -374,15 +369,9 @@ mod tests {
     fn test_partition_key_xff_honored_behind_trusted_proxy() {
         let mut headers = BTreeMap::new();
         headers.insert("x-forwarded-for".to_string(), "192.168.1.1".to_string());
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "10.9.9.9".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("10.9.9.9")
+            .with_headers(headers);
         let rate_limit = RateLimit {
             quota: 10,
             window: 60,
@@ -399,15 +388,9 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("x-real-ip".to_string(), "192.168.1.2".to_string());
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -424,15 +407,7 @@ mod tests {
 
     #[test]
     fn test_extract_partition_key_client_ip_fallback_unknown() {
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -452,15 +427,9 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("x-custom".to_string(), "custom-value".to_string());
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -479,15 +448,9 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("x-custom".to_string(), "custom-value".to_string());
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers,
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("127.0.0.1")
+            .with_headers(headers);
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -503,15 +466,7 @@ mod tests {
 
     #[test]
     fn test_extract_partition_key_from_header_missing() {
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -527,15 +482,7 @@ mod tests {
 
     #[test]
     fn test_extract_partition_key_from_context() {
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -560,15 +507,7 @@ mod tests {
 
     #[test]
     fn test_extract_partition_key_static() {
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let rate_limit = RateLimit {
             quota: 10,
@@ -755,15 +694,7 @@ mod tests {
             fail_open: false,
         };
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let action = rate_limit.on_request(req);
 
@@ -809,15 +740,7 @@ mod tests {
             fail_open: false,
         };
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let action = rate_limit.on_request(req);
 
@@ -848,15 +771,7 @@ mod tests {
             fail_open: false,
         };
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
 
         let action = rate_limit.on_request(req);
 
@@ -879,15 +794,7 @@ mod tests {
             trusted_proxies: vec![],
             fail_open: true,
         };
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        };
+        let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
         match rate_limit.on_request(req) {
             Action::Continue(r) => assert!(!r.headers.contains_key("x-ratelimit-policy")),
             _ => panic!("Expected Action::Continue when fail_open is set"),
@@ -909,11 +816,9 @@ mod tests {
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
 
-        let response = Response {
-            status: 200,
-            headers: headers.clone(),
-            body: Some(br#"{"message":"ok"}"#.to_vec()),
-        };
+        let response = Response::new(200)
+            .with_headers(headers.clone())
+            .with_body(br#"{"message":"ok"}"#.to_vec());
 
         let result = rate_limit.on_response(response);
 
@@ -923,15 +828,7 @@ mod tests {
     }
 
     fn allowed_request() -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new("GET", "/test").with_client_ip("127.0.0.1")
     }
 
     #[test]
@@ -953,11 +850,7 @@ mod tests {
             rate_limit.on_request(allowed_request()),
             Action::Continue(_)
         ));
-        let resp = rate_limit.on_response(Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        });
+        let resp = rate_limit.on_response(Response::new(200));
 
         assert_eq!(
             resp.headers.get("x-ratelimit-policy").unwrap(),
@@ -984,11 +877,7 @@ mod tests {
             rate_limit.on_request(allowed_request()),
             Action::Continue(_)
         ));
-        let resp = rate_limit.on_response(Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        });
+        let resp = rate_limit.on_response(Response::new(200));
 
         assert!(resp.headers.keys().all(|k| !k.starts_with("x-ratelimit-")));
     }
@@ -1030,11 +919,7 @@ mod tests {
                 ));
                 instances.push(instance);
             }
-            let mut resp = Response {
-                status: 200,
-                headers: BTreeMap::new(),
-                body: None,
-            };
+            let mut resp = Response::new(200);
             for instance in instances.into_iter().rev() {
                 resp = instance.on_response(resp);
             }
@@ -1050,14 +935,12 @@ mod tests {
     }
 
     fn response_with(status: u16, headers: &[(&str, &str)]) -> Response {
-        Response {
-            status,
-            headers: headers
+        Response::new(status).with_headers(
+            headers
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
-            body: None,
-        }
+        )
     }
 
     /// Records an allowed request for `instance`, as its `on_request` would.

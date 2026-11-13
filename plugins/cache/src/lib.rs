@@ -4,6 +4,7 @@
 //! Uses the host's response cache via host_cache_get/set.
 
 use barbacane_plugin_sdk::log::log as log_message;
+use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -96,22 +97,22 @@ impl Cache {
             Some(result) if result.hit => {
                 // Cache hit - return cached response
                 if let Some(entry) = result.entry {
-                    log_message(3, &format!("cache hit: {}", cache_key));
+                    log_message(Level::Debug, &format!("cache hit: {}", cache_key));
 
                     // Build response with cache headers
                     let mut headers = entry.headers;
                     headers.insert("x-cache".to_string(), "HIT".to_string());
 
-                    return Action::ShortCircuit(Response {
-                        status: entry.status,
-                        headers,
-                        body: entry.body,
+                    return Action::ShortCircuit({
+                        let mut resp = Response::new(entry.status).with_headers(headers);
+                        resp.body = entry.body;
+                        resp
                     });
                 }
             }
             _ => {
                 // Cache miss - continue to dispatcher
-                log_message(3, &format!("cache miss: {}", cache_key));
+                log_message(Level::Debug, &format!("cache miss: {}", cache_key));
             }
         }
 
@@ -160,7 +161,7 @@ impl Cache {
         };
 
         if self.store_in_cache(&cache_key, &entry) {
-            log_message(3, &format!("cached response: {}", cache_key));
+            log_message(Level::Debug, &format!("cached response: {}", cache_key));
         }
 
         // Add cache header to response
@@ -372,15 +373,7 @@ mod tests {
     }
 
     fn create_test_request(method: &str, path: &str) -> Request {
-        Request {
-            method: method.to_string(),
-            path: path.to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
-        }
+        Request::new(method.to_string(), path.to_string()).with_client_ip("127.0.0.1")
     }
 
     #[test]
@@ -571,15 +564,13 @@ mod tests {
             request_authorized: false,
         };
 
-        let resp = Response {
-            status: 200,
-            headers: {
+        let resp = Response::new(200)
+            .with_headers({
                 let mut h = BTreeMap::new();
                 h.insert("content-type".to_string(), "application/json".to_string());
                 h
-            },
-            body: Some(br#"{"users":[]}"#.to_vec()),
-        };
+            })
+            .with_body(br#"{"users":[]}"#.to_vec());
 
         let result = cache.on_response(resp);
 
@@ -604,11 +595,7 @@ mod tests {
             request_authorized: false,
         };
 
-        let resp = Response {
-            status: 500,
-            headers: BTreeMap::new(),
-            body: Some(b"Internal Server Error".to_vec()),
-        };
+        let resp = Response::new(500).with_body(b"Internal Server Error".to_vec());
 
         let result = cache.on_response(resp);
 
@@ -636,15 +623,13 @@ mod tests {
             request_authorized: false,
         };
 
-        let resp = Response {
-            status: 200,
-            headers: {
+        let resp = Response::new(200)
+            .with_headers({
                 let mut h = BTreeMap::new();
                 h.insert("cache-control".to_string(), "no-store".to_string());
                 h
-            },
-            body: Some(br#"{"users":[]}"#.to_vec()),
-        };
+            })
+            .with_body(br#"{"users":[]}"#.to_vec());
 
         let result = cache.on_response(resp);
 
@@ -672,18 +657,16 @@ mod tests {
             request_authorized: false,
         };
 
-        let resp = Response {
-            status: 200,
-            headers: {
+        let resp = Response::new(200)
+            .with_headers({
                 let mut h = BTreeMap::new();
                 h.insert(
                     "cache-control".to_string(),
                     "private, max-age=3600".to_string(),
                 );
                 h
-            },
-            body: Some(br#"{"users":[]}"#.to_vec()),
-        };
+            })
+            .with_body(br#"{"users":[]}"#.to_vec());
 
         let result = cache.on_response(resp);
 
@@ -704,11 +687,7 @@ mod tests {
             request_authorized: false,
         };
 
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(br#"{"created":true}"#.to_vec()),
-        };
+        let resp = Response::new(200).with_body(br#"{"created":true}"#.to_vec());
 
         let result = cache.on_response(resp);
 
@@ -736,16 +715,14 @@ mod tests {
             request_authorized: false,
         };
 
-        let resp = Response {
-            status: 200,
-            headers: {
+        let resp = Response::new(200)
+            .with_headers({
                 let mut h = BTreeMap::new();
                 h.insert("content-type".to_string(), "application/json".to_string());
                 h.insert("x-custom".to_string(), "value".to_string());
                 h
-            },
-            body: Some(br#"{"data":"test"}"#.to_vec()),
-        };
+            })
+            .with_body(br#"{"data":"test"}"#.to_vec());
 
         let result = cache.on_response(resp.clone());
 
@@ -786,11 +763,7 @@ mod tests {
                 request_authorized: false,
             };
 
-            let resp = Response {
-                status,
-                headers: BTreeMap::new(),
-                body: Some(b"test".to_vec()),
-            };
+            let resp = Response::new(status).with_body(b"test".to_vec());
 
             let result = cache.on_response(resp);
 
@@ -814,11 +787,9 @@ mod tests {
         if let Some(value) = value {
             headers.insert("cache-control".to_string(), value.to_string());
         }
-        Response {
-            status: 200,
-            headers,
-            body: Some(br#"{"user":"alice"}"#.to_vec()),
-        }
+        Response::new(200)
+            .with_headers(headers)
+            .with_body(br#"{"user":"alice"}"#.to_vec())
     }
 
     fn cache_varying_on(vary: &[&str]) -> Cache {

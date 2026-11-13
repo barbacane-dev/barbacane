@@ -29,8 +29,10 @@ impl Audience {
     }
 }
 
-/// Errors decoding a JWT's structure (not signature validity).
+/// Errors decoding a JWT's structure (not signature validity). A minor
+/// release may add variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum JwtDecodeError {
     /// The token is not three `.`-separated segments.
     Malformed,

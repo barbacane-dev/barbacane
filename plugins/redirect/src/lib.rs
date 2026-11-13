@@ -109,11 +109,9 @@ fn redirect_response(status: u16, location: &str) -> Response {
         _ => "Found",
     };
 
-    Response {
-        status,
-        headers,
-        body: Some(body.as_bytes().to_vec()),
-    }
+    Response::new(status)
+        .with_headers(headers)
+        .with_body(body.as_bytes().to_vec())
 }
 
 #[cfg(test)]
@@ -121,14 +119,10 @@ mod tests {
     use super::*;
 
     fn make_request(path: &str, query: Option<&str>) -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: path.to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: query.map(String::from),
-            path_params: BTreeMap::new(),
-            client_ip: "127.0.0.1".to_string(),
+        {
+            let mut req = Request::new("GET", path.to_string()).with_client_ip("127.0.0.1");
+            req.query = query.map(String::from);
+            req
         }
     }
 
@@ -335,11 +329,7 @@ mod tests {
         let mut plugin = plugin_from_json(serde_json::json!({
             "rules": [{ "target": "/x" }]
         }));
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: Some(b"ok".to_vec()),
-        };
+        let resp = Response::new(200).with_body(b"ok".to_vec());
         let result = plugin.on_response(resp);
         assert_eq!(result.status, 200);
     }

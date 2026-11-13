@@ -122,18 +122,17 @@ mod tests {
     /// Request body is absent from JSON (travels via side-channel).
     #[test]
     fn request_body_absent_from_json() {
-        let req = Request {
-            method: "POST".into(),
-            path: "/upload".into(),
-            query: Some("fmt=raw".into()),
-            headers: {
+        let req = {
+            let mut req = Request::new("POST", "/upload")
+                .with_query("fmt=raw")
+                .with_body((0..=255).collect::<Vec<u8>>())
+                .with_client_ip("10.0.0.1");
+            req.headers = {
                 let mut h = BTreeMap::new();
                 h.insert("content-type".into(), "application/octet-stream".into());
                 h
-            },
-            body: Some((0..=255).collect()),
-            client_ip: "10.0.0.1".into(),
-            path_params: BTreeMap::new(),
+            };
+            req
         };
 
         let json_bytes = serde_json::to_vec(&req).unwrap();
@@ -153,15 +152,13 @@ mod tests {
     /// Response body is absent from JSON (travels via side-channel).
     #[test]
     fn response_body_absent_from_json() {
-        let resp = Response {
-            status: 200,
-            headers: {
+        let resp = Response::new(200)
+            .with_headers({
                 let mut h = BTreeMap::new();
                 h.insert("content-type".into(), "image/png".into());
                 h
-            },
-            body: Some(vec![0x89, 0x50, 0x4E, 0x47]),
-        };
+            })
+            .with_body(vec![0x89, 0x50, 0x4E, 0x47]);
 
         let json_bytes = serde_json::to_vec(&resp).unwrap();
         let json_str = std::str::from_utf8(&json_bytes).unwrap();
@@ -177,18 +174,14 @@ mod tests {
     /// Body is absent from JSON (travels via side-channel).
     #[test]
     fn middleware_continue_metadata_survives_value_extraction() {
-        let req = Request {
-            method: "POST".into(),
-            path: "/api/data".into(),
-            query: None,
-            headers: {
+        let req = {
+            let mut req = Request::new("POST", "/api/data").with_client_ip("127.0.0.1");
+            req.headers = {
                 let mut h = BTreeMap::new();
                 h.insert("x-consumer-id".into(), "user-42".into());
                 h
-            },
-            body: None,
-            client_ip: "127.0.0.1".into(),
-            path_params: BTreeMap::new(),
+            };
+            req
         };
 
         let output = json!({"action": 0, "data": req});
@@ -213,15 +206,11 @@ mod tests {
     /// Middleware ShortCircuit: response metadata survives Value extraction.
     #[test]
     fn middleware_shortcircuit_metadata_survives_value_extraction() {
-        let resp = Response {
-            status: 403,
-            headers: {
-                let mut h = BTreeMap::new();
-                h.insert("content-type".into(), "application/json".into());
-                h
-            },
-            body: None,
-        };
+        let resp = Response::new(403).with_headers({
+            let mut h = BTreeMap::new();
+            h.insert("content-type".into(), "application/json".into());
+            h
+        });
 
         let output = json!({"action": 1, "data": resp});
         let output_bytes = serde_json::to_vec(&output).unwrap();
@@ -242,15 +231,9 @@ mod tests {
     #[test]
     fn large_body_does_not_inflate_json() {
         let body: Vec<u8> = vec![0xAA; 1_000_000]; // 1MB
-        let req = Request {
-            method: "POST".into(),
-            path: "/upload".into(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: Some(body),
-            client_ip: "127.0.0.1".into(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("POST", "/upload")
+            .with_body(body)
+            .with_client_ip("127.0.0.1");
 
         let json_bytes = serde_json::to_vec(&req).unwrap();
         // JSON should be tiny — just metadata, no body
@@ -264,15 +247,9 @@ mod tests {
     /// Large body in middleware output doesn't inflate JSON.
     #[test]
     fn large_body_middleware_output_stays_small() {
-        let req = Request {
-            method: "POST".into(),
-            path: "/upload".into(),
-            query: None,
-            headers: BTreeMap::new(),
-            body: Some(vec![0xBB; 1_000_000]),
-            client_ip: "127.0.0.1".into(),
-            path_params: BTreeMap::new(),
-        };
+        let req = Request::new("POST", "/upload")
+            .with_body(vec![0xBB; 1_000_000])
+            .with_client_ip("127.0.0.1");
 
         let output = json!({"action": 0, "data": req});
         let output_bytes = serde_json::to_vec(&output).unwrap();

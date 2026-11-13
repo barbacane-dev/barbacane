@@ -241,9 +241,12 @@ cp target/wasm32-unknown-unknown/release/my_plugin.wasm .
 
 ## Plugin SDK Types
 
+The SDK's data types are `#[non_exhaustive]`: a minor release may add a field, so build them with their constructors, not as struct literals. Their fields are public to read and assign.
+
 ### Request
 
 ```rust
+#[non_exhaustive]
 pub struct Request {
     pub method: String,
     pub path: String,
@@ -255,11 +258,12 @@ pub struct Request {
 }
 ```
 
-Helper methods: `body_str() -> Option<&str>`, `body_string() -> Option<String>`, `set_body_text(&str)`.
+Build one with `Request::new(method, path)` and `with_query`, `with_header`, `with_body`, `with_client_ip`, `with_path_param`. Helper methods: `body_str() -> Option<&str>`, `body_string() -> Option<String>`, `set_body_text(&str)`.
 
 ### Response
 
 ```rust
+#[non_exhaustive]
 pub struct Response {
     pub status: u16,
     pub headers: BTreeMap<String, String>,
@@ -267,7 +271,15 @@ pub struct Response {
 }
 ```
 
-Helper methods: `body_str() -> Option<&str>`, `set_body_text(&str)`, `Response::text(status, headers, &str)`.
+Build one with `Response::new(status)` and `with_header`, `with_headers`, `with_body`, or `Response::text(status, headers, &str)`; `Response::default()` is an empty `200`. Helper methods: `body_str() -> Option<&str>`, `set_body_text(&str)`.
+
+```rust
+let denied = Response::new(403)
+    .with_header("content-type", "application/problem+json")
+    .with_body(br#"{"type":"urn:barbacane:error:acl-denied","title":"Forbidden","status":403}"#.to_vec());
+```
+
+The error enums (`http::HttpError`, `ldap::LdapError`, `jwt::JwtDecodeError`) are `#[non_exhaustive]` too: a `match` on one needs a `_` arm.
 
 > **Note:** Bodies travel as raw bytes via side-channel host functions (`host_body_read`/`host_body_set`),
 > not embedded in JSON. The proc macros handle this transparently — plugin authors just read and write
@@ -282,7 +294,7 @@ pub enum Action {
     /// Continue to next middleware/dispatcher with (possibly modified) request
     Continue(Request),
     /// Short-circuit the chain and return this response immediately
-    Respond(Response),
+    ShortCircuit(Response),
 }
 ```
 
@@ -328,7 +340,7 @@ use barbacane_plugin_sdk::log;
 log::info("Processing request");
 log::warn("rate limit exceeded");
 log::error("something went wrong");
-// or an explicit level: log::log(log::LEVEL_DEBUG, "verbose detail");
+// or an explicit level: log::log(log::Level::Debug, "verbose detail");
 ```
 
 ### HTTP Calls (Dispatcher only)
@@ -554,12 +566,7 @@ mod tests {
             header_value: "value".to_string(),
         };
 
-        let req = Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: Default::default(),
-            ..Default::default()
-        };
+        let req = Request::new("GET", "/test");
 
         let action = plugin.on_request(req);
         match action {

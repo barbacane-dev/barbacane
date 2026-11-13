@@ -133,11 +133,7 @@ impl WsUpstreamDispatcher {
         }
 
         // Success — return 101 sentinel. The host runtime takes over frame relay.
-        Response {
-            status: 101,
-            headers: BTreeMap::new(),
-            body: None,
-        }
+        Response::new(101)
     }
 
     /// Read error details from host_http_read_result after a failed host_ws_upgrade.
@@ -211,14 +207,13 @@ mod tests {
         query: Option<String>,
         path_params: BTreeMap<String, String>,
     ) -> Request {
-        Request {
-            method: method.to_string(),
-            path: path.to_string(),
-            headers,
-            body: None,
-            query,
-            path_params,
-            client_ip: "10.0.0.1".to_string(),
+        {
+            let mut req =
+                Request::new(method.to_string(), path.to_string()).with_client_ip("10.0.0.1");
+            req.headers = headers;
+            req.query = query;
+            req.path_params = path_params;
+            req
         }
     }
 

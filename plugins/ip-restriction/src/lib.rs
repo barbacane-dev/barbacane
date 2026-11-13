@@ -172,7 +172,6 @@ fn bits_match(a: &[u8], b: &[u8], prefix_len: u8, max_bits: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     fn test_plugin() -> IpRestriction {
         serde_json::from_value(serde_json::json!({
@@ -183,15 +182,7 @@ mod tests {
     }
 
     fn request_with_ip(ip: &str) -> Request {
-        Request {
-            method: "GET".to_string(),
-            path: "/test".to_string(),
-            headers: BTreeMap::new(),
-            body: None,
-            query: None,
-            path_params: BTreeMap::new(),
-            client_ip: ip.to_string(),
-        }
+        Request::new("GET", "/test").with_client_ip(ip.to_string())
     }
 
     fn ip(s: &str) -> IpAddr {
@@ -395,11 +386,7 @@ mod tests {
     #[test]
     fn on_response_passthrough() {
         let mut p = test_plugin();
-        let resp = Response {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: None,
-        };
+        let resp = Response::new(200);
         assert_eq!(p.on_response(resp).status, 200);
     }
 }
