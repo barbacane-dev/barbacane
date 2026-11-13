@@ -48,7 +48,7 @@ pub enum AdminAuth {
     Token(Arc<Vec<[u8; 32]>>),
     /// Authentication disabled. **Test only** — the production binary never
     /// constructs this variant; `barbacane-control serve` always uses
-    /// [`AdminAuth::from_token`] and fails to start without a token. Only
+    /// [`AdminAuth::from_env_values`] and fails to start without a token. Only
     /// reachable from `#[cfg(test)]` harnesses, hence the scoped allow.
     #[cfg_attr(not(test), allow(dead_code))]
     Disabled,
