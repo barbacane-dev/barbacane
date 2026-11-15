@@ -19,9 +19,10 @@ pub fn require(available: bool, what: &str) -> bool {
     if available {
         return true;
     }
-    if under_ci() {
-        panic!("{what}: unavailable, and under CI a test does not skip for want of it");
-    }
+    assert!(
+        !under_ci(),
+        "{what}: unavailable, and under CI a test does not skip for want of it"
+    );
     eprintln!("skip: {what}: unavailable");
     false
 }
