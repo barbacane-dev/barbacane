@@ -1,6 +1,6 @@
 //! Registration over the data-plane WebSocket against a database: what a
-//! key may claim, and what a refused registration is told. Skips without
-//! `DATABASE_URL`.
+//! key may claim, and what a refused registration is told. Needs PostgreSQL
+//! ([`crate::api::test_pool`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,9 +21,7 @@ type Socket =
 
 /// The pool and the WebSocket URL of a control plane served on loopback.
 async fn serve() -> Option<(PgPool, String)> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = crate::db::create_pool(&url).await.ok()?;
-    crate::db::run_migrations(&pool).await.ok()?;
+    let pool = crate::api::test_pool().await?;
     let app = create_router(
         pool.clone(),
         None,

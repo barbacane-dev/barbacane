@@ -43,8 +43,6 @@ async fn ssrf_gateway() -> TestGateway {
 /// `opa_url` pointing at the instance-metadata service.
 #[tokio::test]
 async fn metadata_endpoint_is_blocked() {
-    // EXPECTED TO FAIL until BARB-SEC-002 is fixed (host HTTP client has no
-    // resolved-IP denylist for link-local / metadata addresses).
     let gw = ssrf_gateway().await;
     let resp = gw.get("/ssrf-metadata").await.unwrap();
     assert_ne!(
@@ -58,7 +56,6 @@ async fn metadata_endpoint_is_blocked() {
 /// Loopback targets must be blocked.
 #[tokio::test]
 async fn loopback_is_blocked() {
-    // EXPECTED TO FAIL until BARB-SEC-002 is fixed.
     let gw = ssrf_gateway().await;
     let resp = gw.get("/ssrf-loopback").await.unwrap();
     assert_ne!(
@@ -71,7 +68,6 @@ async fn loopback_is_blocked() {
 /// RFC1918 private addresses must be blocked.
 #[tokio::test]
 async fn private_rfc1918_is_blocked() {
-    // EXPECTED TO FAIL until BARB-SEC-002 is fixed.
     let gw = ssrf_gateway().await;
     let resp = gw.get("/ssrf-private").await.unwrap();
     assert_ne!(
@@ -89,8 +85,6 @@ async fn private_rfc1918_is_blocked() {
 /// be reached.
 #[tokio::test]
 async fn dns_resolved_metadata_is_blocked() {
-    // EXPECTED TO FAIL until BARB-SEC-002 is fixed (resolve-then-check, incl.
-    // redirect targets).
     let gw = ssrf_gateway().await;
     let resp = gw.get("/ssrf-dns-metadata").await.unwrap();
     assert_ne!(

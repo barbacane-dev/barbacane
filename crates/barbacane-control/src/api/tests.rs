@@ -1,7 +1,8 @@
 //! Integration tests for the control plane REST API.
 //!
 //! Tests use `tower::ServiceExt::oneshot()` to drive the axum router in-process,
-//! with a real PostgreSQL connection. Set `DATABASE_URL` to run these tests:
+//! with a real PostgreSQL connection ([`crate::api::test_pool`]: a local run
+//! skips without one, a CI run fails). Set `DATABASE_URL` to run them:
 //!
 //! ```text
 //! DATABASE_URL=postgres://barbacane:barbacane@localhost:5432/barbacane \
@@ -27,14 +28,10 @@ use uuid::Uuid;
 // Test harness
 // ---------------------------------------------------------------------------
 
-/// Build the control-plane router connected to the test database.
-/// Returns `None` if `DATABASE_URL` is not reachable (test is skipped).
+/// Build the control-plane router connected to the test database
+/// ([`crate::api::test_pool`]: skipped locally without one, failed under CI).
 async fn make_app() -> Option<Router> {
-    let url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string());
-
-    let pool = crate::db::create_pool(&url).await.ok()?;
-    crate::db::run_migrations(&pool).await.ok()?;
+    let pool = crate::api::test_pool().await?;
 
     let conn_mgr = Arc::new(crate::api::ConnectionManager::new());
     Some(crate::api::create_router(

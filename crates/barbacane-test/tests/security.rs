@@ -2,10 +2,7 @@
 //!
 //! This single test binary aggregates every security category as a submodule
 //! (files under `tests/security/`) so they can share the helpers defined here.
-//! Each category file asserts the SECURE / hardened behaviour, so the test is
-//! RED today and turns GREEN as the corresponding finding is fixed. Every red
-//! test carries a comment of the form
-//! `// EXPECTED TO FAIL until <FINDING-ID> is fixed`.
+//! Each category file asserts the hardened behaviour for its finding.
 //!
 //! Findings covered (see docs/contributing/security-testing.md for the full
 //! threat model):
@@ -21,9 +18,10 @@
 //!
 //! Run with: `cargo test -p barbacane-test --test security`
 //!
-//! Most categories boot the data-plane gateway (and BARB-SEC-001 boots the
-//! control-plane binary), which requires the relevant services to be available.
-//! See the docs for the Docker / Postgres requirements.
+//! Most categories boot the data-plane gateway, and BARB-SEC-001 boots the
+//! control plane, which needs PostgreSQL in `DATABASE_URL`. A test whose
+//! binary or service is missing skips on a local run and fails under CI
+//! (`barbacane_test::require`).
 
 // Shared helpers live here at the test-binary root; category modules reach them
 // via `super::`.

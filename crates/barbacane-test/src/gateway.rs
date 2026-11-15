@@ -734,6 +734,23 @@ impl Drop for TestGateway {
     }
 }
 
+/// A workspace binary (`barbacane`, `barbacane-control`) as an absolute path:
+/// under the active `CARGO_TARGET_DIR` first, which is where `cargo llvm-cov`
+/// builds its instrumented binaries, then under `target/` from the crate or the
+/// workspace root.
+pub fn find_workspace_binary(name: &str) -> Option<std::path::PathBuf> {
+    let target_dirs = std::env::var("CARGO_TARGET_DIR")
+        .ok()
+        .into_iter()
+        .chain(["target", "../target", "../../target"].map(String::from));
+    target_dirs
+        .flat_map(|dir| {
+            ["debug", "release"].map(|profile| Path::new(&dir).join(profile).join(name))
+        })
+        .find(|path| path.exists())
+        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
+}
+
 /// Find the barbacane binary in the target directory, as an absolute path, so
 /// a caller can run it from any working directory.
 pub fn find_barbacane_binary() -> Result<String, TestError> {

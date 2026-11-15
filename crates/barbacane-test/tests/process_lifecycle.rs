@@ -159,7 +159,7 @@ fn sigterm_on_a_serving_gateway_exits_zero() {
 #[test]
 fn a_taken_port_reports_the_cause_without_panicking() {
     let binary = gateway_binary();
-    if !binary.exists() {
+    if !barbacane_test::require(binary.exists(), "the barbacane binary") {
         return;
     }
     let dir = tempfile::tempdir().expect("temp dir");
@@ -200,7 +200,7 @@ fn a_taken_port_reports_the_cause_without_panicking() {
 #[test]
 fn a_taken_admin_port_does_not_stop_the_gateway_serving() {
     let binary = gateway_binary();
-    if !binary.exists() {
+    if !barbacane_test::require(binary.exists(), "the barbacane binary") {
         return;
     }
     let dir = tempfile::tempdir().expect("temp dir");

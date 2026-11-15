@@ -376,7 +376,8 @@ jobs:
 
       - name: Run unit tests
         # Exclude barbacane-test as it contains integration tests requiring gateway binary
-        run: cargo test --locked --workspace --exclude barbacane-test --lib --bins --tests -- --test-threads=4
+        # barbacane-control's tests need PostgreSQL; control-plane-tests runs them.
+        run: cargo test --locked --workspace --exclude barbacane-test --exclude barbacane-control --lib --bins --tests -- --test-threads=4
 
       - name: Doc tests
         run: cargo test --locked --workspace --exclude barbacane-test --doc
@@ -542,15 +543,17 @@ jobs:
 
       - name: Run integration tests
         # Every integration binary in tests/*.rs, discovered rather than
-        # hard-coded so new suites are picked up automatically. `security` is
-        # excluded here (it needs PostgreSQL and the control-plane binary and
-        # has its own security-suite job). This shard takes a round-robin slice
+        # hard-coded so new suites are picked up automatically. `security`,
+        # `control_cli` and `connected_mode` need PostgreSQL and the
+        # control-plane binary and run in the security-suite job; a test that
+        # lacks what it needs fails under CI rather than skipping. This shard
+        # takes a round-robin slice
         # of the binaries; the lib tests run only on shard 0 to avoid repeating
         # them across shards.
         run: |
           all=$(ls crates/barbacane-test/tests/*.rs \
             | xargs -n1 basename | sed 's/\.rs$//' \
-            | grep -vx security | sort)
+            | grep -vxE 'security|control_cli|connected_mode' | sort)
           targets=$(echo "$all" \
             | awk "NR % $SHARD_TOTAL == $SHARD_INDEX" \
             | sed 's/^/--test /' | tr '\n' ' ')
@@ -572,10 +575,27 @@ jobs:
     timeout-minutes: 45
     needs: [changes, unit-tests]
     if: needs.changes.outputs.code == 'true'
-    # Fast, unit-only coverage for a per-pull-request signal. The full
-    # instrumented run (integration + control-plane over PostgreSQL, with the
-    # enforced floor) is heavy, so it lives in coverage-full.yml on main and a
-    # nightly schedule rather than on the pull-request critical path.
+    # Unit coverage, the control plane's tests included over PostgreSQL, for a
+    # per-pull-request signal. The full instrumented run (with the integration
+    # suite and the enforced floor) is heavy, so it lives in coverage-full.yml
+    # on main and a nightly schedule rather than on the pull-request critical
+    # path.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: barbacane
+          POSTGRES_PASSWORD: barbacane
+          POSTGRES_DB: barbacane
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
     steps:
       - uses: actions/checkout@v6
         with:
@@ -691,9 +711,10 @@ jobs:
       - name: Run security suite
         run: cargo test --locked -p barbacane-test --test security -- --test-threads=2
 
-      # `barbacane control` against a control plane on the same database.
-      - name: Run the control CLI tests
-        run: cargo test --locked -p barbacane-test --test control_cli -- --test-threads=2
+      # `barbacane control`, and a data plane in connected mode, against a
+      # control plane on the same database.
+      - name: Run the control CLI and connected-mode tests
+        run: cargo test --locked -p barbacane-test --test control_cli --test connected_mode -- --test-threads=2
 
   # Benchmark regression check
   # Triggered by: adding the "run-benchmarks" label, or commenting "/bench" on a PR.

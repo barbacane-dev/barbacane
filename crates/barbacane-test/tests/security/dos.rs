@@ -7,17 +7,14 @@
 //!      buffer the whole body before deciding (it should bail as soon as the
 //!      streamed size crosses the cap).
 //!
-//!   2. **Slowloris / missing read timeout** — documented; hard to assert
-//!      deterministically without flaky wall-clock timing. See the `#[ignore]`
-//!      test below for the intended shape.
+//!   2. **Slowloris** — a connection that never finishes its headers is closed
+//!      at the header read deadline; a body that never finishes is answered
+//!      408 at the body deadline (`tests/body_read_timeout.rs`).
 //!
 //!   3. **404-flood metric cardinality** — a flood of unique unmatched paths must
-//!      NOT create one Prometheus series per raw path. The router currently
-//!      records `record_request_metrics(&method, &path, ...)` with the *raw*
-//!      request path on the `RouteMatch::NotFound` arm
-//!      (`crates/barbacane/src/main.rs`), so an attacker can blow up metric
-//!      cardinality (memory DoS) and exfiltrate scanned paths. The fix replaces
-//!      the label with an `<unmatched>` sentinel.
+//!      not create one Prometheus series per path, which would grow memory and
+//!      expose the scanned paths: unmatched requests are recorded under the
+//!      `<unmatched>` path label.
 
 use barbacane_test::TestGateway;
 

@@ -65,18 +65,16 @@ suite — see [Development setup](development.md)):
   They need the `barbacane` binary built and the fixture WASM plugins present.
 - **BARB-SEC-001** boots the **control plane** (`barbacane-control serve`),
   which needs PostgreSQL. Start it with `make db-up` and export `DATABASE_URL`.
-  When PostgreSQL or the binary is unavailable the authz tests **skip** (they
-  print a `skip:` line and return) rather than fail spuriously.
+  When PostgreSQL or a binary is unavailable, a local run **skips** those tests
+  (they print a `skip:` line and return) and a CI run **fails** them, since a
+  CI job without what its tests need is broken. `barbacane_test::require` and
+  `barbacane_test::required` apply that rule; every integration test that needs
+  a service or a binary goes through them.
 
-The suite must pass: a red test blocks the merge. Two tests are `#[ignore]`d,
-each with a `BLOCKED: ...` reason naming what it waits for:
-
-- **Crypto (BARB-SEC-005)**: `jwt-auth` verifies RS256/384/512 signatures
-  through the host `verify_signature` capability against an inline
-  `public_key_jwk`. The "validly-signed JWT is accepted" case waits for a test
-  fixture: a private key plus a token signed with it.
-- **Authz IDOR phase 2 (BARB-SEC-001)**: waits for per-project credentials and
-  ownership checks on the global `/specs/{id}` and `/artifacts/{id}` routes.
+The suite must pass: a red test blocks the merge, and no test is `#[ignore]`d.
+The admin API is single-tenant by design: one operator token reaches every
+project, so there is no cross-project access within it to test; data-plane API
+keys are scoped to their project and `authz.rs` tests that scope.
 
 The slowloris test (BARB-SEC-003) runs: `--keepalive-timeout` is the deadline
 for a request's headers and body, and the test asserts the connection is closed.

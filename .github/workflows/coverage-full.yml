@@ -42,8 +42,14 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+      # glauth with its built-in default directory, for tests/ldap.rs.
+      ldap:
+        image: ghcr.io/glauth/glauth:v2.5.4
+        ports:
+          - 3893:3893
     env:
       DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
+      BARBACANE_TEST_LDAP_URL: ldap://127.0.0.1:3893
     steps:
       - uses: actions/checkout@v6
         with:
