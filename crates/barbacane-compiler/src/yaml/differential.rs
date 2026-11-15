@@ -153,17 +153,21 @@ pub static KNOWN: &[KnownDivergence] = &[
     KnownDivergence {
         name: "byte order marks inside a document",
         reason: "YAML 1.2 allows a byte order mark before a document and inside quoted \
-                 scalars only; libyaml reads one that begins a node as content, where the \
-                 module skips one before the document and refuses one inside it",
+                 scalars only; libyaml reads one that begins a node as content and drops one \
+                 that begins a line of a block scalar or follows a comment, where the module \
+                 skips one before the document and otherwise reads it as content or refuses \
+                 the document",
         example: "a: \u{feff}x\n",
-        matches: |_, d| match d {
+        matches: |input, d| match d {
             Difference::OnlyOursFailed { error } => {
                 error.contains("a BOM must not appear inside a document")
+                    || input.chars().skip(1).any(|c| c == '\u{feff}')
             }
             Difference::Value {
-                reference: Value::String(text),
-                ..
-            } => text.contains('\u{feff}'),
+                ours, reference, ..
+            } => [ours, reference]
+                .iter()
+                .any(|v| v.as_str().is_some_and(|text| text.contains('\u{feff}'))),
             _ => false,
         },
     },
@@ -217,7 +221,9 @@ pub static KNOWN: &[KnownDivergence] = &[
         name: "core tags on content of another type",
         reason: "YAML 1.2 makes a node tagged `!!int`, `!!float`, `!!bool`, `!!null` or \
                  `!!binary` whose content is not of that type invalid; libyaml reads it as a \
-                 string, the module refuses the document",
+                 string, the module refuses the document. The module also reads the local \
+                 tags `!int`, `!float`, `!bool`, `!seq` and `!map` as those core tags, so \
+                 `!seq x: 1` is refused, where libyaml ignores a tag on a mapping key",
         example: "!!int :\n",
         matches: |_, d| {
             matches!(d, Difference::OnlyOursFailed { error } if [
@@ -226,6 +232,8 @@ pub static KNOWN: &[KnownDivergence] = &[
                 "invalid boolean",
                 "invalid floating point",
                 "unsupported tag `!!",
+                "unsupported tag `!seq`",
+                "unsupported tag `!map`",
                 "cannot deserialize tagged scalar into string",
             ]
             .iter()
@@ -316,6 +324,19 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
+        name: "integer keys written with underscores",
+        reason: "serde-saphyr reads `1_000` as the string `1_000`, as libyaml does, but its \
+                 duplicate-key check compares it as the integer 1000, so `1000:` and `1_000:` \
+                 are one key and the last is kept; libyaml keeps both. A bug in serde-saphyr: \
+                 the check does not honour `underscored_numbers_as_strings`",
+        example: "1000: a\n1_000: b\n",
+        matches: |input, d| {
+            has_keys_equal_with_underscores(input)
+                && matches!(d, Difference::Value { pointer, ours: Value::Null, .. }
+                    if pointer.rsplit('/').next().and_then(integer_value_with_underscores).is_some())
+        },
+    },
+    KnownDivergence {
         name: "block content not indented past its key",
         reason: "YAML 1.2 indents a node that starts on the line after its key (`a:` or `?`) \
                  past the key; libyaml reads an unindented block scalar there, the module \
@@ -376,6 +397,21 @@ pub static KNOWN: &[KnownDivergence] = &[
                     }
                     Difference::OnlyReferenceFailed { .. } => false,
                 }
+        },
+    },
+    KnownDivergence {
+        name: "`:` followed by a character in flow collections",
+        reason: "YAML 1.2 starts a plain scalar with `:` when a character it can hold \
+                 follows, so `{!t :a}` and `{? :a}` have the key `:a`; after an empty key, \
+                 libyaml takes the `:` for the value indicator, reading `{\"\": \"a\"}`",
+        example: "{!t :a}\n",
+        matches: |input, d| {
+            input.contains(['{', '['])
+                && matches!(d, Difference::Value { pointer, .. }
+                if pointer.rsplit('/').next().is_some_and(|key| {
+                    key.strip_prefix(':')
+                        .is_some_and(|rest| rest.starts_with(|c: char| !c.is_whitespace()))
+                }))
         },
     },
     KnownDivergence {
@@ -494,6 +530,29 @@ fn has_keys_equal_as_integers(input: &str) -> bool {
         integer_value(key)
             .is_some_and(|value| seen.insert(value, key).is_some_and(|other| other != key))
     })
+}
+
+/// Whether `input` has two keys that are the same integer once underscores are
+/// dropped, one of them written with an underscore.
+fn has_keys_equal_with_underscores(input: &str) -> bool {
+    let mut seen = std::collections::HashMap::new();
+    input.lines().any(|line| {
+        let key = line
+            .trim_start_matches([' ', '-', '{', ','])
+            .split(':')
+            .next()
+            .unwrap_or("");
+        integer_value_with_underscores(key).is_some_and(|value| {
+            seen.insert(value, key)
+                .is_some_and(|other| other != key && (other.contains('_') || key.contains('_')))
+        })
+    })
+}
+
+/// The integer `text` writes once underscores are dropped, as YAML 1.1 reads
+/// `1_000`.
+fn integer_value_with_underscores(text: &str) -> Option<i128> {
+    integer_value(&text.replace('_', ""))
 }
 
 /// The integer `text` writes: decimal with an optional sign, or `0x`, `0o` or
