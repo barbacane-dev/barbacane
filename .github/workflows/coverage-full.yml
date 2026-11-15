@@ -50,11 +50,16 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: llvm-tools-preview
 
+      # The key carries the compiler: instrumented objects left by another
+      # compiler (or another `target/` layout) are not removed by
+      # `cargo llvm-cov clean`, and the report counts them as code that never
+      # ran. A new compiler starts from an empty `target/`.
       - name: Cache cargo registry
         uses: actions/cache@v5
         with:
@@ -62,10 +67,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-coverage-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-coverage-
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-coverage-${{ steps.toolchain.outputs.cachekey }}-
 
       - name: Build WASM plugins
         run: make plugins
