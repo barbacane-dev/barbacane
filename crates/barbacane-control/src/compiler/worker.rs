@@ -12,11 +12,25 @@ use crate::db::{
     ProjectPluginConfigsRepository, SpecsRepository,
 };
 
-/// Run the compilation worker loop.
-pub async fn run_worker(pool: PgPool, mut rx: mpsc::Receiver<Uuid>) {
+/// Run the compilation worker loop until `stop` turns true or the channel
+/// closes. A compilation in progress finishes; the queued ones stay `pending`
+/// for the next start.
+pub async fn run_worker(
+    pool: PgPool,
+    mut rx: mpsc::Receiver<Uuid>,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) {
     tracing::info!("Compilation worker started");
 
-    while let Some(compilation_id) = rx.recv().await {
+    loop {
+        let compilation_id = tokio::select! {
+            biased;
+            _ = stop.wait_for(|stop| *stop) => break,
+            next = rx.recv() => match next {
+                Some(id) => id,
+                None => break,
+            },
+        };
         if let Err(e) = process_compilation(&pool, compilation_id).await {
             tracing::error!(
                 compilation_id = %compilation_id,
@@ -508,5 +522,24 @@ mod tests {
             panic!("a plugin without an embedded manifest must be refused");
         };
         assert!(err.to_string().starts_with("E1041"), "{err}");
+    }
+
+    /// Once stopped, the worker takes no queued compilation and returns.
+    #[tokio::test]
+    async fn a_stopped_worker_takes_no_further_compilation() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_secs(1))
+            .connect_lazy("postgres://nobody@127.0.0.1:1/unreachable")
+            .expect("a lazy pool needs no server");
+        let (queue, jobs) = mpsc::channel(4);
+        queue.send(Uuid::new_v4()).await.expect("queued");
+        let (_stop, stopped) = tokio::sync::watch::channel(true);
+
+        let worker = tokio::spawn(run_worker(pool, jobs, stopped));
+        tokio::time::timeout(std::time::Duration::from_millis(500), worker)
+            .await
+            .expect("the worker returns at once")
+            .expect("no panic");
+        drop(queue);
     }
 }

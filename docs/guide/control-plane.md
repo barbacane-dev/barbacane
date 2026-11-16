@@ -146,6 +146,8 @@ A compilation reads each plugin's capabilities, category and config schema from 
 | `succeeded` | Completed, `artifact_id` available |
 | `failed` | Failed, check `errors` array |
 
+Compilations run one at a time, in the order they were requested. A compilation the control plane was running when it stopped goes back to `pending` at the next start, and every `pending` compilation is queued again then: none is lost to a restart.
+
 ### Health
 
 ```bash
@@ -429,6 +431,8 @@ volumes:
 2. **Connection pooling** - Consider PgBouncer for high-traffic deployments
 3. **Authentication** - Every API request carries the admin token (`BARBACANE_CONTROL_ADMIN_TOKEN`), and data planes present a project API key; keep the token in a secret store and rotate the keys from `api-keys`
 4. **TLS** - Terminate TLS at the load balancer or reverse proxy
+5. **One instance** - Run a single control plane per database. Deployment notifications reach the data planes connected to the instance that handles the deploy request, and compilations are queued in that instance; a second instance on the same database does not see either.
+6. **Shutdown** - On `SIGTERM` or `SIGINT` the control plane stops accepting connections, closes the data planes' sessions (they reconnect, to the next instance once it is up), lets the compilation in progress finish, and exits 0. Requests in flight and that compilation get 30 seconds; a compilation still running then is compiled again at the next start.
 
 ## What's Next?
 

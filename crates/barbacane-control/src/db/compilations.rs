@@ -96,6 +96,24 @@ impl CompilationsRepository {
         .await
     }
 
+    /// Put back to `pending` the compilations a stopped run left `compiling`.
+    /// Returns how many.
+    pub async fn requeue_interrupted(&self) -> Result<u64, sqlx::Error> {
+        sqlx::query("UPDATE compilations SET status = 'pending' WHERE status = 'compiling'")
+            .execute(&self.pool)
+            .await
+            .map(|done| done.rows_affected())
+    }
+
+    /// The pending compilations, oldest first.
+    pub async fn pending(&self) -> Result<Vec<Uuid>, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT id FROM compilations WHERE status = 'pending' ORDER BY started_at, id",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
     /// Mark a compilation as succeeded with the resulting artifact.
     pub async fn mark_succeeded(
         &self,
@@ -147,5 +165,80 @@ impl CompilationsRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{NewProject, NewSpec, ProjectsRepository, SpecsRepository};
+
+    /// The test database, migrated; `None` when `DATABASE_URL` is unreachable.
+    async fn pool() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string()
+        });
+        let pool = crate::db::create_pool(&url).await.ok()?;
+        crate::db::run_migrations(&pool).await.ok()?;
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_compilation_is_requeued_and_pending_ones_come_oldest_first() {
+        let Some(pool) = pool().await else {
+            eprintln!("skip: no database");
+            return;
+        };
+        let project = ProjectsRepository::new(pool.clone())
+            .create(NewProject {
+                name: format!("requeue-{}", Uuid::new_v4().simple()),
+                description: None,
+                production_mode: false,
+            })
+            .await
+            .expect("project");
+        let spec = SpecsRepository::new(pool.clone())
+            .create(NewSpec {
+                project_id: project.id,
+                name: format!("requeue-{}", Uuid::new_v4().simple()),
+                spec_type: "openapi".into(),
+                spec_version: "3.0.3".into(),
+                sha256: "0".repeat(64),
+                content: b"openapi: 3.0.3".to_vec(),
+                filename: "api.yaml".into(),
+            })
+            .await
+            .expect("spec");
+        let repo = CompilationsRepository::new(pool.clone());
+        let first = repo
+            .create(spec.id, Some(project.id), false, serde_json::json!([]))
+            .await
+            .expect("first");
+        let second = repo
+            .create(spec.id, Some(project.id), false, serde_json::json!([]))
+            .await
+            .expect("second");
+        // The first was being compiled when the process stopped.
+        assert!(repo.claim(first.id).await.expect("claim").is_some());
+
+        assert!(repo.requeue_interrupted().await.expect("requeue") >= 1);
+        let status = repo
+            .get(first.id)
+            .await
+            .expect("get")
+            .expect("exists")
+            .status;
+        assert_eq!(status, "pending");
+
+        let pending = repo.pending().await.expect("pending");
+        let at = |id: Uuid| pending.iter().position(|p| *p == id);
+        let (first_at, second_at) = (at(first.id), at(second.id));
+        assert!(first_at.is_some() && second_at.is_some(), "{pending:?}");
+        assert!(first_at < second_at, "oldest first: {pending:?}");
+
+        ProjectsRepository::new(pool)
+            .delete(project.id)
+            .await
+            .expect("clean up");
     }
 }
