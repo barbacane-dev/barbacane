@@ -91,6 +91,16 @@ impl ConnectionManager {
         close
     }
 
+    /// End every registered session. Returns how many were signalled.
+    pub fn close_all(&self) -> usize {
+        let mut closed = 0;
+        for conn in self.connections.iter() {
+            conn.close.notify_one();
+            closed += 1;
+        }
+        closed
+    }
+
     /// End every session registered with the API key `key_id`. Returns how
     /// many were signalled.
     pub fn close_sessions_for_key(&self, key_id: Uuid) -> usize {
