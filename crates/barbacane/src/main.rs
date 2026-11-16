@@ -505,6 +505,24 @@ enum Commands {
         format: String,
     },
 
+    /// Check that an artifact loads as `serve` would load it, without serving.
+    ///
+    /// Runs every load-time check: format version, signature, integrity, plugin
+    /// ABI, imports and capabilities, limits, WAF rules, schemas and secrets,
+    /// then each plugin's `init` with every configuration the routes give it.
+    /// Run it with the environment `serve` gets: it reads
+    /// BARBACANE_TRUSTED_PUBKEY and resolves secrets.
+    Check {
+        /// Path to the .bca artifact file.
+        #[arg(long)]
+        artifact: String,
+
+        /// Accept an artifact no trusted key has signed, when
+        /// BARBACANE_TRUSTED_PUBKEY is unset.
+        #[arg(long)]
+        allow_unsigned: bool,
+    },
+
     /// Initialize a new Barbacane project.
     ///
     /// Creates a project directory with barbacane.yaml, spec files, and plugins directory.
@@ -1065,12 +1083,7 @@ impl Gateway {
 
         // Register every (plugin, config) pair the routes use, once.
         for op in &resolved_operations {
-            let entries = op
-                .middlewares
-                .iter()
-                .map(|mw| (&mw.name, &mw.config))
-                .chain(std::iter::once((&op.dispatch.name, &op.dispatch.config)));
-            for (name, config) in entries {
+            for (name, config) in plugin_configs(op) {
                 let key = barbacane_wasm::InstanceKey::new(name, config);
                 let config_json = serde_json::to_vec(config).unwrap_or_default();
                 plugin_pool.register_config(key, config_json);
@@ -5279,6 +5292,110 @@ async fn run_serve(
     ExitCode::SUCCESS
 }
 
+/// The (plugin, config) pairs an operation runs: its middlewares, then its
+/// dispatcher.
+fn plugin_configs(
+    op: &barbacane_compiler::CompiledOperation,
+) -> impl Iterator<Item = (&String, &serde_json::Value)> {
+    op.middlewares
+        .iter()
+        .map(|mw| (&mw.name, &mw.config))
+        .chain(std::iter::once((&op.dispatch.name, &op.dispatch.config)))
+}
+
+/// Run the check command: load the artifact as `serve` does, then run each
+/// plugin's `init` with every configuration the routes give it.
+///
+/// Exit codes are those `serve` uses for the same failures: 1, and 13 when a
+/// secret does not resolve.
+fn run_check(artifact: &str, allow_unsigned: bool) -> ExitCode {
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_max_level(tracing::Level::WARN)
+        .with_target(false)
+        .without_time()
+        .try_init();
+
+    let path = Path::new(artifact);
+    if !path.exists() {
+        eprintln!("error: artifact not found: {artifact}");
+        return ExitCode::from(1);
+    }
+    let pinned = std::env::var("BARBACANE_TRUSTED_PUBKEY").ok();
+    let trust = match artifact_trust(pinned.as_deref(), false, allow_unsigned) {
+        Ok(trust) => trust,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let gateway = match Gateway::load(
+        path,
+        false,
+        RequestLimits::default(),
+        false,
+        Arc::new(MetricsRegistry::new()),
+        &trust,
+        None,
+    ) {
+        Ok(gateway) => gateway,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(if e.contains("failed to resolve secrets") {
+                13
+            } else {
+                1
+            });
+        }
+    };
+
+    let mut checked = HashSet::new();
+    let mut failures = Vec::new();
+    for op in &gateway.operations {
+        for (name, config) in plugin_configs(op) {
+            let key = barbacane_wasm::InstanceKey::new(name, config);
+            if !checked.insert(key.clone()) {
+                continue;
+            }
+            if let Err(e) = gateway.plugin_pool.get_instance(&key) {
+                failures.push(format!(
+                    "plugin '{name}' does not initialise with its configuration on {} {}: {e}",
+                    op.method, op.path
+                ));
+            }
+        }
+    }
+
+    let manifest = &gateway.manifest;
+    let summary = format!(
+        "{artifact}: artifact format {}, compiled by barbacane {}, signature {}; \
+         {} route(s), {} plugin(s), {} plugin configuration(s)",
+        manifest.barbacane_artifact_version,
+        manifest.compiler_version,
+        match trust {
+            ArtifactTrust::Pinned(_) => "verified",
+            ArtifactTrust::Unsigned => "not checked",
+        },
+        manifest.routes_count,
+        manifest.plugins.len(),
+        checked.len(),
+    );
+    drop_off_runtime(gateway);
+
+    if failures.is_empty() {
+        println!("\u{2713} {summary}");
+        ExitCode::SUCCESS
+    } else {
+        for failure in &failures {
+            eprintln!("error: {failure}");
+        }
+        eprintln!("\u{2717} {summary}");
+        ExitCode::from(1)
+    }
+}
+
 /// Drop a value outside the async runtime.
 ///
 /// The plugin host owns broker and directory clients, each carrying its own
@@ -5361,6 +5478,10 @@ async fn main() -> ExitCode {
             no_cache,
         ),
         Commands::Validate { spec, format } => run_validate(&spec, &format),
+        Commands::Check {
+            artifact,
+            allow_unsigned,
+        } => run_check(&artifact, allow_unsigned),
         Commands::Key { action } => run_key(action),
         Commands::Dev {
             listen,

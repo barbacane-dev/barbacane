@@ -422,6 +422,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
