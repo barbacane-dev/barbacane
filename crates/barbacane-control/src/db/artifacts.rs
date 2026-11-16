@@ -1,5 +1,6 @@
 //! Artifacts repository for CRUD operations.
 
+use super::Page;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -45,18 +46,28 @@ impl ArtifactsRepository {
     }
 
     /// List all artifacts.
-    pub async fn list(&self) -> Result<Vec<Artifact>, sqlx::Error> {
-        sqlx::query_as::<_, Artifact>("SELECT * FROM artifacts ORDER BY compiled_at DESC")
-            .fetch_all(&self.pool)
-            .await
+    pub async fn list(&self, page: Page) -> Result<Vec<Artifact>, sqlx::Error> {
+        sqlx::query_as::<_, Artifact>(
+            "SELECT * FROM artifacts ORDER BY compiled_at DESC, id LIMIT $1 OFFSET $2",
+        )
+        .bind(page.limit)
+        .bind(page.offset)
+        .fetch_all(&self.pool)
+        .await
     }
 
     /// List artifacts for a project.
-    pub async fn list_for_project(&self, project_id: Uuid) -> Result<Vec<Artifact>, sqlx::Error> {
+    pub async fn list_for_project(
+        &self,
+        project_id: Uuid,
+        page: Page,
+    ) -> Result<Vec<Artifact>, sqlx::Error> {
         sqlx::query_as::<_, Artifact>(
-            "SELECT * FROM artifacts WHERE project_id = $1 ORDER BY compiled_at DESC",
+            "SELECT * FROM artifacts WHERE project_id = $1 ORDER BY compiled_at DESC, id LIMIT $2 OFFSET $3",
         )
         .bind(project_id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
     }

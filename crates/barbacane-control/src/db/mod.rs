@@ -11,6 +11,21 @@ mod project_plugins;
 mod projects;
 mod specs;
 
+/// A window of a list: at most `limit` rows, after skipping `offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Page {
+    pub limit: i64,
+    pub offset: i64,
+}
+
+impl Page {
+    /// Every row.
+    pub const ALL: Page = Page {
+        limit: i64::MAX,
+        offset: 0,
+    };
+}
+
 pub use api_keys::ApiKeysRepository;
 pub use artifacts::ArtifactsRepository;
 pub use compilations::CompilationsRepository;

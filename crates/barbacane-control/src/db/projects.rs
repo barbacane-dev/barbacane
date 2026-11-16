@@ -1,5 +1,6 @@
 //! Projects repository for CRUD operations.
 
+use super::Page;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -34,8 +35,10 @@ impl ProjectsRepository {
     }
 
     /// List all projects.
-    pub async fn list(&self) -> Result<Vec<Project>, sqlx::Error> {
-        sqlx::query_as::<_, Project>("SELECT * FROM projects ORDER BY name")
+    pub async fn list(&self, page: Page) -> Result<Vec<Project>, sqlx::Error> {
+        sqlx::query_as::<_, Project>("SELECT * FROM projects ORDER BY name LIMIT $1 OFFSET $2")
+            .bind(page.limit)
+            .bind(page.offset)
             .fetch_all(&self.pool)
             .await
     }

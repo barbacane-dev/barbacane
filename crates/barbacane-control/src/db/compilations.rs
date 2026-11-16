@@ -1,5 +1,6 @@
 //! Compilations repository for async job tracking.
 
+use super::Page;
 use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -50,15 +51,22 @@ impl CompilationsRepository {
     }
 
     /// List compilations for a spec.
-    pub async fn list_for_spec(&self, spec_id: Uuid) -> Result<Vec<Compilation>, sqlx::Error> {
+    pub async fn list_for_spec(
+        &self,
+        spec_id: Uuid,
+        page: Page,
+    ) -> Result<Vec<Compilation>, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
             SELECT * FROM compilations
             WHERE spec_id = $1
-            ORDER BY started_at DESC
+            ORDER BY started_at DESC, id
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(spec_id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
     }
@@ -67,15 +75,19 @@ impl CompilationsRepository {
     pub async fn list_for_project(
         &self,
         project_id: Uuid,
+        page: Page,
     ) -> Result<Vec<Compilation>, sqlx::Error> {
         sqlx::query_as::<_, Compilation>(
             r#"
             SELECT * FROM compilations
             WHERE project_id = $1
-            ORDER BY started_at DESC
+            ORDER BY started_at DESC, id
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(project_id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
     }

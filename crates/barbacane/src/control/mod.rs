@@ -359,6 +359,30 @@ impl Client {
         serde_json::from_slice(&bytes)
             .map_err(|e| Failure::from(format!("the response is not JSON: {e}")))
     }
+
+    /// Every item of the list at `path`, read page by page.
+    async fn list_all(&self, path: &str) -> Result<Vec<Value>, Failure> {
+        const PAGE: usize = 1000;
+        let mut items = Vec::new();
+        loop {
+            let page = self
+                .call_json(
+                    "GET",
+                    &format!("{path}?limit={PAGE}&offset={}", items.len()),
+                    None,
+                )
+                .await?;
+            let page = page
+                .as_array()
+                .cloned()
+                .ok_or_else(|| Failure::from(format!("{path} did not answer a list")))?;
+            let last = page.len() < PAGE;
+            items.extend(page);
+            if last {
+                return Ok(items);
+            }
+        }
+    }
 }
 
 /// An error response: its status, and the title and detail of a problem
@@ -546,16 +570,10 @@ async fn deploy(client: &Client, args: &ArgMatches, json_output: bool) -> Result
         Instant::now() + Duration::from_secs(*args.get_one::<u64>("timeout").expect("default"));
     loop {
         let planes = client
-            .call_json(
-                "GET",
-                &format!("/projects/{}/data-planes", encode(project)),
-                None,
-            )
+            .list_all(&format!("/projects/{}/data-planes", encode(project)))
             .await?;
         let connected: Vec<&Value> = planes
-            .as_array()
-            .into_iter()
-            .flatten()
+            .iter()
             .filter(|p| p["status"].as_str() != Some("offline"))
             .collect();
         let behind = connected
@@ -914,5 +932,60 @@ mod tests {
     fn path_values_are_percent_encoded() {
         assert_eq!(encode("a b/c"), "a%20b%2Fc");
         assert_eq!(encode("plugin-1.0_x~"), "plugin-1.0_x~");
+    }
+
+    /// `list_all` reads page after page until one comes back short.
+    #[tokio::test]
+    async fn list_all_reads_every_page() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        const TOTAL: usize = 2500;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = std::sync::Arc::clone(&requests);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut buf = vec![0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                let query = |key: &str| -> usize {
+                    head.split_whitespace()
+                        .nth(1)
+                        .and_then(|target| target.split_once('?'))
+                        .and_then(|(_, q)| {
+                            q.split('&')
+                                .find_map(|p| p.strip_prefix(&format!("{key}=")))
+                        })
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0)
+                };
+                let (limit, offset) = (query("limit"), query("offset"));
+                let items: Vec<usize> = (offset..TOTAL.min(offset + limit)).collect();
+                let body = serde_json::to_string(&items).expect("json");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let client = Client {
+            http: reqwest::Client::new(),
+            base: format!("http://127.0.0.1:{port}"),
+            token: None,
+        };
+        let Ok(items) = client.list_all("/things").await else {
+            panic!("the list could not be read");
+        };
+        assert_eq!(items.len(), TOTAL);
+        assert!(items
+            .iter()
+            .enumerate()
+            .all(|(i, v)| v.as_u64() == Some(i as u64)));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 }

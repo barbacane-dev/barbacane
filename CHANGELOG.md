@@ -33,6 +33,9 @@ The breaking changes below are gathered, with what to do and in which order, in 
 ### Changed
 
 - **control plane**: deleting a project deletes its artifacts, as it already deleted its specs and compilations; they were kept with no project. Artifacts left without a project by earlier deletions stay until deleted with `DELETE /artifacts/{id}`.
+- **control plane**: the list endpoints return at most 100 items by default and take `limit` (1 to 1000) and `offset`; responses stay JSON arrays, in a stable order. A value out of range is `400`. The CLI gains `--limit` and `--offset` on its list commands, and `deploy --wait` reads every page of data planes. A project's plugin configurations and a plugin's versions are returned whole.
+
+  > **Upgrade note (breaking):** a client that read a list of more than 100 items in one request reads it page by page.
 
 - **plugin SDK**: `Request`, `Response`, `HttpRequest`, `HttpResponse`, `Endpoint`, `TlsSettings`, `ldap::Connection`, `ldap::SearchRequest` and `ldap::Entry` are `#[non_exhaustive]`, as are `HttpError`, `LdapError` and `JwtDecodeError`, so a minor release can add fields and variants. A plugin builds them with `Request::new(method, path)`, `Response::new(status)`, `Endpoint::new(url)`, `TlsSettings::new()`, `Entry::new(dn, attrs)` and the `with_*` methods, or assigns the public fields after construction; a `match` on the error enums needs a `_` arm. `log::log` takes a `log::Level` (`Error`, `Warn`, `Info`, `Debug`) in place of an `i32`; the `LEVEL_*` constants are gone.
 

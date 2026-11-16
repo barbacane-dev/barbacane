@@ -1,5 +1,7 @@
 //! API key management endpoints.
 
+use super::pagination::PageQuery;
+use axum::extract::Query;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -45,7 +47,9 @@ pub async fn create_api_key(
 pub async fn list_api_keys(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<ApiKey>>, ProblemDetails> {
+    let page = page.page()?;
     if ProjectsRepository::new(state.pool.clone())
         .get_by_id(project_id)
         .await?
@@ -57,7 +61,7 @@ pub async fn list_api_keys(
     }
     let repo = ApiKeysRepository::new(state.pool.clone());
 
-    let keys = repo.list_for_project(project_id).await?;
+    let keys = repo.list_for_project(project_id, page).await?;
 
     Ok(Json(keys))
 }

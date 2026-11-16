@@ -1,5 +1,6 @@
 //! Plugins repository for CRUD operations.
 
+use super::Page;
 use sqlx::PgPool;
 
 use super::models::{NewPlugin, Plugin, PluginWithBinary};
@@ -42,6 +43,7 @@ impl PluginsRepository {
         &self,
         plugin_type: Option<&str>,
         name: Option<&str>,
+        page: Page,
     ) -> Result<Vec<Plugin>, sqlx::Error> {
         let mut query = String::from(
             "SELECT name, version, plugin_type, description, capabilities, config_schema, sha256, registered_at FROM plugins WHERE 1=1",
@@ -57,6 +59,8 @@ impl PluginsRepository {
             query.push_str(&format!(" AND name = ${}", params.len()));
         }
         query.push_str(" ORDER BY name, version DESC");
+        // Integers the API validated; binding them would type them as text.
+        query.push_str(&format!(" LIMIT {} OFFSET {}", page.limit, page.offset));
 
         // Build the query dynamically
         let mut q = sqlx::query_as::<_, Plugin>(&query);

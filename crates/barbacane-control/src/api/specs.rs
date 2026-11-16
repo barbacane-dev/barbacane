@@ -1,5 +1,7 @@
 //! Specs API handlers.
 
+use super::pagination::PageQuery;
+use crate::db::Page;
 use std::collections::{HashMap, HashSet};
 
 use axum::{
@@ -31,6 +33,8 @@ pub struct ListSpecsQuery {
     pub name: Option<String>,
     #[serde(rename = "type")]
     pub spec_type: Option<String>,
+    #[serde(flatten)]
+    pub page: PageQuery,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,9 +155,10 @@ pub async fn list_specs(
     State(state): State<AppState>,
     Query(query): Query<ListSpecsQuery>,
 ) -> Result<Json<Vec<Spec>>, ProblemDetails> {
+    let page = query.page.page()?;
     let repo = SpecsRepository::new(state.pool.clone());
     let specs = repo
-        .list(query.spec_type.as_deref(), query.name.as_deref())
+        .list(query.spec_type.as_deref(), query.name.as_deref(), page)
         .await?;
     Ok(Json(specs))
 }
@@ -179,7 +184,9 @@ pub async fn get_spec(
 pub async fn get_spec_history(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<SpecRevisionSummary>>, ProblemDetails> {
+    let page = page.page()?;
     let repo = SpecsRepository::new(state.pool.clone());
 
     // First verify spec exists
@@ -188,7 +195,7 @@ pub async fn get_spec_history(
         .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("Spec {} not found", id)))?;
 
-    let history = repo.get_history(id).await?;
+    let history = repo.get_history(id, page).await?;
     Ok(Json(history))
 }
 
@@ -380,7 +387,7 @@ pub async fn check_spec_compliance(
 
     // Load registry plugins into a name → entry map
     let plugins_repo = PluginsRepository::new(pool.clone());
-    let all_plugins = match plugins_repo.list(None, None).await {
+    let all_plugins = match plugins_repo.list(None, None, Page::ALL).await {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "Failed to load plugin registry for compliance check");

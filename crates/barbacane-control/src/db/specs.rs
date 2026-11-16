@@ -1,5 +1,6 @@
 //! Specs repository for CRUD operations.
 
+use super::Page;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -58,6 +59,7 @@ impl SpecsRepository {
         &self,
         spec_type: Option<&str>,
         name: Option<&str>,
+        page: Page,
     ) -> Result<Vec<Spec>, sqlx::Error> {
         let mut query = String::from("SELECT * FROM specs WHERE 1=1");
         let mut params: Vec<String> = vec![];
@@ -70,7 +72,9 @@ impl SpecsRepository {
             params.push(format!("%{}%", escape_like(n)));
             query.push_str(&format!(" AND name ILIKE ${} ESCAPE '\\'", params.len()));
         }
-        query.push_str(" ORDER BY name");
+        query.push_str(" ORDER BY name, id");
+        // Integers the API validated; binding them would type them as text.
+        query.push_str(&format!(" LIMIT {} OFFSET {}", page.limit, page.offset));
 
         let mut q = sqlx::query_as::<_, Spec>(&query);
         for param in &params {
@@ -80,11 +84,19 @@ impl SpecsRepository {
     }
 
     /// List specs for a specific project.
-    pub async fn list_for_project(&self, project_id: Uuid) -> Result<Vec<Spec>, sqlx::Error> {
-        sqlx::query_as::<_, Spec>("SELECT * FROM specs WHERE project_id = $1 ORDER BY name")
-            .bind(project_id)
-            .fetch_all(&self.pool)
-            .await
+    pub async fn list_for_project(
+        &self,
+        project_id: Uuid,
+        page: Page,
+    ) -> Result<Vec<Spec>, sqlx::Error> {
+        sqlx::query_as::<_, Spec>(
+            "SELECT * FROM specs WHERE project_id = $1 ORDER BY name LIMIT $2 OFFSET $3",
+        )
+        .bind(project_id)
+        .bind(page.limit)
+        .bind(page.offset)
+        .fetch_all(&self.pool)
+        .await
     }
 
     /// Get a spec by ID.
@@ -204,15 +216,19 @@ impl SpecsRepository {
     pub async fn get_history(
         &self,
         spec_id: Uuid,
+        page: Page,
     ) -> Result<Vec<SpecRevisionSummary>, sqlx::Error> {
         let revisions = sqlx::query_as::<_, SpecRevision>(
             r#"
             SELECT * FROM spec_revisions
             WHERE spec_id = $1
             ORDER BY revision DESC
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(spec_id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await?;
 

@@ -163,7 +163,11 @@ paths:
           description: Filter by name (case-insensitive partial match)
           schema:
             type: string
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -262,7 +266,11 @@ paths:
       operationId: getSpecHistory
       parameters:
         - $ref: '#/components/parameters/specId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -379,7 +387,11 @@ paths:
       operationId: listSpecCompilations
       parameters:
         - $ref: '#/components/parameters/specId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -458,7 +470,11 @@ paths:
           description: Filter by plugin name
           schema:
             type: string
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -638,7 +654,12 @@ paths:
       summary: List artifacts
       description: List all compiled artifacts.
       operationId: listArtifacts
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -732,7 +753,12 @@ paths:
       summary: List projects
       description: List all projects.
       operationId: listProjects
+      parameters:
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -870,7 +896,11 @@ paths:
       operationId: listProjectDataPlanes
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -976,7 +1006,11 @@ paths:
       operationId: listProjectApiKeys
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -1107,7 +1141,11 @@ paths:
       operationId: listProjectSpecs
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -1164,7 +1202,11 @@ paths:
       operationId: listProjectCompilations
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -1186,7 +1228,11 @@ paths:
       operationId: listProjectArtifacts
       parameters:
         - $ref: '#/components/parameters/projectId'
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
       responses:
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
@@ -1360,6 +1406,23 @@ components:
       scheme: bearer
       description: The control plane's admin token, `BARBACANE_CONTROL_ADMIN_TOKEN`.
   parameters:
+    limit:
+      name: limit
+      in: query
+      description: How many items to return, from 1 to 1000; 100 when absent.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+    offset:
+      name: offset
+      in: query
+      description: How many items to skip before the first one returned; 0 when absent.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
     specId:
       name: id
       in: path

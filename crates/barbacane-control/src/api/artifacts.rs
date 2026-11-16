@@ -1,5 +1,7 @@
 //! Artifacts API handlers.
 
+use super::pagination::PageQuery;
+use axum::extract::Query;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -24,9 +26,11 @@ fn key_may_download(key: &ApiKey, artifact_project: Option<Uuid>) -> bool {
 /// GET /artifacts - List all artifacts
 pub async fn list_artifacts(
     State(state): State<AppState>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<Artifact>>, ProblemDetails> {
+    let page = page.page()?;
     let repo = ArtifactsRepository::new(state.pool.clone());
-    let artifacts = repo.list().await?;
+    let artifacts = repo.list(page).await?;
     Ok(Json(artifacts))
 }
 
