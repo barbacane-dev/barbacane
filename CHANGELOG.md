@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-11-16
+
 The breaking changes below are gathered, with what to do and in which order, in the [migration guide](docs/guide/migrating-to-1.0.md). Each is marked **Upgrade note (breaking)** here.
 
 ### Added
@@ -1008,7 +1010,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...HEAD
+[Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.1...HEAD
+[1.0.0-rc.1]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...v1.0.0-rc.1
 [0.12.4]: https://github.com/barbacane-dev/barbacane/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...v0.12.2
