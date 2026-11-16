@@ -22,13 +22,6 @@ pub struct IpRestriction {
     #[serde(default)]
     deny: Vec<String>,
 
-    /// Exact IPs of trusted reverse proxies. `X-Forwarded-For` / `X-Real-IP` are
-    /// honored only when the immediate peer is one of these; otherwise the
-    /// observed peer IP is used. Empty (default) means forwarded headers are
-    /// never trusted, so a client cannot spoof its address.
-    #[serde(default)]
-    trusted_proxies: Vec<String>,
-
     /// Custom error message for denied requests.
     #[serde(default = "default_message")]
     message: String,
@@ -50,7 +43,9 @@ fn default_status() -> u16 {
 impl IpRestriction {
     /// Handle incoming request - check IP against allow/deny lists.
     pub fn on_request(&mut self, req: Request) -> Action<Request> {
-        let client_ip_str = resolve_client_ip(&req, &self.trusted_proxies);
+        // The address the gateway attributes the request to: forwarded headers
+        // count only behind its --trusted-proxies, so a client cannot choose it.
+        let client_ip_str = req.client_ip.trim().to_string();
 
         // Parse the client IP (IPv4 or IPv6). If it can't be parsed we cannot
         // evaluate the rules, so fail closed whenever any restriction exists.
@@ -324,17 +319,15 @@ mod tests {
         }
     }
 
+    /// A configuration from before 1.0 that still names `trusted_proxies` is
+    /// refused at init: the gateway's `--trusted-proxies` replaces it.
     #[test]
-    fn xff_honored_behind_trusted_proxy() {
-        let mut p: IpRestriction = serde_json::from_value(serde_json::json!({
+    fn trusted_proxies_is_no_longer_accepted() {
+        let refused = serde_json::from_value::<IpRestriction>(serde_json::json!({
             "allow": ["198.51.100.0/24"],
             "trusted_proxies": ["203.0.113.7"]
-        }))
-        .unwrap();
-        let mut req = request_with_ip("203.0.113.7");
-        req.headers
-            .insert("x-forwarded-for".to_string(), "198.51.100.42".to_string());
-        assert!(matches!(p.on_request(req), Action::Continue(_)));
+        }));
+        assert!(refused.is_err());
     }
 
     #[test]
@@ -379,7 +372,6 @@ mod tests {
         let p: IpRestriction = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(p.allow.is_empty());
         assert!(p.deny.is_empty());
-        assert!(p.trusted_proxies.is_empty());
         assert_eq!(p.message, "Access denied");
         assert_eq!(p.status, 403);
     }

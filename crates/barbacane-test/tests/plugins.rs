@@ -522,16 +522,18 @@ async fn test_ip_restriction_allowlist_localhost() {
 
 #[tokio::test]
 async fn test_ip_restriction_allowlist_denied_via_xff() {
-    let gateway = TestGateway::from_spec(&fixture("ip-restriction.yaml"))
-        .await
-        .expect("failed to start gateway");
+    // The gateway trusts the loopback peer as a proxy, so the address in
+    // X-Forwarded-For is the client the plugin checks. Without the flag a
+    // forged XFF is ignored; the security suite covers that case.
+    let gateway = TestGateway::from_spec_with_args(
+        &fixture("ip-restriction.yaml"),
+        &["--trusted-proxies", "127.0.0.1,::1"],
+    )
+    .await
+    .expect("failed to start gateway");
 
-    // X-Forwarded-For from a non-allowed IP should be denied — but only because
-    // this endpoint trusts the loopback proxy, so the forwarded address is
-    // honored. (/allowlist leaves trusted_proxies empty so a forged XFF is
-    // ignored; that anti-spoofing case is covered in the security suite.)
     let resp = gateway
-        .request_builder(reqwest::Method::GET, "/allowlist-trusted-proxy")
+        .request_builder(reqwest::Method::GET, "/allowlist")
         .header("X-Forwarded-For", "203.0.113.50")
         .send()
         .await
@@ -560,14 +562,17 @@ async fn test_ip_restriction_denylist_allowed() {
 
 #[tokio::test]
 async fn test_ip_restriction_denylist_blocked() {
-    let gateway = TestGateway::from_spec(&fixture("ip-restriction.yaml"))
-        .await
-        .expect("failed to start gateway");
+    // Behind the gateway's trusted loopback proxy, a client in the denied
+    // range is refused.
+    let gateway = TestGateway::from_spec_with_args(
+        &fixture("ip-restriction.yaml"),
+        &["--trusted-proxies", "127.0.0.1,::1"],
+    )
+    .await
+    .expect("failed to start gateway");
 
-    // XFF in the denied CIDR range should be blocked on the trusted-proxy
-    // endpoint (which honors X-Forwarded-For from the loopback peer).
     let resp = gateway
-        .request_builder(reqwest::Method::GET, "/denylist-trusted-proxy")
+        .request_builder(reqwest::Method::GET, "/denylist")
         .header("X-Forwarded-For", "10.1.2.3")
         .send()
         .await

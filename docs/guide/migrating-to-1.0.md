@@ -108,12 +108,14 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 - **Timeouts.** `timeout_ms` on an outbound call is cut to 60 seconds and a WebSocket `connect_timeout_ms` to 30.
 - **`host_log`** messages are cut at 4 KiB and their control characters replaced.
 - **Metrics** emitted through the `telemetry` capability are their own Prometheus families, `barbacane_plugin_<plugin>_<metric>`, with the plugin's labels as labels (see [Observability](#observability)).
+- **`resolve_client_ip`** is gone from the SDK. `req.client_ip` is the address the gateway attributes the request to, already resolved behind its `--trusted-proxies`; read it instead.
 
 ### Official plugins
 
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).
 - `cache`, `opa-authz`, `http-log` and `observability` now receive bodies, so a cache hit carries the body, `include_body` works, and body sizes are reported.
 - `ldap-auth` refuses a user in none of the `required_groups` with `urn:barbacane:error:authorization-failed` (see [Observability](#observability)).
+- `ip-restriction` and `rate-limit` no longer take `trusted_proxies`; a configuration that sets it fails compilation with `E1023`. Remove the key and list the proxies on the data plane with `--trusted-proxies` (`BARBACANE_TRUSTED_PROXIES`), which accepts CIDR ranges and applies to every plugin, the WAF and the audit records ([client address](../reference/cli.md#client-address)).
 
 ## Control plane
 
@@ -186,6 +188,7 @@ A request whose body did not arrive in time answers `urn:barbacane:error:request
 | signing | every compiler and the control plane have `BARBACANE_SIGNING_KEY`; every data plane has `BARBACANE_TRUSTED_PUBKEY` and starts without `--allow-unsigned` |
 | artifacts | every artifact recompiled with the 1.0 compiler and loaded by a 1.0 data plane |
 | `barbacane.yaml` and specs | compile without errors; middleware entries checked for `@version`; YAML constructs from the table checked |
-| custom plugins | rebuilt on SDK 1.0; `E1043` clean; `body_access` declared where a body is read; `HttpRequest` literals use `Default` |
+| custom plugins | rebuilt on SDK 1.0; `E1043` clean; `body_access` declared where a body is read; `HttpRequest` literals use `Default`; `resolve_client_ip` calls replaced by `req.client_ip` |
+| proxies | `trusted_proxies` removed from `ip-restriction` and `rate-limit`; the proxies listed in the data plane's `--trusted-proxies` |
 | control plane | port 9090; token of 32 bytes or more; clients regenerated from `/openapi`; probes on `/health` and `/ready`; data planes use `BARBACANE_CONTROL_API_KEY` and `wss://` |
 | observability | dashboards and alerts updated for the problem types, the `method` label and the plugin metric families; probes parse `/__barbacane/health` for `status` only |

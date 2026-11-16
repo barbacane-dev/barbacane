@@ -182,3 +182,58 @@ fn an_invalid_trusted_proxy_list_is_refused_at_start() {
         );
     }
 }
+
+/// The plugins' own `trusted_proxies`, which `--trusted-proxies` replaces, is
+/// refused at compile time with the plugin's other unknown keys.
+#[tokio::test]
+async fn a_plugin_configured_with_trusted_proxies_does_not_compile() {
+    let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    for (plugin, config) in [
+        (
+            "ip-restriction",
+            r#"{ allow: ["10.0.0.0/8"], trusted_proxies: ["127.0.0.1"] }"#,
+        ),
+        (
+            "rate-limit",
+            r#"{ quota: 10, window: 60, trusted_proxies: ["127.0.0.1"] }"#,
+        ),
+    ] {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(
+            dir.path().join("barbacane.yaml"),
+            format!(
+                "plugins:\n  {plugin}:\n    path: {}\n  mock:\n    path: {}\n",
+                plugins.join(format!("{plugin}/{plugin}.wasm")).display(),
+                plugins.join("mock/mock.wasm").display(),
+            ),
+        )
+        .expect("manifest");
+        let spec = dir.path().join("api.yaml");
+        std::fs::write(
+            &spec,
+            format!(
+                r#"openapi: "3.1.0"
+info: {{ title: Legacy, version: "1.0.0" }}
+paths:
+  /legacy:
+    get:
+      operationId: legacy
+      x-barbacane-middlewares:
+        - name: {plugin}
+          config: {config}
+      x-barbacane-dispatch: {{ name: mock, config: {{ status: 200 }} }}
+      responses: {{ "200": {{ description: ok }} }}
+"#
+            ),
+        )
+        .expect("spec");
+        let error = match TestGateway::from_spec(spec.to_str().expect("utf-8 path")).await {
+            Ok(_) => panic!("{plugin} compiled with trusted_proxies"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            error.contains("E1023") && error.contains("trusted_proxies"),
+            "{plugin}: {error}"
+        );
+    }
+}

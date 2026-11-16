@@ -29,12 +29,6 @@ pub struct RateLimit {
     #[serde(default = "default_partition_key")]
     partition_key: String,
 
-    /// Exact IPs of trusted reverse proxies, used when `partition_key` is
-    /// "client_ip". Forwarded headers are honored only behind a trusted proxy;
-    /// otherwise a client cannot rotate `X-Forwarded-For` to dodge the limit.
-    #[serde(default)]
-    trusted_proxies: Vec<String>,
-
     /// When the host rate limiter is unavailable, allow the request through
     /// (fail open) instead of rejecting it. Defaults to false (fail closed), so
     /// a limiter outage cannot silently disable rate limiting.
@@ -166,10 +160,10 @@ impl RateLimit {
     /// Extract the partition key from the request.
     fn extract_partition_key(&self, req: &Request) -> String {
         if self.partition_key == "client_ip" {
-            // Trusted-proxy-aware client IP: forwarded headers are honored only
-            // behind a configured trusted proxy, so the partition can't be
-            // spoofed to get a fresh bucket per request.
-            resolve_client_ip(req, &self.trusted_proxies)
+            // The address the gateway attributes the request to: forwarded
+            // headers count only behind its --trusted-proxies, so a client
+            // cannot rotate them to get a fresh bucket per request.
+            req.client_ip.clone()
         } else if let Some(header_name) = self.partition_key.strip_prefix("header:") {
             // Use specified header value
             req.headers
@@ -357,31 +351,12 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
         // PL-4: without a trusted proxy a spoofed XFF is ignored; the real peer
         // IP is used so a client can't rotate XFF to get fresh buckets.
         assert_eq!(rate_limit.extract_partition_key(&req), "127.0.0.1");
-    }
-
-    #[test]
-    fn test_partition_key_xff_honored_behind_trusted_proxy() {
-        let mut headers = BTreeMap::new();
-        headers.insert("x-forwarded-for".to_string(), "192.168.1.1".to_string());
-        let req = Request::new("GET", "/test")
-            .with_client_ip("10.9.9.9")
-            .with_headers(headers);
-        let rate_limit = RateLimit {
-            quota: 10,
-            window: 60,
-            policy_name: "default".to_string(),
-            partition_key: "client_ip".to_string(),
-            trusted_proxies: vec!["10.9.9.9".to_string()],
-            fail_open: false,
-        };
-        assert_eq!(rate_limit.extract_partition_key(&req), "192.168.1.1");
     }
 
     #[test]
@@ -398,7 +373,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -415,7 +389,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -437,7 +410,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "header:x-custom".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -458,7 +430,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "header:X-Custom".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -474,7 +445,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "header:x-custom".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -490,7 +460,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "context:auth.sub".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -515,7 +484,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "global-limit".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -529,7 +497,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -553,7 +520,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -589,7 +555,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -613,7 +578,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -691,7 +655,6 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -737,7 +700,6 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -768,7 +730,6 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -792,7 +753,6 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: true,
         };
         let req = Request::new("GET", "/test").with_client_ip("127.0.0.1");
@@ -810,7 +770,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -843,7 +802,6 @@ mod tests {
             window: 60,
             policy_name: "test-policy".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         };
 
@@ -870,7 +828,6 @@ mod tests {
             window: 60,
             policy_name: "default".to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: true,
         };
 
@@ -889,7 +846,6 @@ mod tests {
             window: 60,
             policy_name: policy_name.to_string(),
             partition_key: "client_ip".to_string(),
-            trusted_proxies: vec![],
             fail_open: false,
         }
     }

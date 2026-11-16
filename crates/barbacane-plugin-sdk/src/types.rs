@@ -251,59 +251,6 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Resolve the effective client IP, honoring trusted proxies.
-///
-/// `req.client_ip` is the address the gateway attributes the request to (the
-/// TCP peer, or behind the gateway's `--trusted-proxies` the address they
-/// report). The forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are
-/// attacker-controlled, so they are consulted **only** when that address is one
-/// of `trusted_proxies`; then the right-most forwarded address that is not
-/// itself a trusted proxy is returned. With no trusted proxies configured (the
-/// default), forwarded headers are ignored entirely and `req.client_ip` is used.
-///
-/// This is the single source of truth for client-IP resolution so security
-/// middlewares (ip-restriction, rate-limit) cannot drift into
-/// independently spoofable implementations.
-///
-/// Addresses are compared and returned in canonical form: an IPv4-mapped IPv6
-/// address (`::ffff:10.0.0.1`) is the IPv4 address it carries.
-pub fn resolve_client_ip(req: &Request, trusted_proxies: &[String]) -> String {
-    let peer = canonical_ip(&req.client_ip);
-    let trusted: Vec<String> = trusted_proxies.iter().map(|p| canonical_ip(p)).collect();
-    let is_trusted = |ip: &str| trusted.iter().any(|p| p == ip);
-
-    if !is_trusted(&peer) {
-        return peer;
-    }
-
-    if let Some(xff) = req.headers.get("x-forwarded-for") {
-        for hop in xff.split(',').map(canonical_ip).rev() {
-            if !hop.is_empty() && !is_trusted(&hop) {
-                return hop;
-            }
-        }
-    }
-
-    if let Some(real) = req.headers.get("x-real-ip") {
-        let real = canonical_ip(real);
-        if !real.is_empty() {
-            return real;
-        }
-    }
-
-    peer
-}
-
-/// `value` trimmed, and written as an IPv4 address when it is an IPv4-mapped
-/// IPv6 address. A value that is not an address is returned trimmed.
-fn canonical_ip(value: &str) -> String {
-    let value = value.trim();
-    value
-        .parse::<std::net::IpAddr>()
-        .map(|ip| ip.to_canonical().to_string())
-        .unwrap_or_else(|_| value.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,22 +580,6 @@ mod tests {
         assert_eq!(bytes, original);
     }
 
-    fn req_with(peer: &str, xff: Option<&str>) -> Request {
-        let mut headers = BTreeMap::new();
-        if let Some(v) = xff {
-            headers.insert("x-forwarded-for".to_string(), v.to_string());
-        }
-        Request {
-            method: "GET".into(),
-            path: "/".into(),
-            query: None,
-            headers,
-            body: None,
-            client_ip: peer.to_string(),
-            path_params: BTreeMap::new(),
-        }
-    }
-
     #[test]
     fn constant_time_eq_matches_std_equality() {
         assert!(constant_time_eq(b"secret-key", b"secret-key"));
@@ -656,35 +587,5 @@ mod tests {
         assert!(!constant_time_eq(b"secret-key", b"secret-keX"));
         assert!(!constant_time_eq(b"short", b"longer-value"));
         assert!(constant_time_eq(b"", b""));
-    }
-
-    #[test]
-    fn resolve_client_ip_ignores_xff_from_untrusted_peer() {
-        // No trusted proxies: a spoofed XFF must be ignored.
-        let req = req_with("203.0.113.9", Some("10.0.0.5"));
-        assert_eq!(resolve_client_ip(&req, &[]), "203.0.113.9");
-    }
-
-    #[test]
-    fn resolve_client_ip_reports_an_ipv4_mapped_address_as_ipv4() {
-        assert_eq!(
-            resolve_client_ip(&req_with("::ffff:10.0.0.1", None), &[]),
-            "10.0.0.1"
-        );
-        // A trusted proxy matches whichever form it is listed or seen in.
-        let trusted = vec!["10.0.0.1".to_string()];
-        let req = req_with("::ffff:10.0.0.1", Some("::ffff:203.0.113.7"));
-        assert_eq!(resolve_client_ip(&req, &trusted), "203.0.113.7");
-    }
-
-    #[test]
-    fn resolve_client_ip_uses_xff_only_behind_trusted_proxy() {
-        let trusted = vec!["203.0.113.9".to_string()];
-        // Peer is the trusted proxy: take the right-most non-trusted hop.
-        let req = req_with("203.0.113.9", Some("198.51.100.7, 203.0.113.9"));
-        assert_eq!(resolve_client_ip(&req, &trusted), "198.51.100.7");
-        // Peer is NOT trusted: XFF ignored even though one is configured.
-        let req2 = req_with("198.51.100.200", Some("10.0.0.5"));
-        assert_eq!(resolve_client_ip(&req2, &trusted), "198.51.100.200");
     }
 }
