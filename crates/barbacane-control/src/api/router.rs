@@ -75,6 +75,35 @@ async fn log_mutations(
     response
 }
 
+/// Count each routed request under its route template.
+async fn count_requests(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().to_string();
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(String::new, |p| p.as_str().to_string());
+    let response = next.run(req).await;
+    crate::metrics::metrics().request(&method, &route, response.status().as_u16());
+    response
+}
+
+/// GET /metrics: the Prometheus text exposition.
+async fn prometheus_metrics(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        crate::metrics::metrics().render(state.connection_manager.connected()),
+    )
+}
+
 /// Handler to serve the Scalar API documentation UI.
 async fn api_docs() -> Html<String> {
     let config = serde_json::json!({
@@ -151,10 +180,12 @@ pub fn create_router(
         .route(
             "/artifacts/{id}/download",
             get(artifacts::download_artifact),
-        );
+        )
+        .route_layer(axum::middleware::from_fn(count_requests));
 
     // Protected routes: everything else requires the admin bearer token.
     let protected = Router::new()
+        .route("/metrics", get(prometheus_metrics))
         // Init
         .route("/init", post(init::init_project))
         // Specs
@@ -272,7 +303,8 @@ pub fn create_router(
         .layer(axum::middleware::from_fn_with_state(
             admin_auth,
             require_admin,
-        ));
+        ))
+        .route_layer(axum::middleware::from_fn(count_requests));
 
     Router::new()
         .merge(public)

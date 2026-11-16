@@ -25,6 +25,7 @@ mod api;
 mod compiler;
 mod db;
 mod error;
+mod metrics;
 mod server;
 
 #[derive(Parser, Debug)]

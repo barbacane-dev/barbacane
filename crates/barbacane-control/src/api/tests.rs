@@ -1088,3 +1088,46 @@ async fn an_api_key_with_an_unknown_scope_or_a_past_expiry_is_refused() {
         );
     }
 }
+
+/// `GET /metrics` exposes requests by route template, compilations and
+/// connected data planes.
+#[tokio::test]
+async fn metrics_count_requests_by_route_template() {
+    let app = make_app_without_db();
+    let (status, _) = send(app.clone(), empty_req(Method::GET, "/health")).await;
+    assert_eq!(status, StatusCode::OK);
+    // A templated route; without a database it answers an error, which is
+    // all this needs, so it skips the contract check `send` makes.
+    let _ = app
+        .clone()
+        .oneshot(empty_req(
+            Method::GET,
+            "/projects/00000000-0000-0000-0000-000000000001",
+        ))
+        .await
+        .expect("a response");
+
+    let (status, body) = send(app, empty_req(Method::GET, "/metrics")).await;
+    assert_eq!(status, StatusCode::OK);
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains(
+            r#"barbacane_control_requests_total{method="GET",route="/health",status="200"}"#
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"route="/projects/{id}""#),
+        "the route template, not the path: {text}"
+    );
+    assert!(!text.contains("00000000-0000"), "{text}");
+    // No compilation finished in this process yet: the family, no sample.
+    assert!(
+        text.contains("# TYPE barbacane_control_compilations counter"),
+        "{text}"
+    );
+    assert!(
+        text.contains("barbacane_control_data_planes_connected 0"),
+        "{text}"
+    );
+}

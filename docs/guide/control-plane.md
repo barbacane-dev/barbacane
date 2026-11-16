@@ -164,6 +164,16 @@ Response:
 }
 ```
 
+### Metrics
+
+`GET /metrics` serves Prometheus metrics, behind the admin token like the rest of the API (in a Prometheus scrape configuration, `authorization: { credentials: <token> }`):
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `barbacane_control_requests_total` | counter | `method`, `route`, `status` | API requests; `route` is the route template (`/projects/{id}`), not the path |
+| `barbacane_control_compilations_total` | counter | `outcome` (`succeeded`, `failed`) | Finished compilations |
+| `barbacane_control_data_planes_connected` | gauge | - | Data planes with an open session |
+
 ## Projects
 
 Projects organize your APIs and configure which plugins to use. Each project can have its own set of specs, plugin configurations, and connected data planes.
