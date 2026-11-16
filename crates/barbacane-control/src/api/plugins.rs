@@ -1,5 +1,6 @@
 //! Plugins API handlers.
 
+use super::pagination::PageQuery;
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
@@ -18,6 +19,8 @@ pub struct ListPluginsQuery {
     pub name: Option<String>,
     #[serde(rename = "type")]
     pub plugin_type: Option<String>,
+    #[serde(flatten)]
+    pub page: PageQuery,
 }
 
 /// POST /plugins - Register a new plugin
@@ -159,9 +162,10 @@ pub async fn list_plugins(
     State(state): State<AppState>,
     Query(query): Query<ListPluginsQuery>,
 ) -> Result<Json<Vec<Plugin>>, ProblemDetails> {
+    let page = query.page.page()?;
     let repo = PluginsRepository::new(state.pool.clone());
     let plugins = repo
-        .list(query.plugin_type.as_deref(), query.name.as_deref())
+        .list(query.plugin_type.as_deref(), query.name.as_deref(), page)
         .await?;
     Ok(Json(plugins))
 }

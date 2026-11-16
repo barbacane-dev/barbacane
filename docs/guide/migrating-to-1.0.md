@@ -134,6 +134,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 - A plugin registration refuses a name outside lower-case letters, digits and `-`, a version that is not semantic, or a file that is not a WebAssembly module. An API key refuses an unknown scope or an expiry in the past.
 - `GET /specs/{id}/content` answers `application/json` for a JSON spec.
 - The `application/vnd.barbacane.v1+json` content type, which only bodyless responses carried, is gone.
+- A list returns at most 100 items unless the request names a `limit` (up to 1000); read longer lists with `limit` and `offset` ([lists](control-plane.md#lists)).
 
 ### Probes
 

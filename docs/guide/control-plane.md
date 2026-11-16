@@ -59,19 +59,13 @@ A compilation runs in the background: `compilations get` shows `pending` or `com
 barbacane control push --project <PROJECT_ID> api.yaml
 ```
 
-## API Versioning
-
-All JSON responses from the control plane include a versioned content type:
-
-```
-Content-Type: application/vnd.barbacane.v1+json
-```
-
-This allows clients to detect the API version and handle future breaking changes gracefully.
-
 ## API Reference
 
 Full OpenAPI specification is available at [crates/barbacane-control/openapi.yaml](https://github.com/barbacane-dev/barbacane/blob/main/crates/barbacane-control/openapi.yaml), and a running control plane serves it at `GET /openapi` (browsable at `/docs`).
+
+### Lists
+
+A list returns at most 100 items unless the request asks for others with `limit`, from 1 to 1000, and skips the first `offset` items. Read a longer list page by page: `?limit=1000&offset=0`, then `offset=1000`, until a page comes back shorter than `limit`. A `limit` or `offset` out of range is answered `400`. The CLI takes them as `--limit` and `--offset`. A project's plugin configurations and the versions of one plugin are returned whole.
 
 ### Specs
 

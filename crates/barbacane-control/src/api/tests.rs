@@ -1325,3 +1325,57 @@ async fn the_api_keys_of_an_unknown_project_are_404() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_limit_or_offset_out_of_range_is_400() {
+    for uri in [
+        "/projects?limit=0",
+        "/projects?limit=1001",
+        "/artifacts?limit=ten",
+        "/specs?offset=-1",
+        "/plugins?limit=-5",
+    ] {
+        let (status, body) = send(make_app_without_db(), empty_req(Method::GET, uri)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(json_body(&body)["status"], 400, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn a_list_is_read_page_by_page() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let project_id = create_project(app.clone(), &unique_project_name()).await;
+    for title in ["Paged A", "Paged B", "Paged C"] {
+        let spec = PROJECT_SPEC.replace("title: Contract Test API", &format!("title: {title}"));
+        let (status, body) = send(
+            app.clone(),
+            multipart_req(&format!("/projects/{project_id}/specs"), "api.yaml", &spec),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{}", json_body(&body));
+    }
+    let names = |body: &bytes::Bytes| -> Vec<String> {
+        json_body(body)
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(|s| s["name"].as_str().map(str::to_string))
+            .collect()
+    };
+    let page = |query: &'static str| {
+        let app = app.clone();
+        let uri = format!("/projects/{project_id}/specs{query}");
+        async move {
+            let (status, body) = send(app, empty_req(Method::GET, &uri)).await;
+            assert_eq!(status, StatusCode::OK, "{uri}");
+            names(&body)
+        }
+    };
+    assert_eq!(page("?limit=2").await, vec!["Paged A", "Paged B"]);
+    assert_eq!(page("?limit=2&offset=2").await, vec!["Paged C"]);
+    assert!(page("?offset=3").await.is_empty());
+    assert_eq!(page("").await, vec!["Paged A", "Paged B", "Paged C"]);
+}

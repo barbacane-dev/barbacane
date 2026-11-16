@@ -1,5 +1,6 @@
 //! Operations API handlers — extract and modify plugin bindings from specs.
 
+use crate::db::Page;
 use axum::{
     extract::{Path, State},
     Json,
@@ -112,7 +113,7 @@ pub async fn get_project_operations(
         .ok_or_else(|| ProblemDetails::not_found(format!("Project {} not found", project_id)))?;
 
     let repo = SpecsRepository::new(state.pool.clone());
-    let specs = repo.list_for_project(project_id).await?;
+    let specs = repo.list_for_project(project_id, Page::ALL).await?;
 
     let mut spec_ops = Vec::with_capacity(specs.len());
 

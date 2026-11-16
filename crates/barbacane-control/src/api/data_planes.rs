@@ -1,5 +1,8 @@
 //! Data plane management endpoints.
 
+use super::pagination::PageQuery;
+use crate::db::Page;
+use axum::extract::Query;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -16,7 +19,9 @@ use crate::error::ProblemDetails;
 pub async fn list_data_planes(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<DataPlane>>, ProblemDetails> {
+    let page = page.page()?;
     // Verify project exists
     let projects_repo = ProjectsRepository::new(state.pool.clone());
     let _ = projects_repo
@@ -26,7 +31,7 @@ pub async fn list_data_planes(
 
     let repo = DataPlanesRepository::new(state.pool.clone());
 
-    let data_planes = repo.list_for_project(project_id).await?;
+    let data_planes = repo.list_for_project(project_id, page).await?;
 
     Ok(Json(data_planes))
 }
@@ -113,7 +118,15 @@ pub async fn deploy_to_data_planes(
         })?
     } else {
         // Get the latest artifact for this project
-        let artifacts = artifacts_repo.list_for_project(project_id).await?;
+        let artifacts = artifacts_repo
+            .list_for_project(
+                project_id,
+                Page {
+                    limit: 1,
+                    offset: 0,
+                },
+            )
+            .await?;
 
         artifacts.into_iter().next().ok_or_else(|| {
             ProblemDetails::not_found(format!("No artifacts found for project {}", project_id))

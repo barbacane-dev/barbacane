@@ -484,7 +484,7 @@ API key management for data plane authentication.
 
 | Command | Request | Flags |
 |---------|---------|-------|
-| `api-keys list` | `GET /projects/{projectId}/api-keys` | `--project-id` |
+| `api-keys list` | `GET /projects/{projectId}/api-keys` | `--project-id`, `--limit` (optional), `--offset` (optional) |
 | `api-keys create` | `POST /projects/{projectId}/api-keys` | `--project-id`, `--file` |
 | `api-keys revoke` | `DELETE /projects/{projectId}/api-keys/{keyId}` | `--project-id`, `--key-id` |
 
@@ -494,11 +494,11 @@ Compiled artifact management.
 
 | Command | Request | Flags |
 |---------|---------|-------|
-| `artifacts list` | `GET /artifacts` | - |
+| `artifacts list` | `GET /artifacts` | `--limit` (optional), `--offset` (optional) |
 | `artifacts get` | `GET /artifacts/{id}` | `--id` |
 | `artifacts delete` | `DELETE /artifacts/{id}` | `--id` |
 | `artifacts download` | `GET /artifacts/{id}/download` | `--id`, `--out` (optional) |
-| `artifacts list-project` | `GET /projects/{projectId}/artifacts` | `--project-id` |
+| `artifacts list-project` | `GET /projects/{projectId}/artifacts` | `--project-id`, `--limit` (optional), `--offset` (optional) |
 
 #### compilations
 
@@ -508,8 +508,8 @@ Async compilation job management.
 |---------|---------|-------|
 | `compilations get` | `GET /compilations/{id}` | `--id` |
 | `compilations delete` | `DELETE /compilations/{id}` | `--id` |
-| `compilations list` | `GET /projects/{projectId}/compilations` | `--project-id` |
-| `compilations list-spec` | `GET /specs/{id}/compilations` | `--id` |
+| `compilations list` | `GET /projects/{projectId}/compilations` | `--project-id`, `--limit` (optional), `--offset` (optional) |
+| `compilations list-spec` | `GET /specs/{id}/compilations` | `--id`, `--limit` (optional), `--offset` (optional) |
 | `compilations start` | `POST /specs/{id}/compile` | `--id`, `--file` (optional) |
 
 #### data-planes
@@ -518,7 +518,7 @@ Connected data plane management.
 
 | Command | Request | Flags |
 |---------|---------|-------|
-| `data-planes list` | `GET /projects/{projectId}/data-planes` | `--project-id` |
+| `data-planes list` | `GET /projects/{projectId}/data-planes` | `--project-id`, `--limit` (optional), `--offset` (optional) |
 | `data-planes get` | `GET /projects/{projectId}/data-planes/{dataPlaneId}` | `--project-id`, `--data-plane-id` |
 | `data-planes disconnect` | `DELETE /projects/{projectId}/data-planes/{dataPlaneId}` | `--project-id`, `--data-plane-id` |
 | `data-planes deploy` | `POST /projects/{projectId}/deploy` | `--project-id`, `--file` (optional) |
@@ -546,7 +546,7 @@ Plugin registry management.
 
 | Command | Request | Flags |
 |---------|---------|-------|
-| `plugins list` | `GET /plugins` | `--type` (optional), `--name` (optional) |
+| `plugins list` | `GET /plugins` | `--type` (optional), `--name` (optional), `--limit` (optional), `--offset` (optional) |
 | `plugins register` | `POST /plugins` | `--capabilities` (optional), `--config-schema` (optional), `--description` (optional), `--file`, `--name`, `--type`, `--version` |
 | `plugins list-versions` | `GET /plugins/{name}` | `--name` |
 | `plugins get` | `GET /plugins/{name}/{version}` | `--name`, `--version` |
@@ -571,7 +571,7 @@ Project management.
 | Command | Request | Flags |
 |---------|---------|-------|
 | `projects init` | `POST /init` | `--file` |
-| `projects list` | `GET /projects` | - |
+| `projects list` | `GET /projects` | `--limit` (optional), `--offset` (optional) |
 | `projects create` | `POST /projects` | `--file` |
 | `projects get` | `GET /projects/{projectId}` | `--project-id` |
 | `projects update` | `PUT /projects/{projectId}` | `--project-id`, `--file` |
@@ -583,15 +583,15 @@ API specification management.
 
 | Command | Request | Flags |
 |---------|---------|-------|
-| `specs list-project` | `GET /projects/{projectId}/specs` | `--project-id` |
+| `specs list-project` | `GET /projects/{projectId}/specs` | `--project-id`, `--limit` (optional), `--offset` (optional) |
 | `specs upload-project` | `POST /projects/{projectId}/specs` | `--project-id`, `--file` |
-| `specs list` | `GET /specs` | `--type` (optional), `--name` (optional) |
+| `specs list` | `GET /specs` | `--type` (optional), `--name` (optional), `--limit` (optional), `--offset` (optional) |
 | `specs upload` | `POST /specs` | `--file` |
 | `specs get` | `GET /specs/{id}` | `--id` |
 | `specs delete` | `DELETE /specs/{id}` | `--id` |
 | `specs get-compliance` | `GET /specs/{id}/compliance` | `--id` |
 | `specs download-content` | `GET /specs/{id}/content` | `--id`, `--revision` (optional), `--out` (optional) |
-| `specs get-history` | `GET /specs/{id}/history` | `--id` |
+| `specs get-history` | `GET /specs/{id}/history` | `--id`, `--limit` (optional), `--offset` (optional) |
 
 <!-- barbacane-control-commands:end -->
 

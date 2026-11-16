@@ -1,5 +1,6 @@
 //! API keys repository for managing project API keys.
 
+use super::Page;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -103,11 +104,17 @@ impl ApiKeysRepository {
     }
 
     /// List all API keys for a project (without the full key).
-    pub async fn list_for_project(&self, project_id: Uuid) -> Result<Vec<ApiKey>, sqlx::Error> {
+    pub async fn list_for_project(
+        &self,
+        project_id: Uuid,
+        page: Page,
+    ) -> Result<Vec<ApiKey>, sqlx::Error> {
         sqlx::query_as::<_, ApiKey>(
-            "SELECT * FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3",
         )
         .bind(project_id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
     }

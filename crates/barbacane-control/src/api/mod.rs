@@ -9,6 +9,7 @@ mod health;
 mod init;
 pub(crate) mod multipart;
 mod operations;
+mod pagination;
 mod plugins;
 mod project_plugins;
 mod projects;

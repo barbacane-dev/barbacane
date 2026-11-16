@@ -1,5 +1,6 @@
 //! Data planes repository for managing connected data plane records.
 
+use super::Page;
 use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -44,11 +45,17 @@ impl DataPlanesRepository {
     }
 
     /// List all data planes for a project.
-    pub async fn list_for_project(&self, project_id: Uuid) -> Result<Vec<DataPlane>, sqlx::Error> {
+    pub async fn list_for_project(
+        &self,
+        project_id: Uuid,
+        page: Page,
+    ) -> Result<Vec<DataPlane>, sqlx::Error> {
         sqlx::query_as::<_, DataPlane>(
-            "SELECT * FROM data_planes WHERE project_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM data_planes WHERE project_id = $1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3",
         )
         .bind(project_id)
+        .bind(page.limit)
+        .bind(page.offset)
         .fetch_all(&self.pool)
         .await
     }

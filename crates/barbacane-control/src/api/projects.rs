@@ -1,5 +1,7 @@
 //! Projects API handlers.
 
+use super::pagination::PageQuery;
+use axum::extract::Query;
 use axum::{
     extract::{Multipart, Path, State},
     http::StatusCode,
@@ -38,9 +40,11 @@ pub async fn create_project(
 /// GET /projects - List all projects
 pub async fn list_projects(
     State(state): State<AppState>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<Project>>, ProblemDetails> {
+    let page = page.page()?;
     let repo = ProjectsRepository::new(state.pool.clone());
-    let projects = repo.list().await?;
+    let projects = repo.list(page).await?;
     Ok(Json(projects))
 }
 
@@ -110,7 +114,9 @@ pub async fn delete_project(
 pub async fn list_project_specs(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<crate::db::Spec>>, ProblemDetails> {
+    let page = page.page()?;
     // Verify project exists
     let projects_repo = ProjectsRepository::new(state.pool.clone());
     let _ = projects_repo
@@ -119,7 +125,7 @@ pub async fn list_project_specs(
         .ok_or_else(|| ProblemDetails::not_found(format!("Project {} not found", id)))?;
 
     let specs_repo = SpecsRepository::new(state.pool.clone());
-    let specs = specs_repo.list_for_project(id).await?;
+    let specs = specs_repo.list_for_project(id, page).await?;
     Ok(Json(specs))
 }
 
@@ -144,7 +150,9 @@ pub async fn upload_spec_to_project(
 pub async fn list_project_compilations(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<crate::db::Compilation>>, ProblemDetails> {
+    let page = page.page()?;
     // Verify project exists
     let projects_repo = ProjectsRepository::new(state.pool.clone());
     let _ = projects_repo
@@ -153,7 +161,7 @@ pub async fn list_project_compilations(
         .ok_or_else(|| ProblemDetails::not_found(format!("Project {} not found", id)))?;
 
     let compilations_repo = CompilationsRepository::new(state.pool.clone());
-    let compilations = compilations_repo.list_for_project(id).await?;
+    let compilations = compilations_repo.list_for_project(id, page).await?;
     Ok(Json(compilations))
 }
 
@@ -161,7 +169,9 @@ pub async fn list_project_compilations(
 pub async fn list_project_artifacts(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<crate::db::Artifact>>, ProblemDetails> {
+    let page = page.page()?;
     // Verify project exists
     let projects_repo = ProjectsRepository::new(state.pool.clone());
     let _ = projects_repo
@@ -170,6 +180,6 @@ pub async fn list_project_artifacts(
         .ok_or_else(|| ProblemDetails::not_found(format!("Project {} not found", id)))?;
 
     let artifacts_repo = ArtifactsRepository::new(state.pool.clone());
-    let artifacts = artifacts_repo.list_for_project(id).await?;
+    let artifacts = artifacts_repo.list_for_project(id, page).await?;
     Ok(Json(artifacts))
 }

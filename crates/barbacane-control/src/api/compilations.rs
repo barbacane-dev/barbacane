@@ -1,5 +1,7 @@
 //! Compilations API handlers.
 
+use super::pagination::PageQuery;
+use axum::extract::Query;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -76,7 +78,9 @@ pub async fn get_compilation(
 pub async fn list_spec_compilations(
     State(state): State<AppState>,
     Path(spec_id): Path<Uuid>,
+    Query(page): Query<PageQuery>,
 ) -> Result<Json<Vec<Compilation>>, ProblemDetails> {
+    let page = page.page()?;
     // Verify spec exists
     let specs_repo = SpecsRepository::new(state.pool.clone());
     let _ = specs_repo
@@ -85,7 +89,7 @@ pub async fn list_spec_compilations(
         .ok_or_else(|| ProblemDetails::not_found(format!("Spec {} not found", spec_id)))?;
 
     let compilations_repo = CompilationsRepository::new(state.pool.clone());
-    let compilations = compilations_repo.list_for_spec(spec_id).await?;
+    let compilations = compilations_repo.list_for_spec(spec_id, page).await?;
     Ok(Json(compilations))
 }
 
