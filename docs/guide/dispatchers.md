@@ -763,7 +763,7 @@ Transparent WebSocket proxy. Upgrades the client connection to WebSocket and rel
 x-barbacane-dispatch:
   name: ws-upstream
   config:
-    url: "ws://echo.internal:8080"
+    url: "wss://echo.internal:8443"
 ```
 
 #### Configuration
@@ -799,10 +799,10 @@ Path parameters from the OpenAPI spec are substituted in the `path` template:
     x-barbacane-dispatch:
       name: ws-upstream
       config:
-        url: "ws://chat.internal:8080"
+        url: "wss://chat.internal:8443"
         path: "/rooms/{room}"
 
-# Request: GET /ws/general → Upstream: ws://chat.internal:8080/rooms/general
+# Request: GET /ws/general → Upstream: wss://chat.internal:8443/rooms/general
 ```
 
 #### Query String Forwarding
@@ -810,7 +810,7 @@ Path parameters from the OpenAPI spec are substituted in the `path` template:
 Query parameters from the client request are automatically forwarded to the upstream URL:
 
 ```
-Client: GET /ws/echo?token=abc → Upstream: ws://echo.internal:8080/?token=abc
+Client: GET /ws/echo?token=abc → Upstream: wss://echo.internal:8443/?token=abc
 ```
 
 #### Examples
@@ -822,7 +822,7 @@ Client: GET /ws/echo?token=abc → Upstream: ws://echo.internal:8080/?token=abc
     x-barbacane-dispatch:
       name: ws-upstream
       config:
-        url: "ws://backend.internal:8080"
+        url: "wss://backend.internal:8443"
 ```
 
 **With authentication and path routing:**
