@@ -23,6 +23,8 @@ The breaking changes below are gathered, with what to do and in which order, in 
 - **plugins**: a plugin declares its resource limits in a `[limits]` table of `plugin.toml`: `memory_mib`, `fuel` and `timeout_ms`, each optional, with the defaults 16 MiB, 100,000,000 and 100 ms. Each instance of the plugin runs with them. A value above the gateway's ceiling (1024 MiB, 10,000,000,000, 10,000 ms), below 1, or an unknown key fails compilation with `E1044`, and the data plane refuses an artifact that records one. The limits are recorded with the plugin's capabilities and covered by `artifact_hash`. The official plugins declare none.
 - **docs**: the [stability policy](docs/reference/stability.md) states what 1.x keeps compatible (specs, artifacts, the plugin interface, the control-plane API and the CLI, environment variables, metrics and error codes), how deprecations work, and which releases receive security fixes. An installation guide covers the release binaries, the container images and their tags, crates.io and building from source.
 - **plugins**: the operator sets a plugin's resource limits in place of its own, key by key: `limits` (`memory_mib`, `fuel`, `timeout_ms`) on the plugin's entry in `barbacane.yaml`, or on a project's plugin in the control plane (`POST` and `PUT /projects/{id}/plugins`, where `"limits": {}` removes them). A key left out keeps the plugin's value. A value outside the gateway's ceilings is `E1044`; the control plane answers it `400`. The limits in effect are recorded in the artifact and covered by `artifact_hash`.
+- **data plane**: `barbacane serve --max-connections` sets the connection cap, which `BARBACANE_MAX_CONNECTIONS` still sets too (the flag takes precedence). At start the gateway logs the cap with the process's open-file limit, and a warning when the limit is not above the cap, so connections would fail at accept before the cap sheds them ([connection cap](docs/reference/cli.md#connection-cap)).
+- **data plane**: a gateway listening in plaintext on an address other than loopback, the default `0.0.0.0:8080` included, logs a warning at start naming the address.
 
 ### Changed
 
@@ -85,6 +87,8 @@ The breaking changes below are gathered, with what to do and in which order, in 
 - **barbacane.yaml**: a key the format does not have, at the top level or in a plugin entry, fails with an error naming it, where it was ignored. A plugin entry has `path` or `url`, not both, and `sha256` only with `url`.
 
   > **Upgrade note (breaking):** a `barbacane.yaml` with a misspelled or unknown key (`spec:` for `specs:`, a stray key in a plugin entry) no longer compiles; fix or remove the key.
+
+- **data plane**: a `BARBACANE_MAX_CONNECTIONS` that is not a whole number from 1 up stops `barbacane serve` at start with a usage error (exit status 2), where it was ignored in favour of 10000; a value above what the gateway can count no longer panics at start. An empty value is the default.
 
 ### Deprecated
 

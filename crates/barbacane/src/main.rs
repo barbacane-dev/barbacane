@@ -660,6 +660,17 @@ enum Commands {
         #[arg(long, default_value = "30")]
         shutdown_timeout: u64,
 
+        /// Maximum number of concurrently served connections; a connection
+        /// past it is closed at once. Each takes at least one file descriptor,
+        /// so keep it below the open-file limit (`ulimit -n`).
+        #[arg(
+            long,
+            env = "BARBACANE_MAX_CONNECTIONS",
+            default_value_t = DEFAULT_MAX_CONNECTIONS,
+            value_parser = parse_max_connections,
+        )]
+        max_connections: usize,
+
         // Connected mode options (optional)
         /// Control plane WebSocket URL (e.g., ws://control:9090/ws/data-plane).
         /// When provided, the data plane connects to the control plane for centralized management.
@@ -4555,9 +4566,45 @@ async fn run_dev(
 }
 
 /// Default ceiling on concurrently served connections, bounding file-descriptor
-/// and task growth under a connection flood. Override with
-/// `BARBACANE_MAX_CONNECTIONS`.
+/// and task growth under a connection flood. Override with `--max-connections`
+/// or `BARBACANE_MAX_CONNECTIONS`.
 const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
+
+/// `--max-connections`: a whole number from 1 to the largest a semaphore holds.
+/// An empty value, as an empty `BARBACANE_MAX_CONNECTIONS` gives, is the default.
+fn parse_max_connections(value: &str) -> Result<usize, String> {
+    if value.is_empty() {
+        return Ok(DEFAULT_MAX_CONNECTIONS);
+    }
+    let max = tokio::sync::Semaphore::MAX_PERMITS;
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|n| (1..=max).contains(n))
+        .ok_or_else(|| format!("expected a whole number from 1 to {max}"))
+}
+
+/// Whether a listener on `addr` serves plaintext to other hosts.
+fn plaintext_off_loopback(addr: SocketAddr, tls: bool) -> bool {
+    !tls && !addr.ip().to_canonical().is_loopback()
+}
+
+/// The process's soft open-file limit; `None` when unlimited.
+#[cfg(unix)]
+fn open_file_limit() -> Option<u64> {
+    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
+}
+
+#[cfg(not(unix))]
+fn open_file_limit() -> Option<u64> {
+    None
+}
+
+/// Whether the open-file limit runs out before `max_connections` connections
+/// are open. Every connection holds a descriptor, and the process holds others.
+fn open_file_limit_too_low(max_connections: usize, limit: Option<u64>) -> bool {
+    limit.is_some_and(|limit| limit <= max_connections as u64)
+}
 
 /// Pause after a failed `accept`, so a listener whose accepts keep failing
 /// (file descriptors exhausted) does not spin.
@@ -4727,6 +4774,7 @@ async fn run_serve(
     metrics: Arc<MetricsRegistry>,
     keepalive_timeout: u64,
     shutdown_timeout: u64,
+    max_connections: usize,
     connected_mode: Option<ConnectedModeConfig>,
     admin_bind: &str,
     allow_unsigned: bool,
@@ -4839,6 +4887,29 @@ async fn run_serve(
     // this line is how the caller learns what it picked.
     let bound = listener.local_addr().unwrap_or(addr);
     eprintln!("barbacane: listening on {}://{}", protocol, bound);
+    if plaintext_off_loopback(bound, tls_acceptor.is_some()) {
+        tracing::warn!(
+            listen = %bound,
+            "listening in plaintext on {bound}, an address other than loopback: \
+             terminate TLS in front of the gateway, or pass --tls-cert and --tls-key"
+        );
+    }
+    let open_files = open_file_limit();
+    let open_files_text = open_files.map_or_else(|| "unlimited".to_string(), |n| n.to_string());
+    tracing::info!(
+        max_connections,
+        open_file_limit = %open_files_text,
+        "serving at most {max_connections} concurrent connections; open-file limit {open_files_text}"
+    );
+    if open_file_limit_too_low(max_connections, open_files) {
+        tracing::warn!(
+            max_connections,
+            open_file_limit = %open_files_text,
+            "the open-file limit {open_files_text} is not above --max-connections \
+             {max_connections}: connections fail at accept before the cap sheds them; \
+             raise the limit (ulimit -n, LimitNOFILE) or lower --max-connections"
+        );
+    }
 
     // Create shutdown signal channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -4939,11 +5010,6 @@ async fn run_serve(
     let shutdown_duration = Duration::from_secs(shutdown_timeout);
 
     // Cap concurrently served connections to bound FD/task growth under a flood.
-    let max_connections = std::env::var("BARBACANE_MAX_CONNECTIONS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_MAX_CONNECTIONS);
     let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(max_connections));
 
     // Track active connections for graceful shutdown
@@ -5367,6 +5433,7 @@ async fn main() -> ExitCode {
             tls_min_version,
             keepalive_timeout,
             shutdown_timeout,
+            max_connections,
             control_plane,
             project_id,
             api_key,
@@ -5479,6 +5546,7 @@ async fn main() -> ExitCode {
                 metrics,
                 keepalive_timeout,
                 shutdown_timeout,
+                max_connections,
                 connected_mode,
                 &admin_bind,
                 allow_unsigned,
@@ -5828,6 +5896,65 @@ mod peer_tests {
         assert_eq!(canonical_peer(mapped), "10.0.0.1:4242".parse().unwrap());
         let v6: SocketAddr = "[2001:db8::1]:4242".parse().unwrap();
         assert_eq!(canonical_peer(v6), v6);
+    }
+}
+
+#[cfg(test)]
+mod listener_checks_tests {
+    use super::{
+        open_file_limit_too_low, parse_max_connections, plaintext_off_loopback,
+        DEFAULT_MAX_CONNECTIONS,
+    };
+    use std::net::SocketAddr;
+
+    #[test]
+    fn the_connection_cap_is_a_count_a_semaphore_holds() {
+        assert_eq!(parse_max_connections("1"), Ok(1));
+        assert_eq!(parse_max_connections("250000"), Ok(250_000));
+        assert_eq!(parse_max_connections(""), Ok(DEFAULT_MAX_CONNECTIONS));
+        let max = tokio::sync::Semaphore::MAX_PERMITS;
+        assert_eq!(parse_max_connections(&max.to_string()), Ok(max));
+        for refused in [
+            "0",
+            "-1",
+            "ten",
+            "1.5",
+            &(max + 1).to_string(),
+            "18446744073709551616",
+        ] {
+            assert!(parse_max_connections(refused).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn plaintext_is_flagged_off_loopback_only() {
+        for addr in [
+            "0.0.0.0:8080",
+            "[::]:8080",
+            "10.1.2.3:8080",
+            "[2001:db8::1]:443",
+        ] {
+            let addr: SocketAddr = addr.parse().unwrap();
+            assert!(plaintext_off_loopback(addr, false), "{addr}");
+            assert!(!plaintext_off_loopback(addr, true), "{addr} with TLS");
+        }
+        for addr in [
+            "127.0.0.1:8080",
+            "127.10.0.1:8080",
+            "[::1]:8080",
+            "[::ffff:127.0.0.1]:8080",
+        ] {
+            let addr: SocketAddr = addr.parse().unwrap();
+            assert!(!plaintext_off_loopback(addr, false), "{addr}");
+        }
+    }
+
+    #[test]
+    fn the_open_file_limit_must_exceed_the_connection_cap() {
+        assert!(open_file_limit_too_low(10_000, Some(1024)));
+        assert!(open_file_limit_too_low(1024, Some(1024)));
+        assert!(!open_file_limit_too_low(1024, Some(1025)));
+        assert!(!open_file_limit_too_low(10_000, None));
     }
 }
 

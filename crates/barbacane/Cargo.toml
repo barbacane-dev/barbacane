@@ -48,6 +48,9 @@ hex = { workspace = true }
 notify = { workspace = true }
 tempfile = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [features]
 fips = ["rustls/fips"]
 

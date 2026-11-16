@@ -393,3 +393,268 @@ fn read_until(stream: &mut std::net::TcpStream, needle: &[u8]) -> bool {
     }
     true
 }
+
+/// `serve` on `artifact` with `args` and `envs`, its output drained.
+/// With `open_files`, the process runs under that soft open-file limit.
+fn spawn_serve(
+    artifact: &std::path::Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+    open_files: Option<u32>,
+) -> LoggedChild {
+    let mut cmd = match open_files {
+        Some(limit) => {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
+                .arg(format!(r#"ulimit -Sn {limit} && exec "$0" "$@""#))
+                .arg(gateway_binary());
+            cmd
+        }
+        None => Command::new(gateway_binary()),
+    };
+    cmd.arg("serve")
+        .arg("--artifact")
+        .arg(artifact)
+        .args(["--admin-bind", "off", "--allow-unsigned"])
+        .args(args)
+        .env_remove("BARBACANE_TRUSTED_PUBKEY")
+        .env_remove("BARBACANE_MAX_CONNECTIONS")
+        .envs(envs.iter().copied());
+    LoggedChild::spawn(&mut cmd).expect("spawn the gateway")
+}
+
+/// Arguments and environment variables for `serve`.
+type ServeInputs<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
+
+/// The line every serving gateway logs after its listener checks.
+const CAP_LINE: &str = "concurrent connections; open-file limit";
+
+/// A gateway serving plaintext on an address other hosts reach says so at
+/// start, naming the address.
+#[test]
+fn a_plaintext_listener_off_loopback_is_warned_about() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
+
+    let mut process = spawn_serve(&artifact, &["--listen", "0.0.0.0:0"], &[], None);
+    let warning = process
+        .log()
+        .wait_for_line("listening in plaintext", STARTUP_TIMEOUT);
+    process.kill_and_reap();
+    let log = process.log().text();
+
+    let warning = warning.unwrap_or_else(|| panic!("no plaintext warning:\n{log}"));
+    assert!(warning.contains(r#""level":"WARN""#), "{warning}");
+    assert!(warning.contains("0.0.0.0:"), "names the address: {warning}");
+    assert!(warning.contains("--tls-cert"), "says what to do: {warning}");
+}
+
+/// Loopback, or TLS on any address, raises no plaintext warning.
+#[test]
+fn a_loopback_or_tls_listener_is_not_warned_about() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
+    let certs = barbacane_test::gateway::generate_test_certificates(dir.path())
+        .expect("generate test certificates");
+    let cert = certs.cert_path.to_string_lossy().into_owned();
+    let key = certs.key_path.to_string_lossy().into_owned();
+
+    for args in [
+        vec!["--listen", LISTEN_ANY_PORT],
+        vec!["--listen", "[::1]:0"],
+        vec![
+            "--listen",
+            "0.0.0.0:0",
+            "--tls-cert",
+            &cert,
+            "--tls-key",
+            &key,
+        ],
+    ] {
+        let mut process = spawn_serve(&artifact, &args, &[], None);
+        // Logged after the plaintext check, on the same stream.
+        let started = process.log().wait_for(CAP_LINE, STARTUP_TIMEOUT);
+        process.kill_and_reap();
+        let log = process.log().text();
+        assert!(started, "{args:?}: the gateway did not start:\n{log}");
+        assert!(
+            !log.contains("listening in plaintext"),
+            "{args:?}: no warning expected:\n{log}"
+        );
+    }
+}
+
+/// The cap set by `--max-connections` or `BARBACANE_MAX_CONNECTIONS` closes a
+/// connection past it, and a closed connection frees its place.
+#[test]
+fn connections_past_the_cap_are_closed() {
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
+
+    let flag: ServeInputs = (&["--max-connections", "1"], &[]);
+    let env: ServeInputs = (&[], &[("BARBACANE_MAX_CONNECTIONS", "1")]);
+    for (args, envs) in [flag, env] {
+        let mut args = args.to_vec();
+        args.extend(["--listen", LISTEN_ANY_PORT]);
+        let mut process = spawn_serve(&artifact, &args, envs, None);
+        let port = process
+            .announced_port("barbacane: listening on", STARTUP_TIMEOUT)
+            .unwrap_or_else(|| panic!("{args:?} {envs:?}: no port:\n{}", process.log().text()));
+        assert!(
+            process
+                .log()
+                .wait_for("serving at most 1 concurrent connections", STARTUP_TIMEOUT),
+            "{args:?} {envs:?}: the cap is logged:\n{}",
+            process.log().text()
+        );
+
+        // The one place, taken by a kept-alive connection.
+        let mut held = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        held.write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("send a request");
+        assert!(
+            read_until(&mut held, b"pong"),
+            "the first connection is served"
+        );
+
+        let mut over = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        let _ = over.write_all(b"GET /ping HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert!(
+            closed_without_answer(&mut over),
+            "{args:?} {envs:?}: a connection past the cap is closed:\n{}",
+            process.log().text()
+        );
+        assert!(
+            process
+                .log()
+                .wait_for("connection limit reached", Duration::from_secs(10)),
+            "{args:?} {envs:?}: the shed connection is logged"
+        );
+
+        drop(held);
+        assert!(
+            serves_http(port, "/ping", Duration::from_secs(10)),
+            "{args:?} {envs:?}: a closed connection frees its place:\n{}",
+            process.log().text()
+        );
+        process.kill_and_reap();
+    }
+}
+
+/// Whether the peer closed `stream` without sending anything. A read timeout
+/// is not a close.
+fn closed_without_answer(stream: &mut std::net::TcpStream) -> bool {
+    use std::io::Read;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut buf = [0u8; 64];
+    match stream.read(&mut buf) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(e) => matches!(
+            e.kind(),
+            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+        ),
+    }
+}
+
+/// The cap is logged against the open-file limit, with a warning when the
+/// limit runs out first.
+#[test]
+fn the_connection_cap_is_checked_against_the_open_file_limit() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
+    let listen = ["--listen", LISTEN_ANY_PORT];
+
+    // The default cap of 10000 under a limit of 1024.
+    let mut process = spawn_serve(&artifact, &listen, &[], Some(1024));
+    let warning = process
+        .log()
+        .wait_for_line("is not above --max-connections", STARTUP_TIMEOUT);
+    let logged = process.log().find_line(CAP_LINE);
+    process.kill_and_reap();
+    let log = process.log().text();
+    let warning = warning.unwrap_or_else(|| panic!("no open-file warning:\n{log}"));
+    assert!(warning.contains(r#""level":"WARN""#), "{warning}");
+    assert!(
+        warning.contains("open-file limit 1024 is not above --max-connections 10000"),
+        "{warning}"
+    );
+    assert!(
+        logged.is_some_and(|line| line
+            .contains("serving at most 10000 concurrent connections; open-file limit 1024")),
+        "the cap and the limit are logged:\n{log}"
+    );
+
+    // A cap below the limit is logged, without a warning.
+    let mut args = listen.to_vec();
+    args.extend(["--max-connections", "512"]);
+    let mut process = spawn_serve(&artifact, &args, &[], Some(1024));
+    let logged = process.log().wait_for_line(
+        "serving at most 512 concurrent connections",
+        STARTUP_TIMEOUT,
+    );
+    process.kill_and_reap();
+    let log = process.log().text();
+    assert!(
+        logged.is_some_and(|line| line.contains("open-file limit 1024")),
+        "the cap and the limit are logged:\n{log}"
+    );
+    assert!(!log.contains("is not above"), "no warning expected:\n{log}");
+}
+
+/// A cap that is not a whole number from 1 up, by flag or environment, stops
+/// the gateway at start with a usage error; an empty variable is the default.
+#[test]
+fn an_invalid_connection_cap_is_refused_at_start() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let artifact = build_artifact(dir.path()).expect("build the fixture artifact");
+
+    let cases: [ServeInputs; 5] = [
+        (&["--max-connections", "0"], &[]),
+        (&["--max-connections", "many"], &[]),
+        (&[], &[("BARBACANE_MAX_CONNECTIONS", "0")]),
+        (&[], &[("BARBACANE_MAX_CONNECTIONS", "-5")]),
+        // Above what a semaphore holds.
+        (
+            &[],
+            &[("BARBACANE_MAX_CONNECTIONS", "18446744073709551615")],
+        ),
+    ];
+    for (args, envs) in cases {
+        let mut args = args.to_vec();
+        args.extend(["--listen", LISTEN_ANY_PORT]);
+        let mut process = spawn_serve(&artifact, &args, envs, None);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !process.has_exited() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let exited = process.has_exited();
+        process.kill_and_reap();
+        let log = process.log().text();
+        assert!(exited, "{args:?} {envs:?}: the gateway started:\n{log}");
+        let (mut child, _) = process.into_parts();
+        let code = child.wait().expect("wait").code();
+        assert_eq!(code, Some(2), "{args:?} {envs:?}: a usage error:\n{log}");
+        assert!(log.contains("--max-connections"), "names the flag:\n{log}");
+        assert!(!log.contains("panicked"), "{args:?} {envs:?}:\n{log}");
+    }
+
+    let mut process = spawn_serve(
+        &artifact,
+        &["--listen", LISTEN_ANY_PORT],
+        &[("BARBACANE_MAX_CONNECTIONS", "")],
+        None,
+    );
+    let started = process.log().wait_for(
+        "serving at most 10000 concurrent connections",
+        STARTUP_TIMEOUT,
+    );
+    process.kill_and_reap();
+    assert!(
+        started,
+        "an empty variable is the default:\n{}",
+        process.log().text()
+    );
+}

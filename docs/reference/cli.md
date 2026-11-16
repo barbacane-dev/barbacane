@@ -591,6 +591,7 @@ The examples below assume the key is set.
 | `--tls-min-version` | No | `1.2` | Minimum TLS version (`1.2` or `1.3`) |
 | `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds; also the deadline for a request's headers and for its body, answered 408 when missed |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
+| `--max-connections` | No | `10000` | Maximum number of concurrently served connections, from 1; a connection past it is closed at once. Also set by `BARBACANE_MAX_CONNECTIONS`, the flag taking precedence. See [Connection cap](#connection-cap) |
 | `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address for health, metrics, and provenance endpoints. Set to `off` to disable |
 | `--no-introspection` | No | `false` | Do not serve the embedded specs at `/__barbacane/specs*`; the paths answer 404 |
 
@@ -681,6 +682,18 @@ barbacane serve --artifact api.bca \
 - Certificate and key must be in PEM format
 - Certificate file can contain the full chain (cert + intermediates)
 - Both `--tls-cert` and `--tls-key` must be provided together
+
+Without `--tls-cert`, a gateway listening on an address other than loopback (the default `0.0.0.0:8080` included) logs a warning at start: `listening in plaintext on <address>`. Behind a load balancer or proxy that terminates TLS, the warning is expected.
+
+### Connection cap
+
+The gateway serves at most `--max-connections` connections at once (default 10000); a connection past the cap is closed as soon as it is accepted, and `connection limit reached; dropping connection` is logged. At start, the gateway logs the cap and the process's open-file limit:
+
+```
+serving at most 10000 concurrent connections; open-file limit 1048576
+```
+
+Each connection holds at least one file descriptor. When the open-file limit is not above the cap, connections fail at accept before the cap sheds them, and the gateway logs a warning. Raise the limit (`ulimit -n`, `LimitNOFILE=` in a systemd unit, `--ulimit nofile=` for a container) or lower `--max-connections`. A systemd service gets a soft limit of 1024 unless its unit sets one.
 
 ### HTTP/2 Support
 
