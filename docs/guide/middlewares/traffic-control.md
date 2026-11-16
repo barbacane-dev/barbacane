@@ -32,10 +32,11 @@ x-barbacane-middlewares:
 | `window` | integer | **required** | Window duration in seconds |
 | `policy_name` | string | `default` | Policy name for `RateLimit-Policy` header and the rate-limit bucket-key prefix |
 | `partition_key` | string | `client_ip` | Rate limit key source |
+| `trusted_proxies` | array | `[]` | Exact IPs of reverse proxies whose `X-Forwarded-For` / `X-Real-IP` this plugin reads for `client_ip`. Prefer the gateway's `--trusted-proxies`, which every plugin, the WAF and the audit records follow |
 
 ### Partition key sources
 
-- `client_ip` — Client IP from `X-Forwarded-For` or `X-Real-IP`
+- `client_ip` — The client address the gateway attributes the request to: the TCP peer, or behind the gateway's `--trusted-proxies` the address they report ([client address](../../reference/cli.md#client-address)). With `trusted_proxies` set, the plugin also reads `X-Forwarded-For` / `X-Real-IP` when the request comes from one of those IPs
 - `header:<name>` — Header value (e.g., `header:X-API-Key`). The client chooses the value, so a client can spread its requests over as many buckets as it likes; use it for limits the client is meant to scope itself, not for limits per identity
 - `context:<key>` — Context value set by an upstream middleware (e.g., `context:auth.sub`, which every authentication plugin writes and no client can supply): the source for a limit per identity
 - Any static string — same limit for all requests sharing that string
@@ -162,12 +163,13 @@ x-barbacane-middlewares:
 | `deny` | array | `[]` | Denied IPs or CIDR ranges (denylist mode) |
 | `message` | string | `Access denied` | Custom error message for denied requests |
 | `status` | integer | `403` | HTTP status code for denied requests |
+| `trusted_proxies` | array | `[]` | Exact IPs of reverse proxies whose `X-Forwarded-For` / `X-Real-IP` this plugin reads. Prefer the gateway's `--trusted-proxies`, which every plugin, the WAF and the audit records follow |
 
 ### Behavior
 
 - If `deny` is configured, IPs in the list are blocked (denylist takes precedence)
 - If `allow` is configured, only IPs in the list are permitted (allowlist mode)
-- Client IP is extracted from `X-Forwarded-For`, `X-Real-IP`, or direct connection
+- The client IP is the address the gateway attributes the request to: the TCP peer, or behind the gateway's `--trusted-proxies` the address they report ([client address](../../reference/cli.md#client-address)). With `trusted_proxies` set, the plugin also reads `X-Forwarded-For` / `X-Real-IP` when the request comes from one of those IPs; a client elsewhere cannot set its address with these headers
 - Supports both single IPs (`10.0.0.1`) and CIDR notation (`10.0.0.0/8`)
 - An IPv4 client on a dual-stack listener arrives as an IPv4-mapped IPv6 address (`::ffff:10.0.0.1`); it is matched as the IPv4 address it carries, and so is a rule written in that form
 

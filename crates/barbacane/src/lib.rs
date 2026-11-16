@@ -7,6 +7,8 @@
 #[doc(hidden)]
 pub mod admin;
 #[doc(hidden)]
+pub mod client_ip;
+#[doc(hidden)]
 pub mod control;
 #[doc(hidden)]
 pub mod control_plane;

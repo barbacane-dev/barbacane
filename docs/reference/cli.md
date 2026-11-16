@@ -635,6 +635,8 @@ The examples below assume the key is set.
 | `--max-connections` | No | `10000` | Maximum number of concurrently served connections, from 1; a connection past it is closed at once. Also set by `BARBACANE_MAX_CONNECTIONS`, the flag taking precedence. See [Connection cap](#connection-cap) |
 | `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address for health, metrics, and provenance endpoints. Set to `off` to disable |
 | `--no-introspection` | No | `false` | Do not serve the embedded specs at `/__barbacane/specs*`; the paths answer 404 |
+| `--trusted-proxies` | No | - | Proxies whose connections report the client address: comma-separated addresses or CIDR ranges (`10.0.0.0/8,192.0.2.7`). Also set by `BARBACANE_TRUSTED_PROXIES`. See [Client address](#client-address) |
+| `--client-ip-header` | No | `x-forwarded-for` | The header trusted proxies report the client in: `x-forwarded-for` or `forwarded` (RFC 7239). Also set by `BARBACANE_CLIENT_IP_HEADER` |
 
 **Connected mode** (optional — connect to a control plane for centralized management):
 
@@ -735,6 +737,20 @@ serving at most 10000 concurrent connections; open-file limit 1048576
 ```
 
 Each connection holds at least one file descriptor. When the open-file limit is not above the cap, connections fail at accept before the cap sheds them, and the gateway logs a warning. Raise the limit (`ulimit -n`, `LimitNOFILE=` in a systemd unit, `--ulimit nofile=` for a container) or lower `--max-connections`. A systemd service gets a soft limit of 1024 unless its unit sets one.
+
+### Client address
+
+Each request is attributed to a client address, which plugins receive as `client_ip` (rate limiting, IP restriction, `{{request.client_ip}}`, `$client_ip`), the WAF evaluates as `REMOTE_ADDR`, and the WAF audit record names. By default it is the TCP peer.
+
+Behind a load balancer or reverse proxy, list the proxies in `--trusted-proxies`. When a request's TCP peer is in the list, the gateway reads `X-Forwarded-For` (or `Forwarded` with `--client-ip-header forwarded`) from right to left: each hop a trusted proxy added is skipped, and the first address that is not trusted is the client. When every hop is trusted, the left-most is the client. A hop that is not an address (`unknown`, an obfuscated `Forwarded` node) ends the walk at the trusted hop to its right. A request from a peer outside the list is attributed to the peer, whatever its headers say, so a client cannot choose its own address.
+
+```bash
+barbacane serve --artifact api.bca \
+  --trusted-proxies 10.0.0.0/8 \
+  --tls-cert server.crt --tls-key server.key
+```
+
+List only the proxies that overwrite or append to the header: a proxy that passes a client-written header through unchanged lets the client choose its address. At start, the gateway logs the networks and the header it reads.
 
 ### HTTP/2 Support
 

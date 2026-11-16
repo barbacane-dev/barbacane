@@ -253,7 +253,7 @@ pub struct Request {
     pub query: Option<String>,
     pub headers: BTreeMap<String, String>,
     pub body: Option<Vec<u8>>,      // binary-safe, travels via side-channel
-    pub client_ip: String,
+    pub client_ip: String,          // the TCP peer, or behind --trusted-proxies the address they report
     pub path_params: BTreeMap<String, String>,
 }
 ```
