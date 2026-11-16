@@ -33,7 +33,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-11-13
 
       - name: Cache cargo registry
         uses: actions/cache@v5
