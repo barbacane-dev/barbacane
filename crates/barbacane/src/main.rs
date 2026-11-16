@@ -3990,9 +3990,7 @@ async fn perform_hot_reload(
         "Hot-reload completed successfully"
     );
 
-    // Drop old gateway on a blocking thread to avoid panic when wasmtime's
-    // runtime is dropped inside an async context.
-    tokio::task::spawn_blocking(move || drop(old_gateway));
+    retire(old_gateway);
 
     // The gateway runs the new artifact: it becomes the one a restart loads.
     if let Err(e) = hot_reload::promote(artifact_dir).await {
@@ -4474,7 +4472,7 @@ async fn run_dev(
 
                         // Atomic swap.
                         let old = gateway.swap(Arc::new(new_gw));
-                        tokio::task::spawn_blocking(move || drop(old));
+                        retire(old);
 
                         // Update admin manifest.
                         let gw = gateway.load();
@@ -4860,7 +4858,6 @@ async fn run_serve(
         Ok(a) => a,
         Err(_) => {
             eprintln!("error: invalid listen address: {}", listen);
-            drop_off_runtime(gateway);
             return ExitCode::from(1);
         }
     };
@@ -4870,7 +4867,6 @@ async fn run_serve(
         Ok(l) => l,
         Err(e) => {
             eprintln!("error: failed to bind to {}: {}", addr, e);
-            drop_off_runtime(gateway);
             return ExitCode::from(1);
         }
     };
@@ -4882,7 +4878,6 @@ async fn run_serve(
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("error: {}", e);
-                    drop_off_runtime(gateway);
                     return ExitCode::from(1);
                 }
             };
@@ -4985,7 +4980,6 @@ async fn run_serve(
                     "error: invalid --admin-bind address '{}': {}",
                     admin_bind, e
                 );
-                drop_off_runtime(gateway);
                 return ExitCode::from(1);
             }
         };
@@ -5286,9 +5280,6 @@ async fn run_serve(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    // The gateway holds runtimes; letting it fall out of scope here panics.
-    drop_off_runtime(gateway);
-
     ExitCode::SUCCESS
 }
 
@@ -5382,7 +5373,7 @@ fn run_check(artifact: &str, allow_unsigned: bool) -> ExitCode {
         manifest.plugins.len(),
         checked.len(),
     );
-    drop_off_runtime(gateway);
+    drop(gateway);
 
     if failures.is_empty() {
         println!("\u{2713} {summary}");
@@ -5396,26 +5387,12 @@ fn run_check(artifact: &str, allow_unsigned: bool) -> ExitCode {
     }
 }
 
-/// Drop a value outside the async runtime.
-///
-/// The plugin host owns broker and directory clients, each carrying its own
-/// tokio runtime for the synchronous host calls WASM makes. Dropping a runtime
-/// inside an async context is a panic in tokio, so the last reference must not
-/// fall out of scope on a runtime thread. A plain thread has no async context.
-///
-/// Silent when the value is not the last reference: the drop is then cheap and
-/// touches no runtime.
-fn drop_off_runtime<T: Send + 'static>(value: T) {
-    if let Err(e) = std::thread::Builder::new()
-        .name("barbacane-drop".into())
-        .spawn(move || drop(value))
-        .and_then(|h| {
-            h.join()
-                .map_err(|_| std::io::Error::other("drop thread panicked"))
-        })
-    {
-        tracing::debug!(error = %e, "could not drop off the runtime; leaking instead of panicking");
-    }
+/// Release, on the blocking pool, the gateway a reload replaced. When that is
+/// the last reference, freeing its compiled plugins and stopping its engine's
+/// epoch thread happens there rather than on an async worker; a request still
+/// holding the gateway frees it where the request ends.
+fn retire(gateway: Arc<Gateway>) {
+    tokio::task::spawn_blocking(move || drop(gateway));
 }
 
 /// Wait for shutdown signal (SIGTERM or SIGINT).
