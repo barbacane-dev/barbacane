@@ -113,7 +113,6 @@ const schemas = {
     properties: {
       allow: { type: "array" },
       deny: { type: "array" },
-      trusted_proxies: { type: "array" },
       message: { type: "string" },
       status: { type: "integer", minimum: 100, maximum: 599 },
     },
@@ -218,7 +217,6 @@ const schemas = {
       window: { type: "integer", minimum: 1 },
       policy_name: { type: "string" },
       partition_key: { type: "string" },
-      trusted_proxies: { type: "array" },
       fail_open: { type: "boolean" },
     },
     additionalProperties: false,
