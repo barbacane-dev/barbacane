@@ -27,6 +27,7 @@ thiserror = { workspace = true }
 barbacane-wasm = { workspace = true }
 barbacane-telemetry = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
