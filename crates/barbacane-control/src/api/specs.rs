@@ -22,7 +22,7 @@ use super::router::AppState;
 
 /// Default project UUID for backward compatibility.
 /// Specs uploaded via the global /specs endpoint go to this project.
-const DEFAULT_PROJECT_ID: Uuid = Uuid::from_bytes([
+pub(crate) const DEFAULT_PROJECT_ID: Uuid = Uuid::from_bytes([
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
 ]);
 
