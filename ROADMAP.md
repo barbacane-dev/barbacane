@@ -17,8 +17,16 @@ The release candidate ([milestone](https://github.com/barbacane-dev/barbacane/mi
 - [x] **Per-plugin resource limits** ([#274](https://github.com/barbacane-dev/barbacane/issues/274)): a `[limits]` table in `plugin.toml`, enforced per instance and covered by the artifact signature.
 - [x] **Instance reuse** ([#273](https://github.com/barbacane-dev/barbacane/issues/273)): `init` once per plugin and config, each request in a fresh instance started from that state.
 - [x] **YAML in safe Rust** ([#254](https://github.com/barbacane-dev/barbacane/issues/254)): serde-saphyr, held to libyaml by a differential test and nightly fuzzing.
+- [x] **Pre-release review** ([#321](https://github.com/barbacane-dev/barbacane/issues/321) to [#336](https://github.com/barbacane-dev/barbacane/issues/336)): the deploy path end to end, artifact integrity, the plugin ABI version, the public API surface, and data plane and control plane hardening (connection cap, client address behind trusted proxies, listener mTLS and certificate reload, a drain that covers WebSockets and streams, `barbacane check`, control-plane recovery, pagination and metrics).
 
-Remaining: the findings of the pre-release review, issues [#321](https://github.com/barbacane-dev/barbacane/issues/321) to [#336](https://github.com/barbacane-dev/barbacane/issues/336) on the milestone.
+Remaining: the release itself ([#327](https://github.com/barbacane-dev/barbacane/issues/327)).
+
+### 1.0.0
+
+Between the release candidates and 1.0.0 ([milestone](https://github.com/barbacane-dev/barbacane/milestone/2)):
+
+- [ ] SDK wrappers for the host functions plugins still call directly ([#329](https://github.com/barbacane-dev/barbacane/issues/329))
+- [ ] The test categories still missing: proc-macro, property, chaos and snapshot tests, a soak run, coverage floors ([#334](https://github.com/barbacane-dev/barbacane/issues/334))
 
 ---
 
@@ -45,7 +53,6 @@ Committed but not yet scheduled.
 |---|---|---|
 | gRPC support | P2 | Native gRPC proxying |
 | Active health checks | P2 | Probe `http-upstream` pool endpoints, beside the passive circuit breakers |
-| Certificate hot-reload | P2 | Reload TLS certificates without a restart |
 | HTTP/3 support | P3 | QUIC-based ingress |
 | HTTP/2 stream limits | P3 | Expose the stream limits, which are fixed |
 
