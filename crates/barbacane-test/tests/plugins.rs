@@ -1393,20 +1393,13 @@ async fn test_ws_upstream_spec_compiles() {
 
 #[tokio::test]
 async fn test_ws_upstream_rejects_non_websocket_request() {
-    // A plain HTTP GET to a WebSocket endpoint should return an error
-    // The WASM plugin returns 400 but the data plane may wrap it as 500
-    // depending on the upgrade path handling
+    // A GET without `Upgrade: websocket` is refused by the plugin.
     let gateway = TestGateway::from_spec(&fixture("ws-upstream.yaml"))
         .await
         .expect("failed to start gateway");
 
     let resp = gateway.get("/ws/echo").await.unwrap();
-    // Without a real WebSocket upgrade, the request fails at the dispatch level
-    assert!(
-        resp.status().is_client_error() || resp.status().is_server_error(),
-        "expected error status, got {}",
-        resp.status()
-    );
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]
@@ -1427,14 +1420,10 @@ async fn test_ws_upstream_upstream_unavailable() {
         .await
         .unwrap();
 
-    // Without a real WebSocket client, reqwest sends a normal HTTP request.
-    // The gateway dispatch path may return 400, 502, or 500 depending on
-    // how far the upgrade handshake progresses before failing.
-    assert!(
-        resp.status().is_client_error() || resp.status().is_server_error(),
-        "expected error status, got {}",
-        resp.status()
-    );
+    // A complete handshake to an upstream nothing listens on.
+    assert_eq!(resp.status(), 502);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
 }
 
 /// Start a simple WebSocket echo server on a random port.
