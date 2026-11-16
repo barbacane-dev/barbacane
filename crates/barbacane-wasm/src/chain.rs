@@ -344,7 +344,7 @@ pub fn parse_middleware_output(
         return if result_code == 0 {
             Ok(OnRequestResult::Continue(Vec::new()))
         } else {
-            Err(WasmError::InitFailed(
+            Err(WasmError::InvalidOutput(
                 "middleware returned short-circuit without output".into(),
             ))
         };
@@ -353,8 +353,9 @@ pub fn parse_middleware_output(
     // Try to parse as MiddlewareOutput JSON
     match serde_json::from_slice::<MiddlewareOutput>(output) {
         Ok(parsed) => {
-            let data = serde_json::to_vec(&parsed.data)
-                .map_err(|e| WasmError::InitFailed(format!("failed to serialize output: {}", e)))?;
+            let data = serde_json::to_vec(&parsed.data).map_err(|e| {
+                WasmError::InvalidOutput(format!("failed to serialize output: {}", e))
+            })?;
 
             // Fail safe: short-circuit if EITHER the structured action or the
             // ABI result code signals it. Continue only when both agree, so a
@@ -617,5 +618,11 @@ mod tests {
         let response = execute_on_response_with_metrics(&mut instances, request, context, None)
             .expect("no middleware");
         assert_eq!(response, request.to_vec());
+    }
+
+    #[test]
+    fn a_short_circuit_without_output_is_invalid_output() {
+        let error = parse_middleware_output(&[], 1).expect_err("refused");
+        assert!(matches!(error, WasmError::InvalidOutput(_)), "{error:?}");
     }
 }

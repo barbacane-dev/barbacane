@@ -207,13 +207,13 @@ impl InstancePool {
         let module = self
             .modules
             .get(&key.name)
-            .ok_or_else(|| WasmError::InitFailed(format!("plugin not found: {}", key.name)))?;
+            .ok_or_else(|| WasmError::PluginNotFound(key.name.clone()))?;
 
         // Get the config
         let config_json = self
             .configs
             .get(key)
-            .ok_or_else(|| WasmError::InitFailed(format!("config not found for: {}", key.name)))?;
+            .ok_or_else(|| WasmError::ConfigNotRegistered(key.name.clone()))?;
 
         // Scope host_get_secret to this plugin's own config references (WA-3):
         // a plugin can resolve the secrets it declares, not another plugin's.
@@ -462,5 +462,26 @@ mod tests {
             assert!(error.to_string().contains("init returned 1"), "{error}");
         }
         assert_eq!(pool.snapshot_count(), 0);
+    }
+
+    #[test]
+    fn an_unknown_plugin_and_an_unregistered_configuration_are_told_apart() {
+        let (pool, _) = pool_with("marker", MARKS_EACH_CALL);
+        let unknown = pool
+            .get_instance(&InstanceKey::new("absent", &json!({"k": "v"})))
+            .err()
+            .expect("no such plugin");
+        assert!(
+            matches!(&unknown, WasmError::PluginNotFound(name) if name == "absent"),
+            "{unknown:?}"
+        );
+        let unregistered = pool
+            .get_instance(&InstanceKey::new("marker", &json!({"other": 1})))
+            .err()
+            .expect("no such configuration");
+        assert!(
+            matches!(&unregistered, WasmError::ConfigNotRegistered(name) if name == "marker"),
+            "{unregistered:?}"
+        );
     }
 }

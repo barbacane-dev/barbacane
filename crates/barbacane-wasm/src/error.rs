@@ -81,6 +81,22 @@ pub enum WasmError {
     #[error("plugin initialization failed: {0}")]
     InitFailed(String),
 
+    /// No module is registered under this plugin name.
+    #[error("plugin not found: {0}")]
+    PluginNotFound(String),
+
+    /// No configuration is registered for this plugin and configuration.
+    #[error("no configuration registered for plugin {0}")]
+    ConfigNotRegistered(String),
+
+    /// A plugin's output does not follow the ABI.
+    #[error("invalid plugin output: {0}")]
+    InvalidOutput(String),
+
+    /// A fresh instance could not be brought to the state `init` left.
+    #[error("cannot restore the plugin's initialised memory: {0}")]
+    MemoryRestore(String),
+
     /// Invalid return code from plugin.
     #[error("invalid return code from plugin: {0}")]
     InvalidReturnCode(i32),
@@ -92,12 +108,6 @@ pub enum WasmError {
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-}
-
-impl From<wasmtime::Error> for WasmError {
-    fn from(err: wasmtime::Error) -> Self {
-        WasmError::Compilation(err.to_string())
-    }
 }
 
 impl From<serde_json::Error> for WasmError {
