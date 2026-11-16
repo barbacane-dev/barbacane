@@ -1,0 +1,39 @@
+openapi: "3.1.0"
+info:
+  title: Client Address Test API
+  version: "1.0.0"
+
+paths:
+  /client-ip:
+    get:
+      operationId: clientIp
+      summary: Answers with the client address plugins receive
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: "{{request.client_ip}}"
+          content_type: text/plain
+      responses:
+        "200":
+          description: The client address
+
+  /denied:
+    get:
+      operationId: denied
+      summary: Refuses one documentation address
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config:
+            deny:
+              - "198.51.100.7"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"allowed"}'
+      responses:
+        "200":
+          description: Success
+        "403":
+          description: Forbidden

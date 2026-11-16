@@ -59,6 +59,9 @@ pub struct Request {
     /// not embedded in JSON. Skipped during serde.
     #[serde(skip)]
     pub body: Option<Vec<u8>>,
+    /// The client address the gateway attributes the request to: the TCP
+    /// peer, or behind the gateway's `--trusted-proxies` the address they
+    /// report.
     pub client_ip: String,
     pub path_params: BTreeMap<String, String>,
 }
@@ -250,12 +253,13 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 /// Resolve the effective client IP, honoring trusted proxies.
 ///
-/// `req.client_ip` is the peer the gateway actually observed. The forwarded
-/// headers (`X-Forwarded-For`, `X-Real-IP`) are attacker-controlled, so they are
-/// consulted **only** when the immediate peer is one of `trusted_proxies`; then
-/// the right-most forwarded address that is not itself a trusted proxy is
-/// returned. With no trusted proxies configured (the default), forwarded headers
-/// are ignored entirely and the observed peer is used.
+/// `req.client_ip` is the address the gateway attributes the request to (the
+/// TCP peer, or behind the gateway's `--trusted-proxies` the address they
+/// report). The forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are
+/// attacker-controlled, so they are consulted **only** when that address is one
+/// of `trusted_proxies`; then the right-most forwarded address that is not
+/// itself a trusted proxy is returned. With no trusted proxies configured (the
+/// default), forwarded headers are ignored entirely and `req.client_ip` is used.
 ///
 /// This is the single source of truth for client-IP resolution so security
 /// middlewares (ip-restriction, rate-limit) cannot drift into

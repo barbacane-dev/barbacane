@@ -4,12 +4,13 @@
 
 mod waf;
 
+use barbacane_lib::client_ip::{ClientIpHeader, TrustedProxies};
 use barbacane_lib::{admin, control_plane, hot_reload};
 
 use std::convert::Infallible;
 use std::fs::File;
 use std::io::BufReader;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -718,6 +719,21 @@ enum Commands {
         /// answer 404.
         #[arg(long)]
         no_introspection: bool,
+
+        /// Proxies whose connections report the client address, as
+        /// comma-separated addresses or CIDR ranges (10.0.0.0/8,192.0.2.7).
+        /// Without it, every request is attributed to its TCP peer.
+        #[arg(long, env = "BARBACANE_TRUSTED_PROXIES", default_value = "")]
+        trusted_proxies: TrustedProxies,
+
+        /// The header trusted proxies report the client in:
+        /// x-forwarded-for or forwarded (RFC 7239).
+        #[arg(
+            long,
+            env = "BARBACANE_CLIENT_IP_HEADER",
+            default_value = "x-forwarded-for"
+        )]
+        client_ip_header: ClientIpHeader,
     },
 }
 
@@ -1257,8 +1273,19 @@ impl Gateway {
         &self,
         req: Request<Incoming>,
         client_addr: Option<SocketAddr>,
+        trusted_proxies: &TrustedProxies,
     ) -> Result<Response<AnyBody>, Infallible> {
         let start_time = Instant::now();
+        // A value that is not text is an unreadable hop, which ends the walk.
+        let client_ip = client_addr.map(|peer| {
+            trusted_proxies.client_ip(
+                peer.ip(),
+                req.headers()
+                    .get_all(trusted_proxies.header().name())
+                    .iter()
+                    .map(|value| value.to_str().unwrap_or("")),
+            )
+        });
         control_plane::REQUESTS_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // The client's request id and trace id are kept when well-formed;
@@ -1284,7 +1311,7 @@ impl Gateway {
             trace_id = %trace_id,
             upstream_endpoint = tracing::field::Empty
         );
-        self.handle_request_in_span(req, client_addr, start_time, request_id, trace_id)
+        self.handle_request_in_span(req, client_ip, start_time, request_id, trace_id)
             .instrument(span)
             .await
     }
@@ -1292,7 +1319,7 @@ impl Gateway {
     async fn handle_request_in_span(
         &self,
         req: Request<Incoming>,
-        client_addr: Option<SocketAddr>,
+        client_ip: Option<IpAddr>,
         start_time: Instant,
         request_id: String,
         trace_id: String,
@@ -1562,7 +1589,7 @@ impl Gateway {
                         &waf_headers,
                         &body_bytes,
                         content_type,
-                        client_addr.map(|a| a.ip().to_string()).as_deref(),
+                        client_ip.map(|ip| ip.to_string()).as_deref(),
                     );
                     self.metrics.record_waf_inspection(
                         &method_str,
@@ -1608,7 +1635,7 @@ impl Gateway {
                             &method_str,
                             &route_path,
                             &request_id,
-                            client_addr.map(|a| a.ip().to_string()).as_deref(),
+                            client_ip.map(|ip| ip.to_string()).as_deref(),
                             status,
                             Some(rule_id),
                         );
@@ -1659,7 +1686,7 @@ impl Gateway {
                             &method_str,
                             &route_path,
                             &request_id,
-                            client_addr.map(|a| a.ip().to_string()).as_deref(),
+                            client_ip.map(|ip| ip.to_string()).as_deref(),
                             response.status().as_u16(),
                             None,
                         );
@@ -1687,7 +1714,7 @@ impl Gateway {
                         query_string,
                         &body_bytes,
                         &headers,
-                        client_addr,
+                        client_ip,
                         upgrade_handle,
                     )
                     .await?;
@@ -1704,7 +1731,7 @@ impl Gateway {
                         &route_path,
                         &request_matched,
                         &request_id,
-                        client_addr.map(|a| a.ip().to_string()).as_deref(),
+                        client_ip.map(|ip| ip.to_string()).as_deref(),
                     )
                     .await
                 } else {
@@ -1831,7 +1858,7 @@ impl Gateway {
         query_string: Option<String>,
         request_body: &[u8],
         headers: &HashMap<String, String>,
-        client_addr: Option<SocketAddr>,
+        client_ip: Option<IpAddr>,
         upgrade_handle: Option<hyper::upgrade::OnUpgrade>,
     ) -> Result<Response<AnyBody>, Infallible> {
         let dispatch = &operation.dispatch;
@@ -1851,8 +1878,8 @@ impl Gateway {
         // The body travels via the side-channel, not in JSON.
         let mut plugin_request =
             barbacane_wasm::Request::new(operation.method.clone(), request_path).with_client_ip(
-                client_addr
-                    .map(|addr| addr.ip().to_string())
+                client_ip
+                    .map(|ip| ip.to_string())
                     .unwrap_or_else(|| "0.0.0.0".to_string()),
             );
         plugin_request.query = query_string;
@@ -4536,7 +4563,11 @@ async fn run_dev(
                     let service = service_fn(move |req| {
                         let gateway = gateway_swap.load_full();
                         let client_addr = client_addr;
-                        async move { gateway.handle_request(req, client_addr).await }
+                        async move {
+                            gateway
+                                .handle_request(req, client_addr, &TrustedProxies::none())
+                                .await
+                        }
                     });
 
                     let io = TokioIo::new(stream);
@@ -4789,6 +4820,7 @@ async fn run_serve(
     connected_mode: Option<ConnectedModeConfig>,
     admin_bind: &str,
     allow_unsigned: bool,
+    trusted_proxies: TrustedProxies,
 ) -> ExitCode {
     let artifact_path = Path::new(artifact);
     if !artifact_path.exists() {
@@ -4918,6 +4950,16 @@ async fn run_serve(
              raise the limit (ulimit -n, LimitNOFILE) or lower --max-connections"
         );
     }
+    if !trusted_proxies.is_empty() {
+        tracing::info!(
+            trusted_proxies = %trusted_proxies.networks(),
+            header = trusted_proxies.header().name(),
+            "client address read from {} behind {}",
+            trusted_proxies.header().name(),
+            trusted_proxies.networks()
+        );
+    }
+    let trusted_proxies = Arc::new(trusted_proxies);
 
     // Create shutdown signal channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -5157,6 +5199,7 @@ async fn run_serve(
                 let conn_counter = active_connections.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
                 let client_addr = Some(canonical_peer(peer_addr));
+                let conn_trusted_proxies = Arc::clone(&trusted_proxies);
                 let conn_keepalive = keepalive_duration;
 
                 tokio::spawn(async move {
@@ -5165,7 +5208,12 @@ async fn run_serve(
                     let service = service_fn(move |req| {
                         let gateway = gateway_swap.load_full();
                         let client_addr = client_addr;
-                        async move { gateway.handle_request(req, client_addr).await }
+                        let trusted_proxies = Arc::clone(&conn_trusted_proxies);
+                        async move {
+                            gateway
+                                .handle_request(req, client_addr, &trusted_proxies)
+                                .await
+                        }
                     });
 
                     if let Some(acceptor) = tls_acceptor {
@@ -5538,6 +5586,8 @@ async fn main() -> ExitCode {
             data_plane_name,
             admin_bind,
             no_introspection,
+            trusted_proxies,
+            client_ip_header,
         } => {
             // Initialize telemetry
             let log_fmt = barbacane_telemetry::LogFormat::parse(&log_format)
@@ -5648,6 +5698,7 @@ async fn main() -> ExitCode {
                 connected_mode,
                 &admin_bind,
                 allow_unsigned,
+                trusted_proxies.with_header(client_ip_header),
             )
             .await
         }

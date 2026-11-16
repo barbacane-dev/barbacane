@@ -48,6 +48,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 notify = { workspace = true }
 tempfile = { workspace = true }
+ipnet = "2"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }
