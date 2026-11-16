@@ -208,10 +208,12 @@ Data planes connect via WebSocket to receive artifacts and configuration:
 # Start a data plane connected to the control plane
 BARBACANE_TRUSTED_PUBKEY=<public key of the control plane's signing key> \
 barbacane serve \
-  --control-plane ws://localhost:9090/ws/data-plane \
+  --control-plane wss://control.example.com/ws/data-plane \
   --project-id 880e8400-e29b-41d4-a716-446655440003 \
   --api-key dp_key_abc123
 ```
+
+The link carries the data plane's API key, so it uses `wss://`: the control plane serves plain HTTP, and TLS is terminated in front of it by a load balancer or reverse proxy. A `ws://` link is accepted to a loopback address only (`ws://localhost:9090/ws/data-plane` on a development machine), or with `--allow-plaintext-control-plane` on a network you trust.
 
 ### Create API Key for Data Plane
 
@@ -403,6 +405,7 @@ services:
 
   data-plane:
     image: ghcr.io/barbacane-dev/barbacane:latest
+    # Plaintext over compose's private network only; use wss:// elsewhere.
     command: >
       serve
       --control-plane ws://control-plane:9090/ws/data-plane
