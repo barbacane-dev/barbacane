@@ -18,6 +18,7 @@ barbacane <COMMAND> [OPTIONS]
 | `dev` | Start a local development server with auto-reload |
 | `compile` | Compile OpenAPI spec(s) into a `.bca` artifact |
 | `validate` | Validate spec(s) without compiling |
+| `check` | Check that an artifact loads as `serve` would load it, without serving |
 | `serve` | Run the gateway server |
 | `key` | Generate artifact signing keys and print their public keys |
 | `control` | Manage a control plane: projects, specs, plugins, artifacts, data planes |
@@ -368,6 +369,46 @@ validated 1 spec(s): 0 valid, 1 invalid
 |------|---------|
 | 0 | All specs valid |
 | 1 | One or more specs have errors |
+
+---
+
+## barbacane check
+
+Check that an artifact loads as `serve` would load it, without binding a port or connecting to anything. It runs every check `serve` runs at load: the artifact format version, the signature against `BARBACANE_TRUSTED_PUBKEY`, the content hashes, each plugin's ABI version, exports, imports and declared capabilities, plugin resource limits, the WAF rule set, the request schemas and the secret references. Then it runs each plugin's `init` with every configuration the routes give it, which `serve` does on the first request that reaches the plugin: a configuration the plugin cannot read fails here instead of answering that request `500`.
+
+```bash
+barbacane check --artifact <PATH> [--allow-unsigned]
+```
+
+Run it where `serve` will run, with the same environment: it reads `BARBACANE_TRUSTED_PUBKEY`, resolves `env://` and `file://` secrets (`BARBACANE_SECRETS_DIR`), and follows the same rules for unsigned artifacts.
+
+### Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--artifact` | Yes | - | Path to the `.bca` artifact file |
+| `--allow-unsigned` | No | `false` | Accept an artifact no trusted key has signed, when `BARBACANE_TRUSTED_PUBKEY` is unset |
+
+### Output
+
+On success, one line on stdout:
+
+```
+✓ api.bca: artifact format 8, compiled by barbacane 1.0.0, signature verified; 12 route(s), 5 plugin(s), 9 plugin configuration(s)
+```
+
+Warnings `serve` would log at load (an unsigned artifact, a deprecated host function, WAF rules this build does not enforce) are printed on stderr. Each failure is printed on stderr as `error: ...`; a plugin that does not initialise names the operation that configures it.
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | The artifact loads and every plugin configuration initialises |
+| 1 | The artifact is refused, or a plugin configuration does not initialise |
+| 2 | Invalid command-line arguments |
+| 13 | A secret reference does not resolve |
+
+The codes are those `serve` exits with for the same failures.
 
 ---
 
