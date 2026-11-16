@@ -491,11 +491,11 @@ jobs:
     timeout-minutes: 45
     needs: [changes, unit-tests]
     if: needs.changes.outputs.code == 'true'
-    # The suite drives the gateway as a child process on OS-assigned ports, so
-    # within a job concurrency stays at 2 to keep the find-then-bind port race
-    # rare. Wall-clock is cut by sharding the test binaries across parallel jobs
-    # instead of raising concurrency. fail-fast off so one shard's failure does
-    # not cancel the others.
+    # Each test starts its own gateway process, which compiles its plugins at
+    # load, so a job runs two at a time to stay within the runner's CPU and
+    # memory. Wall-clock is cut by sharding the test binaries across parallel
+    # jobs instead of raising concurrency. fail-fast off so one shard's failure
+    # does not cancel the others.
     strategy:
       fail-fast: false
       matrix:

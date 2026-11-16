@@ -31,7 +31,7 @@ paths:
         name: mock
         config:
           status: 200
-          body: '{"route":"wildcard"}'
+          body: '{"route":"wildcard","path":"{{path_params.path}}"}'
       responses:
         "200":
           description: OK
@@ -56,7 +56,7 @@ paths:
         name: mock
         config:
           status: 200
-          body: '{"route":"storage"}'
+          body: '{"route":"storage","bucket":"{{path_params.bucket}}","key":"{{path_params.key}}"}'
       responses:
         "200":
           description: OK

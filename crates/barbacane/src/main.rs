@@ -2623,7 +2623,7 @@ impl Gateway {
                                 error = %err,
                                 "WebSocket upstream connection failed"
                             );
-                            return Err(self.dev_error_response(format_args!(
+                            return Err(self.upstream_unavailable_response(format_args!(
                                 "WebSocket upstream connection failed: {}",
                                 err
                             )));
@@ -3246,6 +3246,24 @@ impl Gateway {
 
         Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .expect("valid response")
+    }
+
+    /// A 502 for an upstream the gateway could not reach, as the dispatchers
+    /// answer it. The cause reaches the caller only in dev mode.
+    fn upstream_unavailable_response(&self, msg: impl std::fmt::Display) -> Response<Full<Bytes>> {
+        let mut body = serde_json::json!({
+            "type": "urn:barbacane:error:upstream-unavailable",
+            "title": "Bad Gateway",
+            "status": 502,
+        });
+        if self.dev_mode {
+            body["detail"] = serde_json::Value::String(msg.to_string());
+        }
+        Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
             .header("content-type", "application/problem+json")
             .body(Full::new(Bytes::from(body.to_string())))
             .expect("valid response")

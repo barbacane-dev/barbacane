@@ -92,6 +92,9 @@ async fn test_wildcard_path_single_segment() {
     // Single segment captured by {path+}
     let resp = gateway.get("/files/readme.txt").await.unwrap();
     assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["route"], "wildcard");
+    assert_eq!(body["path"], "readme.txt");
 }
 
 #[tokio::test]
@@ -103,6 +106,9 @@ async fn test_wildcard_path_multi_segment() {
     // Multi-segment path captured as a single value
     let resp = gateway.get("/files/docs/2024/report.pdf").await.unwrap();
     assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["route"], "wildcard");
+    assert_eq!(body["path"], "docs/2024/report.pdf");
 }
 
 #[tokio::test]
@@ -131,6 +137,10 @@ async fn test_wildcard_path_with_prefix_param() {
         .await
         .unwrap();
     assert_eq!(resp.status().as_u16(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["route"], "storage");
+    assert_eq!(body["bucket"], "my-bucket");
+    assert_eq!(body["key"], "folder/sub/file.txt");
 }
 
 #[tokio::test]
