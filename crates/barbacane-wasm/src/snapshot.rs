@@ -51,7 +51,9 @@ impl MemorySnapshot {
     pub(crate) fn restore(&self, instance: &mut PluginInstance) -> Result<(), WasmError> {
         let current = instance.memory().len();
         if self.size > current {
-            instance.grow_memory(((self.size - current) / PAGE) as u64)?;
+            instance
+                .grow_memory(((self.size - current) / PAGE) as u64)
+                .map_err(|e| WasmError::MemoryRestore(e.to_string()))?;
         }
         let memory = instance.memory_mut();
         for (offset, bytes) in &self.chunks {
@@ -192,5 +194,35 @@ mod tests {
             vec![CHUNK, 5 * CHUNK]
         );
         assert_eq!(snapshot.held(), 2 * CHUNK);
+    }
+
+    /// A snapshot larger than the memory a fresh instance may grow to cannot
+    /// be restored, and says so.
+    #[test]
+    fn a_snapshot_beyond_the_memory_limit_is_a_restore_error() {
+        use crate::limits::PluginLimits;
+        let limits = PluginLimits {
+            max_memory_bytes: 2 * PAGE,
+            ..PluginLimits::default()
+        };
+        let engine = crate::WasmEngine::with_limits(limits.clone()).expect("engine");
+        let wasm = wat::parse_str(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+                (func (export "init") (param i32 i32) (result i32) (i32.const 0)))"#,
+        )
+        .expect("valid WAT");
+        let module = engine
+            .compile(&wasm, "small".into(), "0.0.0".into(), false)
+            .expect("compiles");
+        let mut instance =
+            PluginInstance::new(engine.engine(), &module, limits).expect("instantiates");
+
+        let mut initialised = vec![0u8; 3 * PAGE];
+        initialised[2 * PAGE] = 1;
+        let snapshot = MemorySnapshot::diff(&vec![0u8; PAGE], &initialised);
+        let error = snapshot.restore(&mut instance).expect_err("cannot grow");
+        assert!(matches!(error, WasmError::MemoryRestore(_)), "{error:?}");
     }
 }
