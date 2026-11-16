@@ -27,6 +27,9 @@
 //! }
 //! ```
 
+// Each `unsafe` block states why it is sound; CI checks the wasm32 build.
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 /// The plugin ABI version this SDK builds for. The macros embed it in the
 /// plugin's `barbacane_abi` custom section; the compiler and the gateway
 /// refuse a plugin built for another version.

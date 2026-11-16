@@ -27,6 +27,7 @@ extern "C" {
 /// Returns `None` if no body was set by the host.
 #[cfg(target_arch = "wasm32")]
 pub fn read_request_body() -> Option<Vec<u8>> {
+    // SAFETY: takes no pointer and returns a scalar.
     let len = unsafe { host_body_len() };
     if len < 0 {
         return None;
@@ -36,6 +37,8 @@ pub fn read_request_body() -> Option<Vec<u8>> {
         return Some(Vec::new());
     }
     let mut buf = vec![0u8; len];
+    // SAFETY: `buf` is live and `len` bytes long. The host writes at most `len`
+    // bytes into it and returns how many, between 0 and `len`.
     let copied = unsafe { host_body_read(buf.as_mut_ptr() as i32, len as i32) };
     buf.truncate(copied as usize);
     Some(buf)
@@ -47,12 +50,15 @@ pub fn read_request_body() -> Option<Vec<u8>> {
 /// without embedding it in JSON.
 #[cfg(target_arch = "wasm32")]
 pub fn set_response_body(body: &[u8]) {
+    // SAFETY: `body` is live for the call and its length is the one passed;
+    // the host copies it and writes nothing back.
     unsafe { host_body_set(body.as_ptr() as i32, body.len() as i32) }
 }
 
 /// Explicitly set the output body to None.
 #[cfg(target_arch = "wasm32")]
 pub fn clear_response_body() {
+    // SAFETY: takes no pointer.
     unsafe { host_body_clear() }
 }
 
@@ -61,6 +67,7 @@ pub fn clear_response_body() {
 /// Returns `None` if the response had no body.
 #[cfg(target_arch = "wasm32")]
 pub fn read_http_response_body() -> Option<Vec<u8>> {
+    // SAFETY: takes no pointer and returns a scalar.
     let len = unsafe { host_http_response_body_len() };
     if len < 0 {
         return None;
@@ -70,6 +77,8 @@ pub fn read_http_response_body() -> Option<Vec<u8>> {
         return Some(Vec::new());
     }
     let mut buf = vec![0u8; len];
+    // SAFETY: `buf` is live and `len` bytes long. The host writes at most `len`
+    // bytes into it and returns how many, between 0 and `len`.
     let copied = unsafe { host_http_response_body_read(buf.as_mut_ptr() as i32, len as i32) };
     buf.truncate(copied as usize);
     Some(buf)
@@ -80,6 +89,8 @@ pub fn read_http_response_body() -> Option<Vec<u8>> {
 /// This sends raw bytes to the host without base64 encoding.
 #[cfg(target_arch = "wasm32")]
 pub fn set_http_request_body(body: &[u8]) {
+    // SAFETY: `body` is live for the call and its length is the one passed;
+    // the host copies it and writes nothing back.
     unsafe { host_http_request_body_set(body.as_ptr() as i32, body.len() as i32) }
 }
 

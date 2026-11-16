@@ -144,6 +144,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: clippy
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -169,6 +170,11 @@ jobs:
           -A clippy::unwrap_used
           -A clippy::expect_used
           -A clippy::panic
+
+      - name: Run Clippy on the plugin SDK for wasm32
+        # The SDK's host calls compile for wasm32 only, so the steps above do
+        # not see them; this one holds every unsafe block to a SAFETY comment.
+        run: cargo clippy --locked -p barbacane-plugin-sdk --target wasm32-unknown-unknown -- -D warnings
 
   # Verify the workspace builds on the declared MSRV (workspace.package.rust-version).
   # Static analysis of the workflows themselves. Runs on push and pull_request: a
