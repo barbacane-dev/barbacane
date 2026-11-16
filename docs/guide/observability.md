@@ -65,9 +65,9 @@ curl http://localhost:8081/metrics
 | Metric | Type | Description |
 |--------|------|-------------|
 | `barbacane_requests_total` | counter | Total requests by method, path, status, api |
-| `barbacane_request_duration_seconds` | histogram | Request latency |
+| `barbacane_request_duration_seconds` | histogram | Request latency; for a streamed response, until its last byte is sent |
 | `barbacane_request_size_bytes` | histogram | Request body size |
-| `barbacane_response_size_bytes` | histogram | Response body size |
+| `barbacane_response_size_bytes` | histogram | Response body size; for a streamed response, the bytes sent |
 | `barbacane_active_connections` | gauge | Current open connections |
 | `barbacane_connections_total` | counter | Total connections accepted |
 | `barbacane_validation_failures_total` | counter | Validation errors by reason |

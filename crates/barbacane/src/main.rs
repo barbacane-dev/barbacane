@@ -6,6 +6,7 @@ mod waf;
 
 use barbacane_lib::client_ip::{ClientIpHeader, TrustedProxies};
 use barbacane_lib::lifecycle::background;
+use barbacane_lib::metered_body::MeteredBody;
 use barbacane_lib::tls::{self, TlsSettings};
 use barbacane_lib::{admin, control_plane, hot_reload};
 
@@ -1747,15 +1748,41 @@ impl Gateway {
                     response
                 };
 
-                let response_size = response.body().size_hint().upper().unwrap_or(0);
-                self.record_request_metrics(
-                    &method_str,
-                    &route_path,
-                    response.status().as_u16(),
-                    request_size,
-                    response_size,
-                    start_time,
-                );
+                // A buffered body's size is known now. A streamed one is
+                // measured as it is sent, and the request recorded when it
+                // ends: its size and duration cover the whole body.
+                let response = match response.body().size_hint().exact() {
+                    Some(response_size) => {
+                        self.record_request_metrics(
+                            &method_str,
+                            &route_path,
+                            response.status().as_u16(),
+                            request_size,
+                            response_size,
+                            start_time,
+                        );
+                        response
+                    }
+                    None => {
+                        let metrics = Arc::clone(&self.metrics);
+                        let api = self.api_name.clone();
+                        let status = response.status().as_u16();
+                        let (method, route) = (method_str.clone(), route_path.clone());
+                        response.map(|body| {
+                            BoxBody::new(MeteredBody::new(body, move |response_size| {
+                                metrics.record_request(
+                                    &method,
+                                    &route,
+                                    status,
+                                    &api,
+                                    start_time.elapsed().as_secs_f64(),
+                                    request_size,
+                                    response_size,
+                                );
+                            }))
+                        })
+                    }
+                };
                 Ok(Self::add_standard_headers(response, &request_id, &trace_id))
             }
             RouteMatch::MethodNotAllowed { allowed } => {
