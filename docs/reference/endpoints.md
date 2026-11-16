@@ -205,9 +205,9 @@ barbacane_active_connections 5
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `barbacane_requests_total` | counter | method, path, status, api | Total requests processed |
-| `barbacane_request_duration_seconds` | histogram | method, path, status, api | Request latency |
+| `barbacane_request_duration_seconds` | histogram | method, path, status, api | Request latency. A streamed response is recorded when its body ends (or the client leaves), so its latency runs to its last byte |
 | `barbacane_request_size_bytes` | histogram | method, path, status, api | Request body size |
-| `barbacane_response_size_bytes` | histogram | method, path, status, api | Response body size |
+| `barbacane_response_size_bytes` | histogram | method, path, status, api | Response body size; for a streamed response, the bytes sent before it ended or the client left |
 | `barbacane_active_connections` | gauge | - | Current open connections |
 | `barbacane_connections_total` | counter | - | Total connections accepted |
 | `barbacane_validation_failures_total` | counter | method, path, reason | Validation errors |

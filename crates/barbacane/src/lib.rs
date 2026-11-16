@@ -19,6 +19,8 @@ pub mod hot_reload;
 #[doc(hidden)]
 pub mod lifecycle;
 #[doc(hidden)]
+pub mod metered_body;
+#[doc(hidden)]
 pub mod router;
 #[doc(hidden)]
 pub mod tls;

@@ -288,3 +288,108 @@ async fn a_slow_client_holds_the_upstream_back() {
     );
     drop(resp);
 }
+
+// ---------------------------------------------------------------------------
+// Metrics of a streamed response
+// ---------------------------------------------------------------------------
+
+/// An upstream that streams `events` server-sent events, `gap` apart, with a
+/// chunked body. Returns its base URL.
+async fn slow_sse_upstream(events: usize, gap: std::time::Duration) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n";
+                if stream.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                for i in 0..events {
+                    let event = format!("data: {i}\n\n");
+                    let chunk = format!("{:x}\r\n{event}\r\n", event.len());
+                    if stream.write_all(chunk.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(gap).await;
+                }
+                let _ = stream.write_all(b"0\r\n\r\n").await;
+            });
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// The value of the first sample of `family` whose line contains every
+/// fragment.
+fn sample(body: &str, family: &str, fragments: &[&str]) -> Option<f64> {
+    body.lines()
+        .filter(|l| l.starts_with(family))
+        .find(|l| fragments.iter().all(|f| l.contains(f)))
+        .and_then(|l| l.rsplit(' ').next())
+        .and_then(|v| v.parse().ok())
+}
+
+/// A streamed response is measured to its end: the response size counts the
+/// bytes the client received, and the duration covers the whole stream, not
+/// the time to its headers.
+#[tokio::test]
+async fn a_streamed_response_is_measured_to_its_end() {
+    let gap = std::time::Duration::from_millis(300);
+    let upstream = slow_sse_upstream(4, gap).await;
+    let (_tmp, spec_path) = create_streaming_spec(&upstream);
+    let gateway = TestGateway::from_spec(spec_path.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let body = gateway.get("/stream").await.unwrap().text().await.unwrap();
+    assert_eq!(body, "data: 0\n\ndata: 1\n\ndata: 2\n\ndata: 3\n\n");
+
+    // Recorded when the body ends on the gateway's side, which can follow the
+    // client's last read by a moment.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let metrics = loop {
+        let metrics = gateway
+            .admin_get("/metrics")
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let recorded =
+            sample(&metrics, "barbacane_requests_total", &["path=\"/stream\""]).is_some();
+        if recorded || std::time::Instant::now() > deadline {
+            break metrics;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+
+    let size = sample(
+        &metrics,
+        "barbacane_response_size_bytes_sum",
+        &["path=\"/stream\""],
+    )
+    .unwrap_or_else(|| panic!("no response size for /stream:\n{metrics}"));
+    assert_eq!(size, body.len() as f64, "the bytes the client received");
+    let duration = sample(
+        &metrics,
+        "barbacane_request_duration_seconds_sum",
+        &["path=\"/stream\""],
+    )
+    .unwrap_or_else(|| panic!("no duration for /stream:\n{metrics}"));
+    assert!(
+        duration >= 3.0 * gap.as_secs_f64(),
+        "the duration covers the stream: {duration}s"
+    );
+}
