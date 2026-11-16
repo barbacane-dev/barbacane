@@ -8,7 +8,7 @@ use axum::{
 use uuid::Uuid;
 
 use super::router::AppState;
-use crate::db::{ApiKey, ApiKeyCreated, ApiKeysRepository, NewApiKey};
+use crate::db::{ApiKey, ApiKeyCreated, ApiKeysRepository, NewApiKey, ProjectsRepository};
 use crate::error::ProblemDetails;
 
 /// POST /projects/{id}/api-keys - Create a new API key.
@@ -46,6 +46,15 @@ pub async fn list_api_keys(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<ApiKey>>, ProblemDetails> {
+    if ProjectsRepository::new(state.pool.clone())
+        .get_by_id(project_id)
+        .await?
+        .is_none()
+    {
+        return Err(ProblemDetails::not_found(format!(
+            "Project {project_id} not found"
+        )));
+    }
     let repo = ApiKeysRepository::new(state.pool.clone());
 
     let keys = repo.list_for_project(project_id).await?;

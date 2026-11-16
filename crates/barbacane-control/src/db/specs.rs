@@ -67,8 +67,8 @@ impl SpecsRepository {
             query.push_str(&format!(" AND spec_type = ${}", params.len()));
         }
         if let Some(n) = name {
-            params.push(n.to_string());
-            query.push_str(&format!(" AND name ILIKE ${}", params.len()));
+            params.push(format!("%{}%", escape_like(n)));
+            query.push_str(&format!(" AND name ILIKE ${} ESCAPE '\\'", params.len()));
         }
         query.push_str(" ORDER BY name");
 
@@ -243,5 +243,30 @@ impl SpecsRepository {
         .bind(revision)
         .fetch_optional(&self.pool)
         .await
+    }
+}
+
+/// `value` with the `LIKE` wildcards and the escape character escaped, so it
+/// matches itself.
+fn escape_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
+}
+
+#[cfg(test)]
+mod like_tests {
+    use super::escape_like;
+
+    #[test]
+    fn wildcards_match_themselves() {
+        assert_eq!(escape_like("pet_store 100%"), "pet\\_store 100\\%");
+        assert_eq!(escape_like("a\\b"), "a\\\\b");
+        assert_eq!(escape_like("plain"), "plain");
     }
 }

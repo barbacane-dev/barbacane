@@ -120,10 +120,10 @@ pub async fn deploy_to_data_planes(
         })?
     };
 
-    // Verify artifact belongs to project
+    // An artifact of another project is not one this project can deploy.
     if artifact.project_id != Some(project_id) {
-        return Err(ProblemDetails::bad_request(format!(
-            "Artifact {} does not belong to project {}",
+        return Err(ProblemDetails::not_found(format!(
+            "Artifact {} not found in project {}",
             artifact.id, project_id
         )));
     }
