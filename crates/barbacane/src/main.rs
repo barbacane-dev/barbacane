@@ -5,11 +5,10 @@
 mod waf;
 
 use barbacane_lib::client_ip::{ClientIpHeader, TrustedProxies};
+use barbacane_lib::tls::{self, TlsSettings};
 use barbacane_lib::{admin, control_plane, hot_reload};
 
 use std::convert::Infallible;
-use std::fs::File;
-use std::io::BufReader;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::process::ExitCode;
@@ -37,8 +36,6 @@ fn box_full(r: Response<Full<Bytes>>) -> Response<AnyBody> {
 }
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::ServerConfig;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
@@ -669,6 +666,17 @@ enum Commands {
         /// Use 1.3 for maximum security (modern clients only).
         #[arg(long, default_value = "1.2")]
         tls_min_version: String,
+
+        /// CA certificates (PEM) that client certificates must chain to.
+        /// Every client then presents one (mutual TLS). Requires --tls-cert.
+        #[arg(long)]
+        tls_client_ca: Option<String>,
+
+        /// Seconds between checks of the certificate, key and client CA files;
+        /// changed files are loaded without a restart. 0 turns the check off.
+        /// SIGHUP reloads them at any time.
+        #[arg(long, default_value = "60")]
+        tls_reload_interval: u64,
 
         /// HTTP keep-alive idle timeout in seconds (default: 60).
         #[arg(long, default_value = "60")]
@@ -4660,14 +4668,6 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// (e.g. the dev server). Also the per-request header-read deadline.
 const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(60);
 
-/// TLS configuration for the server.
-struct TlsConfig {
-    cert_path: String,
-    key_path: String,
-    /// Minimum TLS version: "1.2" or "1.3"
-    min_version: String,
-}
-
 /// Configuration for connected mode (optional control plane connection).
 #[derive(Clone)]
 struct ConnectedModeConfig {
@@ -4749,61 +4749,6 @@ fn canonical_peer(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
 
-/// Load TLS certificates and create a rustls ServerConfig.
-///
-/// Configuration:
-/// - Minimum TLS version configurable (1.2 or 1.3)
-/// - ALPN: h2, http/1.1
-fn load_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>, String> {
-    // Load certificate chain
-    let cert_file = File::open(&config.cert_path).map_err(|e| {
-        format!(
-            "failed to open certificate file '{}': {}",
-            config.cert_path, e
-        )
-    })?;
-    let mut cert_reader = BufReader::new(cert_file);
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            format!(
-                "failed to parse certificate file '{}': {}",
-                config.cert_path, e
-            )
-        })?;
-
-    if certs.is_empty() {
-        return Err(format!("no certificates found in '{}'", config.cert_path));
-    }
-
-    // Load private key
-    let key_file = File::open(&config.key_path)
-        .map_err(|e| format!("failed to open key file '{}': {}", config.key_path, e))?;
-    let mut key_reader = BufReader::new(key_file);
-    let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)
-        .map_err(|e| format!("failed to parse key file '{}': {}", config.key_path, e))?
-        .ok_or_else(|| format!("no private key found in '{}'", config.key_path))?;
-
-    // Select TLS versions based on min_version setting
-    // Note: min_version is validated at startup, so only "1.2" or "1.3" are possible
-    let versions: Vec<&'static rustls::SupportedProtocolVersion> = match config.min_version.as_str()
-    {
-        "1.3" => vec![&rustls::version::TLS13],
-        _ => vec![&rustls::version::TLS13, &rustls::version::TLS12], // "1.2" (default)
-    };
-
-    // Build TLS config with configured version
-    let mut server_config = ServerConfig::builder_with_protocol_versions(&versions)
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| format!("failed to build TLS config: {}", e))?;
-
-    // Set ALPN protocols: prefer HTTP/2, fallback to HTTP/1.1
-    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-
-    Ok(Arc::new(server_config))
-}
-
 /// Run the serve command.
 #[allow(clippy::too_many_arguments)]
 async fn run_serve(
@@ -4812,7 +4757,8 @@ async fn run_serve(
     dev: bool,
     limits: RequestLimits,
     allow_plaintext_upstream: bool,
-    tls_config: Option<TlsConfig>,
+    tls_config: Option<TlsSettings>,
+    tls_reload_interval: u64,
     metrics: Arc<MetricsRegistry>,
     keepalive_timeout: u64,
     shutdown_timeout: u64,
@@ -4904,21 +4850,18 @@ async fn run_serve(
     };
 
     // Load TLS config if provided
-    let tls_acceptor = match &tls_config {
-        Some(config) => {
-            let server_config = match load_tls_config(config) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return ExitCode::from(1);
-                }
-            };
-            Some(TlsAcceptor::from(server_config))
-        }
+    let tls_server_config: Option<tls::SharedServerConfig> = match &tls_config {
+        Some(settings) => match tls::server_config(settings) {
+            Ok(config) => Some(Arc::new(ArcSwap::new(config))),
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
+            }
+        },
         None => None,
     };
 
-    let protocol = if tls_acceptor.is_some() {
+    let protocol = if tls_server_config.is_some() {
         "https"
     } else {
         "http"
@@ -4927,7 +4870,7 @@ async fn run_serve(
     // this line is how the caller learns what it picked.
     let bound = listener.local_addr().unwrap_or(addr);
     eprintln!("barbacane: listening on {}://{}", protocol, bound);
-    if plaintext_off_loopback(bound, tls_acceptor.is_some()) {
+    if plaintext_off_loopback(bound, tls_server_config.is_some()) {
         tracing::warn!(
             listen = %bound,
             "listening in plaintext on {bound}, an address other than loopback: \
@@ -4960,6 +4903,13 @@ async fn run_serve(
         );
     }
     let trusted_proxies = Arc::new(trusted_proxies);
+    if let (Some(settings), Some(shared)) = (tls_config, &tls_server_config) {
+        tokio::spawn(tls::reload(
+            settings,
+            Arc::clone(shared),
+            Duration::from_secs(tls_reload_interval),
+        ));
+    }
 
     // Create shutdown signal channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -5194,7 +5144,11 @@ async fn run_serve(
                 // observed by the next request on every connection; a request
                 // in flight keeps the gateway it started with.
                 let gateway_swap = Arc::clone(&gateway);
-                let tls_acceptor = tls_acceptor.clone();
+                // The configuration current at accept time: a reload applies
+                // to the next handshake.
+                let tls_acceptor = tls_server_config
+                    .as_ref()
+                    .map(|config| TlsAcceptor::from(config.load_full()));
                 let conn_metrics = metrics.clone();
                 let conn_counter = active_connections.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
@@ -5577,6 +5531,8 @@ async fn main() -> ExitCode {
             tls_cert,
             tls_key,
             tls_min_version,
+            tls_client_ca,
+            tls_reload_interval,
             keepalive_timeout,
             shutdown_timeout,
             max_connections,
@@ -5623,11 +5579,16 @@ async fn main() -> ExitCode {
 
             // Validate TLS arguments
             let tls_config = match (tls_cert, tls_key) {
-                (Some(cert), Some(key)) => Some(TlsConfig {
-                    cert_path: cert,
-                    key_path: key,
+                (Some(cert), Some(key)) => Some(TlsSettings {
+                    cert_path: cert.into(),
+                    key_path: key.into(),
                     min_version: tls_min_version,
+                    client_ca_path: tls_client_ca.map(Into::into),
                 }),
+                (None, None) if tls_client_ca.is_some() => {
+                    eprintln!("error: --tls-client-ca requires --tls-cert and --tls-key");
+                    return ExitCode::from(1);
+                }
                 (None, None) => None,
                 (Some(_), None) => {
                     eprintln!("error: --tls-cert requires --tls-key");
@@ -5691,6 +5652,7 @@ async fn main() -> ExitCode {
                 limits,
                 allow_plaintext_upstream,
                 tls_config,
+                tls_reload_interval,
                 metrics,
                 keepalive_timeout,
                 shutdown_timeout,

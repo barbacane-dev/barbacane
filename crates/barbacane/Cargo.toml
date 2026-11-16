@@ -65,6 +65,7 @@ serde-saphyr = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+rcgen = { workspace = true }
 flate2 = { workspace = true }
 
 [[bench]]
