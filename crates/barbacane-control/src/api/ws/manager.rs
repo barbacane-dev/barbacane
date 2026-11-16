@@ -91,6 +91,11 @@ impl ConnectionManager {
         close
     }
 
+    /// Data planes with an open session.
+    pub fn connected(&self) -> usize {
+        self.connections.len()
+    }
+
     /// End every registered session. Returns how many were signalled.
     pub fn close_all(&self) -> usize {
         let mut closed = 0;

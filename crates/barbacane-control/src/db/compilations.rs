@@ -135,6 +135,7 @@ impl CompilationsRepository {
         .bind(Utc::now())
         .fetch_optional(&self.pool)
         .await
+        .inspect(|_| crate::metrics::metrics().compilation(true))
     }
 
     /// Mark a compilation as failed with errors.
@@ -156,6 +157,7 @@ impl CompilationsRepository {
         .bind(Utc::now())
         .fetch_optional(&self.pool)
         .await
+        .inspect(|_| crate::metrics::metrics().compilation(false))
     }
 
     /// Delete a compilation.

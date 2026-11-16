@@ -87,6 +87,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReadyResponse'
 
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Prometheus metrics
+      description: |
+        The Prometheus text exposition, behind the admin token like the rest
+        of the API:
+
+        - `barbacane_control_requests_total` (`method`, `route`, `status`):
+          requests, labelled with the route template, not the path
+        - `barbacane_control_compilations_total` (`outcome`: `succeeded`,
+          `failed`): finished compilations
+        - `barbacane_control_data_planes_connected`: data planes with an open
+          session
+      operationId: getMetrics
+      x-cli: { skip: true }
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: The metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
   /init:
     post:
       tags: [Init]
