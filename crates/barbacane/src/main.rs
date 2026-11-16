@@ -5,6 +5,7 @@
 mod waf;
 
 use barbacane_lib::client_ip::{ClientIpHeader, TrustedProxies};
+use barbacane_lib::lifecycle::background;
 use barbacane_lib::tls::{self, TlsSettings};
 use barbacane_lib::{admin, control_plane, hot_reload};
 
@@ -2447,7 +2448,7 @@ impl Gateway {
                 // Strip the response body to avoid WASM OOM with large streamed payloads.
                 let wh = wasm_handle;
                 let metrics = Arc::clone(&self.metrics);
-                tokio::spawn(async move {
+                background().spawn(async move {
                     match wh.await {
                         Ok((Ok(_), _, _, Some(last_http), _, post_ctx))
                             if !middleware_instances.is_empty() =>
@@ -2615,9 +2616,11 @@ impl Gateway {
                         })?;
                     }
 
-                    // Spawn the WebSocket relay as a background task.
-                    // The client-side upgrade completes when we return the 101 response.
-                    tokio::spawn(async move {
+                    // Spawn the WebSocket relay as a background task, which
+                    // the drain waits for. The client-side upgrade completes
+                    // when we return the 101 response.
+                    let shutdown = background().shutdown();
+                    background().spawn(async move {
                         // Wait for hyper to complete the HTTP upgrade.
                         let upgraded = match upgrade_handle.await {
                             Ok(u) => u,
@@ -2639,7 +2642,7 @@ impl Gateway {
                         .await;
 
                         // Relay frames bidirectionally.
-                        Self::relay_websocket(client_ws, ws_upstream).await;
+                        Self::relay_websocket(client_ws, ws_upstream, shutdown).await;
                     });
 
                     // Return 101 Switching Protocols to the client.
@@ -3234,8 +3237,11 @@ impl Gateway {
     ///
     /// Runs until either side closes or an error occurs. Frames are forwarded
     /// as-is with no inspection or transformation.
-    async fn relay_websocket<C, U>(client_ws: C, upstream_ws: U)
-    where
+    async fn relay_websocket<C, U>(
+        client_ws: C,
+        upstream_ws: U,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) where
         C: futures_util::Sink<
                 tokio_tungstenite::tungstenite::Message,
                 Error = tokio_tungstenite::tungstenite::Error,
@@ -3262,46 +3268,77 @@ impl Gateway {
         let (mut client_tx, mut client_rx) = client_ws.split();
         let (mut upstream_tx, mut upstream_rx) = upstream_ws.split();
 
-        // Client → Upstream
+        // Each direction forwards frames until its peer closes, and at
+        // shutdown sends its sink a Close 1001 (going away). Each returns
+        // whether shutdown ended it.
+        let upstream_shutdown = shutdown.clone();
         let client_to_upstream = async move {
-            while let Some(msg) = client_rx.next().await {
-                match msg {
-                    Ok(m) if m.is_close() => {
+            loop {
+                tokio::select! {
+                    biased;
+                    () = upstream_shutdown.cancelled() => {
+                        let _ = upstream_tx.send(going_away()).await;
                         let _ = upstream_tx.close().await;
-                        break;
+                        return true;
                     }
-                    Ok(m) => {
-                        if upstream_tx.send(m).await.is_err() {
-                            break;
+                    msg = client_rx.next() => match msg {
+                        Some(Ok(m)) if m.is_close() => {
+                            let _ = upstream_tx.close().await;
+                            return false;
                         }
-                    }
-                    Err(_) => break,
+                        Some(Ok(m)) => {
+                            if upstream_tx.send(m).await.is_err() {
+                                return false;
+                            }
+                        }
+                        _ => return false,
+                    },
                 }
             }
         };
 
-        // Upstream → Client
         let upstream_to_client = async move {
-            while let Some(msg) = upstream_rx.next().await {
-                match msg {
-                    Ok(m) if m.is_close() => {
+            loop {
+                tokio::select! {
+                    biased;
+                    () = shutdown.cancelled() => {
+                        let _ = client_tx.send(going_away()).await;
                         let _ = client_tx.close().await;
-                        break;
+                        return true;
                     }
-                    Ok(m) => {
-                        if client_tx.send(m).await.is_err() {
-                            break;
+                    msg = upstream_rx.next() => match msg {
+                        Some(Ok(m)) if m.is_close() => {
+                            let _ = client_tx.close().await;
+                            return false;
                         }
-                    }
-                    Err(_) => break,
+                        Some(Ok(m)) => {
+                            if client_tx.send(m).await.is_err() {
+                                return false;
+                            }
+                        }
+                        _ => return false,
+                    },
                 }
             }
         };
 
-        // Run both directions concurrently; when one ends, drop the other.
-        tokio::select! {
-            () = client_to_upstream => {},
-            () = upstream_to_client => {},
+        // When a peer ends its direction, the other is dropped. When shutdown
+        // ends one, the other has seen it too and sends its own Close.
+        let mut client_to_upstream = std::pin::pin!(client_to_upstream);
+        let mut upstream_to_client = std::pin::pin!(upstream_to_client);
+        let (by_shutdown, client_side_done) = tokio::select! {
+            by_shutdown = &mut client_to_upstream => (by_shutdown, true),
+            by_shutdown = &mut upstream_to_client => (by_shutdown, false),
+        };
+        if by_shutdown {
+            let rest = async {
+                if client_side_done {
+                    (&mut upstream_to_client).await;
+                } else {
+                    (&mut client_to_upstream).await;
+                }
+            };
+            let _ = tokio::time::timeout(RELAY_CLOSE_GRACE, rest).await;
         }
 
         tracing::debug!("WebSocket relay closed");
@@ -4660,6 +4697,19 @@ fn open_file_limit_too_low(max_connections: usize, limit: Option<u64>) -> bool {
 /// (file descriptors exhausted) does not spin.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 
+/// How long a WebSocket relay ended by shutdown gives its other direction to
+/// send its Close frame.
+const RELAY_CLOSE_GRACE: Duration = Duration::from_secs(2);
+
+/// The Close frame a relay sends both peers at shutdown.
+fn going_away() -> tokio_tungstenite::tungstenite::Message {
+    use tokio_tungstenite::tungstenite::protocol::frame::{coding::CloseCode, CloseFrame};
+    tokio_tungstenite::tungstenite::Message::Close(Some(CloseFrame {
+        code: CloseCode::Away,
+        reason: "gateway shutting down".into(),
+    }))
+}
+
 /// Maximum time allowed to complete a TLS handshake before the connection is
 /// dropped. Bounds slowloris-style handshake stalls.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -5021,6 +5071,7 @@ async fn run_serve(
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     admin::DRAINING.store(true, Ordering::Relaxed);
+                    background().begin_shutdown();
                     break;
                 }
             }
@@ -5258,28 +5309,28 @@ async fn run_serve(
     // client or a probe that connects now is refused, not queued and reset.
     drop(listener);
 
-    // Wait for active connections to drain (with timeout)
+    // Wait for active connections, WebSocket relays and post-response
+    // middleware to finish (with timeout).
     let drain_start = Instant::now();
     loop {
         let active = active_connections.load(Ordering::SeqCst);
-        if active == 0 {
+        let tasks = background().running();
+        if active == 0 && tasks == 0 {
             eprintln!("barbacane: all connections drained, shutting down");
             break;
         }
 
         if drain_start.elapsed() > shutdown_duration {
             eprintln!(
-                "barbacane: shutdown timeout reached, {} connection(s) still active",
-                active
+                "barbacane: shutdown timeout reached, {active} connection(s) and {tasks} background task(s) still active"
             );
             break;
         }
 
         eprintln!(
-            "barbacane: waiting for {} active connection(s) to complete...",
-            active
+            "barbacane: waiting for {active} active connection(s) and {tasks} background task(s) to complete..."
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     ExitCode::SUCCESS
@@ -5993,6 +6044,82 @@ mod wasi_tests {
             barbacane_compiler::wasi::WASI_MODULE,
             barbacane_wasm::WASI_MODULE
         );
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::Gateway;
+    use futures_util::{SinkExt, StreamExt};
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::WebSocketStream;
+    use tokio_util::sync::CancellationToken;
+
+    type Ws = WebSocketStream<tokio::io::DuplexStream>;
+
+    /// A relay between a client and an upstream, with the peers' ends.
+    async fn relay(shutdown: CancellationToken) -> (Ws, Ws, tokio::task::JoinHandle<()>) {
+        let (client, gateway_client) = tokio::io::duplex(4096);
+        let (gateway_upstream, upstream) = tokio::io::duplex(4096);
+        let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
+        let gateway_client =
+            WebSocketStream::from_raw_socket(gateway_client, Role::Server, None).await;
+        let gateway_upstream =
+            WebSocketStream::from_raw_socket(gateway_upstream, Role::Client, None).await;
+        let upstream = WebSocketStream::from_raw_socket(upstream, Role::Server, None).await;
+        let task = tokio::spawn(Gateway::relay_websocket(
+            gateway_client,
+            gateway_upstream,
+            shutdown,
+        ));
+        (client, upstream, task)
+    }
+
+    async fn next(ws: &mut Ws) -> Message {
+        tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await
+            .expect("a frame in time")
+            .expect("open")
+            .expect("valid")
+    }
+
+    #[tokio::test]
+    async fn frames_cross_both_ways_until_a_peer_closes() {
+        let (mut client, mut upstream, task) = relay(CancellationToken::new()).await;
+        client.send(Message::text("ping")).await.unwrap();
+        assert_eq!(next(&mut upstream).await, Message::text("ping"));
+        upstream.send(Message::binary(vec![1, 2, 3])).await.unwrap();
+        assert_eq!(next(&mut client).await, Message::binary(vec![1, 2, 3]));
+
+        client.close(None).await.unwrap();
+        assert!(next(&mut upstream).await.is_close());
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the relay ends")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_sends_going_away_to_both_peers() {
+        let shutdown = CancellationToken::new();
+        let (mut client, mut upstream, task) = relay(shutdown.clone()).await;
+        client.send(Message::text("before")).await.unwrap();
+        assert_eq!(next(&mut upstream).await, Message::text("before"));
+
+        shutdown.cancel();
+        for peer in [&mut client, &mut upstream] {
+            match next(peer).await {
+                Message::Close(Some(frame)) => assert_eq!(frame.code, CloseCode::Away),
+                other => panic!("expected Close 1001, got {other:?}"),
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .expect("the relay ends")
+            .unwrap();
     }
 }
 

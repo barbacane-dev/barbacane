@@ -828,9 +828,10 @@ Requests exceeding limits receive an RFC 9457 problem details response:
 The gateway handles shutdown signals (SIGTERM, SIGINT) gracefully:
 
 1. **Stop accepting** new connections immediately
-2. **Drain** in-flight requests for up to `--shutdown-timeout` seconds (default: 30)
-3. **Force close** any remaining connections after timeout
-4. **Exit** with code 0 on successful shutdown
+2. **Close WebSockets**: every relayed WebSocket gets a Close frame with code `1001` (going away), sent to the client and to the upstream
+3. **Drain** in-flight requests, WebSocket relays, and the middleware `on_response` that runs after a streamed response, for up to `--shutdown-timeout` seconds (default: 30)
+4. **Force close** anything still running after the timeout
+5. **Exit** with code 0 on successful shutdown
 
 ```bash
 # Send SIGTERM to gracefully shutdown
@@ -838,7 +839,7 @@ kill -TERM $(pgrep barbacane)
 
 # Output during graceful shutdown
 barbacane: received shutdown signal, draining connections...
-barbacane: waiting for 3 active connection(s) to complete...
+barbacane: waiting for 3 active connection(s) and 1 background task(s) to complete...
 barbacane: all connections drained, shutting down
 ```
 
