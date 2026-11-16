@@ -97,6 +97,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: clippy
 
       - name: Clippy
         run: cargo clippy --locked --workspace --lib --bins -- -D warnings
