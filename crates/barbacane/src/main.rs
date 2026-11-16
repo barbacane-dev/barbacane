@@ -5357,6 +5357,8 @@ async fn run_serve(
     // Wait for active connections, WebSocket relays and post-response
     // middleware to finish (with timeout).
     let drain_start = Instant::now();
+    // Progress is reported when it changes, not on every check.
+    let mut reported = None;
     loop {
         let active = active_connections.load(Ordering::SeqCst);
         let tasks = background().running();
@@ -5372,9 +5374,12 @@ async fn run_serve(
             break;
         }
 
-        eprintln!(
-            "barbacane: waiting for {active} active connection(s) and {tasks} background task(s) to complete..."
-        );
+        if reported != Some((active, tasks)) {
+            eprintln!(
+                "barbacane: waiting for {active} active connection(s) and {tasks} background task(s) to complete..."
+            );
+            reported = Some((active, tasks));
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 

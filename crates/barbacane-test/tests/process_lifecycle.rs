@@ -377,6 +377,20 @@ fn a_draining_gateway_refuses_new_connections_and_reports_it() {
     let (mut child, log) = process.into_parts();
     let status = child.wait().expect("wait");
     assert_eq!(status.code(), Some(0), "{}", log.text());
+
+    // One connection held the drain the whole time: its progress is reported
+    // once, not on every check.
+    assert!(
+        log.wait_for("all connections drained", Duration::from_secs(5)),
+        "{}",
+        log.text()
+    );
+    assert_eq!(
+        log.text().matches("waiting for").count(),
+        1,
+        "{}",
+        log.text()
+    );
 }
 
 /// Read from `stream` until `needle` has arrived, or give up after 10 seconds.
