@@ -298,3 +298,103 @@ async fn a_failed_compilation_fails_the_push() {
 fn rand_suffix() -> u32 {
     uuid::Uuid::new_v4().as_u128() as u32 % 1_000_000
 }
+
+/// At SIGTERM the control plane ends the data planes' sessions, finishes, and
+/// exits 0: it neither dies on the signal nor waits on their open WebSockets.
+#[tokio::test]
+async fn sigterm_ends_data_plane_sessions_and_exits_zero() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let Some(mut cp) = ControlPlane::boot().await else {
+        eprintln!("skip: no database or binaries");
+        return;
+    };
+    let project = cp
+        .cli_with(
+            &["projects", "create", "--file", "-", "-o", "json"],
+            Some(&format!(r#"{{"name": "{}"}}"#, unique("sigterm"))),
+            ADMIN_TOKEN,
+        )
+        .json()["id"]
+        .as_str()
+        .expect("project id")
+        .to_string();
+    let key = cp
+        .cli_with(
+            &[
+                "api-keys",
+                "create",
+                "--project-id",
+                &project,
+                "--file",
+                "-",
+                "-o",
+                "json",
+            ],
+            Some(r#"{"name": "data-plane"}"#),
+            ADMIN_TOKEN,
+        )
+        .json()["key"]
+        .as_str()
+        .expect("api key")
+        .to_string();
+
+    let ws_url = format!("{}/ws/data-plane", cp.url.replacen("http://", "ws://", 1));
+    let (mut session, _) = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .expect("open a data-plane session");
+    session
+        .send(Message::text(
+            serde_json::json!({
+                "type": "register",
+                "project_id": project,
+                "api_key": key,
+                "name": "sigterm-test",
+            })
+            .to_string(),
+        ))
+        .await
+        .expect("register");
+    let registered = tokio::time::timeout(Duration::from_secs(10), session.next())
+        .await
+        .expect("an answer to the registration");
+    assert!(
+        matches!(&registered, Some(Ok(Message::Text(t))) if t.contains("registered")),
+        "{registered:?}"
+    );
+
+    // SAFETY: signalling a child this test spawned and still owns.
+    unsafe {
+        libc::kill(cp.process.id().expect("running") as i32, libc::SIGTERM);
+    }
+
+    let ended = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match session.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                Some(Ok(_)) => {}
+            }
+        }
+    })
+    .await;
+    assert!(
+        ended.is_ok(),
+        "the session ends at the signal:\n{}",
+        cp.process.log().text()
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while !cp.process.has_exited() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        cp.process.has_exited(),
+        "the control plane exits:\n{}",
+        cp.process.log().text()
+    );
+    let log = cp.process.log().text();
+    let status = cp.process.exit_status().expect("exited");
+    assert_eq!(status.code(), Some(0), "{log}");
+    assert!(log.contains("Control plane stopped"), "{log}");
+}

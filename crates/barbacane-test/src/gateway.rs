@@ -251,6 +251,13 @@ impl LoggedChild {
         self.child.as_ref().map(Child::id)
     }
 
+    /// The child's exit status, once it has exited.
+    pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        self.child
+            .as_mut()
+            .and_then(|child| child.try_wait().ok().flatten())
+    }
+
     /// Whether the child has already exited.
     pub fn has_exited(&mut self) -> bool {
         match self.child.as_mut() {
