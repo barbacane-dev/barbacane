@@ -1094,9 +1094,10 @@ paths:
       x-cli: { skip: true }
       responses:
         '101':
-          description: WebSocket upgrade successful
-        '401':
-          description: Invalid or missing API key
+          description: >-
+            WebSocket upgrade. The connection is not authenticated until the
+            `register` message; a refused registration is answered
+            `registration_failed`, as described above.
 
   /projects/{projectId}/specs:
     get:
@@ -1478,11 +1479,15 @@ components:
     Spec:
       description: An API specification held by the control plane, with its latest revision
       type: object
-      required: [id, name, current_sha256, spec_type, spec_version, created_at, updated_at]
+      required: [id, project_id, name, current_sha256, spec_type, spec_version, created_at, updated_at]
       properties:
         id:
           type: string
           format: uuid
+        project_id:
+          type: string
+          format: uuid
+          description: The project the spec belongs to
         name:
           type: string
           description: Unique spec name (from OpenAPI/AsyncAPI title)
@@ -1534,6 +1539,19 @@ components:
           type: integer
         sha256:
           type: string
+        warnings:
+          type: array
+          description: Compliance warnings on the spec; absent when there are none
+          items:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+              location:
+                type: string
 
     Plugin:
       description: A plugin version in the registry
@@ -1612,6 +1630,10 @@ components:
         spec_id:
           type: string
           format: uuid
+        project_id:
+          type: [string, 'null']
+          format: uuid
+          description: The project of the compiled spec
         status:
           type: string
           enum: [pending, compiling, succeeded, failed]
@@ -1803,7 +1825,7 @@ components:
     DataPlane:
       description: A data plane connected to the control plane
       type: object
-      required: [id, project_id, status, metadata, created_at]
+      required: [id, project_id, status, metadata, created_at, drift_detected]
       properties:
         id:
           type: string
@@ -1836,6 +1858,12 @@ components:
         created_at:
           type: string
           format: date-time
+        artifact_hash:
+          type: [string, 'null']
+          description: Hash of the artifact the data plane last reported running
+        drift_detected:
+          type: boolean
+          description: Whether the reported artifact differs from the one deployed to it
 
     ApiKey:
       description: A data-plane API key, shown by prefix only

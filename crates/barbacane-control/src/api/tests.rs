@@ -1222,3 +1222,106 @@ async fn deleting_a_project_deletes_its_artifacts() {
         "the artifact went with its project"
     );
 }
+
+/// `?name=` matches part of a name, case-insensitively; `%` and `_` in it
+/// match themselves.
+#[tokio::test]
+async fn the_spec_name_filter_is_a_partial_match_of_the_text_given() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let project_id = create_project(app.clone(), &unique_project_name()).await;
+    let tag = Uuid::new_v4().simple().to_string();
+    let spec = PROJECT_SPEC.replace(
+        "title: Contract Test API",
+        &format!("title: PartialA{tag} Store"),
+    );
+    let (status, body) = send(
+        app.clone(),
+        multipart_req(&format!("/projects/{project_id}/specs"), "api.yaml", &spec),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{}", json_body(&body));
+
+    let names = |body: &bytes::Bytes| -> Vec<String> {
+        json_body(body)
+            .as_array()
+            .expect("a list")
+            .iter()
+            .filter_map(|s| s["name"].as_str().map(str::to_string))
+            .collect()
+    };
+    let (status, body) = send(
+        app.clone(),
+        empty_req(Method::GET, &format!("/specs?name={}", tag.to_uppercase())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(names(&body), vec![format!("PartialA{tag} Store")]);
+
+    // `_` is not a wildcard: "Partial_" does not match "PartialA".
+    let (_, body) = send(
+        app.clone(),
+        empty_req(Method::GET, &format!("/specs?name=Partial_{tag}")),
+    )
+    .await;
+    assert!(names(&body).is_empty(), "{:?}", names(&body));
+    // Nor is `%`.
+    let (_, body) = send(
+        app,
+        empty_req(Method::GET, &format!("/specs?name=Partial%25{tag}")),
+    )
+    .await;
+    assert!(names(&body).is_empty(), "{:?}", names(&body));
+}
+
+#[tokio::test]
+async fn deploying_another_projects_artifact_is_404() {
+    let Some((app, pool)) = make_app_with_pool().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let ours = create_project(app.clone(), &unique_project_name()).await;
+    let theirs: Uuid = create_project(app.clone(), &unique_project_name())
+        .await
+        .parse()
+        .expect("uuid");
+    let artifact = crate::db::ArtifactsRepository::new(pool)
+        .create(
+            Some(theirs),
+            json!({}),
+            b"artifact".to_vec(),
+            &"0".repeat(64),
+            "test",
+        )
+        .await
+        .expect("artifact");
+    let (status, body) = send(
+        app,
+        json_req(
+            Method::POST,
+            &format!("/projects/{ours}/deploy"),
+            json!({"artifact_id": artifact.id}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{}", json_body(&body));
+}
+
+#[tokio::test]
+async fn the_api_keys_of_an_unknown_project_are_404() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let (status, _) = send(
+        app,
+        empty_req(
+            Method::GET,
+            &format!("/projects/{}/api-keys", Uuid::new_v4()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
