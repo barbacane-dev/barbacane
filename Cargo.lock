@@ -409,6 +409,7 @@ dependencies = [
  "jsonschema",
  "notify",
  "reqwest 0.12.28",
+ "rustix",
  "rustls",
  "rustls-pemfile",
  "serde",
