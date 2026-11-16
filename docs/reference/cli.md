@@ -630,6 +630,8 @@ The examples below assume the key is set.
 | `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
 | `--tls-key` | No | - | Path to TLS private key file (PEM format) |
 | `--tls-min-version` | No | `1.2` | Minimum TLS version (`1.2` or `1.3`) |
+| `--tls-client-ca` | No | - | CA certificates (PEM) that client certificates must chain to; every client then presents one (mutual TLS). Requires `--tls-cert`. See [Client certificates](#client-certificates) |
+| `--tls-reload-interval` | No | `60` | Seconds between checks of the certificate, key and client CA files; changed files are loaded without a restart. `0` turns the check off; `SIGHUP` reloads at any time. See [Reloading certificates](#reloading-certificates) |
 | `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds; also the deadline for a request's headers and for its body, answered 408 when missed |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 | `--max-connections` | No | `10000` | Maximum number of concurrently served connections, from 1; a connection past it is closed at once. Also set by `BARBACANE_MAX_CONNECTIONS`, the flag taking precedence. See [Connection cap](#connection-cap) |
@@ -727,6 +729,22 @@ barbacane serve --artifact api.bca \
 - Both `--tls-cert` and `--tls-key` must be provided together
 
 Without `--tls-cert`, a gateway listening on an address other than loopback (the default `0.0.0.0:8080` included) logs a warning at start: `listening in plaintext on <address>`. Behind a load balancer or proxy that terminates TLS, the warning is expected.
+
+#### Client certificates
+
+With `--tls-client-ca`, the gateway asks every client for a certificate and completes the handshake only with one that chains to a certificate in that file; a client without one, or with one from another CA, is refused during the handshake. The file holds one or more PEM certificates. Client certificates need the `clientAuth` extended key usage when they carry an extended key usage at all.
+
+```bash
+barbacane serve --artifact api.bca \
+  --tls-cert server.crt --tls-key server.key \
+  --tls-client-ca clients-ca.crt
+```
+
+#### Reloading certificates
+
+The certificate, the key and the client CA are loaded again while the gateway serves: when their content changes (checked every `--tls-reload-interval` seconds, 60 by default), and on `SIGHUP`. New handshakes use the new files; established connections keep the configuration they started with. When the files do not load (a key that does not match the certificate, a file being written), the gateway logs `TLS configuration not reloaded` and keeps serving the previous configuration; it tries again when the files change or on the next `SIGHUP`. A successful reload logs `TLS configuration reloaded`.
+
+To replace a certificate and key, write both and then send `SIGHUP`, or let the next check pick them up. Mounted Kubernetes secrets and cert-manager renewals are picked up by the check.
 
 ### Connection cap
 

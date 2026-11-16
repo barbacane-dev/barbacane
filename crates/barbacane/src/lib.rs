@@ -19,4 +19,6 @@ pub mod hot_reload;
 #[doc(hidden)]
 pub mod router;
 #[doc(hidden)]
+pub mod tls;
+#[doc(hidden)]
 pub mod validator;

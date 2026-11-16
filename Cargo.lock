@@ -409,6 +409,7 @@ dependencies = [
  "ipnet",
  "jsonschema",
  "notify",
+ "rcgen",
  "reqwest 0.12.28",
  "rustix",
  "rustls",
