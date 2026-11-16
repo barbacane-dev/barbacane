@@ -301,6 +301,8 @@ pub fn bind(conn: &Connection) -> Result<(), LdapError> {
         fn host_ldap_bind(req_ptr: i32, req_len: i32) -> i32;
     }
     let serialized = serde_json::to_vec(conn).map_err(|_| LdapError::InvalidResponse)?;
+    // SAFETY: `serialized` is live for the call and its length is the one
+    // passed; the host only reads it and returns the result's length.
     let len = unsafe { host_ldap_bind(serialized.as_ptr() as i32, serialized.len() as i32) };
     read_result(len).map(|_| ())
 }
@@ -313,6 +315,8 @@ pub fn search(req: &SearchRequest) -> Result<Vec<Entry>, LdapError> {
         fn host_ldap_search(req_ptr: i32, req_len: i32) -> i32;
     }
     let serialized = serde_json::to_vec(req).map_err(|_| LdapError::InvalidResponse)?;
+    // SAFETY: `serialized` is live for the call and its length is the one
+    // passed; the host only reads it and returns the result's length.
     let len = unsafe { host_ldap_search(serialized.as_ptr() as i32, serialized.len() as i32) };
     read_result(len)
 }
@@ -330,6 +334,8 @@ fn read_result(result_len: i32) -> Result<Vec<Entry>, LdapError> {
         return Err(LdapError::Empty);
     }
     let mut buf = vec![0u8; result_len as usize];
+    // SAFETY: `buf` is live and `result_len` bytes long; the host writes at
+    // most that many bytes into it.
     let read = unsafe { host_ldap_read_result(buf.as_mut_ptr() as i32, result_len) };
     if read != result_len {
         return Err(LdapError::ReadFailed);

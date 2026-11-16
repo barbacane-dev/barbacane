@@ -5488,11 +5488,6 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Request headers as handed to plugins. `x-auth-*` is the identity contract
-/// written by auth plugins and read by acl and upstreams, so any client-supplied
-/// value is dropped here; otherwise a caller could forge groups an auth plugin
-/// leaves unset. Used by every path that builds a plugin request (dispatch and
-/// CORS preflight).
 /// `barbacane key` actions.
 #[derive(Subcommand, Debug)]
 enum KeyAction {
@@ -5882,6 +5877,11 @@ mod artifact_version_tests {
 /// middleware configuration tells a plugin to read. Everything else is dropped
 /// before any plugin sees it, so an upstream receives what the document
 /// describes and nothing a caller added on top.
+///
+/// `x-auth-*` is the identity contract written by auth plugins and read by
+/// acl and upstreams, so a client-supplied value is always dropped; otherwise a
+/// caller could forge groups an auth plugin leaves unset. Every path that
+/// builds a plugin request (dispatch and CORS preflight) goes through here.
 ///
 /// The WAF is deliberately not filtered this way: it inspects what the client
 /// actually sent, which is the whole point of it.

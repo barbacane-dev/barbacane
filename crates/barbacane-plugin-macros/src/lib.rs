@@ -134,8 +134,12 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
             /// Initialize the plugin with JSON config.
             #[no_mangle]
             pub extern "C" fn init(ptr: i32, len: i32) -> i32 {
-                let config_bytes = unsafe {
-                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                let config_bytes: &[u8] = if len <= 0 {
+                    &[]
+                } else {
+                    // SAFETY: the host passes a buffer it got from `alloc(len)`
+                    // and filled with `len` bytes; it stays live until `dealloc`.
+                    unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) }
                 };
 
                 match serde_json::from_slice::<#struct_name>(config_bytes) {
@@ -156,8 +160,12 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
             /// Returns 0 to continue, 1 to short-circuit with response.
             #[no_mangle]
             pub extern "C" fn on_request(ptr: i32, len: i32) -> i32 {
-                let request_bytes = unsafe {
-                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                let request_bytes: &[u8] = if len <= 0 {
+                    &[]
+                } else {
+                    // SAFETY: the host passes a buffer it got from `alloc(len)`
+                    // and filled with `len` bytes; it stays live until `dealloc`.
+                    unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) }
                 };
 
                 let mut request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
@@ -211,8 +219,12 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
             /// Process an outgoing response.
             #[no_mangle]
             pub extern "C" fn on_response(ptr: i32, len: i32) -> i32 {
-                let response_bytes = unsafe {
-                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                let response_bytes: &[u8] = if len <= 0 {
+                    &[]
+                } else {
+                    // SAFETY: the host passes a buffer it got from `alloc(len)`
+                    // and filled with `len` bytes; it stays live until `dealloc`.
+                    unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) }
                 };
 
                 let mut response: barbacane_plugin_sdk::prelude::Response = match serde_json::from_slice(response_bytes) {
@@ -267,6 +279,12 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
             /// Free a region previously returned by `alloc`.
             #[no_mangle]
             pub extern "C" fn dealloc(ptr: i32, size: i32) {
+                if size <= 0 {
+                    return;
+                }
+                // SAFETY: `ptr` came from `alloc(size)`, a `Vec<u8>` of capacity
+                // `size` that was forgotten; rebuilding it with that capacity
+                // frees it once.
                 unsafe {
                     drop(Vec::from_raw_parts(ptr as *mut u8, 0, size as usize));
                 }
@@ -278,6 +296,8 @@ pub fn barbacane_middleware(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 extern "C" {
                     fn host_set_output(ptr: i32, len: i32);
                 }
+                // SAFETY: `data` is live for the call and its length is the one
+                // passed; the host copies it and writes nothing back.
                 unsafe {
                     host_set_output(data.as_ptr() as i32, data.len() as i32);
                 }
@@ -331,8 +351,12 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
             /// Initialize the plugin with JSON config.
             #[no_mangle]
             pub extern "C" fn init(ptr: i32, len: i32) -> i32 {
-                let config_bytes = unsafe {
-                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                let config_bytes: &[u8] = if len <= 0 {
+                    &[]
+                } else {
+                    // SAFETY: the host passes a buffer it got from `alloc(len)`
+                    // and filled with `len` bytes; it stays live until `dealloc`.
+                    unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) }
                 };
 
                 match serde_json::from_slice::<#struct_name>(config_bytes) {
@@ -347,8 +371,12 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
             /// Dispatch a request and return a response.
             #[no_mangle]
             pub extern "C" fn dispatch(ptr: i32, len: i32) -> i32 {
-                let request_bytes = unsafe {
-                    core::slice::from_raw_parts(ptr as *const u8, len as usize)
+                let request_bytes: &[u8] = if len <= 0 {
+                    &[]
+                } else {
+                    // SAFETY: the host passes a buffer it got from `alloc(len)`
+                    // and filled with `len` bytes; it stays live until `dealloc`.
+                    unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) }
                 };
 
                 let mut request: barbacane_plugin_sdk::prelude::Request = match serde_json::from_slice(request_bytes) {
@@ -413,6 +441,12 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
             /// Free a region previously returned by `alloc`.
             #[no_mangle]
             pub extern "C" fn dealloc(ptr: i32, size: i32) {
+                if size <= 0 {
+                    return;
+                }
+                // SAFETY: `ptr` came from `alloc(size)`, a `Vec<u8>` of capacity
+                // `size` that was forgotten; rebuilding it with that capacity
+                // frees it once.
                 unsafe {
                     drop(Vec::from_raw_parts(ptr as *mut u8, 0, size as usize));
                 }
@@ -424,6 +458,8 @@ pub fn barbacane_dispatcher(_attr: TokenStream, item: TokenStream) -> TokenStrea
                 extern "C" {
                     fn host_set_output(ptr: i32, len: i32);
                 }
+                // SAFETY: `data` is live for the call and its length is the one
+                // passed; the host copies it and writes nothing back.
                 unsafe {
                     host_set_output(data.as_ptr() as i32, data.len() as i32);
                 }

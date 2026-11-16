@@ -193,6 +193,8 @@ pub fn call(request: &HttpRequest, body_bytes: Option<&[u8]>) -> Result<HttpResp
 
     body::set_http_request_body(body_bytes.unwrap_or(&[]));
     let serialized = serde_json::to_vec(request).map_err(|_| HttpError::InvalidResponse)?;
+    // SAFETY: `serialized` is live for the call and its length is the one
+    // passed; the host only reads it and returns the result's length.
     let result_len = unsafe { host_http_call(serialized.as_ptr() as i32, serialized.len() as i32) };
     read_response(result_len)
 }
@@ -212,6 +214,8 @@ pub fn pool_call(
 
     body::set_http_request_body(body_bytes.unwrap_or(&[]));
     let serialized = serde_json::to_vec(request).map_err(|_| HttpError::InvalidResponse)?;
+    // SAFETY: `serialized` is live for the call and its length is the one
+    // passed; the host only reads it and returns the result's length.
     let result_len =
         unsafe { host_http_pool_call(serialized.as_ptr() as i32, serialized.len() as i32) };
     read_response(result_len)
@@ -233,6 +237,8 @@ fn read_response(result_len: i32) -> Result<HttpResponse, HttpError> {
     }
 
     let mut buf = vec![0u8; result_len as usize];
+    // SAFETY: `buf` is live and `result_len` bytes long; the host writes at
+    // most that many bytes into it.
     let bytes_read = unsafe { host_http_read_result(buf.as_mut_ptr() as i32, result_len) };
     if bytes_read != result_len {
         return Err(HttpError::ReadFailed);

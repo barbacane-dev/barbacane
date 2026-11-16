@@ -8,7 +8,7 @@
 
 ## acl
 
-Enforces access control based on consumer identity and group membership. Reads the standard `x-auth-consumer` and `x-auth-consumer-groups` headers set by upstream auth plugins.
+Enforces access control based on consumer identity and group membership. Reads the standard `x-auth-consumer` and `x-auth-consumer-groups` headers set by upstream auth plugins. A client cannot supply them: the data plane drops every `x-auth-*` header a request arrives with before the first plugin runs, so only an auth plugin sets them.
 
 ```yaml
 x-barbacane-middlewares:

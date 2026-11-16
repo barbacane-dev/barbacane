@@ -3,6 +3,11 @@
 //! Enforces access control based on consumer identity and group membership.
 //! Reads `x-auth-consumer` and `x-auth-consumer-groups` headers set by
 //! upstream auth plugins (basic-auth, jwt-auth, oidc-auth, etc.).
+//!
+//! The headers are as trustworthy as `context:auth.sub` and
+//! `context:auth.groups`: the data plane drops every `x-auth-*` header a
+//! client sends before the first plugin runs, so only an auth plugin can set
+//! them.
 
 use barbacane_plugin_sdk::groups;
 use barbacane_plugin_sdk::prelude::*;

@@ -33,6 +33,8 @@ pub fn get(key: &str) -> Option<String> {
         fn host_context_get(key_ptr: i32, key_len: i32) -> i32;
         fn host_context_read_result(buf_ptr: i32, buf_len: i32) -> i32;
     }
+    // SAFETY: `key` and `buf` are live for each call and the lengths passed are
+    // theirs. The host reads `key` and writes at most `len` bytes into `buf`.
     unsafe {
         let len = host_context_get(key.as_ptr() as i32, key.len() as i32);
         if len <= 0 {
@@ -54,6 +56,8 @@ pub fn set(key: &str, value: &str) {
     extern "C" {
         fn host_context_set(key_ptr: i32, key_len: i32, val_ptr: i32, val_len: i32);
     }
+    // SAFETY: `key` and `value` are live for the call and the lengths passed
+    // are theirs; the host only reads them.
     unsafe {
         host_context_set(
             key.as_ptr() as i32,
