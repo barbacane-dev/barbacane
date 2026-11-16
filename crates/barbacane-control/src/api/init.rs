@@ -67,7 +67,7 @@ pub async fn init_project(
         .description
         .unwrap_or_else(|| format!("A Barbacane-powered API for {}", req.name));
 
-    // Generate files (no .gitignore - that's only for CLI usage)
+    // The CLI's `barbacane init` also writes a .gitignore; this does not.
     let files = vec![
         ProjectFile {
             path: "barbacane.yaml".to_string(),
@@ -112,13 +112,19 @@ plugins: {}
     .to_string()
 }
 
+/// `value` as a double-quoted YAML scalar. A JSON string is one, with every
+/// character that could end it or start new structure escaped.
+fn yaml_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
 fn generate_spec(name: &str, version: &str, description: &str, template: &str) -> String {
     if template == "minimal" {
         format!(
             r#"openapi: "3.1.0"
 info:
   title: {name}
-  version: "{version}"
+  version: {version}
   description: {description}
 
 servers:
@@ -141,9 +147,9 @@ paths:
         "200":
           description: Service is healthy
 "#,
-            name = name,
-            version = version,
-            description = description,
+            name = yaml_string(name),
+            version = yaml_string(version),
+            description = yaml_string(description),
         )
     } else {
         // Basic template with more examples
@@ -151,7 +157,7 @@ paths:
             r#"openapi: "3.1.0"
 info:
   title: {name}
-  version: "{version}"
+  version: {version}
   description: {description}
 
 servers:
@@ -289,9 +295,32 @@ components:
           type: string
           format: email
 "#,
-            name = name,
-            version = version,
-            description = description,
+            name = yaml_string(name),
+            version = yaml_string(version),
+            description = yaml_string(description),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A name, version or description stays the one scalar it was given,
+    /// whatever YAML it contains.
+    #[test]
+    fn the_name_version_and_description_stay_scalars() {
+        let name = "Shop\ninjected: true\n  # \"quoted\" 'single' {flow}: [x]";
+        let version = "1.0\" injected";
+        let description = "desc: with: colons\n- list";
+        for template in ["basic", "minimal"] {
+            let spec = generate_spec(name, version, description, template);
+            let doc: serde_json::Value =
+                barbacane_compiler::yaml::from_str(&spec).expect("valid YAML");
+            assert_eq!(doc["info"]["title"], name, "{template}");
+            assert_eq!(doc["info"]["version"], version, "{template}");
+            assert_eq!(doc["info"]["description"], description, "{template}");
+            assert!(doc.get("injected").is_none(), "{template}: {spec}");
+        }
     }
 }

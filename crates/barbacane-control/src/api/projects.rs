@@ -14,7 +14,7 @@ use crate::db::{
 use crate::error::ProblemDetails;
 
 use super::router::AppState;
-use super::specs::UploadResponse;
+use super::specs::{UploadResponse, DEFAULT_PROJECT_ID};
 
 /// POST /projects - Create a new project
 pub async fn create_project(
@@ -89,6 +89,11 @@ pub async fn delete_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ProblemDetails> {
+    if id == DEFAULT_PROJECT_ID {
+        return Err(ProblemDetails::conflict(
+            "the default project holds the specs uploaded with POST /specs and cannot be deleted",
+        ));
+    }
     let repo = ProjectsRepository::new(state.pool.clone());
     let deleted = repo.delete(id).await?;
     if deleted {

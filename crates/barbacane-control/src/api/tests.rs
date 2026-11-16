@@ -42,6 +42,22 @@ async fn make_app() -> Option<Router> {
     ))
 }
 
+/// The router and its pool, for tests that also query the database.
+async fn make_app_with_pool() -> Option<(Router, sqlx::PgPool)> {
+    let url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string());
+    let pool = crate::db::create_pool(&url).await.ok()?;
+    crate::db::run_migrations(&pool).await.ok()?;
+    let conn_mgr = Arc::new(crate::api::ConnectionManager::new());
+    let app = crate::api::create_router(
+        pool.clone(),
+        None,
+        conn_mgr,
+        crate::api::AdminAuth::Disabled,
+    );
+    Some((app, pool))
+}
+
 /// Build the control-plane router with a pool that never connects: for the
 /// routes that answer before any query.
 fn make_app_without_db() -> Router {
@@ -1129,5 +1145,80 @@ async fn metrics_count_requests_by_route_template() {
     assert!(
         text.contains("barbacane_control_data_planes_connected 0"),
         "{text}"
+    );
+}
+
+#[tokio::test]
+async fn the_default_project_cannot_be_deleted() {
+    let (status, body) = send(
+        make_app_without_db(),
+        empty_req(
+            Method::DELETE,
+            "/projects/00000000-0000-0000-0000-000000000001",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        json_body(&body)["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("POST /specs")),
+        "{body:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_default_project_exists_after_migrations() {
+    let Some((_, pool)) = make_app_with_pool().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let default = crate::db::ProjectsRepository::new(pool)
+        .get_by_id(crate::api::specs::DEFAULT_PROJECT_ID)
+        .await
+        .expect("query");
+    assert!(default.is_some());
+}
+
+#[tokio::test]
+async fn deleting_a_project_deletes_its_artifacts() {
+    let Some((app, pool)) = make_app_with_pool().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let (_, created) = send(
+        app.clone(),
+        json_req(
+            Method::POST,
+            "/projects",
+            json!({"name": unique_project_name()}),
+        ),
+    )
+    .await;
+    let project: Uuid = json_body(&created)["id"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("project id");
+    let artifacts = crate::db::ArtifactsRepository::new(pool);
+    let artifact = artifacts
+        .create(
+            Some(project),
+            json!({}),
+            b"artifact".to_vec(),
+            &"0".repeat(64),
+            "test",
+        )
+        .await
+        .expect("artifact");
+
+    let (status, _) = send(
+        app,
+        empty_req(Method::DELETE, &format!("/projects/{project}")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        artifacts.get(artifact.id).await.expect("query").is_none(),
+        "the artifact went with its project"
     );
 }

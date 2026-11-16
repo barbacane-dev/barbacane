@@ -178,6 +178,8 @@ Response:
 
 Projects organize your APIs and configure which plugins to use. Each project can have its own set of specs, plugin configurations, and connected data planes.
 
+Deleting a project deletes everything in it: specs, compilations, artifacts, plugin configurations, API keys and data plane records. The default project, `00000000-0000-0000-0000-000000000001`, receives the specs uploaded with `POST /specs` and cannot be deleted (`409`).
+
 ### Create a Project
 
 ```bash
