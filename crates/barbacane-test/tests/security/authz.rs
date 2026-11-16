@@ -31,7 +31,7 @@
 //! assertions only run when the control plane is actually up, so they are RED
 //! against a running-but-unhardened control plane and GREEN once the fix lands.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
@@ -114,18 +114,7 @@ impl TestControlPlane {
 
 /// Locate the built `barbacane-control` binary.
 fn find_control_binary() -> Option<PathBuf> {
-    let candidates = [
-        "target/debug/barbacane-control",
-        "target/release/barbacane-control",
-        "../target/debug/barbacane-control",
-        "../target/release/barbacane-control",
-        "../../target/debug/barbacane-control",
-        "../../target/release/barbacane-control",
-    ];
-    candidates
-        .iter()
-        .map(PathBuf::from)
-        .find(|p| Path::new(p).exists())
+    barbacane_test::find_workspace_binary("barbacane-control")
 }
 
 const ADMIN_TOKEN: &str = "test-admin-token-do-not-use-in-prod";
@@ -135,10 +124,10 @@ const ADMIN_TOKEN: &str = "test-admin-token-do-not-use-in-prod";
 /// plugins, artifacts, compilations, and api-keys.
 #[tokio::test]
 async fn mutating_routes_require_admin_token() {
-    // EXPECTED TO FAIL until BARB-SEC-001 is fixed (require_admin not yet wired
-    // into create_router; mutating routes are currently reachable unauthenticated).
-    let Some(cp) = TestControlPlane::boot(Some(ADMIN_TOKEN)).await else {
-        eprintln!("skip: control plane unavailable (need DATABASE_URL + built barbacane-control)");
+    let Some(cp) = barbacane_test::required(
+        TestControlPlane::boot(Some(ADMIN_TOKEN)).await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with `barbacane-control` built",
+    ) else {
         return;
     };
 
@@ -223,9 +212,10 @@ async fn mutating_routes_require_admin_token() {
 /// is anything other than 401 — the request reaches the handler.
 #[tokio::test]
 async fn valid_admin_token_is_accepted() {
-    // EXPECTED TO FAIL until BARB-SEC-001 is fixed.
-    let Some(cp) = TestControlPlane::boot(Some(ADMIN_TOKEN)).await else {
-        eprintln!("skip: control plane unavailable (need DATABASE_URL + built barbacane-control)");
+    let Some(cp) = barbacane_test::required(
+        TestControlPlane::boot(Some(ADMIN_TOKEN)).await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with `barbacane-control` built",
+    ) else {
         return;
     };
 
@@ -251,8 +241,10 @@ async fn valid_admin_token_is_accepted() {
 #[tokio::test]
 async fn health_is_exempt_from_auth() {
     // This is a positive control: it should pass both before and after the fix.
-    let Some(cp) = TestControlPlane::boot(Some(ADMIN_TOKEN)).await else {
-        eprintln!("skip: control plane unavailable (need DATABASE_URL + built barbacane-control)");
+    let Some(cp) = barbacane_test::required(
+        TestControlPlane::boot(Some(ADMIN_TOKEN)).await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with `barbacane-control` built",
+    ) else {
         return;
     };
 
@@ -273,14 +265,12 @@ async fn health_is_exempt_from_auth() {
 /// cannot accidentally expose an unauthenticated control plane).
 #[tokio::test]
 async fn server_refuses_to_start_without_admin_token() {
-    // EXPECTED TO FAIL until BARB-SEC-001 is fixed (serve currently starts with
-    // no token configured).
-    //
-    // We assert via `boot(None)` returning None *because the process exited*.
-    // To distinguish "exited (good)" from "no DB / no binary (skip)", we first
-    // require the prerequisites to exist, then assert boot fails.
-    if std::env::var("DATABASE_URL").is_err() || find_control_binary().is_none() {
-        eprintln!("skip: control plane unavailable (need DATABASE_URL + built barbacane-control)");
+    // `boot(None)` returning `None` means the process exited, once the database
+    // and the binary are known to be there.
+    if !barbacane_test::require(
+        std::env::var("DATABASE_URL").is_ok() && find_control_binary().is_some(),
+        "a control plane on PostgreSQL (`DATABASE_URL`) with `barbacane-control` built",
+    ) {
         return;
     }
 
@@ -291,31 +281,6 @@ async fn server_refuses_to_start_without_admin_token() {
     );
 }
 
-/// Project-scoped IDOR: a credential scoped to project A must not be able to
-/// read project B's spec / artifact / api-keys.
-///
-/// NOTE: per-project credentials do not exist yet in the model (only a single
-/// shared admin token is planned for the first hardening pass), and the global
-/// `/specs/{id}` / `/artifacts/{id}` routes carry no project scoping at all.
-/// This test documents the intended end-state and is parked behind `#[ignore]`
-/// until the ownership model lands.
-#[tokio::test]
-#[ignore = "BLOCKED: per-project credentials + ownership checks on global /specs/{id} and /artifacts/{id} not implemented (BARB-SEC-001 phase 2)"]
-async fn project_scoped_idor_is_blocked() {
-    // EXPECTED TO FAIL until BARB-SEC-001 (phase 2) is fixed.
-    let Some(cp) = TestControlPlane::boot(Some(ADMIN_TOKEN)).await else {
-        eprintln!("skip: control plane unavailable");
-        return;
-    };
-
-    // Intent: create project A and project B, mint a project-A-scoped token,
-    // upload a spec under B, then assert A's token gets 403/404 reading B's
-    // resources. Wiring this requires the per-project token API, which is not
-    // yet present, hence #[ignore]. The shared-token boot above keeps the test
-    // compiling against the current binary surface.
-    let _ = cp.url("/projects");
-}
-
 /// Revoking a data-plane API key ends the WebSocket sessions registered with
 /// it, so a revoked credential stops receiving artifacts at once rather than
 /// at the data plane's next reconnect.
@@ -324,8 +289,10 @@ async fn revoking_an_api_key_closes_its_data_plane_sessions() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let Some(cp) = TestControlPlane::boot(Some(ADMIN_TOKEN)).await else {
-        eprintln!("skip: control plane unavailable (no DATABASE_URL or binary)");
+    let Some(cp) = barbacane_test::required(
+        TestControlPlane::boot(Some(ADMIN_TOKEN)).await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with `barbacane-control` built",
+    ) else {
         return;
     };
     let bearer = format!("Bearer {ADMIN_TOKEN}");

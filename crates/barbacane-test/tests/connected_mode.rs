@@ -1,8 +1,8 @@
 //! Connected mode end to end: a data plane registered with the control plane
 //! receives the artifact `deploy` publishes, downloads it and hot-reloads.
 //!
-//! Needs PostgreSQL in `DATABASE_URL` and both binaries built; skips
-//! otherwise.
+//! Needs PostgreSQL in `DATABASE_URL` and both binaries built; a local run
+//! skips without them and a CI run fails (`barbacane_test::require`).
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -29,10 +29,7 @@ impl Drop for ControlPlane {
 }
 
 fn binary(name: &str) -> Option<PathBuf> {
-    ["target/debug", "../target/debug", "../../target/debug"]
-        .iter()
-        .map(|dir| PathBuf::from(dir).join(name))
-        .find(|p| p.exists())
+    barbacane_test::find_workspace_binary(name)
 }
 
 impl ControlPlane {
@@ -108,8 +105,10 @@ fn fixture(name: &str) -> String {
 /// with that project's API key downloads it and serves it.
 #[tokio::test]
 async fn a_deployed_artifact_reaches_a_connected_data_plane() {
-    let Some(cp) = ControlPlane::boot().await else {
-        eprintln!("skip: no database or binaries");
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
         return;
     };
     let version = format!("1.0.{}", uuid::Uuid::new_v4().as_u128() % 1_000_000);

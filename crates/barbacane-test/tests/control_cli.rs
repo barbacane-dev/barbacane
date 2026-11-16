@@ -1,7 +1,7 @@
 //! `barbacane control` against a running control plane.
 //!
-//! Needs PostgreSQL in `DATABASE_URL` and both binaries built; skips
-//! otherwise, as the authorization tests do.
+//! Needs PostgreSQL in `DATABASE_URL` and both binaries built; a local run
+//! skips without them and a CI run fails (`barbacane_test::require`).
 //!
 //! Run with: `cargo test -p barbacane-test --test control_cli`
 
@@ -27,10 +27,7 @@ impl Drop for ControlPlane {
 }
 
 fn binary(name: &str) -> Option<PathBuf> {
-    ["target/debug", "../target/debug", "../../target/debug"]
-        .iter()
-        .map(|dir| PathBuf::from(dir).join(name))
-        .find(|p| p.exists())
+    barbacane_test::find_workspace_binary(name)
 }
 
 impl ControlPlane {
@@ -115,8 +112,10 @@ fn unique(prefix: &str) -> String {
 
 #[tokio::test]
 async fn projects_are_created_listed_shown_and_deleted() {
-    let Some(cp) = ControlPlane::boot().await else {
-        eprintln!("skip: no database or binaries");
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
         return;
     };
     let name = unique("cli");
@@ -158,8 +157,10 @@ async fn projects_are_created_listed_shown_and_deleted() {
 
 #[tokio::test]
 async fn a_rejected_token_and_an_unreachable_control_plane_are_reported() {
-    let Some(cp) = ControlPlane::boot().await else {
-        eprintln!("skip: no database or binaries");
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
         return;
     };
     let refused = cp.cli_with(&["projects", "list"], None, "not-the-token");
@@ -184,8 +185,10 @@ async fn a_rejected_token_and_an_unreachable_control_plane_are_reported() {
 
 #[tokio::test]
 async fn push_compiles_a_project_and_deploy_waits_for_its_data_planes() {
-    let Some(cp) = ControlPlane::boot().await else {
-        eprintln!("skip: no database or binaries");
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
         return;
     };
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
@@ -268,8 +271,10 @@ async fn push_compiles_a_project_and_deploy_waits_for_its_data_planes() {
 
 #[tokio::test]
 async fn a_failed_compilation_fails_the_push() {
-    let Some(cp) = ControlPlane::boot().await else {
-        eprintln!("skip: no database or binaries");
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
         return;
     };
     let created = cp.cli_with(

@@ -1,5 +1,5 @@
 //! A data-plane session over the WebSocket against a database: what ends
-//! it. Skips without `DATABASE_URL`.
+//! it. Needs PostgreSQL ([`crate::api::test_pool`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,9 +17,7 @@ type Socket =
 
 /// The pool and the base URL of a control plane served on loopback.
 async fn serve() -> Option<(PgPool, String)> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = crate::db::create_pool(&url).await.ok()?;
-    crate::db::run_migrations(&pool).await.ok()?;
+    let pool = crate::api::test_pool().await?;
     let app = create_router(
         pool.clone(),
         None,

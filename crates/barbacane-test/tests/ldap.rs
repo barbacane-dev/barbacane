@@ -69,8 +69,10 @@ async fn gateway(url: &str) -> TestGateway {
 /// logging) when no directory is reachable.
 async fn live_gateway() -> Option<TestGateway> {
     let url = directory_url();
-    if !directory_reachable(&url) {
-        eprintln!("skipping: no LDAP directory at {url} (set BARBACANE_TEST_LDAP_URL)");
+    if !barbacane_test::require(
+        directory_reachable(&url),
+        &format!("an LDAP directory at {url} (`BARBACANE_TEST_LDAP_URL`)"),
+    ) {
         return None;
     }
     Some(gateway(&url).await)

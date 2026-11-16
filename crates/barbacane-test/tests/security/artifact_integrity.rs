@@ -115,30 +115,15 @@ fn tamper_artifact(dir: &Path, predicate: impl Fn(&str) -> bool) -> PathBuf {
 
 /// Locate the built `barbacane` data-plane binary.
 fn find_barbacane_binary() -> Option<PathBuf> {
-    [
-        "target/debug/barbacane",
-        "target/release/barbacane",
-        "../target/debug/barbacane",
-        "../target/release/barbacane",
-        "../../target/debug/barbacane",
-        "../../target/release/barbacane",
-    ]
-    .iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
+    barbacane_test::find_workspace_binary("barbacane")
 }
 
 /// Boot `barbacane serve` against `artifact` and report whether the gateway
 /// becomes healthy. `true` = loaded & serving (verification did NOT reject);
 /// `false` = the process refused to start / never became healthy.
 async fn gateway_loads_artifact(artifact: &Path) -> bool {
-    let Some(binary) = find_barbacane_binary() else {
-        // Caller treats `None`-equivalent as skip; surface via panic-free path.
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
-        // Returning `false` here would masquerade as "rejected"; instead we make
-        // the caller skip by checking the binary separately. See callers.
-        return false;
-    };
+    // Callers check for the binary first: `false` here must mean "refused".
+    let binary = find_barbacane_binary().expect("callers require the barbacane binary");
 
     let mut cmd = Command::new(&binary);
     cmd.arg("serve")
@@ -183,8 +168,7 @@ async fn gateway_loads_artifact(artifact: &Path) -> bool {
 /// Tampering a bundled plugin's WASM bytes must make the load FAIL.
 #[tokio::test]
 async fn tampered_plugin_wasm_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -201,8 +185,7 @@ async fn tampered_plugin_wasm_is_rejected() {
 /// Corrupting `routes.json` (one flipped byte) must make the load FAIL.
 #[tokio::test]
 async fn tampered_routes_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -220,8 +203,7 @@ async fn tampered_routes_is_rejected() {
 /// over the manifest is what makes this detectable.
 #[tokio::test]
 async fn tampered_manifest_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -273,8 +255,7 @@ async fn tampered_manifest_is_rejected() {
 /// No trusted key is configured, so no signature is required.
 #[tokio::test]
 async fn untampered_artifact_loads() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -381,8 +362,7 @@ async fn assert_rejected(artifact: &Path, what: &str) {
 /// manifest's checksum for `routes.json` no longer matches.
 #[tokio::test]
 async fn rewritten_routes_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -402,8 +382,7 @@ async fn rewritten_routes_is_rejected() {
 /// `artifact_hash`, the checksum table is.
 #[tokio::test]
 async fn plugin_swapped_with_matching_digest_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -420,8 +399,7 @@ async fn plugin_swapped_with_matching_digest_is_rejected() {
 /// runs only from `plugins/<name>.wasm`, under its checksum.
 #[tokio::test]
 async fn plugin_redirected_to_another_member_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -438,8 +416,7 @@ async fn plugin_redirected_to_another_member_is_rejected() {
 /// gateway serves it at `/__barbacane/specs`.
 #[tokio::test]
 async fn rewritten_spec_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -454,8 +431,7 @@ async fn rewritten_spec_is_rejected() {
 /// verified are the bytes that are used.
 #[tokio::test]
 async fn duplicate_member_is_rejected() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built (run `cargo build -p barbacane`)");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().expect("temp dir");
@@ -504,8 +480,7 @@ fn dispatcher_importing(wasi_function: &str, signature: &str) -> String {
 /// in an artifact built some other way.
 #[tokio::test]
 async fn a_plugin_importing_an_unsupported_wasi_function_is_refused_on_load() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().unwrap();
@@ -530,8 +505,7 @@ async fn a_plugin_importing_an_unsupported_wasi_function_is_refused_on_load() {
 /// plane refuses it too, in an artifact built some other way.
 #[tokio::test]
 async fn a_plugin_without_an_abi_version_is_refused_on_load() {
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let tagged = dispatcher_importing("random_get", "(param i32 i32) (result i32)");
@@ -578,8 +552,7 @@ async fn limits_above_the_gateway_ceiling_are_refused_on_load() {
     use barbacane_compiler::limits::MAX_MEMORY_MIB;
     use barbacane_compiler::DeclaredLimits;
 
-    if find_barbacane_binary().is_none() {
-        eprintln!("skip: barbacane binary not built");
+    if !barbacane_test::require(find_barbacane_binary().is_some(), "the barbacane binary") {
         return;
     }
     let dir = TempDir::new().unwrap();
