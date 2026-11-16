@@ -7,7 +7,9 @@ reviews:
   profile: "chill"
   request_changes_workflow: false
   high_level_summary: true
-  review_status: true
+  # No status comment on pull requests it does not review: only a
+  # `deep-review` label asks for a review, and the rest stay quiet.
+  review_status: false
   poem: false
   collapse_walkthrough: true
   sequence_diagrams: false
