@@ -90,6 +90,24 @@ jobs:
     needs: [validate-version, validate-changelog]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # barbacane-control's tests run against PostgreSQL, and fail without it
+    # under CI.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: barbacane
+          POSTGRES_PASSWORD: barbacane
+          POSTGRES_DB: barbacane
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
     steps:
       - uses: actions/checkout@v6
         with:
@@ -411,9 +429,12 @@ jobs:
           category: 'trivy-standalone'
 
   # Publish crates to crates.io
+  # A version on crates.io cannot be published again, so the crates go out
+  # only once the binaries and plugins are built and the images are scanned
+  # and signed.
   publish-crates:
     name: Publish Crates
-    needs: [validate-version, validate-changelog, verify]
+    needs: [validate-version, validate-changelog, verify, build-binaries, build-plugins, scan-containers, sign-and-sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
