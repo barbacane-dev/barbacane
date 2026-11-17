@@ -24,8 +24,10 @@ ENV CARGO_BUILD_JOBS=2
 RUN cargo build --locked --release --package barbacane && \
     cp target/release/barbacane /usr/local/bin/barbacane
 
-# Runtime stage - distroless for minimal attack surface
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+# Runtime stage - glibc, libgcc, libstdc++ and CA certificates, no shell and
+# no OpenSSL (TLS is rustls with aws-lc-rs, linked in). The free tier publishes
+# only `latest`: bump this digest by hand.
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:2c362104c7f7adc37e6bdc87451450ff3834871a6268d930815cbe561493f947
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"
@@ -36,7 +38,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 COPY --from=builder /usr/local/bin/barbacane /barbacane
 
 # Run as non-root user (UID 65532)
-USER nonroot:nonroot
+USER 65532:65532
 
 # Expose default ports
 # 8080 - HTTP
