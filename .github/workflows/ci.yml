@@ -923,11 +923,6 @@ jobs:
       - name: Build the fuzz targets
         run: cd fuzz && cargo build --locked --bins
 
-  # Single required status check. Aggregates every gating job into one stable
-  # context, so branch protection needs just "CI" regardless of matrix sharding
-  # or which jobs a given change skips. Passes when every needed job succeeded
-  # or was skipped; fails if any failed or was cancelled. Not run on
-  # issue_comment (which exists only for the /bench command).
   # The book and the crate docs build without warnings, so a broken link or
   # a bad SUMMARY.md entry is found on the pull request, not after the merge.
   docs:
@@ -957,6 +952,47 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  # The plugin SDK's public API, compared with its latest stable release on
+  # crates.io. A pre-release workspace version is compared with the previous
+  # major, which allows any change (docs/reference/stability.md: pre-releases
+  # are outside the promise). From a stable version, a breaking change fails
+  # the job. cargo-semver-checks skips proc-macro crates, so it does not check
+  # barbacane-plugin-macros.
+  semver:
+    name: Semver
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+        with:
+          tool: cargo-semver-checks@0.51.0
+
+      - name: Check the plugin SDK against crates.io
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "barbacane-plugin-sdk") | .version')"
+          case "$version" in
+            *-*) release_type=() ;;
+            *) release_type=(--release-type minor) ;;
+          esac
+          cargo semver-checks check-release "${release_type[@]}" \
+            --package barbacane-plugin-sdk
+
+  # Single required status check. Aggregates every gating job into one stable
+  # context, so branch protection needs just "CI" regardless of matrix sharding
+  # or which jobs a given change skips. Passes when every needed job succeeded
+  # or was skipped; fails if any failed or was cancelled. Not run on
+  # issue_comment (which exists only for the /bench command).
   ci-success:
     name: CI
     if: ${{ always() && github.event_name != 'issue_comment' }}
@@ -982,6 +1018,7 @@ jobs:
       - images
       - fuzz-build
       - docs
+      - semver
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
