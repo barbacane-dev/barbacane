@@ -350,9 +350,11 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
-  # Security scan the multi-arch images
+  # Scans each multi-arch image with Grype. A vulnerability rated high or
+  # critical that has a fix fails the release; every finding goes to code
+  # scanning.
   scan-containers:
-    name: Scan Containers
+    name: Scan Containers (${{ matrix.image }})
     needs: [validate-version, create-manifests]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -360,6 +362,10 @@ jobs:
       contents: read
       packages: read
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [barbacane, barbacane-control, barbacane-standalone]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -376,59 +382,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Security scan images
-      - name: Scan data plane image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - name: Scan ${{ matrix.image }}
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-data-plane.sarif'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
-          exit-code: '1'
+          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tag.outputs.version }}
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          output-format: sarif
+          output-file: grype-${{ matrix.image }}.sarif
 
-      - name: Scan control plane image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-control-plane.sarif'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
-          exit-code: '1'
-
-      - name: Upload data plane scan results
+      - name: Upload scan results
+        if: ${{ !cancelled() && hashFiles(format('grype-{0}.sarif', matrix.image)) != '' }}
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
         with:
-          sarif_file: 'trivy-data-plane.sarif'
-          category: 'trivy-data-plane'
+          sarif_file: grype-${{ matrix.image }}.sarif
+          category: grype-${{ matrix.image }}
 
-      - name: Upload control plane scan results
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: 'trivy-control-plane.sarif'
-          category: 'trivy-control-plane'
-
-      - name: Scan standalone image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.tag.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-standalone.sarif'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
-          exit-code: '1'
-
-      - name: Upload standalone scan results
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: 'trivy-standalone.sarif'
-          category: 'trivy-standalone'
-
-  # Publish crates to crates.io
   # A version on crates.io cannot be published again, so the crates go out
   # only once the binaries and plugins are built and the images are scanned
   # and signed.

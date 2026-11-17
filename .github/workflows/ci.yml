@@ -847,10 +847,13 @@ jobs:
         include:
           - image: barbacane
             file: Dockerfile
+            binary: /barbacane
           - image: barbacane-control
             file: Dockerfile.control
+            binary: /usr/local/bin/barbacane-control
           - image: barbacane-standalone
             file: Dockerfile.standalone
+            binary: barbacane
     steps:
       - uses: actions/checkout@v6
         with:
@@ -866,6 +869,26 @@ jobs:
           file: ./${{ matrix.file }}
           platforms: linux/amd64
           push: false
+          load: true
+          tags: ${{ matrix.image }}:ci
+
+      # The binary starts on the runtime image: its shared libraries resolve.
+      - name: Run ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}:ci
+          BINARY: ${{ matrix.binary }}
+        run: docker run --rm --entrypoint "$BINARY" "$IMAGE" --version
+
+      # The scan the release runs (release.yml, scan-containers), so a tag is
+      # not the first time an image meets it.
+      - name: Scan ${{ matrix.image }}
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ matrix.image }}:ci
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          output-format: table
 
   # The cargo-fuzz targets in fuzz/, built (not run) on stable. fuzz/ is a
   # workspace of its own; the job copies the root Cargo.lock into it first, so

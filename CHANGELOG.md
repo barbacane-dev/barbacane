@@ -54,6 +54,7 @@ The breaking changes below are gathered, with what to do and in which order, in 
 - **artifacts**: the `.bca` format version is 8. The MCP configuration was part of `artifact_hash`, so a data plane from this release refuses an artifact built by an earlier compiler: recompile it.
 
   > **Upgrade note (breaking):** recompile every artifact with this release's compiler before upgrading a data plane.
+- **data-plane image**: `barbacane` is built on `cgr.dev/chainguard/glibc-dynamic` (glibc, libgcc, libstdc++ and CA certificates), in place of `gcr.io/distroless/cc-debian12`. It has no shell and no OpenSSL, which the gateway does not use (TLS is rustls), and runs as uid 65532 as before.
 - **control-plane image**: `barbacane-control` runs the API alone, as the non-root `barbacane` user, and exposes only port 9090. Port 80 and its `/api/` prefix are gone: clients call the API on port 9090.
 
   > **Upgrade note (breaking):** clients and compose files that reached the API on port 80 under `/api/` call port 9090 without the prefix.
