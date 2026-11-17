@@ -22,6 +22,10 @@ ignore = [
     "RUSTSEC-2026-0391",
     "RUSTSEC-2026-0398",
     "RUSTSEC-2026-0403",
+
+    # chrono unmaintained, every version; no vulnerability. rskafka 0.6 requires it
+    # whatever the workspace uses; moving the workspace's own uses to `time` is #400.
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
