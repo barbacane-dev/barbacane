@@ -20,7 +20,7 @@ use barbacane_test::gateway::{LoggedChild, LISTEN_ANY_PORT, STARTUP_TIMEOUT};
 fn gateway_binary() -> std::path::PathBuf {
     barbacane_test::gateway::find_barbacane_binary()
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("target/debug/barbacane"))
+        .expect("the barbacane binary is built (cargo build -p barbacane)")
 }
 
 /// The smallest artifact the repository can build: one mock route.

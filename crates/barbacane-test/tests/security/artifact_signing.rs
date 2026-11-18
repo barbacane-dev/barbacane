@@ -19,15 +19,9 @@ use tempfile::TempDir;
 use crate::fixtures_dir;
 
 fn barbacane_binary() -> PathBuf {
-    [
-        "target/debug/barbacane",
-        "../target/debug/barbacane",
-        "../../target/debug/barbacane",
-    ]
-    .iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
-    .expect("the barbacane binary is built (cargo build -p barbacane)")
+    barbacane_test::gateway::find_barbacane_binary()
+        .map(PathBuf::from)
+        .expect("the barbacane binary is built (cargo build -p barbacane)")
 }
 
 /// Generate a key with `barbacane key generate`; returns its path and the
