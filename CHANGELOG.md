@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **control plane**: `barbacane-control health` checks that a control plane answers `200` on `/health` (`--url`, default `http://127.0.0.1:9090`), and exits `1` with the reason otherwise. The `barbacane-control` image's `HEALTHCHECK` runs it (#397).
+
 ### Changed
 
+- **images**: `barbacane` and `barbacane-control` run on a base of Wolfi packages that the Dockerfiles build with apko: glibc 2.44 and its loader, libgcc, the CA bundle and the base layout, with `nonroot` (uid 65532) and no shell or package manager. `docker/runtime.apko.lock.json` pins every package by version and checksum; the `Runtime base` workflow scans the base and the latest release's images every night and proposes a newer lock on the `deps/runtime-base` branch. `barbacane` was built on `cgr.dev/chainguard/glibc-dynamic`, whose free tier publishes `latest` only; it leaves `libstdc++`, which the gateway does not link. Both binaries are built with `cargo auditable`, so a scanner reads their crates and versions, and matches advisories that only GitHub publishes (#397).
+- **control-plane image**: `barbacane-control` moves from Debian 12 slim to the same base. It runs as `nonroot` (uid 65532, home `/home/nonroot`) in place of the `barbacane` system user, has no shell, and its `HEALTHCHECK` runs `barbacane-control health`.
+
+  > **Upgrade note (breaking):** a health check that runs a shell command in the control-plane container (`bash -c 'echo > /dev/tcp/localhost/9090'`) fails: use `["CMD", "/usr/local/bin/barbacane-control", "health"]`. A volume the control plane writes to must be writable by uid 65532.
 - **YAML**: serde-saphyr 2.2.0. More documents read as libyaml read them, so as in 0.12: a plain `null`, `~` or empty scalar reads as its text as a mapping key or where a string is expected (a key tagged `!!null` is still refused); a quoted scalar continued on lines not indented past its node, or indented with tabs, reads; and `0X1F`, `0O17` and `0B101` are strings, and so are `-.nan` and `+.nan`. 1.0.0-rc.1 refused the null-like scalars and the under-indented quoted scalars, read the upper-case prefixes as integers, and signed `.nan` as not-a-number. Twenty-five kinds of construct read differently from libyaml, listed in `barbacane_compiler::yaml::differential`; the [migration guide](docs/guide/migrating-to-1.0.md#yaml-is-read-by-a-different-parser) lists those a spec can meet.
 
 ### Fixed

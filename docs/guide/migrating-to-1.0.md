@@ -118,7 +118,8 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 
 ### Image, port and credentials
 
-- The `barbacane-control` image runs the API alone, as a non-root user, on port 9090. Port 80 and the `/api/` prefix are gone: clients call `http://control:9090/...`.
+- The `barbacane-control` image runs the API alone, as `nonroot` (uid 65532, home `/home/nonroot`), on port 9090. Port 80 and the `/api/` prefix are gone: clients call `http://control:9090/...`.
+- The image has no shell. A health check that ran a shell command runs `["CMD", "/usr/local/bin/barbacane-control", "health"]`, and a volume the control plane writes to must be writable by uid 65532.
 - `BARBACANE_CONTROL_ADMIN_TOKEN` is required and must be at least 32 bytes (`openssl rand -hex 32`). To rotate it, start with the new token and the old one in `BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS`, move the clients, then restart without the previous one.
 - `GET /openapi` and `GET /docs` need no token; everything else but `/health`, `/ready` and the data-plane WebSocket does.
 - The web interface is gone; `barbacane control <resource> <command>` drives the API from the shell, with one command per operation, `push` and `deploy` for the common flow, and `--output json`.

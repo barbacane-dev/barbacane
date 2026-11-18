@@ -848,12 +848,15 @@ jobs:
           - image: barbacane
             file: Dockerfile
             binary: /barbacane
+            runtime-base: true
           - image: barbacane-control
             file: Dockerfile.control
             binary: /usr/local/bin/barbacane-control
+            runtime-base: true
           - image: barbacane-standalone
             file: Dockerfile.standalone
             binary: barbacane
+            runtime-base: false
     steps:
       - uses: actions/checkout@v6
         with:
@@ -878,6 +881,27 @@ jobs:
           IMAGE: ${{ matrix.image }}:ci
           BINARY: ${{ matrix.binary }}
         run: docker run --rm --entrypoint "$BINARY" "$IMAGE" --version
+
+      # On the runtime base (docker/runtime.apko.yaml): no shell or package
+      # manager, the home owned by nonroot, /tmp writable by all, and the apk
+      # database scanners read.
+      - name: Check ${{ matrix.image }}'s files
+        if: matrix.runtime-base
+        env:
+          IMAGE: ${{ matrix.image }}:ci
+        run: |
+          set -euo pipefail
+          container=$(docker create "$IMAGE")
+          docker export "$container" | tar -tv --numeric-owner > contents.txt
+          docker rm "$container" > /dev/null
+          grep -E ' 65532/65532 .* home/nonroot/$' contents.txt
+          grep -E '^drwxrwxrwt .* tmp/$' contents.txt
+          grep -E ' (usr/)?lib/apk/db/installed$' contents.txt
+          if awk '{ print $6 }' contents.txt \
+            | grep -E '(^|/)(sh|ash|bash|dash|busybox|apk|apt|apt-get|dpkg)$'; then
+            echo "$IMAGE holds a shell or a package manager" >&2
+            exit 1
+          fi
 
       # The scan the release runs (release.yml, scan-containers), so a tag is
       # not the first time an image meets it.

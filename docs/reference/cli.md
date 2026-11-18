@@ -1071,6 +1071,7 @@ barbacane-control <COMMAND> [OPTIONS]
 |---------|-------------|
 | `serve` | Start the control plane REST API server |
 | `seed-plugins` | Seed the plugin registry with built-in plugins |
+| `health` | Check that a running control plane answers on `/health` |
 
 ---
 
@@ -1161,6 +1162,40 @@ cargo run -p barbacane-control -- seed-plugins \
 |------|---------|
 | 0 | Success |
 | 1 | Error (database connection, invalid manifest, etc.) |
+
+---
+
+## barbacane-control health
+
+Check that a running control plane answers on `/health`. The `barbacane-control` image has no shell, so its `HEALTHCHECK` runs this command, and a Compose health check can too.
+
+```bash
+barbacane-control health [OPTIONS]
+```
+
+### Options
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `--url` | No | `http://127.0.0.1:9090` | Base URL of the control plane |
+
+### Examples
+
+```yaml
+# docker-compose.yml
+services:
+  control-plane:
+    image: ghcr.io/barbacane-dev/barbacane-control
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/barbacane-control", "health"]
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | `/health` answered `200` within 5 seconds |
+| 1 | It answered another status, or did not answer; the reason is on stderr |
 
 ---
 

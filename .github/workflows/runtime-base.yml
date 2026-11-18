@@ -1,0 +1,183 @@
+name: Runtime base
+
+# The images' runtime base: docker/runtime.apko.yaml, built from the packages
+# docker/runtime.apko.lock.json pins.
+#
+# Every night:
+# - scans the base built from the committed lock, and the images of the latest
+#   release; a vulnerability rated high or critical that has a fix fails;
+# - locks the packages again and, when Wolfi has newer ones, pushes the new
+#   lock to the branch deps/runtime-base, for a pull request. A push from this
+#   workflow starts no CI: CI runs on the pull request a person opens.
+#
+# On a pull request that changes the base, it locks again and uploads the
+# result as the `runtime-lock` artifact, and scans the committed lock.
+
+on:
+  schedule:
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - docker/runtime.apko.yaml
+      - docker/runtime.apko.lock.json
+      - .github/workflows/runtime-base.yml
+
+permissions:
+  contents: read
+
+env:
+  APKO_VERSION: v1.4.15
+
+jobs:
+  lock:
+    name: Lock the packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.lock.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install apko
+        run: |
+          GOTOOLCHAIN=auto go install "chainguard.dev/apko@$APKO_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Lock
+        id: lock
+        run: |
+          set -euo pipefail
+          apko lock docker/runtime.apko.yaml
+          jq -r '.contents.packages[] | "\(.architecture) \(.name) \(.version)"' \
+            docker/runtime.apko.lock.json | sort
+          if git diff --quiet -- docker/runtime.apko.lock.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The committed lock is current." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- docker/runtime.apko.lock.json
+            echo "Wolfi has newer packages than the committed lock." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-lock
+          path: docker/runtime.apko.lock.json
+          retention-days: 7
+
+  push-lock:
+    name: Push the new lock
+    needs: [lock]
+    if: github.event_name != 'pull_request' && needs.lock.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download the lock
+        uses: actions/download-artifact@v8
+        with:
+          name: runtime-lock
+          path: docker
+
+      - name: Push deps/runtime-base
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          versions() { jq -r '.contents.packages[] | "\(.architecture) \(.name) \(.version)"' | sort; }
+          changes=$(diff <(git show HEAD:docker/runtime.apko.lock.json | versions) \
+            <(versions < docker/runtime.apko.lock.json) | grep '^[<>]' || true)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -C deps/runtime-base
+          git add docker/runtime.apko.lock.json
+          printf 'chore(deps): newer packages in the runtime base\n\n%s\n' "$changes" | git commit -q -F -
+          git push --force origin deps/runtime-base
+          {
+            echo "The new lock is on \`deps/runtime-base\`:"
+            echo "[open a pull request](https://github.com/$REPOSITORY/compare/main...deps/runtime-base?expand=1)."
+            echo
+            echo '```'
+            echo "$changes"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  scan-base:
+    name: Scan the base
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install apko
+        run: |
+          GOTOOLCHAIN=auto go install "chainguard.dev/apko@$APKO_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build the base from the committed lock
+        run: |
+          set -euo pipefail
+          apko build --arch amd64 --lockfile docker/runtime.apko.lock.json --sbom=false \
+            docker/runtime.apko.yaml barbacane-runtime:scan runtime.tar
+          loaded=$(docker load < runtime.tar | sed -n 's/^Loaded image: //p')
+          image=$( (echo "$loaded" | grep -- '-amd64$' || echo "$loaded") | head -1)
+          docker tag "$image" barbacane-runtime:scan
+
+      - name: Scan
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: barbacane-runtime:scan
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          output-format: table
+
+      # Every match, unfixed and low ones included: what a user's scanner lists.
+      - name: Every match
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: barbacane-runtime:scan
+          severity-cutoff: negligible
+          only-fixed: false
+          fail-build: false
+          output-format: table
+
+  # The scan release.yml runs, on the images of the latest release (pre-releases
+  # included), for the vulnerabilities published since.
+  scan-release:
+    name: Scan the release (${{ matrix.image }})
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [barbacane, barbacane-control, barbacane-standalone]
+    steps:
+      - name: Find the latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          tag=$(gh release list --repo "$REPOSITORY" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Latest release: $tag"
+
+      - name: Scan ${{ matrix.image }}
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.release.outputs.version }}
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          output-format: table
