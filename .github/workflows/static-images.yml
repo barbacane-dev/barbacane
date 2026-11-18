@@ -371,6 +371,7 @@ jobs:
             version: "1.0.0"
           x-barbacane-middlewares:
             - name: correlation-id
+              config: {}
             - name: cors
               config:
                 allowed_origins: ["https://example.com"]
