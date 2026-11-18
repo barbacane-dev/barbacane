@@ -425,6 +425,9 @@ jobs:
             --output bench/api.bca --allow-plaintext
 
           serve() {
+            # The proxied routes reach a loopback upstream, which the SSRF guard
+            # refuses unless internal egress is allowed.
+            BARBACANE_ALLOW_INTERNAL_EGRESS=1 \
             "$1" serve --artifact bench/api.bca --listen "127.0.0.1:$2" --admin-bind off \
               --allow-unsigned --allow-plaintext-upstream --log-level error &
             pid=$!
