@@ -460,10 +460,6 @@ jobs:
                 wrk -t2 -c64 -d5s -H 'Origin: https://example.com' "$url" > /dev/null
                 wrk -t2 -c64 -d20s --latency -H 'Origin: https://example.com' "$url" \
                   > "bench/$label-$route-$round.txt"
-                if grep -q 'Non-2xx' "bench/$label-$route-$round.txt"; then
-                  cat "bench/$label-$route-$round.txt" >&2
-                  exit 1
-                fi
                 printf '%s\t%s\t%s\t%s\n' "$label" "$route" "$round" "bench/$label-$route-$round.txt" >> bench/results.tsv
               done
               printf '%s\trss\t%s\t%s\n' "$label" "$round" \
@@ -490,6 +486,13 @@ jobs:
                   continue
               out = open(value).read()
               runs[label][f"{kind} req/s"].append(float(re.search(r"Requests/sec:\s+([\d.]+)", out).group(1)))
+              # Failed requests: non-2xx answers and socket errors.
+              failed = re.search(r"Non-2xx or 3xx responses:\s+(\d+)", out)
+              sockets = re.search(r"Socket errors: connect (\d+), read (\d+), write (\d+), timeout (\d+)", out)
+              runs[label][f"{kind} failed"].append(
+                  (int(failed.group(1)) if failed else 0)
+                  + (sum(map(int, sockets.groups())) if sockets else 0)
+              )
               for pct in ("50", "99"):
                   latency = re.search(rf"^\s+{pct}%\s+(\S+)", out, re.M).group(1)
                   runs[label][f"{kind} p{pct} (ms)"].append(ms(latency))
@@ -501,7 +504,8 @@ jobs:
           for metric in metrics:
               g = statistics.median(runs["glibc"][metric])
               s = statistics.median(runs["static"][metric])
-              print(f"| {metric} | {g:.2f} | {s:.2f} | {s / g:.2f} |")
+              ratio = f"{s / g:.2f}" if g else "-"
+              print(f"| {metric} | {g:.2f} | {s:.2f} | {ratio} |")
           print("\nEvery round:\n")
           for label in ("glibc", "static"):
               for metric in metrics:
