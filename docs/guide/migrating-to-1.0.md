@@ -85,7 +85,7 @@ Specs are read by serde-saphyr, configured to read documents as libyaml did. The
 | a block scalar (`|`, `>`) ending the file without a final line break | no trailing line break | one trailing line break | end the file with a line break |
 | keys spelled differently but equal as integers (`10` and `0xA`, `1000` and `1_000`) | two keys | one key, the last kept | spell the keys as strings |
 
-The full list of twenty-four classes is in `barbacane_compiler::yaml::differential`.
+The full list of twenty-five classes is in `barbacane_compiler::yaml::differential`.
 
 ### Resource limits and `--fetch-plugins`
 

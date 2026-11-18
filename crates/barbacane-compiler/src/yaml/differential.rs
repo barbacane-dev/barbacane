@@ -138,20 +138,23 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
-        name: "byte order marks libyaml drops",
-        reason: "libyaml drops a byte order mark that begins a line of a block scalar or \
-                 follows a comment; the module keeps it in the block scalar, or refuses the \
-                 document",
-        example: "a #\n\u{feff}",
+        name: "byte order marks inside a document",
+        reason: "YAML 1.2 allows a byte order mark before a document and inside quoted \
+                 scalars only; libyaml reads one that begins a node as content and drops one \
+                 that begins a line of a block scalar or follows a comment, where the module \
+                 skips one before the document and otherwise reads it as content or refuses \
+                 the document",
+        example: "a: \u{feff}x\n",
         matches: |input, d| match d {
-            Difference::OnlyOursFailed { .. } => {
-                input.contains('#') && input.contains("\n\u{feff}")
+            Difference::OnlyOursFailed { error } => {
+                error.contains("a BOM must not appear inside a document")
+                    || input.chars().skip(1).any(|c| c == '\u{feff}')
             }
             Difference::Value {
-                ours: Value::String(ours),
-                reference: Value::String(reference),
-                ..
-            } => ours.contains('\u{feff}') && ours.replace('\u{feff}', "") == *reference,
+                ours, reference, ..
+            } => [ours, reference]
+                .iter()
+                .any(|v| v.as_str().is_some_and(|text| text.contains('\u{feff}'))),
             _ => false,
         },
     },
@@ -312,6 +315,18 @@ pub static KNOWN: &[KnownDivergence] = &[
         matches: |_, d| {
             matches!(d, Difference::OnlyOursFailed { error }
                 if error.contains("simple key expected ':'"))
+        },
+    },
+    KnownDivergence {
+        name: "`!!null` on mapping keys",
+        reason: "a JSON value's keys are strings, and serde-saphyr refuses a scalar tagged \
+                 `!!null` as a string (`!!null a: 1`, `!!null : 1`); libyaml reads the key as \
+                 its text",
+        example: "!!null a: 1\n",
+        matches: |input, d| {
+            input.contains("!!null")
+                && matches!(d, Difference::OnlyOursFailed { error }
+                    if error.contains("cannot deserialize null into string"))
         },
     },
     KnownDivergence {
