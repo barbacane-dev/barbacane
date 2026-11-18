@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **YAML**: serde-saphyr 2.2.0. More documents read as libyaml read them, so as in 0.12: a plain `null`, `~` or empty scalar reads as its text as a mapping key or where a string is expected; a quoted scalar continued on lines not indented past its node, or indented with tabs, reads; `0X1F`, `0O17` and `0B101` are strings, and so are `-.nan` and `+.nan`; and a byte order mark that begins a node is content. 1.0.0-rc.1 refused the null-like scalars, the under-indented quoted scalars and the byte order mark, read the upper-case prefixes as integers, and signed `.nan` as not-a-number. Twenty-four kinds of construct read differently from libyaml, listed in `barbacane_compiler::yaml::differential`; the [migration guide](docs/guide/migrating-to-1.0.md#yaml-is-read-by-a-different-parser) lists those a spec can meet.
+
 ## [1.0.0-rc.1] - 2026-11-16
 
 The breaking changes below are gathered, with what to do and in which order, in the [migration guide](docs/guide/migrating-to-1.0.md). Each is marked **Upgrade note (breaking)** here.
