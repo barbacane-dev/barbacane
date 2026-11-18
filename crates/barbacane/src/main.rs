@@ -4,6 +4,11 @@
 
 mod waf;
 
+/// musl's allocator serialises threads under load; static builds use mimalloc.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use barbacane_lib::client_ip::{ClientIpHeader, TrustedProxies};
 use barbacane_lib::lifecycle::background;
 use barbacane_lib::metered_body::MeteredBody;

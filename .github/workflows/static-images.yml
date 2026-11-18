@@ -1,0 +1,514 @@
+name: Static images (prototype)
+
+# Prototype for #397: static (musl, mimalloc) binaries on scratch images.
+# Builds both images and checks their contents and what a scanner sees in
+# them, runs the integration suites against the static binaries, and compares
+# the static gateway with the glibc build under load.
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - Dockerfile.control
+      - .github/workflows/static-images.yml
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Image (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: barbacane
+            file: Dockerfile
+            binary: barbacane
+            path: /barbacane
+          - image: barbacane-control
+            file: Dockerfile.control
+            binary: barbacane-control
+            path: /usr/local/bin/barbacane-control
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build the static binary
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./${{ matrix.file }}
+          target: binary
+          outputs: type=local,dest=static
+
+      # Same builder, so the build stage comes from its cache.
+      - name: Build the image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./${{ matrix.file }}
+          load: true
+          tags: ${{ matrix.image }}:static
+
+      - name: Check the binary and the image's contents
+        env:
+          IMAGE: ${{ matrix.image }}:static
+          BINARY: static/${{ matrix.binary }}
+          IN_IMAGE: ${{ matrix.path }}
+        run: |
+          set -euo pipefail
+          file "$BINARY"
+          ls -l "$BINARY"
+          echo "lines mentioning mimalloc: $(grep -ac mimalloc "$BINARY")"
+          docker run --rm --entrypoint "$IN_IMAGE" "$IMAGE" --version
+          docker image inspect "$IMAGE" --format 'image size: {{.Size}} bytes'
+          container=$(docker create "$IMAGE")
+          docker export "$container" | tar -tv --numeric-owner | tee contents.txt
+          docker rm "$container" >/dev/null
+          grep -E ' 65532/65532 .* home/nonroot/$' contents.txt
+          grep -E '^drwxrwxrwt .* tmp/$' contents.txt
+          grep -E ' etc/ssl/certs/ca-certificates.crt$' contents.txt
+          if grep -qE ' (bin|sbin|usr/bin|lib)/' contents.txt; then
+            echo "the image holds a bin or lib directory" >&2
+            exit 1
+          fi
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      # On scratch there is no package database: what a scanner sees comes from
+      # the dependency list `cargo auditable` embeds in the binary.
+      - name: What a scanner sees
+        env:
+          IMAGE: ${{ matrix.image }}:static
+        run: |
+          set -euo pipefail
+          syft scan "docker:$IMAGE" -o json > sbom.json
+          jq -r '.artifacts | group_by(.type) | map("\(.[0].type): \(length)") | .[]' sbom.json
+          crates=$(jq '[.artifacts[] | select(.type == "rust-crate")] | length' sbom.json)
+          echo "Rust crates: $crates"
+          if [ "$crates" -lt 100 ]; then
+            echo "Syft sees $crates crates in $IMAGE" >&2
+            exit 1
+          fi
+
+      # The scan the release runs.
+      - name: Scan ${{ matrix.image }}
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ matrix.image }}:static
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: true
+          output-format: table
+
+      - name: Upload the static binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: static-${{ matrix.binary }}
+          path: static/${{ matrix.binary }}
+          retention-days: 3
+
+  # The integration suite of CI's integration-tests job, run against the static
+  # gateway. Caches are restored only: the jobs place static binaries where
+  # cargo builds its own, and must not save them.
+  integration:
+    name: Integration Tests, static gateway (shard ${{ matrix.shard }})
+    needs: [image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_TOTAL: 4
+      BARBACANE_TEST_LDAP_URL: ldap://127.0.0.1:3893
+    services:
+      ldap:
+        image: ghcr.io/glauth/glauth:v2.5.4
+        ports:
+          - 3893:3893
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Restore WASM plugins
+        uses: actions/cache/restore@v5
+        id: plugin-cache
+        with:
+          path: |
+            plugins/*/*.wasm
+            plugins/*/target
+          key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'plugins/**/plugin.toml', 'plugins/**/config-schema.json', 'crates/barbacane-plugin-sdk/**') }}
+
+      - name: Build WASM plugins
+        if: steps.plugin-cache.outputs.cache-hit != 'true'
+        run: make plugins
+
+      - name: Download the static gateway
+        uses: actions/download-artifact@v8
+        with:
+          name: static-barbacane
+          path: static
+
+      - name: Point the harness at it
+        run: |
+          chmod +x static/barbacane
+          echo "BARBACANE_TEST_BINARY=$PWD/static/barbacane" >> "$GITHUB_ENV"
+
+      - name: Run integration tests
+        run: |
+          all=$(ls crates/barbacane-test/tests/*.rs \
+            | xargs -n1 basename | sed 's/\.rs$//' \
+            | grep -vxE 'security|control_cli|connected_mode' | sort)
+          targets=$(echo "$all" \
+            | awk "NR % $SHARD_TOTAL == $SHARD_INDEX" \
+            | sed 's/^/--test /' | tr '\n' ' ')
+          lib=""; [ "$SHARD_INDEX" = "0" ] && lib="--lib"
+          if [ -z "$targets" ] && [ -z "$lib" ]; then
+            echo "No targets for shard $SHARD_INDEX"; exit 0
+          fi
+          echo "Shard $SHARD_INDEX/$SHARD_TOTAL targets: $lib $targets"
+          cargo test --locked -p barbacane-test $lib $targets --no-fail-fast -- --test-threads=2
+
+  # CI's security-suite job with both static binaries: the control plane on
+  # PostgreSQL, the CLI against it, and a gateway in connected mode.
+  security-suite:
+    name: Security Suite, static binaries
+    needs: [image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: barbacane
+          POSTGRES_PASSWORD: barbacane
+          POSTGRES_DB: barbacane
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Restore WASM plugins
+        uses: actions/cache/restore@v5
+        id: plugin-cache
+        with:
+          path: |
+            plugins/*/*.wasm
+            plugins/*/target
+          key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'plugins/**/plugin.toml', 'plugins/**/config-schema.json', 'crates/barbacane-plugin-sdk/**') }}
+
+      - name: Build WASM plugins
+        if: steps.plugin-cache.outputs.cache-hit != 'true'
+        run: make plugins
+
+      - name: Download the static binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: static-*
+          path: static
+          merge-multiple: true
+
+      # control_cli and connected_mode look for both binaries in target/debug.
+      - name: Point the harness at them
+        run: |
+          chmod +x static/barbacane static/barbacane-control
+          mkdir -p target/debug
+          cp static/barbacane static/barbacane-control target/debug/
+          echo "BARBACANE_TEST_BINARY=$PWD/static/barbacane" >> "$GITHUB_ENV"
+
+      - name: Run security suite
+        run: cargo test --locked -p barbacane-test --test security -- --test-threads=2
+
+      - name: Run the control CLI and connected-mode tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p barbacane-test --test control_cli --test connected_mode -- --test-threads=2
+
+  # The static gateway against the glibc one, both built by Rust 1.95 from this
+  # commit: the glibc one with the builder of the current Dockerfile, so the
+  # target and the allocator are the only differences. Three alternating rounds
+  # per binary, on a mock route and on a route proxying to a glibc upstream,
+  # with the global middlewares cors and correlation-id.
+  load:
+    name: Load comparison (glibc, static)
+    needs: [image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build the glibc gateway
+        run: |
+          set -euo pipefail
+          docker buildx build --target out --output type=local,dest=glibc -f - . <<'EOF'
+          FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS builder
+          RUN apt-get update && apt-get install -y --no-install-recommends cmake clang pkg-config
+          WORKDIR /build
+          COPY Cargo.toml Cargo.lock ./
+          COPY crates/ crates/
+          ENV CARGO_BUILD_JOBS=4
+          RUN cargo build --locked --release --package barbacane && cp target/release/barbacane /barbacane
+          FROM scratch AS out
+          COPY --from=builder /barbacane /barbacane
+          EOF
+          file glibc/barbacane
+
+      - name: Download the static gateway
+        uses: actions/download-artifact@v8
+        with:
+          name: static-barbacane
+          path: static
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Restore WASM plugins
+        uses: actions/cache/restore@v5
+        id: plugin-cache
+        with:
+          path: |
+            plugins/*/*.wasm
+            plugins/*/target
+          key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'plugins/**/plugin.toml', 'plugins/**/config-schema.json', 'crates/barbacane-plugin-sdk/**') }}
+
+      - name: Build the plugins the benchmark uses
+        if: steps.plugin-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          for name in mock http-upstream cors correlation-id; do
+            (cd "plugins/$name" && cargo build --locked --release --target wasm32-unknown-unknown)
+            cp "$(ls "plugins/$name/target/wasm32-unknown-unknown/release/"*.wasm | head -1)" \
+              "plugins/$name/$name.wasm"
+          done
+
+      - name: Install wrk
+        run: sudo apt-get update && sudo apt-get install -y wrk
+
+      - name: Compare
+        run: |
+          set -euo pipefail
+          chmod +x static/barbacane glibc/barbacane
+          mkdir -p bench
+          cat > bench/barbacane.yaml <<'EOF'
+          plugins:
+            mock:
+              path: ../plugins/mock/mock.wasm
+            http-upstream:
+              path: ../plugins/http-upstream/http-upstream.wasm
+            cors:
+              path: ../plugins/cors/cors.wasm
+            correlation-id:
+              path: ../plugins/correlation-id/correlation-id.wasm
+          EOF
+          cat > bench/api.yaml <<'EOF'
+          openapi: "3.1.0"
+          info:
+            title: Load comparison
+            version: "1.0.0"
+          x-barbacane-middlewares:
+            - name: correlation-id
+            - name: cors
+              config:
+                allowed_origins: ["https://example.com"]
+          paths:
+            /mock:
+              get:
+                operationId: mock
+                x-barbacane-dispatch:
+                  name: mock
+                  config:
+                    status: 200
+                    body: '{"status":"ok","items":[1,2,3,4,5,6,7,8]}'
+                responses:
+                  "200":
+                    description: OK
+            /proxy:
+              get:
+                operationId: proxy
+                x-barbacane-dispatch:
+                  name: http-upstream
+                  config:
+                    url: "http://127.0.0.1:18081"
+                    path: "/mock"
+                responses:
+                  "200":
+                    description: OK
+            /proxy-by-name:
+              get:
+                operationId: proxyByName
+                x-barbacane-dispatch:
+                  name: http-upstream
+                  config:
+                    url: "http://localhost:18081"
+                    path: "/mock"
+                responses:
+                  "200":
+                    description: OK
+            /external:
+              get:
+                operationId: external
+                x-barbacane-dispatch:
+                  name: http-upstream
+                  config:
+                    url: "https://example.com"
+                    path: "/"
+                responses:
+                  "200":
+                    description: OK
+          EOF
+          glibc/barbacane compile --spec bench/api.yaml --manifest bench/barbacane.yaml \
+            --output bench/api.bca --allow-plaintext
+
+          serve() {
+            "$1" serve --artifact bench/api.bca --listen "127.0.0.1:$2" --admin-bind off \
+              --allow-unsigned --allow-plaintext-upstream --log-level error &
+            pid=$!
+            for _ in $(seq 1 150); do
+              curl -fsS -o /dev/null "http://127.0.0.1:$2/mock" && return 0
+              sleep 0.2
+            done
+            echo "$1 did not answer on $2" >&2
+            exit 1
+          }
+          status() { curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080$1"; }
+
+          serve glibc/barbacane 18081
+          upstream=$pid
+
+          : > bench/results.tsv
+          for round in 1 2 3; do
+            for label in glibc static; do
+              serve "$label/barbacane" 18080
+              gateway=$pid
+              # A hostname resolved through the binary's libc, and a public
+              # host over TLS: both must answer.
+              for route in /proxy /proxy-by-name /external; do
+                code=$(status "$route")
+                echo "$label $route: $code"
+                [ "$code" = 200 ]
+              done
+              for route in mock proxy; do
+                url="http://127.0.0.1:18080/$route"
+                wrk -t2 -c64 -d5s -H 'Origin: https://example.com' "$url" > /dev/null
+                wrk -t2 -c64 -d20s --latency -H 'Origin: https://example.com' "$url" \
+                  > "bench/$label-$route-$round.txt"
+                if grep -q 'Non-2xx' "bench/$label-$route-$round.txt"; then
+                  cat "bench/$label-$route-$round.txt" >&2
+                  exit 1
+                fi
+                printf '%s\t%s\t%s\t%s\n' "$label" "$route" "$round" "bench/$label-$route-$round.txt" >> bench/results.tsv
+              done
+              printf '%s\trss\t%s\t%s\n' "$label" "$round" \
+                "$(awk '/^VmHWM/ {print $2}' "/proc/$gateway/status")" >> bench/results.tsv
+              kill "$gateway"
+              wait "$gateway" || true
+            done
+          done
+          kill "$upstream"
+
+          python3 - <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
+          import re, statistics
+          from collections import defaultdict
+
+          def ms(text):
+              value, unit = re.fullmatch(r"([\d.]+)(us|ms|s)", text).groups()
+              return float(value) * {"us": 0.001, "ms": 1.0, "s": 1000.0}[unit]
+
+          runs = defaultdict(lambda: defaultdict(list))
+          for line in open("bench/results.tsv"):
+              label, kind, round_, value = line.rstrip("\n").split("\t")
+              if kind == "rss":
+                  runs[label]["peak RSS (MiB)"].append(int(value) / 1024)
+                  continue
+              out = open(value).read()
+              runs[label][f"{kind} req/s"].append(float(re.search(r"Requests/sec:\s+([\d.]+)", out).group(1)))
+              for pct in ("50", "99"):
+                  latency = re.search(rf"^\s+{pct}%\s+(\S+)", out, re.M).group(1)
+                  runs[label][f"{kind} p{pct} (ms)"].append(ms(latency))
+
+          metrics = list(runs["glibc"])
+          print("### Static gateway against glibc (median of 3 rounds)\n")
+          print("| metric | glibc | static | static / glibc |")
+          print("|---|---|---|---|")
+          for metric in metrics:
+              g = statistics.median(runs["glibc"][metric])
+              s = statistics.median(runs["static"][metric])
+              print(f"| {metric} | {g:.2f} | {s:.2f} | {s / g:.2f} |")
+          print("\nEvery round:\n")
+          for label in ("glibc", "static"):
+              for metric in metrics:
+                  values = ", ".join(f"{v:.2f}" for v in runs[label][metric])
+                  print(f"- {label}, {metric}: {values}")
+          EOF
+
+      - name: Upload the wrk outputs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: load-comparison
+          path: bench/
+          retention-days: 7

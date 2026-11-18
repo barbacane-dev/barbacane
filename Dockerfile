@@ -1,15 +1,17 @@
 # Barbacane Data Plane - Multi-stage build
-# Produces a minimal, rootless container image
+# Produces a minimal, rootless container image: a static binary on scratch.
 
-# Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor), Bookworm for glibc compat
-FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS builder
+# Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor). Alpine's
+# toolchain targets musl, so the binary links no shared library.
+FROM rust:1.95-alpine3.23@sha256:606fd313a0f49743ee2a7bd49a0914bab7deedb12791f3a846a34a4711db7ed2 AS builder
 
-# Install build dependencies for aws-lc-rs
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake \
-    clang \
-    pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+# C toolchain for aws-lc-rs, zstd, lz4 and mimalloc; CA certificates for the
+# runtime image.
+RUN apk add --no-cache build-base cmake perl linux-headers ca-certificates
+
+# `cargo auditable` records the binary's crates in it, where image scanners
+# read them: the runtime image has no package database.
+RUN cargo install --locked cargo-auditable@0.7.7
 
 WORKDIR /build
 
@@ -20,22 +22,41 @@ COPY crates/ crates/
 # Limit parallel jobs to avoid OOM in memory-constrained Docker environments
 ENV CARGO_BUILD_JOBS=2
 
-# Build the data plane binary
-RUN cargo build --locked --release --package barbacane && \
-    cp target/release/barbacane /usr/local/bin/barbacane
+# Build the data plane binary; fail if it links a shared library.
+RUN cargo auditable build --locked --release --package barbacane && \
+    cp target/release/barbacane /barbacane && \
+    if readelf -d /barbacane | grep -q NEEDED; then \
+        echo "barbacane links shared libraries" >&2; exit 1; \
+    fi
 
-# Runtime stage - glibc, libgcc, libstdc++ and CA certificates, no shell and
-# no OpenSSL (TLS is rustls with aws-lc-rs, linked in). The free tier publishes
-# only `latest`: bump this digest by hand.
-FROM cgr.dev/chainguard/glibc-dynamic@sha256:2c362104c7f7adc37e6bdc87451450ff3834871a6268d930815cbe561493f947
+# The runtime image's files: CA certificates, the users, /tmp, and a home for
+# the non-root user.
+RUN mkdir -p /rootfs/etc/ssl/certs /rootfs/tmp /home-nonroot && \
+    cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ && \
+    printf 'root:x:0:0:root:/root:/sbin/nologin\nnonroot:x:65532:65532:nonroot:/home/nonroot:/sbin/nologin\n' \
+        > /rootfs/etc/passwd && \
+    printf 'root:x:0:\nnonroot:x:65532:\n' > /rootfs/etc/group && \
+    chmod 1777 /rootfs/tmp
+
+# The binary alone, for `docker build --target binary --output type=local,dest=<dir>`.
+FROM scratch AS binary
+COPY --from=builder /barbacane /barbacane
+
+# Runtime stage - the static binary, CA certificates and a non-root user: no
+# shell, no libc, no package database.
+FROM scratch
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"
 LABEL org.opencontainers.image.description="Barbacane API Gateway - Data Plane"
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 
-# Copy the binary from builder
-COPY --from=builder /usr/local/bin/barbacane /barbacane
+COPY --from=builder /rootfs/ /
+COPY --from=builder --chown=65532:65532 /home-nonroot/ /home/nonroot/
+COPY --from=builder /barbacane /barbacane
+
+# The compiler caches downloaded plugins under $HOME.
+ENV HOME=/home/nonroot
 
 # Run as non-root user (UID 65532)
 USER 65532:65532
