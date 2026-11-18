@@ -731,10 +731,11 @@ paths:
     assert!(err.to_string().contains("E1023"), "{err}");
 }
 
-/// An operation that names no `config` is left alone: the plugin applies its own
-/// defaults, and a schema does not always restate them.
+/// An omitted `config` stays `null` in the parsed spec, so the `enabled: false`
+/// checks (E1012) tell it from an empty one. The compiler checks it, and the
+/// plugin receives it, as `{}`.
 #[test]
-fn an_absent_config_is_not_validated_as_empty() {
+fn an_absent_config_stays_absent_in_the_parsed_spec() {
     let spec = parse_spec(
         r#"openapi: "3.1.0"
 info: { title: Bare, version: "1.0.0" }

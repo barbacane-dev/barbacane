@@ -134,6 +134,8 @@ paths:
 | `name` | string | Yes | Dispatcher plugin name |
 | `config` | object | No | Plugin-specific configuration |
 
+An entry without `config`, dispatcher or middleware, runs the plugin as `config: {}`, with its defaults. A plugin whose schema requires a field refuses it at compile time (`E1023`).
+
 Built-in dispatchers: `mock`, `http-upstream`, `lambda`, `kafka`, `nats`, `s3`. See [Dispatchers](dispatchers.md) for configuration details.
 
 Config values support secret references: `env://VAR_NAME` (environment variable) or `file:///path/to/secret` (file). See [Secrets](secrets.md).
