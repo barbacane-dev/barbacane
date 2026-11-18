@@ -28,11 +28,6 @@ mod error;
 mod metrics;
 mod server;
 
-/// musl's allocator serialises threads under load; static builds use mimalloc.
-#[cfg(target_env = "musl")]
-#[global_allocator]
-static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 #[derive(Parser, Debug)]
 #[command(
     name = "barbacane-control",

@@ -98,9 +98,6 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 rcgen = "0.13"
 
-# Allocator of the static (musl) builds
-mimalloc = "0.1.52"
-
 # Sync primitives
 parking_lot = "0.12"
 

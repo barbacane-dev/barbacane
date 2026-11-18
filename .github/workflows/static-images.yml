@@ -1,15 +1,16 @@
-name: Static images (prototype)
+name: Scratch images (prototype)
 
-# Prototype for #397: static (musl, mimalloc) binaries on scratch images.
-# Builds both images and checks their contents and what a scanner sees in
-# them, runs the integration suites against the static binaries, and compares
-# the static gateway with the glibc build under load.
+# Prototype for #397: the binaries on scratch with Debian 12's glibc and
+# libgcc and their dpkg records. Builds both images and checks their contents
+# and what a scanner sees in them, runs the integration suites against the
+# images' binaries, and compares the gateway image with today's under load.
 
 on:
   pull_request:
     paths:
       - Dockerfile
       - Dockerfile.control
+      - docker/scratch-rootfs.sh
       - .github/workflows/static-images.yml
   workflow_dispatch:
 
@@ -45,13 +46,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
-      - name: Build the static binary
+      - name: Export the binary
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: ./${{ matrix.file }}
           target: binary
-          outputs: type=local,dest=static
+          outputs: type=local,dest=bin
 
       # Same builder, so the build stage comes from its cache.
       - name: Build the image
@@ -60,43 +61,60 @@ jobs:
           context: .
           file: ./${{ matrix.file }}
           load: true
-          tags: ${{ matrix.image }}:static
+          tags: ${{ matrix.image }}:scratch
 
       - name: Check the binary and the image's contents
         env:
-          IMAGE: ${{ matrix.image }}:static
-          BINARY: static/${{ matrix.binary }}
+          IMAGE: ${{ matrix.image }}:scratch
+          BINARY: bin/${{ matrix.binary }}
           IN_IMAGE: ${{ matrix.path }}
         run: |
           set -euo pipefail
           file "$BINARY"
           ls -l "$BINARY"
-          echo "lines mentioning mimalloc: $(grep -ac mimalloc "$BINARY")"
+          readelf -d "$BINARY" | grep NEEDED
           docker run --rm --entrypoint "$IN_IMAGE" "$IMAGE" --version
           docker image inspect "$IMAGE" --format 'image size: {{.Size}} bytes'
           container=$(docker create "$IMAGE")
           docker export "$container" | tar -tv --numeric-owner | tee contents.txt
           docker rm "$container" >/dev/null
+          awk -v binary="${IN_IMAGE#/}" '
+            { total += $3 }
+            $6 == binary { bin = $3 }
+            $6 ~ /\/gconv\// { gconv += $3 }
+            END { printf "bytes: %d in all, %d the binary, %d gconv modules, %d the rest\n", total, bin, gconv, total - bin - gconv }
+          ' contents.txt
           grep -E ' 65532/65532 .* home/nonroot/$' contents.txt
           grep -E '^drwxrwxrwt .* tmp/$' contents.txt
           grep -E ' etc/ssl/certs/ca-certificates.crt$' contents.txt
-          if grep -qE ' (bin|sbin|usr/bin|lib)/' contents.txt; then
-            echo "the image holds a bin or lib directory" >&2
+          grep -E ' etc/nsswitch.conf$' contents.txt
+          grep -E ' var/lib/dpkg/status$' contents.txt
+          grep -E ' etc/os-release -> ' contents.txt
+          if grep -qE ' (usr/)?s?bin/.' contents.txt; then
+            echo "the image holds programs other than the binary" >&2
             exit 1
           fi
 
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
-      # On scratch there is no package database: what a scanner sees comes from
-      # the dependency list `cargo auditable` embeds in the binary.
+      # A scanner sees glibc and libgcc through the dpkg records and the
+      # crates through the list `cargo auditable` embeds in the binary.
       - name: What a scanner sees
         env:
-          IMAGE: ${{ matrix.image }}:static
+          IMAGE: ${{ matrix.image }}:scratch
         run: |
           set -euo pipefail
           syft scan "docker:$IMAGE" -o json > sbom.json
+          jq -r '"distro: \(.distro.id) \(.distro.versionID)"' sbom.json
           jq -r '.artifacts | group_by(.type) | map("\(.[0].type): \(length)") | .[]' sbom.json
+          jq -r '.artifacts[] | select(.type == "deb") | "deb: \(.name) \(.version)"' sbom.json
+          [ "$(jq -r '.distro.id' sbom.json)" = debian ]
+          [ "$(jq -r '.distro.versionID' sbom.json)" = 12 ]
+          for package in libc6 libgcc-s1; do
+            jq -e --arg p "$package" 'any(.artifacts[]; .type == "deb" and .name == $p)' sbom.json > /dev/null \
+              || { echo "Syft does not see $package in $IMAGE" >&2; exit 1; }
+          done
           crates=$(jq '[.artifacts[] | select(.type == "rust-crate")] | length' sbom.json)
           echo "Rust crates: $crates"
           if [ "$crates" -lt 100 ]; then
@@ -108,24 +126,46 @@ jobs:
       - name: Scan ${{ matrix.image }}
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image: ${{ matrix.image }}:static
+          image: ${{ matrix.image }}:scratch
           severity-cutoff: high
           only-fixed: true
           fail-build: true
           output-format: table
 
-      - name: Upload the static binary
+      # Every match, unfixed and low ones included: what a user's scanner lists.
+      - name: Every match in ${{ matrix.image }}
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ matrix.image }}:scratch
+          severity-cutoff: negligible
+          only-fixed: false
+          fail-build: false
+          output-format: table
+
+      - name: Upload the binary
         uses: actions/upload-artifact@v7
         with:
-          name: static-${{ matrix.binary }}
-          path: static/${{ matrix.binary }}
+          name: scratch-${{ matrix.binary }}
+          path: bin/${{ matrix.binary }}
           retention-days: 3
 
-  # The integration suite of CI's integration-tests job, run against the static
-  # gateway. Caches are restored only: the jobs place static binaries where
-  # cargo builds its own, and must not save them.
+      - name: Save the gateway image
+        if: matrix.image == 'barbacane'
+        run: docker save barbacane:scratch | gzip > image.tar.gz
+
+      - name: Upload the gateway image
+        if: matrix.image == 'barbacane'
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-barbacane
+          path: image.tar.gz
+          retention-days: 3
+
+  # The integration suite of CI's integration-tests job, run against the
+  # image's gateway binary. Caches are restored only: the jobs place that
+  # binary where cargo builds its own, and must not save it.
   integration:
-    name: Integration Tests, static gateway (shard ${{ matrix.shard }})
+    name: Integration Tests, image binary (shard ${{ matrix.shard }})
     needs: [image]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -176,16 +216,16 @@ jobs:
         if: steps.plugin-cache.outputs.cache-hit != 'true'
         run: make plugins
 
-      - name: Download the static gateway
+      - name: Download the image's gateway
         uses: actions/download-artifact@v8
         with:
-          name: static-barbacane
-          path: static
+          name: scratch-barbacane
+          path: bin
 
       - name: Point the harness at it
         run: |
-          chmod +x static/barbacane
-          echo "BARBACANE_TEST_BINARY=$PWD/static/barbacane" >> "$GITHUB_ENV"
+          chmod +x bin/barbacane
+          echo "BARBACANE_TEST_BINARY=$PWD/bin/barbacane" >> "$GITHUB_ENV"
 
       - name: Run integration tests
         run: |
@@ -202,10 +242,10 @@ jobs:
           echo "Shard $SHARD_INDEX/$SHARD_TOTAL targets: $lib $targets"
           cargo test --locked -p barbacane-test $lib $targets --no-fail-fast -- --test-threads=2
 
-  # CI's security-suite job with both static binaries: the control plane on
+  # CI's security-suite job with both images' binaries: the control plane on
   # PostgreSQL, the CLI against it, and a gateway in connected mode.
   security-suite:
-    name: Security Suite, static binaries
+    name: Security Suite, image binaries
     needs: [image]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -259,20 +299,20 @@ jobs:
         if: steps.plugin-cache.outputs.cache-hit != 'true'
         run: make plugins
 
-      - name: Download the static binaries
+      - name: Download the images' binaries
         uses: actions/download-artifact@v8
         with:
-          pattern: static-*
-          path: static
+          pattern: scratch-*
+          path: bin
           merge-multiple: true
 
       # control_cli and connected_mode look for both binaries in target/debug.
       - name: Point the harness at them
         run: |
-          chmod +x static/barbacane static/barbacane-control
+          chmod +x bin/barbacane bin/barbacane-control
           mkdir -p target/debug
-          cp static/barbacane static/barbacane-control target/debug/
-          echo "BARBACANE_TEST_BINARY=$PWD/static/barbacane" >> "$GITHUB_ENV"
+          cp bin/barbacane bin/barbacane-control target/debug/
+          echo "BARBACANE_TEST_BINARY=$PWD/bin/barbacane" >> "$GITHUB_ENV"
 
       - name: Run security suite
         run: cargo test --locked -p barbacane-test --test security -- --test-threads=2
@@ -281,13 +321,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo test --locked -p barbacane-test --test control_cli --test connected_mode -- --test-threads=2
 
-  # The static gateway against the glibc one, both built by Rust 1.95 from this
-  # commit: the glibc one with the builder of the current Dockerfile, so the
-  # target and the allocator are the only differences. Three alternating rounds
-  # per binary, on a mock route and on a route proxying to a glibc upstream,
-  # with the global middlewares cors and correlation-id.
+  # Today's gateway image (main's Dockerfile) against the scratch one, both
+  # with the gateway built by Rust 1.95 from this commit and both run as
+  # containers on the host network. Three alternating rounds per image, on a
+  # mock route and on a route proxying to an upstream in today's image, with
+  # the global middlewares cors and correlation-id.
   load:
-    name: Load comparison (glibc, static)
+    name: Load comparison (today, scratch)
     needs: [image]
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -299,27 +339,29 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
-      - name: Build the glibc gateway
+      - name: Build today's gateway image
         run: |
           set -euo pipefail
-          docker buildx build --target out --output type=local,dest=glibc -f - . <<'EOF'
-          FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS builder
-          RUN apt-get update && apt-get install -y --no-install-recommends cmake clang pkg-config
-          WORKDIR /build
-          COPY Cargo.toml Cargo.lock ./
-          COPY crates/ crates/
-          ENV CARGO_BUILD_JOBS=4
-          RUN cargo build --locked --release --package barbacane && cp target/release/barbacane /barbacane
-          FROM scratch AS out
-          COPY --from=builder /barbacane /barbacane
-          EOF
-          file glibc/barbacane
+          git fetch --depth 1 origin main
+          git show FETCH_HEAD:Dockerfile > Dockerfile.today
+          docker buildx build --load -t barbacane:today -f Dockerfile.today .
 
-      - name: Download the static gateway
+      - name: Download the scratch image
         uses: actions/download-artifact@v8
         with:
-          name: static-barbacane
-          path: static
+          name: image-barbacane
+          path: image
+
+      - name: Download the scratch image's binary
+        uses: actions/download-artifact@v8
+        with:
+          name: scratch-barbacane
+          path: bin
+
+      - name: Load the scratch image
+        run: |
+          gunzip -c image/image.tar.gz | docker load
+          docker image ls barbacane
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.100.0
@@ -351,7 +393,7 @@ jobs:
       - name: Compare
         run: |
           set -euo pipefail
-          chmod +x static/barbacane glibc/barbacane
+          chmod +x bin/barbacane
           mkdir -p bench
           cat > bench/barbacane.yaml <<'EOF'
           plugins:
@@ -421,34 +463,37 @@ jobs:
                   "200":
                     description: OK
           EOF
-          glibc/barbacane compile --spec bench/api.yaml --manifest bench/barbacane.yaml \
+          bin/barbacane compile --spec bench/api.yaml --manifest bench/barbacane.yaml \
             --output bench/api.bca --allow-plaintext
+          chmod 644 bench/api.bca
 
+          # serve <image> <port>: starts a gateway container and sets $cid.
           serve() {
             # The proxied routes reach a loopback upstream, which the SSRF guard
             # refuses unless internal egress is allowed.
-            BARBACANE_ALLOW_INTERNAL_EGRESS=1 \
-            "$1" serve --artifact bench/api.bca --listen "127.0.0.1:$2" --admin-bind off \
-              --allow-unsigned --allow-plaintext-upstream --log-level error &
-            pid=$!
+            cid=$(docker run -d --network host -e BARBACANE_ALLOW_INTERNAL_EGRESS=1 \
+              -v "$PWD/bench:/bench:ro" "$1" \
+              serve --artifact /bench/api.bca --listen "127.0.0.1:$2" --admin-bind off \
+              --allow-unsigned --allow-plaintext-upstream --log-level error)
             for _ in $(seq 1 150); do
               curl -fsS -o /dev/null "http://127.0.0.1:$2/mock" && return 0
               sleep 0.2
             done
+            docker logs "$cid" >&2
             echo "$1 did not answer on $2" >&2
             exit 1
           }
           status() { curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080$1"; }
 
-          serve glibc/barbacane 18081
-          upstream=$pid
+          serve barbacane:today 18081
+          upstream=$cid
 
           : > bench/results.tsv
           for round in 1 2 3; do
-            for label in glibc static; do
-              serve "$label/barbacane" 18080
-              gateway=$pid
-              # A hostname resolved through the binary's libc, and a public
+            for label in today scratch; do
+              serve "barbacane:$label" 18080
+              gateway=$cid
+              # A hostname resolved through the image's libc, and a public
               # host over TLS: both must answer.
               for route in /proxy /proxy-by-name /external; do
                 code=$(status "$route")
@@ -462,13 +507,15 @@ jobs:
                   > "bench/$label-$route-$round.txt"
                 printf '%s\t%s\t%s\t%s\n' "$label" "$route" "$round" "bench/$label-$route-$round.txt" >> bench/results.tsv
               done
+              pid=$(docker inspect -f '{{.State.Pid}}' "$gateway")
               printf '%s\trss\t%s\t%s\n' "$label" "$round" \
-                "$(awk '/^VmHWM/ {print $2}' "/proc/$gateway/status")" >> bench/results.tsv
-              kill "$gateway"
-              wait "$gateway" || true
+                "$(awk '/^VmHWM/ {print $2}' "/proc/$pid/status")" >> bench/results.tsv
+              echo "$label round $round: $(docker logs "$gateway" 2>&1 | grep -c 'HTTP call failed' || true) failed upstream calls logged"
+              docker stop "$gateway" > /dev/null
+              docker rm "$gateway" > /dev/null
             done
           done
-          kill "$upstream"
+          docker stop "$upstream" > /dev/null
 
           python3 - <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
           import re, statistics
@@ -497,17 +544,17 @@ jobs:
                   latency = re.search(rf"^\s+{pct}%\s+(\S+)", out, re.M).group(1)
                   runs[label][f"{kind} p{pct} (ms)"].append(ms(latency))
 
-          metrics = list(runs["glibc"])
-          print("### Static gateway against glibc (median of 3 rounds)\n")
-          print("| metric | glibc | static | static / glibc |")
+          metrics = list(runs["today"])
+          print("### Scratch image against today's image (median of 3 rounds)\n")
+          print("| metric | today | scratch | scratch / today |")
           print("|---|---|---|---|")
           for metric in metrics:
-              g = statistics.median(runs["glibc"][metric])
-              s = statistics.median(runs["static"][metric])
-              ratio = f"{s / g:.2f}" if g else "-"
-              print(f"| {metric} | {g:.2f} | {s:.2f} | {ratio} |")
+              t = statistics.median(runs["today"][metric])
+              s = statistics.median(runs["scratch"][metric])
+              ratio = f"{s / t:.2f}" if t else "-"
+              print(f"| {metric} | {t:.2f} | {s:.2f} | {ratio} |")
           print("\nEvery round:\n")
-          for label in ("glibc", "static"):
+          for label in ("today", "scratch"):
               for metric in metrics:
                   values = ", ".join(f"{v:.2f}" for v in runs[label][metric])
                   print(f"- {label}, {metric}: {values}")

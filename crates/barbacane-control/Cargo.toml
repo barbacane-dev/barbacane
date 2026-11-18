@@ -59,9 +59,6 @@ toml = { workspace = true }
 # Validation
 jsonschema = { workspace = true }
 
-[target.'cfg(target_env = "musl")'.dependencies]
-mimalloc = { workspace = true }
-
 [dev-dependencies]
 tower = { workspace = true }
 tokio-tungstenite = { workspace = true }

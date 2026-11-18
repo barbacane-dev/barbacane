@@ -54,9 +54,6 @@ ipnet = "2"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }
 
-[target.'cfg(target_env = "musl")'.dependencies]
-mimalloc = { workspace = true }
-
 [features]
 fips = ["rustls/fips"]
 
