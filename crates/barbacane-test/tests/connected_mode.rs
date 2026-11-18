@@ -60,17 +60,19 @@ impl ControlPlane {
     /// Run `barbacane control <args>` against this control plane, with
     /// `stdin` as the request body when given, and return its JSON output.
     fn cli(&self, args: &[&str], stdin: Option<&str>) -> Value {
-        let mut child = Command::new(binary("barbacane").expect("barbacane is built"))
-            .arg("control")
-            .args(args)
-            .args(["-o", "json"])
-            .env("BARBACANE_CONTROL_URL", &self.url)
-            .env("BARBACANE_CONTROL_ADMIN_TOKEN", ADMIN_TOKEN)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("run barbacane control");
+        let mut child = Command::new(
+            barbacane_test::gateway::find_barbacane_binary().expect("barbacane is built"),
+        )
+        .arg("control")
+        .args(args)
+        .args(["-o", "json"])
+        .env("BARBACANE_CONTROL_URL", &self.url)
+        .env("BARBACANE_CONTROL_ADMIN_TOKEN", ADMIN_TOKEN)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run barbacane control");
         if let Some(input) = stdin {
             child
                 .stdin

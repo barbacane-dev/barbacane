@@ -52,15 +52,7 @@ fn artifact_without_capabilities(dir: &Path) -> PathBuf {
 async fn an_artifact_without_authoritative_capabilities_is_refused() {
     let dir = tempfile::TempDir::new().unwrap();
     let artifact = artifact_without_capabilities(dir.path());
-    let binary = [
-        "target/debug/barbacane",
-        "../target/debug/barbacane",
-        "../../target/debug/barbacane",
-    ]
-    .iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
-    .expect("barbacane is built");
+    let binary = barbacane_test::gateway::find_barbacane_binary().expect("barbacane is built");
     let mut cmd = Command::new(binary);
     cmd.args(["serve", "--artifact"]).arg(&artifact).args([
         "--listen",

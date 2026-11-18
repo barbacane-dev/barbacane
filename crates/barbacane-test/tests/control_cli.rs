@@ -79,16 +79,17 @@ impl Outcome {
 }
 
 fn run_cli(url: &str, token: &str, args: &[&str], stdin: Option<&str>) -> Outcome {
-    let mut child = Command::new(binary("barbacane").expect("barbacane is built"))
-        .arg("control")
-        .args(args)
-        .env("BARBACANE_CONTROL_URL", url)
-        .env("BARBACANE_CONTROL_ADMIN_TOKEN", token)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("run barbacane control");
+    let mut child =
+        Command::new(barbacane_test::gateway::find_barbacane_binary().expect("barbacane is built"))
+            .arg("control")
+            .args(args)
+            .env("BARBACANE_CONTROL_URL", url)
+            .env("BARBACANE_CONTROL_ADMIN_TOKEN", token)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run barbacane control");
     if let Some(input) = stdin {
         child
             .stdin

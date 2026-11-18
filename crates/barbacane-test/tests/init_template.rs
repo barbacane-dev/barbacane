@@ -6,7 +6,9 @@ use barbacane_test::TestGateway;
 use tempfile::TempDir;
 
 fn barbacane_binary() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/barbacane")
+    barbacane_test::gateway::find_barbacane_binary()
+        .map(std::path::PathBuf::from)
+        .expect("the barbacane binary is built (cargo build -p barbacane)")
 }
 
 #[tokio::test]
