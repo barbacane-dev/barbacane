@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **YAML**: serde-saphyr 2.2.0. More documents read as libyaml read them, so as in 0.12: a plain `null`, `~` or empty scalar reads as its text as a mapping key or where a string is expected (a key tagged `!!null` is still refused); a quoted scalar continued on lines not indented past its node, or indented with tabs, reads; and `0X1F`, `0O17` and `0B101` are strings, and so are `-.nan` and `+.nan`. 1.0.0-rc.1 refused the null-like scalars and the under-indented quoted scalars, read the upper-case prefixes as integers, and signed `.nan` as not-a-number. Twenty-five kinds of construct read differently from libyaml, listed in `barbacane_compiler::yaml::differential`; the [migration guide](docs/guide/migrating-to-1.0.md#yaml-is-read-by-a-different-parser) lists those a spec can meet.
+
+### Fixed
+
+- **plugins without `config`**: a middleware or dispatcher entry without `config` runs the plugin with its defaults, as `config: {}`. The plugin received `null`, which its `init` refuses, so every request through it answered 500, artifacts already compiled included; the data plane now passes `{}`. The compiler checks an omitted config against the plugin's schema as `{}`, so a plugin that requires a field (`cors` without `allowed_origins`) is refused at compile time (`E1023`) rather than on every request (#406).
+
 ## [1.0.0-rc.1] - 2026-11-16
 
 The breaking changes below are gathered, with what to do and in which order, in the [migration guide](docs/guide/migrating-to-1.0.md). Each is marked **Upgrade note (breaking)** here.

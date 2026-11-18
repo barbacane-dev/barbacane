@@ -157,6 +157,84 @@ async fn test_correlation_id_preserves_incoming() {
 }
 
 // =========================================================================
+// Plugins Without `config`
+// =========================================================================
+
+/// A spec whose global middleware `middleware` and whose `mock` dispatcher
+/// have no `config`, written next to a manifest naming both.
+fn spec_without_configs(middleware: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  mock:\n    path: {}\n  {middleware}:\n    path: {}\n",
+            plugins.join("mock/mock.wasm").display(),
+            plugins
+                .join(format!("{middleware}/{middleware}.wasm"))
+                .display(),
+        ),
+    )
+    .expect("write manifest");
+    let spec = dir.path().join("api.yaml");
+    std::fs::write(
+        &spec,
+        format!(
+            r#"openapi: "3.1.0"
+info:
+  title: Plugins without config
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: {middleware}
+paths:
+  /test:
+    get:
+      operationId: getTest
+      x-barbacane-dispatch:
+        name: mock
+      responses:
+        "200":
+          description: Success
+"#
+        ),
+    )
+    .expect("write spec");
+    (dir, spec)
+}
+
+/// An omitted `config` reaches the plugin as `{}`, so it runs with its
+/// defaults: correlation-id generates an id and returns it, mock answers 200.
+#[tokio::test]
+async fn a_plugin_without_config_runs_with_its_defaults() {
+    let (_dir, spec) = spec_without_configs("correlation-id");
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/test").await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.headers().contains_key("x-correlation-id"),
+        "{:?}",
+        resp.headers()
+    );
+}
+
+/// An omitted `config` is checked against the plugin's schema as `{}`: cors
+/// requires `allowed_origins`, so the spec does not compile (E1023).
+#[tokio::test]
+async fn a_plugin_without_config_is_checked_against_its_schema() {
+    let (_dir, spec) = spec_without_configs("cors");
+    let error = match TestGateway::from_spec(spec.to_str().unwrap()).await {
+        Ok(_) => panic!("a cors entry without allowed_origins compiled"),
+        Err(e) => e.to_string(),
+    };
+    assert!(error.contains("E1023"), "{error}");
+    assert!(error.contains("allowed_origins"), "{error}");
+}
+
+// =========================================================================
 // CORS Middleware Tests (Automatic Preflight Handling)
 // =========================================================================
 

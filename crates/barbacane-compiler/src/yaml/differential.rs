@@ -138,19 +138,6 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
-        name: "under-indented quoted scalars",
-        reason: "YAML 1.2 requires the continuation lines of a quoted scalar in block context \
-                 to be indented past the node that holds it (yaml-test-suite QB6E), and a tab \
-                 does not count as indentation; libyaml reads them, the module refuses the \
-                 document",
-        example: "quoted: \"a\nb\nc\"\n",
-        matches: |_, d| {
-            matches!(d, Difference::OnlyOursFailed { error }
-                if error.contains("invalid indentation in multiline quoted scalar")
-                    || error.contains("tab cannot be used as indentation"))
-        },
-    },
-    KnownDivergence {
         name: "byte order marks inside a document",
         reason: "YAML 1.2 allows a byte order mark before a document and inside quoted \
                  scalars only; libyaml reads one that begins a node as content and drops one \
@@ -281,23 +268,6 @@ pub static KNOWN: &[KnownDivergence] = &[
         matches: |input, _| has_bare_carriage_return(input),
     },
     KnownDivergence {
-        name: "signed .nan",
-        reason: "YAML 1.2 spells not-a-number `.nan` with no sign, so `-.nan` is a string, as \
-                 libyaml reads it; serde-saphyr reads not-a-number, null in a JSON value \
-                 (bourumir-wyngs/serde-saphyr#271)",
-        example: "a: -.nan\n",
-        matches: |_, d| {
-            matches!(d, Difference::Value {
-                ours: Value::Null,
-                reference: Value::String(text),
-                ..
-            } if matches!(
-                text.strip_prefix(['+', '-']),
-                Some(".nan" | ".NaN" | ".NAN")
-            ))
-        },
-    },
-    KnownDivergence {
         name: "anchor names with punctuation",
         reason: "YAML 1.2 lets an anchor name hold any character but whitespace and flow \
                  indicators (`&a:b`); libyaml ends it at the first character other than a \
@@ -348,30 +318,15 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
-        name: "upper-case radix prefixes",
-        reason: "serde-saphyr reads `0X1F`, `0O17` and `0B101` as integers; YAML 1.2 and \
-                 libyaml keep them as strings, since the core schema's prefixes are lower case",
-        example: "a: 0X1F\n",
-        matches: |_, d| match d {
-            Difference::Value {
-                ours: Value::Number(_),
-                reference: Value::String(text),
-                ..
-            } => {
-                let digits = text.trim_start_matches(['+', '-']);
-                digits.starts_with("0X") || digits.starts_with("0O") || digits.starts_with("0B")
-            }
-            _ => false,
-        },
-    },
-    KnownDivergence {
-        name: "null-like mapping keys",
-        reason: "serde-saphyr refuses a plain `null`, `~` or empty mapping key where a string \
-                 is expected; libyaml reads the key as its text",
-        example: "null: 1\n",
-        matches: |_, d| {
-            matches!(d, Difference::OnlyOursFailed { error }
-                if error.contains("cannot deserialize null into string"))
+        name: "`!!null` on mapping keys",
+        reason: "a JSON value's keys are strings, and serde-saphyr refuses a scalar tagged \
+                 `!!null` as a string (`!!null a: 1`, `!!null : 1`); libyaml reads the key as \
+                 its text",
+        example: "!!null a: 1\n",
+        matches: |input, d| {
+            input.contains("!!null")
+                && matches!(d, Difference::OnlyOursFailed { error }
+                    if error.contains("cannot deserialize null into string"))
         },
     },
     KnownDivergence {

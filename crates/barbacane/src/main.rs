@@ -1116,8 +1116,7 @@ impl Gateway {
         for op in &resolved_operations {
             for (name, config) in plugin_configs(op) {
                 let key = barbacane_wasm::InstanceKey::new(name, config);
-                let config_json = serde_json::to_vec(config).unwrap_or_default();
-                plugin_pool.register_config(key, config_json);
+                plugin_pool.register_config(key, init_config(config));
             }
         }
 
@@ -5400,6 +5399,16 @@ fn plugin_configs(
         .iter()
         .map(|mw| (&mw.name, &mw.config))
         .chain(std::iter::once((&op.dispatch.name, &op.dispatch.config)))
+}
+
+/// The JSON a plugin's `init` receives for `config`. An omitted config is an
+/// empty object: the SDK deserializes it into the plugin's config struct, which
+/// `null` cannot be.
+fn init_config(config: &serde_json::Value) -> Vec<u8> {
+    if config.is_null() {
+        return b"{}".to_vec();
+    }
+    serde_json::to_vec(config).unwrap_or_default()
 }
 
 /// Run the check command: load the artifact as `serve` does, then run each

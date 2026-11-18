@@ -1104,6 +1104,7 @@ fn compile_inner(
             }),
         }
     }
+    let empty_config = serde_json::Value::Object(serde_json::Map::new());
 
     // Plugins whose manifest puts them in the `authentication` family. Each
     // verifies a credential the client sends, and the security scheme is what
@@ -1328,11 +1329,13 @@ fn compile_inner(
                 .map(|m| (&m.name, &m.config))
                 .chain(std::iter::once((&dispatch.name, &dispatch.config)))
             {
-                // An omitted `config` is not an empty one: the plugin applies
-                // its own defaults, which the schema does not always restate.
-                if config.is_null() {
-                    continue;
-                }
+                // An omitted `config` reaches the plugin as `{}` (the data
+                // plane's `init_config`), so it is checked as one.
+                let config = if config.is_null() {
+                    &empty_config
+                } else {
+                    config
+                };
                 let key = crate::manifest::normalize_plugin_name(name);
                 let Some(validator) = plugin_validators.get(key.as_str()) else {
                     continue;

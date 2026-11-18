@@ -84,11 +84,8 @@ Specs are read by serde-saphyr, configured to read documents as libyaml did. The
 | an alias written after its anchor name is reused (`&string` twice, `*string` later) | could resolve to another anchor's node | the last node with that name | check specs that reuse anchor names |
 | a block scalar (`|`, `>`) ending the file without a final line break | no trailing line break | one trailing line break | end the file with a line break |
 | keys spelled differently but equal as integers (`10` and `0xA`, `1000` and `1_000`) | two keys | one key, the last kept | spell the keys as strings |
-| a plain `null`, `~` or empty mapping key | read as its text | refused | quote the key: `"null"` |
-| a quoted scalar continued on lines not indented past its node | read | refused | indent the continuation lines |
-| `0X1F`, `0O17`, `0B101` | strings | integers | quote them |
 
-The full list of twenty-eight classes is in `barbacane_compiler::yaml::differential`.
+The full list of twenty-five classes is in `barbacane_compiler::yaml::differential`.
 
 ### Resource limits and `--fetch-plugins`
 
