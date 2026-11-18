@@ -1,9 +1,9 @@
 # Barbacane Control Plane - Multi-stage build
 # Produces a minimal, rootless container image: the binary on scratch with
-# Debian 12's glibc and libgcc, and no shell or package manager.
+# Debian 13's glibc and libgcc, and no shell or package manager.
 
-# Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor). Debian 12, as
-# the runtime files: the binary needs no newer glibc than they hold.
+# Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor). Debian 12, so
+# the binary needs no newer glibc than the runtime files (Debian 13) hold.
 FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS rust-builder
 
 # Install build dependencies for aws-lc-rs
@@ -34,7 +34,7 @@ FROM scratch AS binary
 COPY --from=rust-builder /barbacane-control /barbacane-control
 
 # Runtime files, assembled under /rootfs.
-FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
 
 # The archive's current glibc and libgcc, security updates included.
 RUN apt-get update && apt-get install -y --no-install-recommends \

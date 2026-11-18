@@ -1,6 +1,6 @@
 name: Scratch images (prototype)
 
-# Prototype for #397: the binaries on scratch with Debian 12's glibc and
+# Prototype for #397: the binaries on scratch with Debian 13's glibc and
 # libgcc and their dpkg records. Builds both images and checks their contents
 # and what a scanner sees in them, runs the integration suites against the
 # images' binaries, and compares the gateway image with today's under load.
@@ -110,7 +110,7 @@ jobs:
           jq -r '.artifacts | group_by(.type) | map("\(.[0].type): \(length)") | .[]' sbom.json
           jq -r '.artifacts[] | select(.type == "deb") | "deb: \(.name) \(.version)"' sbom.json
           [ "$(jq -r '.distro.id' sbom.json)" = debian ]
-          [ "$(jq -r '.distro.versionID' sbom.json)" = 12 ]
+          [ "$(jq -r '.distro.versionID' sbom.json)" = 13 ]
           for package in libc6 libgcc-s1; do
             jq -e --arg p "$package" 'any(.artifacts[]; .type == "deb" and .name == $p)' sbom.json > /dev/null \
               || { echo "Syft does not see $package in $IMAGE" >&2; exit 1; }
@@ -345,6 +345,17 @@ jobs:
           git fetch --depth 1 origin main
           git show FETCH_HEAD:Dockerfile > Dockerfile.today
           docker buildx build --load -t barbacane:today -f Dockerfile.today .
+
+      # What a user's scanner lists in today's image, to set against the
+      # scratch image's list in the image job.
+      - name: Every match in today's image
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: barbacane:today
+          severity-cutoff: negligible
+          only-fixed: false
+          fail-build: false
+          output-format: table
 
       - name: Download the scratch image
         uses: actions/download-artifact@v8
