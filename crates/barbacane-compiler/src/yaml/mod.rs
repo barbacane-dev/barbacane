@@ -48,6 +48,12 @@ fn options() -> Options {
     // libyaml keeps `0755`, `007`, `1_000` and `0xFF_FF` as strings.
     options.leading_zero_numbers_as_strings = true;
     options.underscored_numbers_as_strings = true;
+    // libyaml reads a plain `null`, `~` or empty scalar as its text where a
+    // string is expected.
+    options.null_as_string = true;
+    // `bom_inside_document_as_content` stays off: libyaml drops a byte order
+    // mark that starts a line in a flow collection, and the option would read
+    // it as content, a different key or value, where the module refuses.
     let mut budget = Budget::default();
     budget.max_depth = MAX_DEPTH;
     budget.max_nodes = MAX_NODES;
