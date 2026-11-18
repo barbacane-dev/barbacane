@@ -457,16 +457,36 @@ fn has_punctuated_anchor(input: &str) -> bool {
     })
 }
 
+/// The text of each mapping key `input` may write: what precedes the first `:`
+/// of a line or of a flow mapping entry, without the indentation, `- `
+/// sequence indicators, or a tag or anchor before the key.
+fn written_keys(input: &str) -> impl Iterator<Item = &str> {
+    input
+        .lines()
+        .flat_map(|line| line.split([',', '{']))
+        .map(|entry| {
+            let mut key = entry.split(':').next().unwrap_or("").trim();
+            loop {
+                key = if let Some(rest) = key
+                    .strip_prefix('-')
+                    .filter(|rest| rest.starts_with(char::is_whitespace))
+                {
+                    rest.trim_start()
+                } else if key.starts_with(['!', '&']) {
+                    key.split_once(char::is_whitespace)
+                        .map_or("", |(_, rest)| rest.trim_start())
+                } else {
+                    return key;
+                };
+            }
+        })
+}
+
 /// Whether `input` has two mapping keys spelled differently that are the
 /// same integer, such as `10` and `0xA`, or `+1` and `1`.
 fn has_keys_equal_as_integers(input: &str) -> bool {
     let mut seen = std::collections::HashMap::new();
-    input.lines().any(|line| {
-        let key = line
-            .trim_start_matches([' ', '-', '{', ','])
-            .split(':')
-            .next()
-            .unwrap_or("");
+    written_keys(input).any(|key| {
         integer_value(key)
             .is_some_and(|value| seen.insert(value, key).is_some_and(|other| other != key))
     })
@@ -476,12 +496,7 @@ fn has_keys_equal_as_integers(input: &str) -> bool {
 /// dropped, one of them written with an underscore.
 fn has_keys_equal_with_underscores(input: &str) -> bool {
     let mut seen = std::collections::HashMap::new();
-    input.lines().any(|line| {
-        let key = line
-            .trim_start_matches([' ', '-', '{', ','])
-            .split(':')
-            .next()
-            .unwrap_or("");
+    written_keys(input).any(|key| {
         integer_value_with_underscores(key).is_some_and(|value| {
             seen.insert(value, key)
                 .is_some_and(|other| other != key && (other.contains('_') || key.contains('_')))
