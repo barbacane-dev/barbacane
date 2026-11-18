@@ -1,22 +1,24 @@
-name: Scratch images (prototype)
+name: Runtime base images (prototype)
 
-# Prototype for #397: the binaries on scratch with Debian 13's glibc and
-# libgcc and their dpkg records. Builds both images and checks their contents
-# and what a scanner sees in them, runs the integration suites against the
-# images' binaries, and compares the gateway image with today's under load.
+# Prototype for #397: a runtime base built with apko from Wolfi packages
+# (docker/runtime.apko.yaml), and both images on it. Builds the base and the
+# images, checks their contents and what a scanner sees in them, runs the
+# integration suites against the images' binaries, and compares the gateway
+# image with today's under load.
 
 on:
   pull_request:
     paths:
       - Dockerfile
       - Dockerfile.control
-      - docker/scratch-rootfs.sh
+      - docker/runtime.apko.yaml
       - .github/workflows/static-images.yml
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  APKO_VERSION: v1.4.15
 
 permissions:
   contents: read
@@ -43,29 +45,41 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      # `apko lock` pins every package by version and checksum; the build
+      # installs exactly those.
+      - name: Build the runtime base
+        run: |
+          set -euo pipefail
+          GOTOOLCHAIN=auto go install "chainguard.dev/apko@$APKO_VERSION"
+          apko="$(go env GOPATH)/bin/apko"
+          "$apko" version
+          "$apko" lock --arch amd64 docker/runtime.apko.yaml
+          jq -r '.contents.packages[] | "locked: \(.name) \(.version)"' docker/runtime.apko.lock.json
+          "$apko" build --arch amd64 --lockfile docker/runtime.apko.lock.json \
+            docker/runtime.apko.yaml barbacane-runtime:apko runtime.tar
+          loaded=$(docker load < runtime.tar | sed -n 's/^Loaded image: //p')
+          echo "$loaded"
+          image=$( (echo "$loaded" | grep -- '-amd64$' || echo "$loaded") | head -1)
+          docker tag "$image" barbacane-runtime:local
+          docker image inspect barbacane-runtime:local --format 'base: {{.Size}} bytes, user {{.Config.User}}'
 
+      # The local builder, so the images' FROM finds the base just loaded.
       - name: Export the binary
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: ./${{ matrix.file }}
-          target: binary
-          outputs: type=local,dest=bin
+        env:
+          FILE: ${{ matrix.file }}
+        run: docker buildx build --builder default -f "$FILE" --target binary --output type=local,dest=bin .
 
-      # Same builder, so the build stage comes from its cache.
       - name: Build the image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: ./${{ matrix.file }}
-          load: true
-          tags: ${{ matrix.image }}:scratch
+        env:
+          FILE: ${{ matrix.file }}
+          IMAGE: ${{ matrix.image }}:apko
+        run: |
+          docker buildx build --builder default -f "$FILE" \
+            --build-arg BASE=barbacane-runtime:local --load -t "$IMAGE" .
 
       - name: Check the binary and the image's contents
         env:
-          IMAGE: ${{ matrix.image }}:scratch
+          IMAGE: ${{ matrix.image }}:apko
           BINARY: bin/${{ matrix.binary }}
           IN_IMAGE: ${{ matrix.path }}
         run: |
@@ -81,38 +95,38 @@ jobs:
           awk -v binary="${IN_IMAGE#/}" '
             { total += $3 }
             $6 == binary { bin = $3 }
-            $6 ~ /\/gconv\// { gconv += $3 }
-            END { printf "bytes: %d in all, %d the binary, %d gconv modules, %d the rest\n", total, bin, gconv, total - bin - gconv }
+            END { printf "bytes: %d in all, %d the binary, %d the rest\n", total, bin, total - bin }
           ' contents.txt
+          awk '$6 ~ /(^|\/)s?bin\/./ { print "program: " $6, $7, $8 }' contents.txt
           grep -E ' 65532/65532 .* home/nonroot/$' contents.txt
           grep -E '^drwxrwxrwt .* tmp/$' contents.txt
-          grep -E ' etc/ssl/certs/ca-certificates.crt$' contents.txt
+          grep -E ' etc/ssl/certs/ca-certificates.crt($| -> )' contents.txt
           grep -E ' etc/nsswitch.conf$' contents.txt
-          grep -E ' var/lib/dpkg/status$' contents.txt
-          grep -E ' etc/os-release -> ' contents.txt
-          if grep -qE ' (usr/)?s?bin/.' contents.txt; then
-            echo "the image holds programs other than the binary" >&2
+          grep -E ' etc/os-release($| -> )' contents.txt
+          grep -E ' (usr/)?lib/apk/db/installed$' contents.txt
+          if awk '{ print $6 }' contents.txt \
+            | grep -qE '(^|/)(sh|ash|bash|dash|busybox|apk|apt|apt-get|dpkg)$'; then
+            echo "the image holds a shell or a package manager" >&2
             exit 1
           fi
 
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
-      # A scanner sees glibc and libgcc through the dpkg records and the
+      # A scanner sees the Wolfi packages through the apk database and the
       # crates through the list `cargo auditable` embeds in the binary.
       - name: What a scanner sees
         env:
-          IMAGE: ${{ matrix.image }}:scratch
+          IMAGE: ${{ matrix.image }}:apko
         run: |
           set -euo pipefail
           syft scan "docker:$IMAGE" -o json > sbom.json
           jq -r '"distro: \(.distro.id) \(.distro.versionID)"' sbom.json
           jq -r '.artifacts | group_by(.type) | map("\(.[0].type): \(length)") | .[]' sbom.json
-          jq -r '.artifacts[] | select(.type == "deb") | "deb: \(.name) \(.version)"' sbom.json
-          [ "$(jq -r '.distro.id' sbom.json)" = debian ]
-          [ "$(jq -r '.distro.versionID' sbom.json)" = 13 ]
-          for package in libc6 libgcc-s1; do
-            jq -e --arg p "$package" 'any(.artifacts[]; .type == "deb" and .name == $p)' sbom.json > /dev/null \
+          jq -r '.artifacts[] | select(.type == "apk") | "apk: \(.name) \(.version)"' sbom.json
+          [ "$(jq -r '.distro.id' sbom.json)" = wolfi ]
+          for package in wolfi-baselayout ca-certificates-bundle glibc-2.44 ld-linux-2.44 libgcc; do
+            jq -e --arg p "$package" 'any(.artifacts[]; .type == "apk" and .name == $p)' sbom.json > /dev/null \
               || { echo "Syft does not see $package in $IMAGE" >&2; exit 1; }
           done
           crates=$(jq '[.artifacts[] | select(.type == "rust-crate")] | length' sbom.json)
@@ -126,7 +140,7 @@ jobs:
       - name: Scan ${{ matrix.image }}
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image: ${{ matrix.image }}:scratch
+          image: ${{ matrix.image }}:apko
           severity-cutoff: high
           only-fixed: true
           fail-build: true
@@ -136,7 +150,7 @@ jobs:
       - name: Every match in ${{ matrix.image }}
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image: ${{ matrix.image }}:scratch
+          image: ${{ matrix.image }}:apko
           severity-cutoff: negligible
           only-fixed: false
           fail-build: false
@@ -145,13 +159,21 @@ jobs:
       - name: Upload the binary
         uses: actions/upload-artifact@v7
         with:
-          name: scratch-${{ matrix.binary }}
+          name: bin-${{ matrix.binary }}
           path: bin/${{ matrix.binary }}
           retention-days: 3
 
+      - name: Upload the base's lock
+        if: matrix.image == 'barbacane'
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-lock
+          path: docker/runtime.apko.lock.json
+          retention-days: 7
+
       - name: Save the gateway image
         if: matrix.image == 'barbacane'
-        run: docker save barbacane:scratch | gzip > image.tar.gz
+        run: docker save barbacane:apko | gzip > image.tar.gz
 
       - name: Upload the gateway image
         if: matrix.image == 'barbacane'
@@ -219,7 +241,7 @@ jobs:
       - name: Download the image's gateway
         uses: actions/download-artifact@v8
         with:
-          name: scratch-barbacane
+          name: bin-barbacane
           path: bin
 
       - name: Point the harness at it
@@ -302,7 +324,7 @@ jobs:
       - name: Download the images' binaries
         uses: actions/download-artifact@v8
         with:
-          pattern: scratch-*
+          pattern: bin-*
           path: bin
           merge-multiple: true
 
@@ -321,13 +343,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo test --locked -p barbacane-test --test control_cli --test connected_mode -- --test-threads=2
 
-  # Today's gateway image (main's Dockerfile) against the scratch one, both
-  # with the gateway built by Rust 1.95 from this commit and both run as
-  # containers on the host network. Three alternating rounds per image, on a
-  # mock route and on a route proxying to an upstream in today's image, with
-  # the global middlewares cors and correlation-id.
+  # Today's gateway image (main's Dockerfile) against the one on the apko
+  # base, both with the gateway built by Rust 1.95 from this commit and both
+  # run as containers on the host network. Three alternating rounds per image,
+  # on a mock route and on a route proxying to an upstream in today's image,
+  # with the global middlewares cors and correlation-id.
   load:
-    name: Load comparison (today, scratch)
+    name: Load comparison (today, apko)
     needs: [image]
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -347,7 +369,7 @@ jobs:
           docker buildx build --load -t barbacane:today -f Dockerfile.today .
 
       # What a user's scanner lists in today's image, to set against the
-      # scratch image's list in the image job.
+      # apko image's list in the image job.
       - name: Every match in today's image
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
@@ -357,41 +379,21 @@ jobs:
           fail-build: false
           output-format: table
 
-      - name: Download the scratch image
+      - name: Download the apko image
         uses: actions/download-artifact@v8
         with:
           name: image-barbacane
           path: image
 
-      - name: Download the scratch image's binary
+      - name: Download the apko image's binary
         uses: actions/download-artifact@v8
         with:
-          name: scratch-barbacane
+          name: bin-barbacane
           path: bin
 
-      - name: Load the scratch image
+      - name: Load the apko image
         run: |
           gunzip -c image/image.tar.gz | docker load
-          docker image ls barbacane
-
-      # Each image with the other's binary, to tell the runtime files from
-      # the build: today's binary is built by `cargo build`, the scratch
-      # image's by `cargo auditable build`.
-      - name: Cross the binaries and the runtimes
-        run: |
-          set -euo pipefail
-          mkdir -p cross/plain cross/auditable
-          container=$(docker create barbacane:today)
-          docker cp "$container:/barbacane" cross/plain/barbacane
-          docker rm "$container" > /dev/null
-          cp bin/barbacane cross/auditable/barbacane
-          chmod 755 cross/plain/barbacane cross/auditable/barbacane
-          cross() {
-            printf 'FROM %s\nCOPY barbacane /barbacane\n' "$1" \
-              | docker buildx build --builder default --load -t "$2" -f - "$3"
-          }
-          cross barbacane:today barbacane:today-auditable cross/auditable
-          cross barbacane:scratch barbacane:scratch-plain cross/plain
           docker image ls barbacane
 
       - name: Install Rust toolchain
@@ -521,7 +523,7 @@ jobs:
 
           : > bench/results.tsv
           for round in 1 2 3; do
-            for label in today today-auditable scratch-plain scratch; do
+            for label in today apko; do
               serve "barbacane:$label" 18080
               gateway=$cid
               # A hostname resolved through the image's libc, and a public
@@ -575,11 +577,9 @@ jobs:
                   latency = re.search(rf"^\s+{pct}%\s+(\S+)", out, re.M).group(1)
                   runs[label][f"{kind} p{pct} (ms)"].append(ms(latency))
 
-          # today: Chainguard runtime, `cargo build`; scratch: Debian runtime,
-          # `cargo auditable build`; the other two cross them.
-          labels = ["today", "today-auditable", "scratch-plain", "scratch"]
+          labels = ["today", "apko"]
           metrics = list(runs["today"])
-          print("### Runtime files and build against today's image (median of 3 rounds, ratio to today)\n")
+          print("### The apko image against today's (median of 3 rounds, ratio to today)\n")
           print("| metric | " + " | ".join(labels) + " |")
           print("|---" * (len(labels) + 1) + "|")
           for metric in metrics:

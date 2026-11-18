@@ -1,9 +1,14 @@
 # Barbacane Data Plane - Multi-stage build
-# Produces a minimal, rootless container image: the binary on scratch with
-# Debian 13's glibc and libgcc, and no shell or package manager.
+# Produces a minimal, rootless container image: the binary on the runtime base
+# of docker/runtime.apko.yaml (glibc, libgcc and CA certificates from Wolfi; no
+# shell, no package manager).
+
+# The runtime base, built by apko and passed as BASE. Without it, Chainguard's
+# glibc-dynamic.
+ARG BASE=cgr.dev/chainguard/glibc-dynamic@sha256:2c362104c7f7adc37e6bdc87451450ff3834871a6268d930815cbe561493f947
 
 # Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor). Debian 12, so
-# the binary needs no newer glibc than the runtime files (Debian 13) hold.
+# the binary needs no newer glibc than the runtime base holds.
 FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS builder
 
 # Install build dependencies for aws-lc-rs
@@ -33,29 +38,14 @@ RUN cargo auditable build --locked --release --package barbacane && \
 FROM scratch AS binary
 COPY --from=builder /barbacane /barbacane
 
-# Runtime files, assembled under /rootfs.
-FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
-
-# The archive's current glibc and libgcc, security updates included.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libc6 \
-    libgcc-s1 \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY docker/scratch-rootfs.sh /usr/local/bin/scratch-rootfs
-COPY --from=builder /barbacane /barbacane
-RUN sh /usr/local/bin/scratch-rootfs /barbacane /barbacane
-
-FROM scratch
+FROM ${BASE}
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"
 LABEL org.opencontainers.image.description="Barbacane API Gateway - Data Plane"
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 
-COPY --from=runtime /rootfs/ /
-COPY --from=runtime --chown=65532:65532 /home-nonroot/ /home/nonroot/
+COPY --from=builder /barbacane /barbacane
 
 # The compiler caches downloaded plugins under $HOME.
 ENV HOME=/home/nonroot

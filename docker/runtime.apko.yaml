@@ -1,0 +1,41 @@
+# The runtime base of the Barbacane images, built with apko from Wolfi
+# packages: glibc and its loader, libgcc, the CA bundle and the base layout,
+# with the nonroot user (65532). No shell, no package manager. The images'
+# Dockerfiles add a binary on top.
+#
+# `apko lock` pins the packages in runtime.apko.lock.json; a build with
+# `--lockfile` installs exactly those.
+contents:
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  repositories:
+    - https://packages.wolfi.dev/os
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - glibc-2.44
+    - ld-linux-2.44
+    - libgcc
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+      homedir: /home/nonroot
+  run-as: 65532
+
+# The compiler caches downloaded plugins under the home directory.
+paths:
+  - path: /home/nonroot
+    type: directory
+    uid: 65532
+    gid: 65532
+    permissions: 0o755
+
+archs:
+  - amd64
+  - arm64
