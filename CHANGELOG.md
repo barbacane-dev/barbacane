@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **plugins without `config`**: a middleware or dispatcher entry without `config` runs the plugin with its defaults, as `config: {}`. The plugin received `null`, which its `init` refuses, so every request through it answered 500, artifacts already compiled included; the data plane now passes `{}`. The compiler checks an omitted config against the plugin's schema as `{}`, so a plugin that requires a field (`cors` without `allowed_origins`) is refused at compile time (`E1023`) rather than on every request (#406).
 
+### Security
+
+- **dependencies**: tar 0.4.46 and rand 0.8.6. tar 0.4.45 applied a PAX header to the extension header after it rather than to the file, so a crafted archive lists different members under tar-rs than under other tar readers (GHSA-3pv8-6f4r-ffg2). Barbacane opens a `.bca` only with tar-rs, so its own readers agree; a review of the archive with another tool could miss a member. rand 0.8.5 is unsound when a custom `log` logger draws from `thread_rng` (GHSA-cq8v-f236-94qc); Barbacane builds rand 0.8 without its `log` feature. Neither advisory has a RustSec id, so `cargo deny` does not report them.
+
 ## [1.0.0-rc.1] - 2026-11-16
 
 The breaking changes below are gathered, with what to do and in which order, in the [migration guide](docs/guide/migrating-to-1.0.md). Each is marked **Upgrade note (breaking)** here.
