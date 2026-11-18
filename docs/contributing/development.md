@@ -176,7 +176,9 @@ barbacane/
 ├── Dockerfile.standalone   # Gateway plus every official plugin
 ├── docker-compose.yml      # PostgreSQL and control plane for local dev
 ├── docker/
-│   └── plugins.yaml        # Plugin manifest bundled in the standalone image
+│   ├── plugins.yaml        # Plugin manifest bundled in the standalone image
+│   ├── runtime.apko.yaml   # Runtime base of the data and control plane images
+│   └── runtime.apko.lock.json  # The base's packages, pinned
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── README.md
@@ -505,6 +507,12 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
 ```bash
 cargo doc --workspace --open
 ```
+
+## Container Images
+
+`barbacane` and `barbacane-control` run on a base of Wolfi packages: glibc and its loader, libgcc, the CA bundle and the base layout, with the `nonroot` user (65532), and no shell or package manager. `docker/runtime.apko.yaml` lists the packages and `docker/runtime.apko.lock.json` pins each one by version and checksum. The Dockerfiles install exactly those with [apko](https://github.com/chainguard-dev/apko), so the same lock gives the same files on every build. `barbacane-standalone` stays on Debian and keeps a shell.
+
+The `Runtime base` workflow scans the base every night and locks the packages again. When Wolfi has newer ones, it pushes the new lock to the `deps/runtime-base` branch: open a pull request from it, and CI builds and scans both images on the new base. To lock by hand, install apko (`go install chainguard.dev/apko@v1.4.15`) and run `apko lock docker/runtime.apko.yaml`.
 
 ## Release Process
 

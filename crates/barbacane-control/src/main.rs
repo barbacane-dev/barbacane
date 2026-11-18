@@ -1,7 +1,7 @@
 //! Barbacane control plane CLI.
 //!
-//! Provides `serve` and `seed-plugins` subcommands for running the control plane server
-//! and seeding the plugin registry.
+//! Provides `serve`, `seed-plugins` and `health` subcommands for running the control
+//! plane server, seeding the plugin registry and checking a running server.
 
 // Handlers return `Result<_, ProblemDetails>`, and `ProblemDetails` is exactly
 // 128 bytes: the six fields RFC 9457 defines, five of them String, Option<String>
@@ -18,7 +18,9 @@
 use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 mod api;
@@ -74,6 +76,14 @@ enum Command {
         #[arg(long)]
         verbose: bool,
     },
+
+    /// Check that a control plane answers on `/health`: exits 0 when it answers
+    /// 200 within 5 seconds, 1 otherwise. The container image's health check.
+    Health {
+        /// Base URL of the control plane.
+        #[arg(long, default_value = "http://127.0.0.1:9090")]
+        url: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -126,7 +136,32 @@ fn main() -> ExitCode {
                 }
             })
         }
+
+        Command::Health { url } => match check_health(&url) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::from(1)
+            }
+        },
     }
+}
+
+/// `GET <url>/health`, which needs no token and no database: Ok when it
+/// answers 200 within 5 seconds.
+fn check_health(url: &str) -> anyhow::Result<()> {
+    let endpoint = format!("{}/health", url.trim_end_matches('/'));
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?
+        .get(&endpoint)
+        .send()
+        .with_context(|| format!("{endpoint} did not answer"))?;
+    if response.status() != reqwest::StatusCode::OK {
+        anyhow::bail!("{endpoint} answered {}", response.status());
+    }
+    Ok(())
 }
 
 async fn run_server(listen: SocketAddr, database_url: &str, migrate: bool) -> anyhow::Result<()> {

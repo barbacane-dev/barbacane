@@ -59,10 +59,12 @@ toml = { workspace = true }
 # Validation
 jsonschema = { workspace = true }
 
+# `health` subcommand
+reqwest = { workspace = true }
+
 [dev-dependencies]
 tower = { workspace = true }
 tokio-tungstenite = { workspace = true }
-reqwest = { workspace = true }
 bytes = { workspace = true }
 http-body-util = "0.1"
 

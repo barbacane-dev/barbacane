@@ -184,6 +184,49 @@ async fn a_rejected_token_and_an_unreachable_control_plane_are_reported() {
     );
 }
 
+/// `barbacane-control health`, the image's health check: it succeeds against a
+/// running control plane, and fails where `/health` answers otherwise or nothing
+/// answers.
+#[tokio::test]
+async fn health_succeeds_only_when_the_control_plane_answers_200() {
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
+        return;
+    };
+    let health = |url: &str| {
+        Command::new(binary("barbacane-control").expect("barbacane-control is built"))
+            .args(["health", "--url", url])
+            .output()
+            .expect("run barbacane-control health")
+    };
+
+    let up = health(&cp.url);
+    assert!(
+        up.status.success(),
+        "{}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    // GET /missing/health is no route: it answers, but not 200.
+    let elsewhere = health(&format!("{}/missing", cp.url));
+    assert_eq!(elsewhere.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&elsewhere.stderr).contains("/missing/health answered 4"),
+        "{}",
+        String::from_utf8_lossy(&elsewhere.stderr)
+    );
+
+    let down = health("http://127.0.0.1:1");
+    assert_eq!(down.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&down.stderr).contains("did not answer"),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+}
+
 #[tokio::test]
 async fn push_compiles_a_project_and_deploy_waits_for_its_data_planes() {
     let Some(cp) = barbacane_test::required(

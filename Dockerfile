@@ -1,7 +1,25 @@
 # Barbacane Data Plane - Multi-stage build
-# Produces a minimal, rootless container image
+# Produces a minimal, rootless container image: the binary on the runtime base
+# of docker/runtime.apko.yaml (glibc, libgcc and CA certificates from Wolfi; no
+# shell, no package manager).
 
-# Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor), Bookworm for glibc compat
+# Runtime base - apko installs the Wolfi packages docker/runtime.apko.lock.json
+# pins, for the target architecture, into an image of one layer; its files
+# become /rootfs.
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS runtime
+ARG TARGETARCH
+RUN go install chainguard.dev/apko@v1.4.15
+WORKDIR /runtime
+COPY docker/runtime.apko.yaml docker/runtime.apko.lock.json ./
+RUN apko build --arch "$TARGETARCH" --lockfile runtime.apko.lock.json --sbom=false \
+        runtime.apko.yaml barbacane-runtime:build runtime.tar && \
+    layer=$(tar -tf runtime.tar | grep '\.tar\.gz$') && \
+    test "$(printf '%s\n' "$layer" | wc -l)" -eq 1 && \
+    mkdir /rootfs && \
+    tar -xOf runtime.tar "$layer" | tar -xzp --same-owner -C /rootfs
+
+# Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor). Debian 12, so
+# the binary needs no newer glibc than the runtime base holds.
 FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS builder
 
 # Install build dependencies for aws-lc-rs
@@ -10,6 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
+
+# `cargo auditable` records the binary's crates in it, where image scanners
+# read them.
+RUN cargo install --locked cargo-auditable@0.7.7
 
 WORKDIR /build
 
@@ -21,21 +43,24 @@ COPY crates/ crates/
 ENV CARGO_BUILD_JOBS=2
 
 # Build the data plane binary
-RUN cargo build --locked --release --package barbacane && \
+RUN cargo auditable build --locked --release --package barbacane && \
     cp target/release/barbacane /usr/local/bin/barbacane
 
-# Runtime stage - glibc, libgcc, libstdc++ and CA certificates, no shell and
-# no OpenSSL (TLS is rustls with aws-lc-rs, linked in). The free tier publishes
-# only `latest`: bump this digest by hand.
-FROM cgr.dev/chainguard/glibc-dynamic@sha256:2c362104c7f7adc37e6bdc87451450ff3834871a6268d930815cbe561493f947
+FROM scratch
 
 # OCI labels for GitHub Container Registry
 LABEL org.opencontainers.image.source="https://github.com/barbacane-dev/barbacane"
 LABEL org.opencontainers.image.description="Barbacane API Gateway - Data Plane"
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 
+COPY --from=runtime /rootfs/ /
+COPY --from=runtime --chown=65532:65532 /rootfs/home/nonroot/ /home/nonroot/
+
 # Copy the binary from builder
 COPY --from=builder /usr/local/bin/barbacane /barbacane
+
+# The compiler caches downloaded plugins under $HOME.
+ENV HOME=/home/nonroot
 
 # Run as non-root user (UID 65532)
 USER 65532:65532

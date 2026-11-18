@@ -99,7 +99,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-The runtime image (`chainguard/glibc-dynamic`) does not need changes: the FIPS module is statically linked.
+The runtime base (`docker/runtime.apko.yaml`) does not need changes: the FIPS module is statically linked.
 
 ## FIPS Cipher Suites
 

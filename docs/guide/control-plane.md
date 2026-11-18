@@ -150,6 +150,8 @@ barbacane control health check
 
 `/health` needs no token, so a probe can call it directly. It says the process is up and makes no database query: use it as a liveness probe. `/ready`, which needs no token either, answers `200` when the database answers and `503` otherwise, so it serves as a readiness probe; its answer is cached for one second.
 
+The `barbacane-control` image has no shell. Its `HEALTHCHECK` runs [`barbacane-control health`](../reference/cli.md#barbacane-control-health), which calls `/health`; a Compose health check uses the same command, `["CMD", "/usr/local/bin/barbacane-control", "health"]`.
+
 Response:
 ```json
 {
