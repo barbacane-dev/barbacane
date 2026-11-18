@@ -374,6 +374,26 @@ jobs:
           gunzip -c image/image.tar.gz | docker load
           docker image ls barbacane
 
+      # Each image with the other's binary, to tell the runtime files from
+      # the build: today's binary is built by `cargo build`, the scratch
+      # image's by `cargo auditable build`.
+      - name: Cross the binaries and the runtimes
+        run: |
+          set -euo pipefail
+          mkdir -p cross/plain cross/auditable
+          container=$(docker create barbacane:today)
+          docker cp "$container:/barbacane" cross/plain/barbacane
+          docker rm "$container" > /dev/null
+          cp bin/barbacane cross/auditable/barbacane
+          chmod 755 cross/plain/barbacane cross/auditable/barbacane
+          cross() {
+            printf 'FROM %s\nCOPY barbacane /barbacane\n' "$1" \
+              | docker buildx build --builder default --load -t "$2" -f - "$3"
+          }
+          cross barbacane:today barbacane:today-auditable cross/auditable
+          cross barbacane:scratch barbacane:scratch-plain cross/plain
+          docker image ls barbacane
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.100.0
         with:
@@ -501,7 +521,7 @@ jobs:
 
           : > bench/results.tsv
           for round in 1 2 3; do
-            for label in today scratch; do
+            for label in today today-auditable scratch-plain scratch; do
               serve "barbacane:$label" 18080
               gateway=$cid
               # A hostname resolved through the image's libc, and a public
@@ -555,17 +575,22 @@ jobs:
                   latency = re.search(rf"^\s+{pct}%\s+(\S+)", out, re.M).group(1)
                   runs[label][f"{kind} p{pct} (ms)"].append(ms(latency))
 
+          # today: Chainguard runtime, `cargo build`; scratch: Debian runtime,
+          # `cargo auditable build`; the other two cross them.
+          labels = ["today", "today-auditable", "scratch-plain", "scratch"]
           metrics = list(runs["today"])
-          print("### Scratch image against today's image (median of 3 rounds)\n")
-          print("| metric | today | scratch | scratch / today |")
-          print("|---|---|---|---|")
+          print("### Runtime files and build against today's image (median of 3 rounds, ratio to today)\n")
+          print("| metric | " + " | ".join(labels) + " |")
+          print("|---" * (len(labels) + 1) + "|")
           for metric in metrics:
               t = statistics.median(runs["today"][metric])
-              s = statistics.median(runs["scratch"][metric])
-              ratio = f"{s / t:.2f}" if t else "-"
-              print(f"| {metric} | {t:.2f} | {s:.2f} | {ratio} |")
+              cells = []
+              for label in labels:
+                  v = statistics.median(runs[label][metric])
+                  cells.append(f"{v:.2f}" + (f" ({v / t:.2f})" if t and label != "today" else ""))
+              print(f"| {metric} | " + " | ".join(cells) + " |")
           print("\nEvery round:\n")
-          for label in ("today", "scratch"):
+          for label in labels:
               for metric in metrics:
                   values = ", ".join(f"{v:.2f}" for v in runs[label][metric])
                   print(f"- {label}, {metric}: {values}")
