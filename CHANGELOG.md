@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **plugins without `config`**: a middleware or dispatcher entry without `config` runs the plugin with its defaults, as `config: {}`. The plugin received `null`, which its `init` refuses, so every request through it answered 500, artifacts already compiled included; the data plane now passes `{}`. The compiler checks an omitted config against the plugin's schema as `{}`, so a plugin that requires a field (`cors` without `allowed_origins`) is refused at compile time (`E1023`) rather than on every request (#406).
+- **plugin HTTP calls**: a plugin's HTTP calls reuse their connections. Each call ran on a runtime of its own that ended with the call and took the tasks of the connections it had opened: the next call found the pooled connection dead and opened another, so every proxied request paid for a new connection and left one in TIME_WAIT, and under load about 2% of calls failed (`dispatch task is gone`) when they took a connection whose task had just ended. The calls run on a runtime that each HTTP client keeps for its lifetime (#408).
 
 ### Security
 

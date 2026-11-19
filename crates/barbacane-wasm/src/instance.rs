@@ -847,23 +847,13 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
         }
     };
 
-    // Use a separate runtime to avoid deadlock with the main runtime.
-    // The main runtime is blocked waiting for the WASM call to complete,
-    // so we can't schedule work on it. Create a new runtime just for this call.
-    // TODO: Optimize by using a thread-local runtime or worker pool instead of
-    // creating a new runtime per call (performance improvement for high throughput).
+    // The call runs on the client's own runtime, from a thread of its own:
+    // the gateway's runtime is blocked on this WASM call, and `block_on`
+    // cannot run inside it. The connection the call opens stays on the
+    // client's runtime for the next call.
     let response_result = std::thread::scope(|s| {
         let handle = s.spawn(|| {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    tracing::error!("failed to create runtime: {}", e);
-                    return None;
-                }
-            };
+            let rt = http_client.runtime();
 
             rt.block_on(async {
                 let outcome = if pooled {
@@ -1387,19 +1377,8 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
 
                 let response_result = std::thread::scope(|s| {
                     let handle = s.spawn(|| {
-                        let rt = match tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            Ok(rt) => rt,
-                            Err(e) => {
-                                tracing::error!(
-                                    "host_http_stream: failed to create runtime: {}",
-                                    e
-                                );
-                                return None;
-                            }
-                        };
+                        // The client's own runtime, as `http_call` uses.
+                        let rt = http_client.runtime();
 
                         rt.block_on(async {
                             use futures_util::StreamExt;

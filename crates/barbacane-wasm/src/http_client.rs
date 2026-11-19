@@ -95,11 +95,34 @@ impl Hash for TlsCacheKey {
     }
 }
 
+/// The runtime plugin HTTP calls run on, shared by every clone of a client.
+/// A connection's task runs on the runtime that opened it, so the pooled
+/// connections live as long as this runtime does.
+struct CallRuntime(Option<tokio::runtime::Runtime>);
+
+impl Drop for CallRuntime {
+    /// Hand the runtime to tokio's background shutdown: dropping it blocks
+    /// until its workers stop, which tokio refuses in an async context, and
+    /// the last clone of a client can be dropped anywhere.
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+/// Worker threads of a client's runtime. They run the connections' socket
+/// I/O; each call's own future runs on the thread that waits for it.
+fn call_runtime_workers() -> usize {
+    std::thread::available_parallelism().map_or(2, |n| n.get().clamp(1, 4))
+}
+
 /// HTTP client with connection pooling and endpoint pools.
 #[derive(Clone)]
 pub struct HttpClient {
     /// Default client (no mTLS).
     client: Client,
+    runtime: Arc<CallRuntime>,
     /// Cached clients with specific TLS configurations.
     tls_clients: Arc<RwLock<HashMap<TlsCacheKey, Client>>>,
     /// Base config for creating new clients.
@@ -138,17 +161,35 @@ impl HttpClient {
             .build()
             .map_err(HttpClientError::BuildError)?;
 
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(call_runtime_workers())
+            .thread_name("plugin-http")
+            .enable_all()
+            .build()
+            .map_err(HttpClientError::Runtime)?;
+
         let default_timeout = config.default_timeout;
         let allow_plaintext = config.allow_plaintext;
 
         Ok(Self {
             client,
+            runtime: Arc::new(CallRuntime(Some(runtime))),
             tls_clients: Arc::new(RwLock::new(HashMap::new())),
             base_config: config,
             balancer,
             default_timeout,
             allow_plaintext,
         })
+    }
+
+    /// The runtime a host function runs this client's calls on, with
+    /// `block_on` from a thread outside any runtime. The connections it opens
+    /// stay usable after the call.
+    pub fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime
+            .0
+            .as_ref()
+            .expect("the runtime is taken only while dropping")
     }
 
     /// Get or create a client with the specified TLS configuration.
@@ -949,6 +990,9 @@ pub enum HttpClientError {
 
     #[error("request timeout")]
     Timeout,
+
+    #[error("failed to start the HTTP client's runtime: {0}")]
+    Runtime(#[source] std::io::Error),
 
     #[error("connection failed: {0}")]
     ConnectionFailed(String),

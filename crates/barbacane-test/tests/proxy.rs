@@ -174,6 +174,68 @@ async fn test_http_upstream_post() {
     assert_eq!(body["json"]["test"], "data");
 }
 
+/// An HTTP/1.1 upstream that keeps connections open and answers `200 ok` to
+/// every request. Returns its base URL and the number of connections it has
+/// accepted.
+async fn start_keep_alive_upstream() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("address"));
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            counter.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut pending = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    // Answer each request whose head has arrived; GETs carry no body.
+                    while let Some(end) = pending.windows(4).position(|w| w == b"\r\n\r\n") {
+                        pending.drain(..end + 4);
+                        let answer = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok";
+                        if socket.write_all(answer).await.is_err() {
+                            return;
+                        }
+                    }
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => pending.extend_from_slice(&chunk[..n]),
+                    }
+                }
+            });
+        }
+    });
+    (url, accepted)
+}
+
+/// Sequential proxied requests reuse one upstream connection: the connection
+/// outlives the plugin call that opened it.
+#[tokio::test]
+async fn test_http_upstream_reuses_its_connection() {
+    let (upstream, accepted) = start_keep_alive_upstream().await;
+    let (_tmp, spec) = http_upstream_spec(&upstream);
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    for _ in 0..10 {
+        let resp = gateway.get("/proxy/get").await.unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.text().await.unwrap(), "ok");
+    }
+    assert_eq!(
+        accepted.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "ten sequential requests should share one upstream connection"
+    );
+}
+
 #[tokio::test]
 async fn test_http_upstream_headers_forwarded() {
     use wiremock::matchers::{header_exists, method, path};
