@@ -175,9 +175,11 @@ async fn test_http_upstream_post() {
 }
 
 /// An HTTP/1.1 upstream that keeps connections open and answers `200 ok` to
-/// every request. Returns its base URL and the number of connections it has
-/// accepted.
-async fn start_keep_alive_upstream() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+/// every request, `delay` after reading it. Returns its base URL and the
+/// number of connections it has accepted.
+async fn start_keep_alive_upstream(
+    delay: std::time::Duration,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -198,6 +200,7 @@ async fn start_keep_alive_upstream() -> (String, std::sync::Arc<std::sync::atomi
                     // Answer each request whose head has arrived; GETs carry no body.
                     while let Some(end) = pending.windows(4).position(|w| w == b"\r\n\r\n") {
                         pending.drain(..end + 4);
+                        tokio::time::sleep(delay).await;
                         let answer = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok";
                         if socket.write_all(answer).await.is_err() {
                             return;
@@ -218,7 +221,7 @@ async fn start_keep_alive_upstream() -> (String, std::sync::Arc<std::sync::atomi
 /// outlives the plugin call that opened it.
 #[tokio::test]
 async fn test_http_upstream_reuses_its_connection() {
-    let (upstream, accepted) = start_keep_alive_upstream().await;
+    let (upstream, accepted) = start_keep_alive_upstream(std::time::Duration::ZERO).await;
     let (_tmp, spec) = http_upstream_spec(&upstream);
     let gateway = TestGateway::from_spec(spec.to_str().unwrap())
         .await
@@ -233,6 +236,42 @@ async fn test_http_upstream_reuses_its_connection() {
         accepted.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "ten sequential requests should share one upstream connection"
+    );
+}
+
+/// The connections a burst of concurrent requests opens stay open for the
+/// next burst: the client keeps more idle connections than the burst needs.
+#[tokio::test]
+async fn test_http_upstream_keeps_a_burst_of_connections_for_the_next() {
+    use std::sync::atomic::Ordering;
+
+    const BURST: usize = 32;
+    // Answers after 300 ms, so the burst's requests are in flight together.
+    let (upstream, accepted) =
+        start_keep_alive_upstream(std::time::Duration::from_millis(300)).await;
+    let (_tmp, spec) = http_upstream_spec(&upstream);
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    let burst = || async {
+        let responses =
+            futures_util::future::join_all((0..BURST).map(|_| gateway.get("/proxy/get"))).await;
+        for response in responses {
+            assert_eq!(response.unwrap().status(), 200);
+        }
+    };
+
+    burst().await;
+    let opened = accepted.load(Ordering::SeqCst);
+    assert!(
+        opened > 10,
+        "the first burst opened {opened} connections; the test needs more than 10 in flight"
+    );
+    burst().await;
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        opened,
+        "the second burst opened new connections"
     );
 }
 

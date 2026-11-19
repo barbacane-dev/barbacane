@@ -881,7 +881,10 @@ async fn ssrf_guard(url: &reqwest::Url, allow_internal: bool) -> Result<(), Http
 /// Configuration for the HTTP client.
 #[derive(Debug, Clone)]
 pub struct HttpClientConfig {
-    /// Maximum idle connections per host.
+    /// Idle connections kept per upstream host, so a burst of concurrent
+    /// calls finds its connections open for the next one. Each holds a file
+    /// descriptor here and a connection at the upstream until
+    /// `pool_idle_timeout`.
     pub pool_max_idle_per_host: usize,
     /// Idle connection timeout.
     pub pool_idle_timeout: Duration,
@@ -905,7 +908,7 @@ pub struct HttpClientConfig {
 impl Default for HttpClientConfig {
     fn default() -> Self {
         Self {
-            pool_max_idle_per_host: 10,
+            pool_max_idle_per_host: 256,
             pool_idle_timeout: Duration::from_secs(90),
             connect_timeout: Duration::from_secs(10),
             default_timeout: Duration::from_secs(30),
@@ -1173,7 +1176,7 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = HttpClientConfig::default();
-        assert_eq!(config.pool_max_idle_per_host, 10);
+        assert_eq!(config.pool_max_idle_per_host, 256);
         assert_eq!(config.default_timeout, Duration::from_secs(30));
         assert!(!config.allow_plaintext);
     }
