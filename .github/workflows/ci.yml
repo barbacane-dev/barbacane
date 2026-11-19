@@ -833,18 +833,25 @@ jobs:
             echo "::warning::$regressed benchmark(s) regressed — see job summary for details"
           fi
 
-  # The three release images, built for linux/amd64 and not pushed, from the
-  # same Dockerfiles and context the release workflow uses.
+  # The three release images, built for linux/amd64 and linux/arm64 and not
+  # pushed, from the same Dockerfiles and context the release workflow uses.
   images:
-    name: Image (${{ matrix.image }})
-    runs-on: ubuntu-latest
+    name: Image (${{ matrix.image }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     needs: [changes]
     if: needs.changes.outputs.images == 'true'
     strategy:
       fail-fast: false
       matrix:
+        image: [barbacane, barbacane-control, barbacane-standalone]
+        arch: [amd64, arm64]
         include:
+          # The release builds each platform on a native runner of its own.
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
           - image: barbacane
             file: Dockerfile
             binary: /barbacane
@@ -870,7 +877,7 @@ jobs:
         with:
           context: .
           file: ./${{ matrix.file }}
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           push: false
           load: true
           tags: ${{ matrix.image }}:ci
