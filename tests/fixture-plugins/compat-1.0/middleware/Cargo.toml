@@ -1,0 +1,21 @@
+[package]
+name = "compat-middleware"
+version = "1.0.0"
+edition = "2021"
+description = "Test fixture: a middleware written against the 1.0 plugin API, frozen for 1.x"
+license = "AGPL-3.0-only"
+
+# Standalone crate excluded from the workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+barbacane-plugin-sdk = { path = "../../../../crates/barbacane-plugin-sdk" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true

@@ -33,6 +33,8 @@ A plugin built against `barbacane-plugin-sdk` 1.x runs on any later 1.x gateway.
 
 A minor release may add host functions, capabilities and SDK items.
 
+CI holds the plugin API to this. `cargo-semver-checks` compares the SDK with its last release, and a middleware and a dispatcher written against the 1.0 API (`tests/fixture-plugins/compat-1.0`, which stays unchanged for 1.x) are built with the current SDK and macros and run in a gateway on every change.
+
 ### The control plane and the CLI
 
 - The control-plane REST API, as its OpenAPI spec describes it (served at `/openapi`): paths, methods, parameters, request and response fields, status codes, and the problem types it answers with. A minor release may add operations, optional parameters and response fields, so a client ignores fields it does not know. The admin API is single-tenant: one operator token reaches every project; data-plane API keys are scoped to their project.
