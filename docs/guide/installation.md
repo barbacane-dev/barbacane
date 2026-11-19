@@ -20,6 +20,8 @@ Every [GitHub release](https://github.com/barbacane-dev/barbacane/releases) carr
 | macOS Intel | `x86_64-apple-darwin` |
 | macOS Apple Silicon | `aarch64-apple-darwin` |
 
+The static musl builds run on any Linux, whatever its C library. Under load they answer up to 15% fewer requests per second than the glibc builds, most on proxied routes, and use about a quarter less memory; where the system has glibc, the glibc build is the faster one.
+
 The assets are named `barbacane-<target>` and `barbacane-control-<target>`. Download the latest stable release, check it against the release's `checksums.txt`, and put it on your `PATH`:
 
 ```bash
