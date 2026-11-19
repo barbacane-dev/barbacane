@@ -80,6 +80,10 @@ jobs:
       - name: Build WASM plugins
         run: make plugins
 
+      # The control plane's `sslmode` tests need a PostgreSQL that serves TLS.
+      - name: Start PostgreSQL with TLS
+        run: ./scripts/postgres-tls.sh >> "$GITHUB_ENV"
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:

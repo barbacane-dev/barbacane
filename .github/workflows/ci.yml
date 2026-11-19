@@ -437,6 +437,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # A second PostgreSQL that serves TLS, for the `sslmode` tests.
+      - name: Start PostgreSQL with TLS
+        run: ./scripts/postgres-tls.sh >> "$GITHUB_ENV"
+
       - name: Run control plane tests
         run: cargo test --locked -p barbacane-control -- --test-threads=4
 
@@ -645,6 +649,10 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: build-artifacts
+
+      # The control plane's `sslmode` tests need a PostgreSQL that serves TLS.
+      - name: Start PostgreSQL with TLS
+        run: ./scripts/postgres-tls.sh >> "$GITHUB_ENV"
 
       # Unit-only, report-only: a quick per-PR number without the integration
       # suite or a database. The floor is enforced by the full run in

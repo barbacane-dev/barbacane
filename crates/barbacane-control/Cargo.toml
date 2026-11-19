@@ -36,6 +36,8 @@ futures-util = { workspace = true }
 
 # Database
 sqlx = { workspace = true }
+# The crypto provider sqlx's TLS uses (db::create_pool).
+rustls = { workspace = true }
 
 # Utilities
 chrono = { workspace = true }
