@@ -1215,7 +1215,7 @@ barbacane-control serve [OPTIONS]
 | `--database-url` | Yes | - | PostgreSQL connection URL |
 | `--migrate` | No | `true` | Run database migrations on startup |
 
-The `--database-url` can also be set via the `DATABASE_URL` environment variable.
+The `--database-url` can also be set via the `DATABASE_URL` environment variable. It takes libpq's TLS parameters (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`): see [PostgreSQL over TLS](../guide/control-plane.md#postgresql-over-tls).
 
 ### Examples
 

@@ -344,6 +344,26 @@ Migrations run automatically on startup with `--migrate` (enabled by default).
 
 To rotate the admin token: start the control plane with the new token in `BARBACANE_CONTROL_ADMIN_TOKEN` and the old one in `BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS`, move every client to the new token, then restart without the previous one.
 
+### PostgreSQL over TLS
+
+`DATABASE_URL` takes libpq's TLS parameters:
+
+| Parameter | Effect |
+|-----------|--------|
+| `sslmode=disable` | Plaintext |
+| `sslmode=prefer` (the default) | TLS when the server offers it, without checking its certificate; plaintext otherwise |
+| `sslmode=require` | TLS, without checking the server's certificate |
+| `sslmode=verify-ca` | TLS; the server's certificate must come from a trusted CA |
+| `sslmode=verify-full` | As `verify-ca`, and the certificate must name the host in the URL |
+| `sslrootcert=<path>` | A PEM file of CAs to trust, besides the public CAs the control plane ships with (Mozilla's list) |
+| `sslcert=<path>`, `sslkey=<path>` | A client certificate and its key, for a server that asks for one |
+
+In production, use `verify-full`, with `sslrootcert` when the database's certificate comes from the provider's own CA:
+
+```text
+postgres://barbacane:secret@db.example.com:5432/barbacane?sslmode=verify-full&sslrootcert=/etc/barbacane/db-ca.pem
+```
+
 The [configuration reference](../reference/configuration.md) describes each variable.
 
 ### CLI Options
