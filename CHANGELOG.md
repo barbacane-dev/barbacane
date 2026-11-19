@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **wasm runtime**: Wasmtime 48.0.9, for RUSTSEC-2026-0566 to RUSTSEC-2026-0573. None of them reaches the gateway: two are in `wasmtime-wasi` and `wasmtime-wasi-http`, which it does not build (it provides its seven WASI functions itself), and one in the component model, which it does not load; two abort builds without the `threads` or `gc` feature, and it builds both; one is a panic in `Caller::get_module_export`, which it does not call; one needs a host function that hands the guest a GC reference, and none does; one needs a GC heap reservation that is not a multiple of the page size, and it configures none.
 - **dependencies**: tar 0.4.46 and rand 0.8.6. tar 0.4.45 applied a PAX header to the extension header after it rather than to the file, so a crafted archive lists different members under tar-rs than under other tar readers (GHSA-3pv8-6f4r-ffg2). Barbacane opens a `.bca` only with tar-rs, so its own readers agree; a review of the archive with another tool could miss a member. rand 0.8.5 is unsound when a custom `log` logger draws from `thread_rng` (GHSA-cq8v-f236-94qc); Barbacane builds rand 0.8 without its `log` feature. Neither advisory has a RustSec id, so `cargo deny` does not report them.
 
 ## [1.0.0-rc.1] - 2026-11-16
