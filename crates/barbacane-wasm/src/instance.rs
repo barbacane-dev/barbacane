@@ -890,9 +890,10 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
                         Some((json, body))
                     }
                     Err(e) => {
+                        // The cause, which can name the upstream, stays in
+                        // the log; the response names the kind of failure.
                         tracing::error!("HTTP call failed: {}", e);
-                        // Return error response
-                        let error_response = match e {
+                        let mut error_response = match e {
                             crate::http_client::HttpClientError::Timeout => {
                                 HttpClientResponse::error(
                                     504,
@@ -913,11 +914,14 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
                                 502,
                                 "urn:barbacane:error:upstream-unavailable",
                                 "Bad Gateway",
-                                &e.to_string(),
+                                "Upstream request failed",
                             ),
                         };
+                        // The body goes through the side-channel, as an
+                        // upstream response's does: the plugin reads it there.
+                        let body = error_response.body.take();
                         let json = serde_json::to_vec(&error_response).ok();
-                        Some((json, None))
+                        Some((json, body))
                     }
                 }
             })

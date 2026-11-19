@@ -293,9 +293,9 @@ impl HttpClient {
                 if e.is_timeout() {
                     Err(HttpClientError::Timeout)
                 } else if e.is_connect() {
-                    Err(HttpClientError::ConnectionFailed(e.to_string()))
+                    Err(HttpClientError::ConnectionFailed(with_causes(&e)))
                 } else {
-                    Err(HttpClientError::RequestFailed(e.to_string()))
+                    Err(HttpClientError::RequestFailed(with_causes(&e)))
                 }
             }
         }
@@ -516,13 +516,13 @@ impl HttpClient {
                 let error = if e.is_timeout() {
                     HttpClientError::Timeout
                 } else {
-                    HttpClientError::ConnectionFailed(e.to_string())
+                    HttpClientError::ConnectionFailed(with_causes(&e))
                 };
                 Err((error, AttemptFailure::Unreached))
             }
             Err(e) if e.is_timeout() => Err((HttpClientError::Timeout, AttemptFailure::Unanswered)),
             Err(e) => Err((
-                HttpClientError::RequestFailed(e.to_string()),
+                HttpClientError::RequestFailed(with_causes(&e)),
                 AttemptFailure::Unanswered,
             )),
         }
@@ -929,6 +929,20 @@ impl HttpResponse {
     }
 }
 
+/// `error` and each error it was caused by, joined by `: `. A reqwest error's
+/// own message stops at "error sending request for url (...)"; the reason
+/// (refused, reset, closed before the response) is in its sources.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        text.push_str(": ");
+        text.push_str(&next.to_string());
+        cause = next.source();
+    }
+    text
+}
+
 /// HTTP client errors.
 #[derive(Debug, Error)]
 pub enum HttpClientError {
@@ -993,6 +1007,26 @@ mod option_duration_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_causes_appends_every_source() {
+        #[derive(Debug, Error)]
+        #[error("error sending request")]
+        struct Sending(#[source] Client);
+
+        #[derive(Debug, Error)]
+        #[error("client error (SendRequest)")]
+        struct Client(#[source] std::io::Error);
+
+        let error = Sending(Client(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        )));
+        assert_eq!(
+            with_causes(&error),
+            "error sending request: client error (SendRequest): connection reset by peer"
+        );
+    }
 
     #[tokio::test]
     async fn resolve_permitted_addrs_pins_public_literal_and_blocks_internal() {
