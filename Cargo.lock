@@ -478,6 +478,7 @@ dependencies = [
  "prometheus-client",
  "rand 0.9.4",
  "reqwest 0.12.28",
+ "rustls",
  "scalar_api_reference",
  "serde",
  "serde_json",
@@ -4600,6 +4601,7 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4610,6 +4612,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

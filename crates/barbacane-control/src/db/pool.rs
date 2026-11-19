@@ -3,8 +3,14 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-/// Create a PostgreSQL connection pool.
+/// Create a PostgreSQL connection pool. `database_url` takes libpq's TLS
+/// parameters: `sslmode`, `sslrootcert`, `sslcert` and `sslkey`.
 pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    // rustls is built here with two crypto providers (aws-lc-rs for sqlx, ring
+    // for reqwest), so it cannot pick a process default by itself, and sqlx
+    // asks for one with `sslmode=verify-ca`. aws-lc-rs, as the data plane; a
+    // later call keeps the provider already installed.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     PgPoolOptions::new()
         .max_connections(10)
         .connect(database_url)
@@ -64,13 +70,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_full_trusts_the_given_ca_only() {
+    async fn verify_trusts_the_given_ca_only() {
         let Some((url, ca)) = tls_server() else {
             return;
         };
         let pool = create_pool(&format!("{url}?sslmode=verify-full&sslrootcert={ca}"))
             .await
             .expect("connects with the server's CA");
+        assert!(encrypted(&pool).await, "the connection is not encrypted");
+
+        // verify-ca checks the chain but not the name.
+        let pool = create_pool(&format!("{url}?sslmode=verify-ca&sslrootcert={ca}"))
+            .await
+            .expect("connects with verify-ca");
         assert!(encrypted(&pool).await, "the connection is not encrypted");
 
         // Without `sslrootcert`, the test CA is not a trusted root.
