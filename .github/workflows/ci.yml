@@ -380,6 +380,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # The compiler's corpus tests compile specs against built plugins, and
+      # under CI fail when one is missing.
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
+
       - name: Run unit tests
         # Exclude barbacane-test as it contains integration tests requiring gateway binary
         # barbacane-control's tests need PostgreSQL; control-plane-tests runs them.
