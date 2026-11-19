@@ -269,6 +269,58 @@ async fn test_http_upstream_headers_forwarded() {
     );
 }
 
+/// An upstream that accepts each connection, reads the request and closes the
+/// connection without answering. Returns its base URL.
+async fn start_hang_up_upstream() -> String {
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("address"));
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await;
+        }
+    });
+    url
+}
+
+/// An upstream that hangs up answers `502`, and the response says nothing of
+/// the upstream's address or of the client error: the cause goes to the
+/// gateway's log.
+#[tokio::test]
+async fn test_http_upstream_failure_does_not_reveal_the_upstream() {
+    let upstream = start_hang_up_upstream().await;
+    let (_tmp, spec) = http_upstream_spec(&upstream);
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/proxy/get").await.unwrap();
+    assert_eq!(resp.status(), 502);
+    let body = resp.text().await.unwrap();
+    let address = upstream.trim_start_matches("http://");
+    assert!(
+        !body.contains(address) && !body.contains("error sending request"),
+        "the response reveals the upstream: {body}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&body).expect("problem+json");
+    assert_eq!(body["type"], "urn:barbacane:error:upstream-unavailable");
+    assert_eq!(body["status"], 502);
+
+    let line = gateway
+        .log()
+        .wait_for_line("HTTP call failed", std::time::Duration::from_secs(5))
+        .expect("the failure is logged");
+    assert!(line.contains(address), "the log names the upstream: {line}");
+    assert!(
+        line.contains("connection closed before message completed"),
+        "the log gives the cause: {line}"
+    );
+}
+
 // ========================
 // Request header allowlist (ADR-0033)
 // ========================
