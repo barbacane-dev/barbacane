@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **plugins without `config`**: a middleware or dispatcher entry without `config` runs the plugin with its defaults, as `config: {}`. The plugin received `null`, which its `init` refuses, so every request through it answered 500, artifacts already compiled included; the data plane now passes `{}`. The compiler checks an omitted config against the plugin's schema as `{}`, so a plugin that requires a field (`cors` without `allowed_origins`) is refused at compile time (`E1023`) rather than on every request (#406).
+- **host HTTP calls**: when the host cannot complete a plugin's HTTP call, the plugin receives the `502` or `504` problem+json body the host builds. It received an empty body under an `application/problem+json` content type, so `http-upstream` answered the client a `502` with no body. The body's `detail` names the kind of failure (`Failed to connect to upstream`, `Upstream request failed`, `Upstream request timed out`) and never the upstream; the gateway's `HTTP call failed` log line gives the cause with the errors behind it, such as `connection closed before message completed`, where it stopped at `error sending request for url (...)` (#408).
 
 ### Security
 
