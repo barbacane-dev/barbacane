@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Compat middleware configuration",
+  "type": "object",
+  "required": ["header", "deny_path"],
+  "properties": {
+    "header": { "type": "string" },
+    "deny_path": { "type": "string" }
+  },
+  "additionalProperties": false
+}

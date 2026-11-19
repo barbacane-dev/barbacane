@@ -1000,6 +1000,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # tests/fixture-plugins/compat-1.0 holds plugins written against the 1.0
+      # API, for plugins written by others: barbacane-test builds them with the
+      # current SDK and macros and runs them (plugin_compat.rs). An edit there
+      # would let a breaking change pass, so their sources keep this hash for
+      # all of 1.x. Cargo.lock is left out: their dependencies may move.
+      - name: The 1.0 plugin fixtures are unchanged
+        working-directory: tests/fixture-plugins/compat-1.0
+        run: |
+          set -euo pipefail
+          actual=$(find . -type f \( -name '*.rs' -o -name Cargo.toml -o -name plugin.toml \
+              -o -name config-schema.json \) -not -path '*/target/*' \
+            | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+          expected=c2bdbd72c77c30a2fb49392a9eb3a631f84e7e2980b9da4804c6d060f81dae93
+          if [ "$actual" != "$expected" ]; then
+            echo "tests/fixture-plugins/compat-1.0 changed (sources hash $actual): it stays as it is for 1.x" >&2
+            exit 1
+          fi
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.100.0
 

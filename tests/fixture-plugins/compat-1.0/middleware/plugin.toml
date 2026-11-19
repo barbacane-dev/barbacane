@@ -1,0 +1,9 @@
+[plugin]
+name = "compat-middleware"
+version = "1.0.0"
+type = "middleware"
+description = "Test fixture: a middleware written against the 1.0 plugin API, frozen for 1.x"
+wasm = "compat_middleware.wasm"
+
+[capabilities]
+host_functions = ["log", "context_get", "context_set"]

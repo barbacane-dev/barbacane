@@ -41,6 +41,14 @@ const FIXTURE_PLUGINS: &[FixturePlugin] = &[
         dir: "tests/fixture-plugins/body-echo",
         wasm: "body_echo.wasm",
     },
+    FixturePlugin {
+        dir: "tests/fixture-plugins/compat-1.0/middleware",
+        wasm: "compat_middleware.wasm",
+    },
+    FixturePlugin {
+        dir: "tests/fixture-plugins/compat-1.0/dispatcher",
+        wasm: "compat_dispatcher.wasm",
+    },
 ];
 
 fn main() {

@@ -1,0 +1,9 @@
+[plugin]
+name = "compat-dispatcher"
+version = "1.0.0"
+type = "dispatcher"
+description = "Test fixture: a dispatcher written against the 1.0 plugin API, frozen for 1.x"
+wasm = "compat_dispatcher.wasm"
+
+[capabilities]
+host_functions = ["context_get", "hash"]
