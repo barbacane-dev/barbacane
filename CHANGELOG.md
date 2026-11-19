@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.2] - 2026-11-19
+
+One change is breaking: the control-plane image has no shell, so a health check that runs a shell command in it fails; its **Upgrade note (breaking)** says what to use.
+
 ### Added
 
 - **control plane**: `barbacane-control health` checks that a control plane answers `200` on `/health` (`--url`, default `http://127.0.0.1:9090`), and exits `1` with the reason otherwise. The `barbacane-control` image's `HEALTHCHECK` runs it (#397).
@@ -1037,7 +1041,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.1...HEAD
+[Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.2...HEAD
+[1.0.0-rc.2]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.1...v1.0.0-rc.2
 [1.0.0-rc.1]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...v1.0.0-rc.1
 [0.12.4]: https://github.com/barbacane-dev/barbacane/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...v0.12.3

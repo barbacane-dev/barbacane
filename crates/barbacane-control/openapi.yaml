@@ -4,7 +4,7 @@ info:
   description: |
     REST API for managing API specifications, plugins, artifacts, and compilations
     in the Barbacane API Gateway control plane.
-  version: 1.0.0-rc.1
+  version: 1.0.0-rc.2
   license:
     name: AGPL-3.0-only
     url: https://www.gnu.org/licenses/agpl-3.0.html

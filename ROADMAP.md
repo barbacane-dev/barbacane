@@ -19,12 +19,20 @@ The release candidate ([milestone](https://github.com/barbacane-dev/barbacane/mi
 - [x] **YAML in safe Rust** ([#254](https://github.com/barbacane-dev/barbacane/issues/254)): serde-saphyr, held to libyaml by a differential test and nightly fuzzing.
 - [x] **Pre-release review** ([#321](https://github.com/barbacane-dev/barbacane/issues/321) to [#336](https://github.com/barbacane-dev/barbacane/issues/336)): the deploy path end to end, artifact integrity, the plugin ABI version, the public API surface, and data plane and control plane hardening (connection cap, client address behind trusted proxies, listener mTLS and certificate reload, a drain that covers WebSockets and streams, `barbacane check`, control-plane recovery, pagination and metrics).
 
-Remaining: the release itself ([#327](https://github.com/barbacane-dev/barbacane/issues/327)).
+Released on 2026-11-17.
+
+### 1.0.0-rc.2
+
+- [x] **Container images on a runtime base of our own** ([#397](https://github.com/barbacane-dev/barbacane/issues/397)): Wolfi packages pinned by checksum and installed with apko, no shell and no package manager, scanned every night.
+- [x] **Plugin HTTP calls reuse their connections** ([#408](https://github.com/barbacane-dev/barbacane/issues/408)), with up to 256 idle connections per upstream ([#416](https://github.com/barbacane-dev/barbacane/issues/416)).
+- [x] **The control plane connects to PostgreSQL over TLS** ([#398](https://github.com/barbacane-dev/barbacane/issues/398)).
+- [x] **The plugin API checked against plugins written for 1.0** on every change ([#401](https://github.com/barbacane-dev/barbacane/issues/401)).
 
 ### 1.0.0
 
 Between the release candidates and 1.0.0 ([milestone](https://github.com/barbacane-dev/barbacane/milestone/2)):
 
+- [ ] Plugin instances from Wasmtime's pooling allocator: about 1.7x the requests on a plugin route under load ([#422](https://github.com/barbacane-dev/barbacane/issues/422))
 - [ ] SDK wrappers for the host functions plugins still call directly ([#329](https://github.com/barbacane-dev/barbacane/issues/329))
 - [ ] The test categories still missing: proc-macro, property, chaos and snapshot tests, a soak run, coverage floors ([#334](https://github.com/barbacane-dev/barbacane/issues/334))
 
