@@ -380,6 +380,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # The compiler's corpus tests compile specs against built plugins, and
+      # under CI fail when one is missing.
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
+
       - name: Run unit tests
         # Exclude barbacane-test as it contains integration tests requiring gateway binary
         # barbacane-control's tests need PostgreSQL; control-plane-tests runs them.
@@ -630,6 +637,14 @@ jobs:
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-llvm-cov@0.9.1
+
+      # The compiler's corpus tests compile specs against built plugins, and
+      # under CI fail when one is missing. Unit Tests, which this job waits
+      # for, waits for Build, so the artifact is there.
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
 
       # Unit-only, report-only: a quick per-PR number without the integration
       # suite or a database. The floor is enforced by the full run in

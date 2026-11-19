@@ -105,6 +105,17 @@ jobs:
           fetch k8s-rbac.json  "$k8s/apis__rbac.authorization.k8s.io__v1_openapi.json"
           ls -1
 
+      # Four corpus tests compile specs against these plugins, and under CI
+      # fail when one is missing.
+      - name: Build the plugins the corpus tests use
+        run: |
+          set -euo pipefail
+          for name in mock http-upstream ws-upstream rate-limit basic-auth; do
+            (cd "plugins/$name" && cargo build --locked --release --target wasm32-unknown-unknown)
+            cp "$(ls "plugins/$name/target/wasm32-unknown-unknown/release/"*.wasm | head -1)" \
+              "plugins/$name/$name.wasm"
+          done
+
       - name: Run the corpus checks over them
         env:
           BARBACANE_CORPUS_DIR: ${{ runner.temp }}/corpus

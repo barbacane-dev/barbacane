@@ -16,6 +16,19 @@ use std::path::{Path, PathBuf};
 use barbacane_compiler::spec_parser::{for_each_schema_ref, parse_spec, parse_spec_file, ApiSpec};
 use serde_json::Value;
 
+/// Whether `wasm` is built. A local run without plugins skips the test that
+/// needs it; under CI, which builds every plugin first, a missing one fails it,
+/// so the test cannot pass without checking anything.
+fn plugin_built(wasm: &Path) -> bool {
+    if wasm.exists() {
+        return true;
+    }
+    let under_ci = std::env::var("CI").is_ok_and(|v| !v.is_empty() && v != "false");
+    assert!(!under_ci, "{} is not built", wasm.display());
+    eprintln!("skipping: {} is not built", wasm.display());
+    false
+}
+
 /// Methods an OpenAPI path item may hold, including `query` from 3.2.
 const HTTP_METHODS: &[&str] = &[
     "get", "post", "put", "delete", "patch", "head", "options", "trace", "query",
@@ -335,25 +348,14 @@ fn configured_header_names_reach_the_allowlist() {
         .expect("repository root");
     let fixtures = repo_root.join("tests/fixtures");
     let manifest_path = fixtures.join("barbacane.yaml");
-    let Ok(manifest_text) = std::fs::read_to_string(&manifest_path) else {
-        eprintln!("skipping: no fixture manifest");
-        return;
-    };
-    let Ok(manifest) = ProjectManifest::parse(&manifest_text, &manifest_path) else {
-        eprintln!("skipping: fixture manifest does not parse");
-        return;
-    };
+    let manifest_text = std::fs::read_to_string(&manifest_path).expect("the fixture manifest");
+    let manifest = ProjectManifest::parse(&manifest_text, &manifest_path)
+        .expect("the fixture manifest parses");
 
-    // The fixture's plugins must be built for it to compile. Skip only when they
-    // are absent, as in a clean tree, so a real compilation failure still fails.
+    // The fixture's plugins must be built for it to compile.
     let repo_plugins = repo_root.join("plugins");
     for plugin in ["rate-limit", "basic-auth"] {
-        if !repo_plugins
-            .join(plugin)
-            .join(format!("{plugin}.wasm"))
-            .exists()
-        {
-            eprintln!("skipping: {plugin}.wasm is not built");
+        if !plugin_built(&repo_plugins.join(plugin).join(format!("{plugin}.wasm"))) {
             return;
         }
     }
@@ -520,8 +522,7 @@ components:
         .and_then(Path::parent)
         .expect("repository root");
     let mock = repo.join("plugins/mock/mock.wasm");
-    if !mock.exists() {
-        eprintln!("skipping: {} is not built", mock.display());
+    if !plugin_built(&mock) {
         return;
     }
     std::fs::write(
@@ -602,8 +603,7 @@ fn a_config_the_plugin_schema_rejects_does_not_compile() {
         .and_then(Path::parent)
         .expect("repository root");
     let wasm = repo.join("plugins/http-upstream/http-upstream.wasm");
-    if !wasm.exists() {
-        eprintln!("skipping: {} is not built", wasm.display());
+    if !plugin_built(&wasm) {
         return;
     }
 
@@ -676,8 +676,7 @@ fn a_runtime_reference_satisfies_a_constrained_field() {
         .and_then(Path::parent)
         .expect("repository root");
     let wasm = repo.join("plugins/ws-upstream/ws-upstream.wasm");
-    if !wasm.exists() {
-        eprintln!("skipping: {} is not built", wasm.display());
+    if !plugin_built(&wasm) {
         return;
     }
 
