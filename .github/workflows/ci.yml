@@ -638,6 +638,14 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
 
+      # The compiler's corpus tests compile specs against built plugins, and
+      # under CI fail when one is missing. Unit Tests, which this job waits
+      # for, waits for Build, so the artifact is there.
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: build-artifacts
+
       # Unit-only, report-only: a quick per-PR number without the integration
       # suite or a database. The floor is enforced by the full run in
       # coverage-full.yml.
