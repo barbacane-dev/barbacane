@@ -117,9 +117,25 @@ jobs:
         uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: clippy
+          targets: wasm32-unknown-unknown
 
       - name: Clippy
         run: cargo clippy --locked --workspace --lib --bins -- -D warnings
+
+      # The compiler's corpus tests compile specs against these plugins, and
+      # under CI fail when one is missing.
+      - name: Build the plugins the corpus tests use
+        run: |
+          set -euo pipefail
+          for name in mock http-upstream ws-upstream rate-limit basic-auth; do
+            (cd "plugins/$name" && cargo build --locked --release --target wasm32-unknown-unknown)
+            cp "$(ls "plugins/$name/target/wasm32-unknown-unknown/release/"*.wasm | head -1)" \
+              "plugins/$name/$name.wasm"
+          done
+
+      # The control plane's `sslmode` tests need a PostgreSQL that serves TLS.
+      - name: Start PostgreSQL with TLS
+        run: ./scripts/postgres-tls.sh >> "$GITHUB_ENV"
 
       - name: Unit tests
         run: cargo test --locked --workspace --exclude barbacane-test --lib --bins --tests
