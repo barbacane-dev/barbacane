@@ -430,6 +430,38 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # A second PostgreSQL that serves TLS, with a certificate for localhost
+      # from a CA made for the run, for the `sslmode` tests (db/pool.rs).
+      # PostgreSQL reads its key only when the server user owns it, so the
+      # container copies the files in before it starts.
+      - name: Start PostgreSQL with TLS
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/pg-tls"
+          mkdir -p "$dir" && cd "$dir"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=Barbacane test CA" \
+            -keyout ca.key -out ca.crt
+          openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" -keyout server.key -out server.csr
+          printf 'subjectAltName=DNS:localhost\n' > san.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 \
+            -extfile san.ext -out server.crt
+          docker run -d --name postgres-tls -p 5433:5432 \
+            -e POSTGRES_USER=barbacane -e POSTGRES_PASSWORD=barbacane -e POSTGRES_DB=barbacane \
+            -v "$dir:/certs:ro" --entrypoint bash postgres:16 -c '
+              install -o postgres -m 600 /certs/server.key /tmp/server.key &&
+              install -o postgres -m 644 /certs/server.crt /tmp/server.crt &&
+              exec docker-entrypoint.sh postgres -c ssl=on \
+                -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key'
+          for _ in $(seq 1 60); do
+            docker exec postgres-tls pg_isready -U barbacane -h localhost > /dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec postgres-tls pg_isready -U barbacane -h localhost
+          {
+            echo "BARBACANE_TEST_POSTGRES_TLS_URL=postgres://barbacane:barbacane@localhost:5433/barbacane"
+            echo "BARBACANE_TEST_POSTGRES_TLS_CA=$dir/ca.crt"
+          } >> "$GITHUB_ENV"
+
       - name: Run control plane tests
         run: cargo test --locked -p barbacane-control -- --test-threads=4
 
