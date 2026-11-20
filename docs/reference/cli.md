@@ -635,6 +635,7 @@ The examples below assume the key is set.
 | `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds; also the deadline for a request's headers and for its body, answered 408 when missed |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 | `--max-connections` | No | `10000` | Maximum number of concurrently served connections, from 1; a connection past it is closed at once. Also set by `BARBACANE_MAX_CONNECTIONS`, the flag taking precedence. See [Connection cap](#connection-cap) |
+| `--plugin-instance-pool` | No | `1000` | Plugin instances alive at once that the gateway keeps memory set up for; `0` turns the pool off. Also set by `BARBACANE_PLUGIN_INSTANCE_POOL`, the flag taking precedence. See [Plugin instance pool](#plugin-instance-pool) |
 | `--admin-bind` | No | `127.0.0.1:8081` | Admin API listen address for health, metrics, and provenance endpoints. Set to `off` to disable |
 | `--no-introspection` | No | `false` | Do not serve the embedded specs at `/__barbacane/specs*`; the paths answer 404 |
 | `--trusted-proxies` | No | - | Proxies whose connections report the client address: comma-separated addresses or CIDR ranges (`10.0.0.0/8,192.0.2.7`). Also set by `BARBACANE_TRUSTED_PROXIES`. See [Client address](#client-address) |
@@ -755,6 +756,14 @@ serving at most 10000 concurrent connections; open-file limit 1048576
 ```
 
 Each connection holds at least one file descriptor. When the open-file limit is not above the cap, connections fail at accept before the cap sheds them, and the gateway logs a warning. Raise the limit (`ulimit -n`, `LimitNOFILE=` in a systemd unit, `--ulimit nofile=` for a container) or lower `--max-connections`. A systemd service gets a soft limit of 1024 unless its unit sets one.
+
+### Plugin instance pool
+
+Every plugin on a route runs in a fresh instance for each request. The gateway keeps the memory of up to `--plugin-instance-pool` instances (default 1000) set up and reuses it, reset between instances, instead of mapping and unmapping memory for each one; the gateway logs `plugin instance pool ready` at start.
+
+A request holds one instance per middleware on its route and one for its dispatcher until its response is sent; a streamed response holds them until the stream ends or the client leaves. Instances past the pool's size are allocated for the request alone: the request is served, with more kernel time, and `barbacane_wasm_instances_unpooled_total` counts it. `barbacane_wasm_instances` is the number of instances alive. When the counter climbs under normal load, raise `--plugin-instance-pool`.
+
+Each instance in the pool reserves about 4 GiB of virtual address space, not memory: the default reserves about 4 TiB. Where the address space is smaller (an address-space limit such as `ulimit -v`, an ARM kernel with 39-bit addresses), the gateway logs `cannot set up the plugin instance pool` and allocates every instance for its request alone; a smaller `--plugin-instance-pool` fits. A plugin whose memory or table cannot fit a pool slot runs the same way; the gateway logs `plugin does not fit the instance pool` when it loads the artifact.
 
 ### Client address
 

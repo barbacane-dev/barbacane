@@ -393,3 +393,56 @@ async fn a_streamed_response_is_measured_to_its_end() {
         "the duration covers the stream: {duration}s"
     );
 }
+
+/// A client that leaves a stream gives its plugin instances back at once,
+/// though the upstream sends nothing more for half a minute, and the next
+/// request finds them in the pool.
+#[tokio::test]
+async fn a_client_leaving_a_quiet_stream_gives_its_instances_back() {
+    use std::time::Duration;
+
+    // One event, then 30 seconds of silence.
+    let upstream = slow_sse_upstream(2, Duration::from_secs(30)).await;
+    let (_tmp, spec_path) = create_streaming_spec(&upstream);
+    let gateway = TestGateway::from_spec_with_args(
+        spec_path.to_str().unwrap(),
+        &["--plugin-instance-pool", "2"],
+    )
+    .await
+    .expect("failed to start gateway");
+
+    let mut stream = gateway
+        .request_builder(reqwest::Method::GET, "/stream/protected")
+        .header("x-api-key", "secret-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), 200);
+    let first = stream.chunk().await.unwrap().expect("the first event");
+    assert!(first.starts_with(b"data: 0"), "{first:?}");
+    assert_eq!(
+        gateway.metric("barbacane_wasm_instances").await.unwrap(),
+        Some(2.0),
+        "apikey-auth and streaming-echo are alive while the stream is"
+    );
+
+    drop(stream);
+    let alive = gateway
+        .wait_for_metric("barbacane_wasm_instances", 0.0, Duration::from_secs(5))
+        .await;
+    assert_eq!(
+        alive,
+        Some(0.0),
+        "instances alive 5 s after the client left"
+    );
+
+    assert_eq!(gateway.get("/buffered").await.unwrap().status(), 200);
+    assert_eq!(
+        gateway
+            .metric("barbacane_wasm_instances_unpooled_total")
+            .await
+            .unwrap(),
+        Some(0.0),
+        "every instance came from the pool"
+    );
+}

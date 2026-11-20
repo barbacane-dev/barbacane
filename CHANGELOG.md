@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **data plane**: `--plugin-instance-pool` (`BARBACANE_PLUGIN_INSTANCE_POOL`, default 1000) sets how many plugin instances alive at once the gateway keeps memory set up for; `0` turns the pool off. Instances past it are allocated for their request alone. Each pool slot reserves about 4 GiB of virtual address space; where the host cannot reserve the pool, the gateway logs `cannot set up the plugin instance pool` and allocates every instance for its request (#422).
+- **metrics**: `barbacane_wasm_instances`, the plugin instances alive, and `barbacane_wasm_instances_unpooled_total`, the instances allocated per request because the pool was full (#422).
+
+### Changed
+
+- **wasm runtime**: plugin instances come from Wasmtime's pooling allocator. Each instance mapped its linear memory when it was created and unmapped it when its request ended, and the kernel time that took (memory-map locks, TLB shootdowns, page faults) was over half the gateway's CPU under load. A module whose memory or table cannot fit a pool slot is compiled for per-request allocation and logged as `plugin does not fit the instance pool` (#422).
+
+### Fixed
+
+- **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
+
 ## [1.0.0-rc.2] - 2026-11-19
 
 One change is breaking: the control-plane image has no shell, so a health check that runs a shell command in it fails; its **Upgrade note (breaking)** says what to use.

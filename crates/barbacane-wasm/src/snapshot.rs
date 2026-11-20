@@ -216,8 +216,7 @@ mod tests {
         let module = engine
             .compile(&wasm, "small".into(), "0.0.0".into(), false)
             .expect("compiles");
-        let mut instance =
-            PluginInstance::new(engine.engine(), &module, limits).expect("instantiates");
+        let mut instance = PluginInstance::new(&module, limits).expect("instantiates");
 
         let mut initialised = vec![0u8; 3 * PAGE];
         initialised[2 * PAGE] = 1;

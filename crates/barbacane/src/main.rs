@@ -438,7 +438,7 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 }
 use barbacane_wasm::balancer::{pool_key, Balancer, Endpoint};
 use barbacane_wasm::{
-    HttpClient, HttpClientConfig, InstancePool, PluginLimits, RateLimiter, ResponseCache,
+    HttpClient, HttpClientConfig, InstancePool, PluginLimits, PoolSize, RateLimiter, ResponseCache,
     WasmEngine,
 };
 
@@ -700,6 +700,18 @@ enum Commands {
         )]
         max_connections: usize,
 
+        /// Plugin instances alive at once that the gateway keeps preallocated
+        /// memory for. Each reserves about 4 GiB of virtual address space, not
+        /// resident memory. Instances past it are allocated per request; 0
+        /// turns the pool off.
+        #[arg(
+            long,
+            env = "BARBACANE_PLUGIN_INSTANCE_POOL",
+            default_value_t = DEFAULT_PLUGIN_INSTANCE_POOL,
+            value_parser = parse_plugin_instance_pool,
+        )]
+        plugin_instance_pool: u32,
+
         // Connected mode options (optional)
         /// Control plane WebSocket URL (e.g., ws://control:9090/ws/data-plane).
         /// When provided, the data plane connects to the control plane for centralized management.
@@ -794,6 +806,9 @@ struct Gateway {
     _wasm_engine: Arc<WasmEngine>,
     /// Plugin instance pool.
     plugin_pool: Arc<InstancePool>,
+    /// Size of the WASM engine's instance pool, handed to the next artifact's
+    /// gateway.
+    plugin_instance_pool: u32,
     /// Endpoint pool state, handed to the next artifact's gateway.
     balancer: Arc<Balancer>,
     /// Metrics registry for observability.
@@ -804,6 +819,7 @@ struct Gateway {
 
 impl Gateway {
     /// Load a gateway from a .bca artifact.
+    #[allow(clippy::too_many_arguments)]
     fn load(
         artifact_path: &Path,
         dev_mode: bool,
@@ -812,6 +828,7 @@ impl Gateway {
         metrics: Arc<MetricsRegistry>,
         trust: &ArtifactTrust,
         balancer: Option<Arc<Balancer>>,
+        plugin_instance_pool: u32,
     ) -> Result<Self, String> {
         let archive = ArtifactArchive::read(artifact_path)
             .map_err(|e| format!("failed to read artifact: {}", e))?;
@@ -890,8 +907,24 @@ impl Gateway {
         }
         let plugin_limits =
             limits_for_plugin(&DeclaredLimits::default(), true, limits.max_body_size);
-        let wasm_engine = WasmEngine::with_limits(plugin_limits.clone())
+        let pool = PoolSize {
+            instances: plugin_instance_pool,
+            max_memory_bytes: per_plugin_limits
+                .values()
+                .chain([&plugin_limits])
+                .map(|limits| limits.max_memory_bytes)
+                .max()
+                .unwrap_or(plugin_limits.max_memory_bytes),
+        };
+        let wasm_engine = WasmEngine::with_pool(plugin_limits.clone(), Some(pool))
             .map_err(|e| format!("failed to create WASM engine: {}", e))?;
+        if wasm_engine.pool_instances() > 0 {
+            tracing::info!(
+                instances = wasm_engine.pool_instances(),
+                max_memory_mib = pool.max_memory_bytes.div_ceil(1024 * 1024),
+                "plugin instance pool ready"
+            );
+        }
         let wasm_engine = Arc::new(wasm_engine);
 
         if bundled_plugins.is_empty() {
@@ -1210,6 +1243,7 @@ impl Gateway {
             allow_internal_egress,
             _wasm_engine: wasm_engine,
             plugin_pool: Arc::new(plugin_pool),
+            plugin_instance_pool,
             balancer,
             metrics,
             api_name,
@@ -4078,6 +4112,7 @@ async fn perform_hot_reload(
             metrics,
             &trust,
             Some(balancer),
+            shared_gateway.load().plugin_instance_pool,
         )
     }) {
         Ok(g) => g,
@@ -4345,6 +4380,7 @@ async fn run_dev(
         metrics.clone(),
         &trust,
         None,
+        DEFAULT_PLUGIN_INSTANCE_POOL,
     ) {
         Ok(g) => {
             eprintln!(
@@ -4580,6 +4616,7 @@ async fn run_dev(
                         metrics.clone(),
                         &trust,
                         Some(balancer),
+                        gateway.load().plugin_instance_pool,
                     )
                 }) {
                     Ok(new_gw) => {
@@ -4713,6 +4750,21 @@ fn parse_max_connections(value: &str) -> Result<usize, String> {
         .ok()
         .filter(|n| (1..=max).contains(n))
         .ok_or_else(|| format!("expected a whole number from 1 to {max}"))
+}
+
+/// Default size of the plugin instance pool, in instances alive at once.
+/// Override with `--plugin-instance-pool` or `BARBACANE_PLUGIN_INSTANCE_POOL`.
+const DEFAULT_PLUGIN_INSTANCE_POOL: u32 = 1000;
+
+/// `--plugin-instance-pool`: a whole number, 0 for no pool. An empty value is
+/// the default.
+fn parse_plugin_instance_pool(value: &str) -> Result<u32, String> {
+    if value.is_empty() {
+        return Ok(DEFAULT_PLUGIN_INSTANCE_POOL);
+    }
+    value
+        .parse::<u32>()
+        .map_err(|_| format!("expected a whole number from 0 to {}", u32::MAX))
 }
 
 /// Whether a listener on `addr` serves plaintext to other hosts.
@@ -4857,6 +4909,7 @@ async fn run_serve(
     keepalive_timeout: u64,
     shutdown_timeout: u64,
     max_connections: usize,
+    plugin_instance_pool: u32,
     connected_mode: Option<ConnectedModeConfig>,
     admin_bind: &str,
     allow_unsigned: bool,
@@ -4908,6 +4961,7 @@ async fn run_serve(
         metrics.clone(),
         &trust,
         None,
+        plugin_instance_pool,
     ) {
         Ok(g) => Arc::new(ArcSwap::new(Arc::new(g))),
         Err(e) => {
@@ -5442,6 +5496,7 @@ fn run_check(artifact: &str, allow_unsigned: bool) -> ExitCode {
         Arc::new(MetricsRegistry::new()),
         &trust,
         None,
+        0,
     ) {
         Ok(gateway) => gateway,
         Err(e) => {
@@ -5646,6 +5701,7 @@ async fn main() -> ExitCode {
             keepalive_timeout,
             shutdown_timeout,
             max_connections,
+            plugin_instance_pool,
             control_plane,
             project_id,
             api_key,
@@ -5767,6 +5823,7 @@ async fn main() -> ExitCode {
                 keepalive_timeout,
                 shutdown_timeout,
                 max_connections,
+                plugin_instance_pool,
                 connected_mode,
                 &admin_bind,
                 allow_unsigned,

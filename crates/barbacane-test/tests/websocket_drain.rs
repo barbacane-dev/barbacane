@@ -229,11 +229,9 @@ async fn slow_stream_upstream() -> u16 {
     port
 }
 
-/// A client that leaves a streamed response early no longer holds a
-/// connection, but the dispatcher runs until it next writes to the stream (the
-/// next upstream event, 2 seconds later), and the middleware `on_response`
-/// (here `http-log`) after it. At SIGTERM the gateway waits for both before
-/// exiting.
+/// A client that leaves a streamed response early ends the dispatcher's read of
+/// the upstream, and the middleware `on_response` (here `http-log`) runs after
+/// it. At SIGTERM the gateway waits for both before exiting.
 #[tokio::test(flavor = "multi_thread")]
 async fn sigterm_waits_for_the_middleware_after_a_streamed_response() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
