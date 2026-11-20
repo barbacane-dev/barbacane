@@ -1,0 +1,93 @@
+name: Soak
+
+# The gateway under load for a while (scripts/soak.sh): resident memory must
+# level off, no plugin instance may outlive its request, and an overflowed
+# instance pool must still serve every request. Every night for 10 minutes,
+# and for 3 on a pull request that changes how instances are allocated.
+
+on:
+  schedule:
+    - cron: "40 3 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Minutes of steady load
+        default: "10"
+  pull_request:
+    paths:
+      - .github/workflows/soak.yml
+      - scripts/soak.sh
+      - crates/barbacane-wasm/src/engine.rs
+      - crates/barbacane-wasm/src/pool.rs
+      - crates/barbacane-wasm/src/snapshot.rs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wrk and an upstream
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake clang wrk nginx
+          sudo mkdir -p /srv/upstream
+          echo '{"status":"ok","items":[1,2,3,4,5,6,7,8]}' | sudo tee /srv/upstream/mock > /dev/null
+          sudo tee /etc/nginx/conf.d/upstream.conf > /dev/null <<'EOF'
+          server {
+            listen 127.0.0.1:18082;
+            keepalive_requests 100000;
+            location / { root /srv/upstream; default_type application/json; }
+          }
+          EOF
+          sudo nginx -t && sudo systemctl restart nginx
+
+      - name: Build the gateway
+        run: cargo build --locked --release --package barbacane
+
+      - name: Build the plugins
+        run: |
+          set -euo pipefail
+          for name in mock http-upstream cors correlation-id; do
+            (cd "plugins/$name" && cargo build --locked --release --target wasm32-unknown-unknown)
+            cp "$(ls "plugins/$name/target/wasm32-unknown-unknown/release/"*.wasm | head -1)" \
+              "plugins/$name/$name.wasm"
+          done
+
+      - name: Soak
+        env:
+          MINUTES: ${{ github.event_name == 'pull_request' && '3' || inputs.minutes || '10' }}
+        run: |
+          set -euo pipefail
+          status=0
+          ./scripts/soak.sh target/release/barbacane "$MINUTES" soak || status=$?
+          cat soak/report.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload the samples
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak
+          path: |
+            soak/*.tsv
+            soak/*.txt
+            soak/*.log
+            soak/report.md
+          retention-days: 14
