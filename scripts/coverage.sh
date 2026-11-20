@@ -66,11 +66,11 @@ done < <(
 # environment exists. barbacane-test's build.rs skips any that are already
 # present.
 if [[ "$unit_only" -eq 0 ]]; then
-  for plugin in tests/fixture-plugins/*/; do
-    [[ -f "$plugin/Cargo.toml" ]] || continue
-    echo "Building fixture plugin: $(basename "$plugin")"
+  while IFS= read -r manifest; do
+    plugin=$(dirname "$manifest")
+    echo "Building fixture plugin: ${plugin#tests/fixture-plugins/}"
     (cd "$plugin" && cargo build --target wasm32-unknown-unknown --release)
-  done
+  done < <(find tests/fixture-plugins -name Cargo.toml -not -path '*/target/*' | sort)
 fi
 
 # shellcheck disable=SC1090
