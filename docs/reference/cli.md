@@ -759,7 +759,7 @@ Each connection holds at least one file descriptor. When the open-file limit is 
 
 ### Plugin instance pool
 
-Every plugin on a route runs in a fresh instance for each request. The gateway keeps the memory of up to `--plugin-instance-pool` instances (default 1000) set up and reuses it, reset between instances, instead of mapping and unmapping memory for each one; the gateway logs `plugin instance pool ready` at start.
+Every plugin on a route runs in a fresh instance for each request. The gateway keeps the memory of up to `--plugin-instance-pool` instances (default 1000) set up and reuses it, reset between instances, instead of mapping and unmapping memory for each one; the gateway logs `plugin instance pool ready` at start. On Linux 6.7 and later, up to 256 KiB of the pages an instance wrote are cleared in place for the slot's next instance, so it takes no page faults on them, and the rest are returned to the kernel; on earlier kernels every page is returned.
 
 A request holds one instance per middleware on its route and one for its dispatcher until its response is sent; a streamed response holds them until the stream ends or the client leaves. Instances past the pool's size are allocated for the request alone: the request is served, with more kernel time, and `barbacane_wasm_instances_unpooled_total` counts it. `barbacane_wasm_instances` is the number of instances alive. When the counter climbs under normal load, raise `--plugin-instance-pool`.
 

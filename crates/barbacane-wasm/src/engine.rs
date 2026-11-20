@@ -25,12 +25,12 @@ pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(1);
 /// Size of a WASM page, in bytes.
 const WASM_PAGE: usize = 65536;
 
-/// Bytes of a pooled instance's memory that are reset in place, page by
-/// dirty page, when the instance ends; past them the pages are returned to
-/// the kernel and fault back in on the slot's next use. Resetting in place
-/// needs Linux 6.7 or later (`PAGEMAP_SCAN`); elsewhere every page is
-/// returned.
-const POOL_KEEP_RESIDENT: usize = 0;
+/// Bytes of the pages a pooled instance wrote that are reset in place when
+/// the instance ends, so the slot's next instance takes no page fault on
+/// them; the rest are returned to the kernel. Applies where the kernel
+/// reports which pages were written (`PAGEMAP_SCAN`, Linux 6.7 and later);
+/// elsewhere every page is returned.
+const POOL_KEEP_RESIDENT: usize = 256 * 1024;
 
 /// The instance pool an engine keeps: memory, tables and instance slots set up
 /// once and reused, instead of mapped and unmapped for each instance.
@@ -346,9 +346,14 @@ impl WasmEngine {
             .total_memories(pool.instances)
             .total_tables(pool.instances)
             .total_gc_heaps(pool.instances)
-            .max_memory_size(pool.max_memory_bytes.div_ceil(WASM_PAGE) * WASM_PAGE)
-            .linear_memory_keep_resident(POOL_KEEP_RESIDENT)
-            .pagemap_scan(wasmtime::Enabled::Auto);
+            .max_memory_size(pool.max_memory_bytes.div_ceil(WASM_PAGE) * WASM_PAGE);
+        // Without `PAGEMAP_SCAN`, a reset in place clears the whole region,
+        // written or not, on every reset.
+        if PoolingAllocationConfig::is_pagemap_scan_available() {
+            pooling
+                .linear_memory_keep_resident(POOL_KEEP_RESIDENT)
+                .pagemap_scan(wasmtime::Enabled::Yes);
+        }
         let mut config = config.clone();
         config.allocation_strategy(InstanceAllocationStrategy::Pooling(pooling));
         config
