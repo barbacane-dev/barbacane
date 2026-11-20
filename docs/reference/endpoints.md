@@ -214,6 +214,8 @@ barbacane_active_connections 5
 | `barbacane_middleware_duration_seconds` | histogram | middleware, phase | Middleware execution time |
 | `barbacane_dispatch_duration_seconds` | histogram | dispatcher, upstream | Dispatcher execution time |
 | `barbacane_wasm_execution_duration_seconds` | histogram | plugin, function | WASM plugin execution time |
+| `barbacane_wasm_instances` | gauge | - | Plugin instances alive now |
+| `barbacane_wasm_instances_unpooled_total` | counter | - | Plugin instances allocated per request because the instance pool was full |
 
 #### Usage
 

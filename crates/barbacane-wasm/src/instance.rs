@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use wasmtime::{AsContextMut, Caller, Engine, Instance, Linker, Memory, Store, TypedFunc};
+use wasmtime::{AsContextMut, Caller, Instance, Linker, Memory, Store, TypedFunc};
 
 use barbacane_plugin_sdk::types::base64_body;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
 use crate::broker::BrokerMessage;
-use crate::engine::CompiledModule;
+use crate::engine::{CompiledModule, Instantiated};
 use crate::error::WasmError;
 use crate::http_client::{
     HttpClient, HttpRequest as HttpClientRequest, HttpResponse as HttpClientResponse,
@@ -341,6 +341,19 @@ pub struct PluginInstance {
     dispatch_func: Option<TypedFunc<(i32, i32), i32>>,
     alloc_func: TypedFunc<i32, i32>,
     memory: Memory,
+    /// Allocated per request because the engine's pool was full.
+    pool_was_full: bool,
+    /// Holds the instance in the live-instances gauge while it lives.
+    counted: Option<Counted>,
+}
+
+/// Counts a plugin instance as alive until it is dropped.
+struct Counted(Arc<barbacane_telemetry::MetricsRegistry>);
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.wasm_instance_dropped();
+    }
 }
 
 /// A failed call, naming its cause. wasmtime's own message for a trap is the
@@ -358,20 +371,13 @@ fn call_error(error: wasmtime::Error, fuel: u64, deadline_ms: u64) -> WasmError 
 
 impl PluginInstance {
     /// Create a new plugin instance from a compiled module.
-    pub fn new(
-        engine: &Engine,
-        module: &CompiledModule,
-        limits: PluginLimits,
-    ) -> Result<Self, WasmError> {
-        Self::new_with_all_options(
-            engine, module, limits, None, None, None, None, None, None, None,
-        )
+    pub fn new(module: &CompiledModule, limits: PluginLimits) -> Result<Self, WasmError> {
+        Self::new_with_all_options(module, limits, None, None, None, None, None, None, None)
     }
 
     /// Create a new plugin instance with all options including rate limiter and cache.
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_all_options(
-        engine: &Engine,
         module: &CompiledModule,
         limits: PluginLimits,
         http_client: Option<Arc<HttpClient>>,
@@ -390,24 +396,11 @@ impl PluginInstance {
         state.nats_publisher = nats_publisher;
         state.kafka_publisher = kafka_publisher;
         state.ldap_client = ldap_client;
-        let mut store = Store::new(engine, state);
-
-        // Set fuel for execution limiting
-        store
-            .set_fuel(limits.max_fuel)
-            .map_err(|e| WasmError::Instantiation(format!("failed to set fuel: {}", e)))?;
-
-        // Wall-clock backstop: trap if the guest runs past its time budget. The
-        // deadline is expressed in epoch ticks (see EPOCH_TICK).
-        store.set_epoch_deadline(limits.max_execution_ms.max(1));
-
-        // Enable resource limiting
-        store.limiter(|state| state);
-
-        let instance = module
-            .linked()?
-            .instantiate(&mut store)
-            .map_err(|e| WasmError::Instantiation(e.to_string()))?;
+        let Instantiated {
+            mut store,
+            instance,
+            pool_was_full,
+        } = module.instantiate(state, &limits)?;
 
         // Get memory
         let memory = instance
@@ -441,7 +434,21 @@ impl PluginInstance {
             dispatch_func,
             alloc_func,
             memory,
+            pool_was_full,
+            counted: None,
         })
+    }
+
+    /// Count this instance in `metrics` for as long as it lives.
+    pub(crate) fn count_in(&mut self, metrics: Arc<barbacane_telemetry::MetricsRegistry>) {
+        metrics.wasm_instance_created(self.pool_was_full);
+        self.counted = Some(Counted(metrics));
+    }
+
+    /// Whether this instance was allocated per request because the engine's
+    /// pool was full.
+    pub fn pool_was_full(&self) -> bool {
+        self.pool_was_full
     }
 
     /// Get the plugin name.
@@ -1424,7 +1431,23 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                                     let mut byte_stream = upstream.bytes_stream();
 
                                     while client_present {
-                                        let chunk = match byte_stream.next().await {
+                                        let next = match &stream_sender {
+                                            // A client that leaves stops the read
+                                            // at once, whether or not the upstream
+                                            // sends anything more.
+                                            Some(tx) => tokio::select! {
+                                                biased;
+                                                () = tx.closed() => {
+                                                    tracing::debug!(
+                                                        "host_http_stream: client went away, upstream read stopped"
+                                                    );
+                                                    break;
+                                                }
+                                                next = byte_stream.next() => next,
+                                            },
+                                            None => byte_stream.next().await,
+                                        };
+                                        let chunk = match next {
                                             Some(Ok(chunk)) => chunk,
                                             Some(Err(e)) => {
                                                 tracing::error!(
@@ -2479,7 +2502,7 @@ mod tests {
         let module = engine
             .compile(&wasm, "test".into(), "0.0.0".into(), false)
             .expect("compiles");
-        let instance = PluginInstance::new(engine.engine(), &module, limits).expect("instantiates");
+        let instance = PluginInstance::new(&module, limits).expect("instantiates");
         (engine, instance)
     }
 
@@ -2517,7 +2540,7 @@ mod tests {
             .compile(&wasm, "wasi".into(), "0.0.0".into(), false)
             .expect("compiles");
         crate::validate::validate_import_modules(module.module()).expect("all provided");
-        PluginInstance::new(engine.engine(), &module, limits).expect("every stub links");
+        PluginInstance::new(&module, limits).expect("every stub links");
     }
 
     #[test]
@@ -2776,7 +2799,6 @@ mod http_stream_tests {
         })
         .expect("client");
         let instance = PluginInstance::new_with_all_options(
-            engine.engine(),
             &module,
             limits,
             Some(Arc::new(client)),

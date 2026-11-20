@@ -56,8 +56,9 @@ fn compute_hash(s: &str) -> String {
 ///
 /// Maintains a cache of compiled modules and manages instance creation.
 pub struct InstancePool {
-    /// The WASM engine.
-    engine: Arc<WasmEngine>,
+    /// The engine the modules were compiled with. Its epoch ticker enforces
+    /// the instances' time limits, so it lives as long as the pool.
+    _engine: Arc<WasmEngine>,
 
     /// Resource limits for a plugin without its own.
     limits: PluginLimits,
@@ -109,7 +110,7 @@ impl InstancePool {
     /// Create a new instance pool.
     pub fn new(engine: Arc<WasmEngine>, limits: PluginLimits) -> Self {
         Self {
-            engine,
+            _engine: engine,
             limits,
             http_client: None,
             secrets: None,
@@ -141,7 +142,7 @@ impl InstancePool {
         ldap_client: Option<Arc<crate::ldap_client::LdapClient>>,
     ) -> Self {
         Self {
-            engine,
+            _engine: engine,
             limits,
             http_client,
             secrets,
@@ -227,7 +228,6 @@ impl InstancePool {
 
         // Create a new instance with all options
         let mut instance = PluginInstance::new_with_all_options(
-            self.engine.engine(),
             &module,
             self.limits_for(&key.name).clone(),
             self.http_client.clone(),
@@ -239,6 +239,9 @@ impl InstancePool {
             self.ldap_client.clone(),
         )?;
         instance.set_metrics(self.metrics.clone());
+        if let Some(metrics) = &self.metrics {
+            instance.count_in(Arc::clone(metrics));
+        }
 
         if let Some(snapshot) = self.snapshots.get(key) {
             snapshot.restore(&mut instance)?;
@@ -483,5 +486,155 @@ mod tests {
             matches!(&unregistered, WasmError::ConfigNotRegistered(name) if name == "marker"),
             "{unregistered:?}"
         );
+    }
+
+    /// A pool over an engine whose pool holds `instances`, with `name`
+    /// compiled from `wat` and one configuration registered.
+    fn pooled_with(
+        name: &str,
+        wat: &str,
+        instances: u32,
+        max_memory_bytes: usize,
+    ) -> (
+        InstancePool,
+        InstanceKey,
+        Arc<barbacane_telemetry::MetricsRegistry>,
+    ) {
+        let pool_size = crate::engine::PoolSize {
+            instances,
+            max_memory_bytes,
+        };
+        let engine =
+            Arc::new(WasmEngine::with_pool(PluginLimits::default(), Some(pool_size)).unwrap());
+        assert_eq!(engine.pool_instances(), instances);
+        let metrics = Arc::new(barbacane_telemetry::MetricsRegistry::new());
+        let pool = InstancePool::new(Arc::clone(&engine), PluginLimits::default())
+            .with_metrics(Arc::clone(&metrics));
+        let module = engine
+            .compile(
+                &wat::parse_str(wat).expect("valid WAT"),
+                name.into(),
+                "0.1.0".into(),
+                false,
+            )
+            .expect("compile");
+        pool.register_module(module);
+        let key = InstanceKey::new(name, &json!({"k": "v"}));
+        pool.register_config(key.clone(), br#"{"k":"v"}"#.to_vec());
+        (pool, key, metrics)
+    }
+
+    const MIB: usize = 1024 * 1024;
+
+    #[test]
+    fn a_full_pool_allocates_the_next_instances_per_request() {
+        let (pool, key, metrics) = pooled_with("marker", MARKS_EACH_CALL, 2, 16 * MIB);
+        let mut alive: Vec<PluginInstance> = (0..5)
+            .map(|n| {
+                pool.get_instance(&key)
+                    .unwrap_or_else(|e| panic!("instance {n}: {e}"))
+            })
+            .collect();
+
+        let full: Vec<bool> = alive.iter().map(PluginInstance::pool_was_full).collect();
+        assert_eq!(full, [false, false, true, true, true]);
+        for instance in &mut alive {
+            assert_eq!(instance.on_request(b"{}").unwrap(), 0);
+        }
+        assert_eq!(metrics.wasm_instances.get(), 5);
+        assert_eq!(metrics.wasm_instances_unpooled_total.get(), 3);
+
+        drop(alive);
+        assert_eq!(metrics.wasm_instances.get(), 0);
+    }
+
+    #[test]
+    fn a_dropped_instance_gives_its_slot_back() {
+        let (pool, key, metrics) = pooled_with("marker", MARKS_EACH_CALL, 2, 16 * MIB);
+        for round in 0..50 {
+            let pair = [pool.get_instance(&key), pool.get_instance(&key)];
+            for instance in pair {
+                let instance = instance.unwrap_or_else(|e| panic!("round {round}: {e}"));
+                assert!(!instance.pool_was_full(), "round {round}: a slot was kept");
+            }
+        }
+        assert_eq!(metrics.wasm_instances_unpooled_total.get(), 0);
+        assert_eq!(metrics.wasm_instances.get(), 0);
+    }
+
+    #[test]
+    fn a_reused_slot_holds_nothing_from_its_last_instance() {
+        // One slot: every instance after the first reuses the memory the
+        // previous one wrote to.
+        let (pool, key, metrics) = pooled_with("marker", MARKS_EACH_CALL, 1, 16 * MIB);
+        for call in 1..=5 {
+            let mut instance = pool.get_instance(&key).expect("instance");
+            assert!(!instance.pool_was_full(), "call {call}");
+            assert_eq!(instance.on_request(b"{}").unwrap(), 0, "call {call}");
+        }
+        assert_eq!(pool.snapshot_count(), 1);
+        assert_eq!(metrics.wasm_instances_unpooled_total.get(), 0);
+    }
+
+    #[test]
+    fn a_pooled_instance_keeps_its_plugin_memory_limit() {
+        let small = PluginLimits::default().with_memory(2 * MIB);
+        let engine = Arc::new(
+            WasmEngine::with_pool(
+                PluginLimits::default(),
+                Some(crate::engine::PoolSize {
+                    instances: 4,
+                    max_memory_bytes: 16 * MIB,
+                }),
+            )
+            .unwrap(),
+        );
+        let pool = InstancePool::new(Arc::clone(&engine), PluginLimits::default())
+            .with_plugin_limits(HashMap::from([("small".to_string(), small)]));
+        let wasm = wat::parse_str(GROWS_TO_3_MIB).expect("valid WAT");
+        for name in ["small", "roomy"] {
+            let module = engine
+                .compile(&wasm, name.into(), "0.1.0".into(), false)
+                .expect("compile");
+            assert!(module.pooled(), "{name} fits the pool");
+            pool.register_module(module);
+            pool.register_config(InstanceKey::new(name, &json!({})), b"{}".to_vec());
+        }
+
+        let refused = pool
+            .get_instance(&InstanceKey::new("small", &json!({})))
+            .err()
+            .expect("3 MiB does not fit in 2 MiB");
+        assert!(refused.to_string().contains("init returned 1"), "{refused}");
+        let roomy = pool
+            .get_instance(&InstanceKey::new("roomy", &json!({})))
+            .expect("3 MiB fits in the default");
+        assert!(!roomy.pool_was_full());
+    }
+
+    #[test]
+    fn a_module_the_pool_cannot_hold_runs_per_request() {
+        // Its memory starts at 2 pages; the pool's slots hold 1.
+        let two_pages = MARKS_EACH_CALL.replace(
+            "(memory (export \"memory\") 1)",
+            "(memory (export \"memory\") 2)",
+        );
+        let (pool, key, metrics) = pooled_with("marker", &two_pages, 4, 65536);
+        assert!(!pool.modules.get("marker").expect("registered").pooled());
+        for call in 1..=3 {
+            let mut instance = pool.get_instance(&key).expect("instance");
+            assert!(!instance.pool_was_full(), "call {call}");
+            assert_eq!(instance.on_request(b"{}").unwrap(), 0, "call {call}");
+        }
+        assert_eq!(metrics.wasm_instances_unpooled_total.get(), 0);
+    }
+
+    #[test]
+    fn a_pool_of_zero_is_no_pool() {
+        let (pool, key, metrics) = pooled_with("marker", MARKS_EACH_CALL, 0, 16 * MIB);
+        assert!(!pool.modules.get("marker").expect("registered").pooled());
+        let mut instance = pool.get_instance(&key).expect("instance");
+        assert_eq!(instance.on_request(b"{}").unwrap(), 0);
+        assert_eq!(metrics.wasm_instances_unpooled_total.get(), 0);
     }
 }

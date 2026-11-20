@@ -74,6 +74,8 @@ curl http://localhost:8081/metrics
 | `barbacane_middleware_duration_seconds` | histogram | Middleware execution time |
 | `barbacane_dispatch_duration_seconds` | histogram | Dispatcher execution time |
 | `barbacane_wasm_execution_duration_seconds` | histogram | WASM plugin execution time |
+| `barbacane_wasm_instances` | gauge | Plugin instances alive now |
+| `barbacane_wasm_instances_unpooled_total` | counter | Plugin instances allocated per request because the [instance pool](../reference/cli.md#plugin-instance-pool) was full |
 | `barbacane_upstream_endpoint_requests_total` | counter | Attempts sent to an `endpoints` pool member, by endpoint and outcome (`success`, `failure`) |
 | `barbacane_upstream_endpoint_retries_total` | counter | Attempts sent to an endpoint after another one failed, by endpoint |
 | `barbacane_upstream_endpoint_circuit_state` | gauge | An endpoint's circuit breaker: 0 closed, 1 open, 2 half-open |

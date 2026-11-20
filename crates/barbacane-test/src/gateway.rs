@@ -614,6 +614,28 @@ impl TestGateway {
         Ok(self.client.get(&url).send().await?)
     }
 
+    /// The value of the unlabelled metric `name` on the admin API's
+    /// `/metrics`, if it is there.
+    pub async fn metric(&self, name: &str) -> Result<Option<f64>, TestError> {
+        let body = self.admin_get("/metrics").await?.text().await?;
+        Ok(body
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(' ')?.parse().ok()))
+    }
+
+    /// Wait up to `limit` for the unlabelled metric `name` to read `value`.
+    /// Returns the last value read.
+    pub async fn wait_for_metric(&self, name: &str, value: f64, limit: Duration) -> Option<f64> {
+        let deadline = std::time::Instant::now() + limit;
+        loop {
+            let read = self.metric(name).await.ok().flatten();
+            if read == Some(value) || std::time::Instant::now() >= deadline {
+                return read;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// Make a POST request to the admin API at the given path.
     pub async fn admin_post(&self, path: &str) -> Result<reqwest::Response, TestError> {
         let url = format!("{}{}", self.admin_base_url(), path);

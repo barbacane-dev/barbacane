@@ -209,6 +209,11 @@ pub struct MetricsRegistry {
     // WASM metrics
     pub wasm_execution_duration_seconds: Family<WasmLabels, Histogram>,
     pub wasm_traps_total: Family<WasmLabels, Counter>,
+    /// Plugin instances alive now.
+    pub wasm_instances: Gauge,
+    /// Plugin instances allocated per request because the instance pool was
+    /// full.
+    pub wasm_instances_unpooled_total: Counter,
 
     // Deprecation metrics
     pub deprecated_route_requests_total: Family<RouteLabels, Counter>,
@@ -409,6 +414,20 @@ impl MetricsRegistry {
             wasm_traps_total.clone(),
         );
 
+        let wasm_instances = Gauge::default();
+        registry.register(
+            "barbacane_wasm_instances",
+            "Plugin instances alive now",
+            wasm_instances.clone(),
+        );
+
+        let wasm_instances_unpooled_total = Counter::default();
+        registry.register(
+            "barbacane_wasm_instances_unpooled",
+            "Plugin instances allocated per request because the instance pool was full",
+            wasm_instances_unpooled_total.clone(),
+        );
+
         // Deprecation metrics
         let deprecated_route_requests_total = Family::<RouteLabels, Counter>::default();
         registry.register(
@@ -472,6 +491,8 @@ impl MetricsRegistry {
             dispatch_errors_total,
             wasm_execution_duration_seconds,
             wasm_traps_total,
+            wasm_instances,
+            wasm_instances_unpooled_total,
             deprecated_route_requests_total,
             upstream_endpoint_requests_total,
             upstream_endpoint_retries_total,
@@ -706,6 +727,20 @@ impl MetricsRegistry {
         self.active_connections.dec();
     }
 
+    /// Count a new plugin instance; `unpooled` when it was allocated per
+    /// request because the instance pool was full.
+    pub fn wasm_instance_created(&self, unpooled: bool) {
+        self.wasm_instances.inc();
+        if unpooled {
+            self.wasm_instances_unpooled_total.inc();
+        }
+    }
+
+    /// Count a plugin instance dropped.
+    pub fn wasm_instance_dropped(&self) {
+        self.wasm_instances.dec();
+    }
+
     /// Record that a plugin metric write was dropped by a guard.
     fn record_plugin_metric_dropped(&self, plugin: &str, reason: &str) {
         self.plugin_metrics_dropped_total
@@ -868,6 +903,25 @@ mod tests {
         registry.connection_closed();
         assert_eq!(registry.active_connections.get(), 1);
         assert_eq!(registry.connections_total.get(), 2);
+    }
+
+    #[test]
+    fn wasm_instances_are_counted_alive_and_unpooled() {
+        let registry = MetricsRegistry::new();
+        registry.wasm_instance_created(false);
+        registry.wasm_instance_created(true);
+        registry.wasm_instance_created(true);
+        registry.wasm_instance_dropped();
+
+        let rendered = crate::prometheus::render_metrics(&registry);
+        assert!(
+            rendered.contains("\nbarbacane_wasm_instances 2\n"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("\nbarbacane_wasm_instances_unpooled_total 2\n"),
+            "{rendered}"
+        );
     }
 
     #[test]

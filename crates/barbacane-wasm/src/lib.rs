@@ -45,7 +45,7 @@ pub use chain::{
     ChainResult, MetricsCallback, MiddlewareChain, MiddlewareConfig, OnRequestResult,
     OnResponseError,
 };
-pub use engine::WasmEngine;
+pub use engine::{PoolSize, WasmEngine};
 pub use error::WasmError;
 pub use instance::{PluginInstance, RequestContext, StreamEvent};
 pub use limits::PluginLimits;

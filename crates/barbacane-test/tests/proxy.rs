@@ -217,6 +217,51 @@ async fn start_keep_alive_upstream(
     (url, accepted)
 }
 
+/// A client that leaves before a slow upstream answers holds its plugin
+/// instance until the upstream answers, no longer: then no instance is
+/// alive, and the next request finds its slot in the pool.
+#[tokio::test]
+async fn test_a_client_leaving_a_slow_request_gives_its_instance_back() {
+    use std::time::Duration;
+
+    let (upstream, _) = start_keep_alive_upstream(Duration::from_secs(2)).await;
+    let (_tmp, spec) = http_upstream_spec(&upstream);
+    let gateway =
+        TestGateway::from_spec_with_args(spec.to_str().unwrap(), &["--plugin-instance-pool", "1"])
+            .await
+            .expect("failed to start gateway");
+
+    let left = tokio::time::timeout(Duration::from_millis(300), gateway.get("/proxy/get")).await;
+    assert!(
+        left.is_err(),
+        "the client left before the upstream answered"
+    );
+    assert_eq!(
+        gateway.metric("barbacane_wasm_instances").await.unwrap(),
+        Some(1.0),
+        "the dispatcher waits for the upstream"
+    );
+
+    let alive = gateway
+        .wait_for_metric("barbacane_wasm_instances", 0.0, Duration::from_secs(6))
+        .await;
+    assert_eq!(
+        alive,
+        Some(0.0),
+        "instances alive after the upstream answered"
+    );
+
+    assert_eq!(gateway.get("/proxy/get").await.unwrap().status(), 200);
+    assert_eq!(
+        gateway
+            .metric("barbacane_wasm_instances_unpooled_total")
+            .await
+            .unwrap(),
+        Some(0.0),
+        "every instance came from the pool"
+    );
+}
+
 /// Sequential proxied requests reuse one upstream connection: the connection
 /// outlives the plugin call that opened it.
 #[tokio::test]

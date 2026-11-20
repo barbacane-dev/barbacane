@@ -102,7 +102,7 @@ fn instance(engine: &WasmEngine, wat: &str, limits: PluginLimits) -> PluginInsta
     let module = engine
         .compile(&wasm, "hash-test".into(), "0.1.0".into(), false)
         .expect("compile");
-    PluginInstance::new(engine.engine(), &module, limits).expect("instantiate")
+    PluginInstance::new(&module, limits).expect("instantiate")
 }
 
 /// The result code and, when it is 0, the digest.

@@ -328,8 +328,7 @@ fn run(engine: &WasmEngine, wat: &str) -> Result<Result<i32, WasmError>, String>
     let module = engine
         .compile(&wasm, "hostile".into(), "0.1.0".into(), false)
         .expect("compile");
-    let mut instance =
-        PluginInstance::new(engine.engine(), &module, PluginLimits::default()).expect("instance");
+    let mut instance = PluginInstance::new(&module, PluginLimits::default()).expect("instance");
     catch_unwind(AssertUnwindSafe(|| instance.dispatch(b"{}"))).map_err(|panic| {
         panic
             .downcast_ref::<String>()

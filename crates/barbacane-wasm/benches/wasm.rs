@@ -64,7 +64,7 @@ fn create_noop_instance(engine: &WasmEngine) -> PluginInstance {
     let module = engine
         .compile(&wasm, "noop".to_string(), "0.1.0".to_string(), false)
         .expect("compile");
-    PluginInstance::new(engine.engine(), &module, PluginLimits::default()).expect("instance")
+    PluginInstance::new(&module, PluginLimits::default()).expect("instance")
 }
 
 // ---------------------------------------------------------------------------
@@ -110,17 +110,14 @@ fn bench_wasm_instance(c: &mut Criterion) {
 
     group.bench_function("create_instance", |b| {
         b.iter(|| {
-            black_box(
-                PluginInstance::new(engine.engine(), &module, PluginLimits::default()).unwrap(),
-            );
+            black_box(PluginInstance::new(&module, PluginLimits::default()).unwrap());
         });
     });
 
     group.bench_function("init_instance", |b| {
         let config = serde_json::to_vec(&serde_json::json!({"key": "value"})).unwrap();
         b.iter(|| {
-            let mut instance =
-                PluginInstance::new(engine.engine(), &module, PluginLimits::default()).unwrap();
+            let mut instance = PluginInstance::new(&module, PluginLimits::default()).unwrap();
             black_box(instance.init(&config).unwrap());
         });
     });
@@ -137,8 +134,7 @@ fn bench_wasm_instance(c: &mut Criterion) {
             BenchmarkId::new("write_to_memory", label),
             &data,
             |b, data| {
-                let mut instance =
-                    PluginInstance::new(engine.engine(), &module, PluginLimits::default()).unwrap();
+                let mut instance = PluginInstance::new(&module, PluginLimits::default()).unwrap();
                 b.iter(|| {
                     black_box(instance.write_to_memory(data).unwrap());
                 });
@@ -148,16 +144,14 @@ fn bench_wasm_instance(c: &mut Criterion) {
 
     group.bench_function("on_request", |b| {
         b.iter(|| {
-            let mut instance =
-                PluginInstance::new(engine.engine(), &module, PluginLimits::default()).unwrap();
+            let mut instance = PluginInstance::new(&module, PluginLimits::default()).unwrap();
             black_box(instance.on_request(&request).unwrap());
         });
     });
 
     group.bench_function("dispatch", |b| {
         b.iter(|| {
-            let mut instance =
-                PluginInstance::new(engine.engine(), &module, PluginLimits::default()).unwrap();
+            let mut instance = PluginInstance::new(&module, PluginLimits::default()).unwrap();
             black_box(instance.dispatch(&request).unwrap());
         });
     });

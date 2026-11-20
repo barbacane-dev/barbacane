@@ -156,7 +156,7 @@ If any secret cannot be resolved in step 5, the gateway exits with code 13.
 WASM plugin runtime built on wasmtime.
 
 **Key types:**
-- `WasmEngine` - Configured wasmtime engine with AOT compilation
+- `WasmEngine` - Configured wasmtime engine with AOT compilation. With a pool (`--plugin-instance-pool`), modules are compiled for a pooled engine; when the pool is full, an instance comes from a second engine that allocates per instance, which compiles the module the first time it needs it
 - `InstancePool` - Instances per (plugin_name, config_hash): `init` runs once, and each request gets a fresh instance with the memory `init` left (see the plugin guide's "Instances and state")
 - `PluginInstance` - Single WASM instance with host function bindings
 - `MiddlewareChain` - Ordered middleware execution
