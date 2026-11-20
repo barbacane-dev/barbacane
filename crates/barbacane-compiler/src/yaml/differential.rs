@@ -318,13 +318,13 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
-        name: "`!!null` on mapping keys",
+        name: "`!!null` and `!null` on mapping keys",
         reason: "a JSON value's keys are strings, and serde-saphyr refuses a scalar tagged \
-                 `!!null` as a string (`!!null a: 1`, `!!null : 1`); libyaml reads the key as \
-                 its text",
+                 `!!null` as a string, or tagged `!null`, which it reads as `!!null` \
+                 (`!!null a: 1`, `!null : 1`); libyaml reads the key as its text",
         example: "!!null a: 1\n",
         matches: |input, d| {
-            input.contains("!!null")
+            input.contains("!null")
                 && matches!(d, Difference::OnlyOursFailed { error }
                     if error.contains("cannot deserialize null into string"))
         },
@@ -334,7 +334,10 @@ pub static KNOWN: &[KnownDivergence] = &[
         reason: "YAML 1.2 takes `?` for an explicit key only when whitespace follows it, so \
                  `{?a: 1}` has the key `?a` and `[?:]` the key `?`, and `[?]]` is invalid; in a \
                  flow collection libyaml takes `?` for an explicit key whatever follows, reading \
-                 the key `a`, an empty key, and `[?]]` as `[{\"\": null}]`",
+                 the key `a`, an empty key, and `[?]]` as `[{\"\": null}]`. When the quoted \
+                 text right after `?` holds a flow indicator (`{?\"[\"}`), the plain scalar \
+                 `?\"` ends there and the quotes no longer pair, so the module refuses the \
+                 document, where libyaml reads the key `[`",
         example: "{?a: 1}\n",
         matches: |input, d| {
             input.contains(['{', '['])
@@ -347,8 +350,9 @@ pub static KNOWN: &[KnownDivergence] = &[
                             || ours.as_str().is_some_and(starts_with_question_mark)
                     }
                     Difference::OnlyOursFailed { error } => {
-                        error.contains("misplaced bracket")
-                            && (input.contains("?]") || input.contains("?}"))
+                        (error.contains("misplaced bracket")
+                            && (input.contains("?]") || input.contains("?}")))
+                            || has_question_mark_before_quoted_flow_indicator(input)
                     }
                     Difference::OnlyReferenceFailed { .. } => false,
                 }
@@ -358,15 +362,19 @@ pub static KNOWN: &[KnownDivergence] = &[
         name: "`:` followed by a character in flow collections",
         reason: "YAML 1.2 starts a plain scalar with `:` when a character it can hold \
                  follows, so `{!t :a}` and `{? :a}` have the key `:a`; after an empty key, \
-                 libyaml takes the `:` for the value indicator, reading `{\"\": \"a\"}`",
+                 libyaml takes the `:` for the value indicator, reading `{\"\": \"a\"}`. When \
+                 the mapping has another empty key (`{\"\": 1, ! :a}`), libyaml's value \
+                 replaces that key's, and the readings first differ there",
         example: "{!t :a}\n",
         matches: |input, d| {
             input.contains(['{', '['])
-                && matches!(d, Difference::Value { pointer, .. }
+                && matches!(d, Difference::Value { pointer, reference, .. }
                 if pointer.rsplit('/').next().is_some_and(|key| {
                     key.strip_prefix(':')
                         .is_some_and(|rest| rest.starts_with(|c: char| !c.is_whitespace()))
-                }))
+                }) || pointer
+                    .strip_suffix('/')
+                    .is_some_and(|parent| has_colon_key_reading_as(input, parent, reference)))
         },
     },
     KnownDivergence {
@@ -435,6 +443,42 @@ fn has_reused_anchor(input: &str) -> bool {
             .unwrap_or(rest.len());
         end > 0 && !names.insert(&rest[..end])
     })
+}
+
+/// Whether `input` has `?` directly followed by a quoted scalar whose text holds
+/// a flow indicator, as in `{?"["}`.
+fn has_question_mark_before_quoted_flow_indicator(input: &str) -> bool {
+    input.match_indices('?').any(|(at, _)| {
+        let rest = &input[at + 1..];
+        rest.chars()
+            .next()
+            .filter(|c| matches!(c, '"' | '\''))
+            .is_some_and(|quote| {
+                rest[1..]
+                    .split(quote)
+                    .next()
+                    .is_some_and(|text| text.contains([',', '[', ']', '{', '}']))
+            })
+    })
+}
+
+/// Whether, in the module's reading of `input`, the mapping at `parent` has a
+/// key `:` followed by text that reads as `value`: the entry libyaml reads as
+/// an empty key with that value.
+fn has_colon_key_reading_as(input: &str, parent: &str, value: &Value) -> bool {
+    let Ok(ours) = crate::yaml::from_str::<Value>(input) else {
+        return false;
+    };
+    ours.pointer(parent)
+        .and_then(Value::as_object)
+        .is_some_and(|mapping| {
+            mapping.keys().any(|key| {
+                key.strip_prefix(':').is_some_and(|text| {
+                    text.starts_with(|c: char| !c.is_whitespace())
+                        && crate::yaml::from_str::<Value>(text).ok().as_ref() == Some(value)
+                })
+            })
+        })
 }
 
 /// Whether `text` starts with `?` not followed by whitespace.
