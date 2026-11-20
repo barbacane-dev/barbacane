@@ -32,15 +32,20 @@ Released on 2026-11-17.
 
 Between the release candidates and 1.0.0 ([milestone](https://github.com/barbacane-dev/barbacane/milestone/2)):
 
-- [ ] Plugin instances from Wasmtime's pooling allocator: about 1.7x the requests on a plugin route under load ([#422](https://github.com/barbacane-dev/barbacane/issues/422))
-- [ ] SDK wrappers for the host functions plugins still call directly ([#329](https://github.com/barbacane-dev/barbacane/issues/329))
-- [ ] The test categories still missing: proc-macro, property, chaos and snapshot tests, a soak run, coverage floors ([#334](https://github.com/barbacane-dev/barbacane/issues/334))
+- [ ] Plugin instances from Wasmtime's pooling allocator: about 1.7x the requests on a plugin route under load, with a soak run watching memory and tests that a cancelled request gives its slot back ([#422](https://github.com/barbacane-dev/barbacane/issues/422))
+- [ ] Pre-release review: the whole repository read crate by crate against what the docs and the website claim
 
 ---
 
 ## Next
 
-After 1.0, prioritised roughly top to bottom:
+After 1.0, prioritised roughly top to bottom. 1.1.0 ([milestone](https://github.com/barbacane-dev/barbacane/milestone/3)) starts with:
+
+- [ ] SDK wrappers for the host functions plugins still call directly ([#329](https://github.com/barbacane-dev/barbacane/issues/329))
+- [ ] The test categories still missing: proc-macro, property, chaos and snapshot tests, coverage floors ([#334](https://github.com/barbacane-dev/barbacane/issues/334))
+- [ ] Date and time code on `time` instead of the unmaintained `chrono` ([#400](https://github.com/barbacane-dev/barbacane/issues/400))
+
+Then:
 
 - [ ] Official plugin limits: measure each official plugin's memory and fuel under realistic configs, and declare `[limits]` that fit
 - [ ] Spec pointers in compile errors: a JSON Pointer (`#/paths/~1users/get`) on every error, and an E-code catalog with examples and remediation
