@@ -5,6 +5,8 @@
 //! A dedicated tokio runtime keeps Kafka background tasks alive between publishes.
 
 use crate::broker::{BrokerError, PublishResult};
+use crate::egress_relay::{self, Permit};
+use crate::http_client::{ip_is_internal, resolve_addrs_where, HostGuardError};
 use chrono::Utc;
 use parking_lot::Mutex;
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
@@ -12,6 +14,7 @@ use rskafka::client::{Client, ClientBuilder};
 use rskafka::record::Record;
 use rskafka::BackoffConfig;
 use std::collections::{BTreeMap, HashMap};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,14 +36,26 @@ const PRODUCE_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct KafkaPublisher {
     runtime: Option<tokio::runtime::Runtime>,
     clients: Mutex<HashMap<String, Arc<Client>>>,
-    /// When false, broker addresses resolving to internal/metadata ranges are
-    /// rejected (SSRF guard). Operators opt in for trusted internal brokers.
-    allow_internal_egress: bool,
+    /// The addresses a broker connection may reach (SSRF guard); `None` when
+    /// the operator allows internal egress.
+    permit: Option<Permit>,
+    /// The egress relay every broker connection goes through while `permit` is
+    /// set, started with the first connection.
+    relay: Mutex<Option<SocketAddr>>,
 }
 
 impl KafkaPublisher {
     /// Create a new Kafka publisher with its own background runtime.
     pub fn new(allow_internal_egress: bool) -> Result<Self, BrokerError> {
+        let permit: Option<Permit> = if allow_internal_egress {
+            None
+        } else {
+            Some(Arc::new(|addr: &SocketAddr| !ip_is_internal(&addr.ip())))
+        };
+        Self::with_permit(permit)
+    }
+
+    fn with_permit(permit: Option<Permit>) -> Result<Self, BrokerError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("kafka-runtime")
@@ -50,7 +65,8 @@ impl KafkaPublisher {
         Ok(Self {
             runtime: Some(runtime),
             clients: Mutex::new(HashMap::new()),
-            allow_internal_egress,
+            permit,
+            relay: Mutex::new(None),
         })
     }
 
@@ -125,39 +141,33 @@ impl KafkaPublisher {
             }
         }
 
-        // Parse broker addresses (comma-separated)
-        let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_string()).collect();
-
-        // SSRF guard: resolve each bootstrap broker once and pin the connection to
-        // the vetted IPs, refusing internal/metadata targets unless the operator
-        // opted into internal egress. Pinning (vs. letting rskafka resolve again at
-        // connect time) closes the DNS-rebinding TOCTOU window for the bootstrap
-        // connection. The Kafka client here is plaintext, so connecting by IP is
-        // transparent.
-        //
-        // Residual (rskafka 0.6 limitation): after bootstrap, rskafka discovers the
-        // cluster's *advertised* broker addresses from metadata and connects to
-        // those directly. rskafka exposes no resolver/socket hook, so those
-        // addresses cannot be filtered here; a hostile broker advertising an
-        // internal listener is not fully mitigated. Tracked as follow-up.
-        let mut pinned_brokers: Vec<String> = Vec::new();
-        for broker in &broker_list {
-            let (host, port) = crate::broker::split_host_port(broker, DEFAULT_KAFKA_PORT);
-            match crate::http_client::resolve_permitted_addrs(
-                &host,
-                port,
-                self.allow_internal_egress,
-            )
-            .await
-            {
-                Ok(addrs) => pinned_brokers.extend(addrs.iter().map(|a| a.to_string())),
-                Err(crate::http_client::HostGuardError::Blocked(h)) => {
-                    return Err(BrokerError::Blocked(h));
+        let mut bootstrap = Vec::new();
+        for broker in brokers.split(',') {
+            let (host, port) = crate::broker::split_host_port(broker.trim(), DEFAULT_KAFKA_PORT);
+            let is_ipv6 = host.contains(':');
+            if let Some(permit) = &self.permit {
+                // The relay enforces the guard on every connection; checking the
+                // bootstrap brokers here reports a blocked one at once.
+                match resolve_addrs_where(&host, port, |addr| permit(addr)).await {
+                    Ok(_) => {}
+                    Err(HostGuardError::Blocked(h)) => return Err(BrokerError::Blocked(h)),
+                    Err(HostGuardError::Resolve(m)) => {
+                        return Err(BrokerError::ConnectionFailed(m));
+                    }
                 }
-                Err(crate::http_client::HostGuardError::Resolve(m)) => {
-                    return Err(BrokerError::ConnectionFailed(m));
+                // The client's SOCKS5 transport splits host and port at the first colon.
+                if is_ipv6 {
+                    return Err(BrokerError::ConnectionFailed(format!(
+                        "Kafka broker {broker}: an IPv6 address cannot name a broker while the \
+                         egress guard is on; use a host name"
+                    )));
                 }
             }
+            bootstrap.push(if is_ipv6 {
+                format!("[{host}]:{port}")
+            } else {
+                format!("{host}:{port}")
+            });
         }
 
         // Connect (outside the lock) with a 5s deadline to avoid blocking the host function
@@ -165,8 +175,13 @@ impl KafkaPublisher {
             deadline: Some(Duration::from_secs(5)),
             ..Default::default()
         };
-        let client = ClientBuilder::new(pinned_brokers)
-            .backoff_config(backoff)
+        let mut builder = ClientBuilder::new(bootstrap).backoff_config(backoff);
+        if let Some(permit) = &self.permit {
+            // The client dials the brokers the cluster advertises by itself, so
+            // every connection goes through the relay that applies the guard.
+            builder = builder.socks5_proxy(self.relay(permit)?.to_string());
+        }
+        let client = builder
             .build()
             .await
             .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
@@ -190,6 +205,20 @@ impl KafkaPublisher {
 }
 
 impl KafkaPublisher {
+    /// The address of the egress relay, started on this publisher's runtime at
+    /// the first call. Must be called on that runtime.
+    fn relay(&self, permit: &Permit) -> Result<SocketAddr, BrokerError> {
+        let mut relay = self.relay.lock();
+        if let Some(addr) = *relay {
+            return Ok(addr);
+        }
+        let addr = egress_relay::start(permit.clone()).map_err(|e| {
+            BrokerError::ConnectionFailed(format!("cannot start the egress relay: {e}"))
+        })?;
+        *relay = Some(addr);
+        Ok(addr)
+    }
+
     /// The runtime, which is present for the whole life of the value and taken
     /// only by `Drop`.
     fn runtime(&self) -> &tokio::runtime::Runtime {
@@ -261,6 +290,7 @@ mod drop_safety_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn publisher_starts_empty() {
@@ -331,6 +361,131 @@ mod tests {
         );
         // Connection refused, but validates the key/headers path compiles and runs
         assert!(matches!(result, Err(BrokerError::ConnectionFailed(_))));
+    }
+
+    /// Answers a Kafka client as a one-broker cluster whose broker, the leader
+    /// of every partition, is advertised at `advertised`: ApiVersions v3
+    /// (offering Metadata v0 only) and Metadata v0.
+    fn serve_bootstrap(advertised: SocketAddr) -> (SocketAddr, Arc<AtomicUsize>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let connections = Arc::new(AtomicUsize::new(0));
+        let seen = connections.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                seen.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || answer_as_broker(stream, advertised));
+            }
+        });
+        (addr, connections)
+    }
+
+    fn answer_as_broker(mut stream: std::net::TcpStream, advertised: SocketAddr) {
+        use std::io::{Read, Write};
+        let i16_be = |v: i16| v.to_be_bytes();
+        let i32_be = |v: i32| v.to_be_bytes();
+        loop {
+            let mut len = [0u8; 4];
+            if stream.read_exact(&mut len).is_err() {
+                return;
+            }
+            let mut request = vec![0u8; u32::from_be_bytes(len) as usize];
+            if stream.read_exact(&mut request).is_err() {
+                return;
+            }
+            let api_key = i16::from_be_bytes([request[0], request[1]]);
+            let mut body = request[4..8].to_vec(); // correlation id
+            match api_key {
+                18 => {
+                    body.extend(i16_be(0));
+                    body.push(3); // compact array of two
+                    for (key, max) in [(18, 3), (3, 0)] {
+                        body.extend(i16_be(key));
+                        body.extend(i16_be(0));
+                        body.extend(i16_be(max));
+                        body.push(0);
+                    }
+                    body.extend(i32_be(0));
+                    body.push(0);
+                }
+                3 => {
+                    let host = advertised.ip().to_string();
+                    body.extend(i32_be(1));
+                    body.extend(i32_be(1)); // node id
+                    body.extend(i16_be(host.len() as i16));
+                    body.extend(host.as_bytes());
+                    body.extend(i32_be(i32::from(advertised.port())));
+                    body.extend(i32_be(1));
+                    body.extend(i16_be(0));
+                    body.extend(i16_be("test-topic".len() as i16));
+                    body.extend(b"test-topic");
+                    body.extend(i32_be(1));
+                    body.extend(i16_be(0));
+                    body.extend(i32_be(0)); // partition 0
+                    body.extend(i32_be(1)); // leader: node 1
+                    body.extend(i32_be(1));
+                    body.extend(i32_be(1)); // replicas
+                    body.extend(i32_be(1));
+                    body.extend(i32_be(1)); // in-sync replicas
+                }
+                _ => return,
+            }
+            let mut frame = (body.len() as u32).to_be_bytes().to_vec();
+            frame.extend(body);
+            if stream.write_all(&frame).is_err() {
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn an_advertised_broker_passes_the_egress_guard() {
+        let advertised = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let advertised_addr = advertised.local_addr().expect("addr");
+        let dialed = Arc::new(AtomicUsize::new(0));
+        let counter = dialed.clone();
+        std::thread::spawn(move || {
+            for _ in advertised.incoming().flatten() {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let (bootstrap, answered) = serve_bootstrap(advertised_addr);
+
+        // The guard admits the bootstrap broker and nothing else.
+        let publisher = KafkaPublisher::with_permit(Some(Arc::new(move |addr: &SocketAddr| {
+            *addr == bootstrap
+        })))
+        .expect("kafka publisher");
+        let result = publisher.publish_blocking(
+            &bootstrap.to_string(),
+            "test-topic",
+            None,
+            "hello",
+            BTreeMap::new(),
+        );
+
+        assert!(
+            answered.load(Ordering::SeqCst) > 0,
+            "the bootstrap broker was not reached"
+        );
+        assert!(result.is_err(), "published through a refused broker");
+        assert_eq!(
+            dialed.load(Ordering::SeqCst),
+            0,
+            "the client dialed an advertised broker the guard refuses"
+        );
+    }
+
+    #[test]
+    fn an_ipv6_broker_address_is_refused_while_the_guard_is_on() {
+        let publisher =
+            KafkaPublisher::with_permit(Some(Arc::new(|_: &SocketAddr| true))).expect("publisher");
+        let result =
+            publisher.publish_blocking("[::1]:9092", "test-topic", None, "hello", BTreeMap::new());
+        assert!(
+            matches!(&result, Err(BrokerError::ConnectionFailed(m)) if m.contains("use a host name")),
+            "{result:?}"
+        );
     }
 
     #[test]

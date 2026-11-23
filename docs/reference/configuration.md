@@ -15,7 +15,7 @@ without it.
 | `BARBACANE_TRUSTED_PUBKEY` | Data plane | _unset_ | **Required by `barbacane serve`**, unless `--dev` or `--allow-unsigned` is passed. The hex-encoded Ed25519 public key (64 characters, as `barbacane key public` prints it) whose private key signs your artifacts. Every artifact the gateway loads, hot reloads included, must carry a valid signature by it; an unsigned or differently signed artifact is refused, whatever the flags. Without a pinned key, `--dev` and `--allow-unsigned` load artifacts unsigned, and each load logs a warning; content hashes are checked either way. |
 | `BARBACANE_SIGNING_KEY` | Compiler, control plane | _unset_ | Path to a PKCS#8 Ed25519 private key, DER or PEM, from `barbacane key generate` or `openssl genpkey -algorithm ed25519`. When set, `barbacane compile` and the control plane's compilations sign the artifact's content hash. When unset or empty, artifacts are built unsigned. |
 | `BARBACANE_SECRETS_DIR` | Data plane | _unset_ | Base directory that `file://` secret references are confined to. **Required to use `file://` secrets** — references are rejected when it is unset, and any path resolving outside this directory (after symlink/`..` resolution) is rejected. |
-| `BARBACANE_ALLOW_INTERNAL_EGRESS` | Data plane | `false` | Set to `1`/`true` to disable the plugin SSRF guard and allow plugin egress (HTTP calls, Kafka/NATS broker connections, LDAP directory connections **and** WebSocket upstreams) to internal/loopback/link-local/cloud-metadata addresses. Guarded clients connect to the address vetted by the guard rather than resolving again (DNS-rebinding safe), except a NATS `tls://` broker, which keeps its hostname so the TLS handshake carries SNI. Leave off unless you have legitimate internal upstreams or brokers. |
+| `BARBACANE_ALLOW_INTERNAL_EGRESS` | Data plane | `false` | Set to `1`/`true` to disable the plugin SSRF guard and allow plugin egress (HTTP calls, Kafka/NATS broker connections, LDAP directory connections **and** WebSocket upstreams) to internal/loopback/link-local/cloud-metadata addresses. Guarded clients connect to the address vetted by the guard rather than resolving again (DNS-rebinding safe), except a NATS `tls://` broker, which keeps its hostname so the TLS handshake carries SNI. Kafka connections, to the brokers a cluster advertises as well, go through a SOCKS5 relay the gateway runs on a loopback port, which resolves and checks each one. Leave off unless you have legitimate internal upstreams or brokers. |
 | `BARBACANE_MAX_UPSTREAM_RESPONSE_BYTES` | Data plane | `16777216` (16 MiB) | Maximum size of an upstream response body that the buffered plugin HTTP-call path will read into host memory. Bodies larger than this are rejected, bounding host memory against a hostile or compromised upstream. Streaming dispatchers are unaffected. |
 | `BARBACANE_MAX_CONNECTIONS` | Data plane | `10000` | Maximum number of concurrently served ingress connections, as `barbacane serve --max-connections` sets it (the flag takes precedence). Beyond this, new connections are dropped (load shed) rather than letting file descriptors and tasks grow without bound under a connection flood. A value that is not a whole number from 1 up stops the gateway at start; an empty value is the default. Keep it below the open-file limit; see [Connection cap](cli.md#connection-cap). |
 | `BARBACANE_PLUGIN_INSTANCE_POOL` | Data plane | `1000` | Plugin instances alive at once that the gateway keeps memory set up for, as `barbacane serve --plugin-instance-pool` sets it (the flag takes precedence); `0` turns the pool off. A value that is not a whole number stops the gateway at start; an empty value is the default. See [Plugin instance pool](cli.md#plugin-instance-pool). |
@@ -37,7 +37,14 @@ These defaults are deliberate. Adopt them as follows:
    `BARBACANE_SECRETS_DIR=/run/secrets`. `env://` references are unaffected.
 
 3. **Plugin egress to internal addresses is blocked by default.** This covers
-   plugin HTTP calls, Kafka/NATS broker connections, and WebSocket upstreams. If
+   plugin HTTP calls, Kafka/NATS broker connections, and WebSocket upstreams.
+   Blocked: loopback, unspecified, broadcast and multicast addresses;
+   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`,
+   `169.254.0.0/16` (cloud metadata), `0.0.0.0/8`, `192.0.0.0/24`,
+   `198.18.0.0/15` and `240.0.0.0/4`; `fc00::/7`, `fe80::/10`, `100::/64`,
+   `2001::/32` (Teredo) and `64:ff9b:1::/48`. An IPv6 address that carries an
+   IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4
+   `2002::/16`) is judged by the IPv4 address. If
    a plugin legitimately reaches an internal upstream or broker, set
    `BARBACANE_ALLOW_INTERNAL_EGRESS=1` (or prefer an explicit allowlist when one
    is available).

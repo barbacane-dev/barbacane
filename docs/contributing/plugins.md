@@ -375,14 +375,20 @@ match http::call(&req, None) {
 
 `.tls(http::TlsSettings { client_cert, client_key, ca })` sets a client
 certificate for mutual TLS and a CA the server must chain to. Each is a path to
-a PEM file, which the host reads only from under `BARBACANE_SECRETS_DIR`; with
-`ca`, the built-in roots are not trusted. `HttpRequest` implements `Default`, so
+a PEM file, which the host reads only from under `BARBACANE_SECRETS_DIR`, and
+which must be written, with the same spelling, as a string in the plugin's own
+configuration: a call naming any other file is answered 502 without being sent,
+and the refusal is logged. With `ca`, the built-in roots are not trusted. `HttpRequest` implements `Default`, so
 a struct literal can end with `..Default::default()`.
 
 `http::pool_call` sends a request to one of `request.endpoints`, which the host
 selects and retries as the [`http-upstream` endpoints](../guide/dispatchers.md#load-balancing-across-endpoints)
 describe; `request.url` then holds the path and query. It needs the `http_pool`
-capability.
+capability. `request.endpoints` must be a list the plugin's own configuration
+holds, with the same URLs and weights in the same order; any other list is
+refused without a request (`HttpError::Unreachable`), and the refusal is logged.
+The host keeps a rotation and per-endpoint circuit breakers only for the pools
+the loaded configurations list.
 
 The host sets `Host` from the URL and owns the message framing, so it drops
 these headers when a plugin sets them, on every call, pooled or streamed:

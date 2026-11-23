@@ -22,6 +22,10 @@ use crate::manifest::ProjectManifest;
 
 /// Current artifact format version.
 ///
+/// v9 binds the manifest's labels into `artifact_hash`: the format version,
+/// `compiler_version`, `routes_count` and `provenance`. A v8 artifact is still
+/// verified by the v8 rule, which leaves them out.
+///
 /// v8 has no MCP configuration: the manifest, `artifact_hash` and operations
 /// carry no `mcp` fields. A v7 artifact's hash covers that configuration, so
 /// it is refused by version rather than failing the integrity check.
@@ -46,7 +50,7 @@ use crate::manifest::ProjectManifest;
 ///
 /// v4 added Ed25519 signing fields and recorded each plugin's declared
 /// capability `host_functions` in the manifest.
-pub const ARTIFACT_VERSION: u32 = 8;
+pub const ARTIFACT_VERSION: u32 = 9;
 
 /// The oldest artifact format a data plane of this major version loads: the
 /// one 1.0.0 ships with. A 1.x data plane loads every format from it up to
@@ -1657,16 +1661,6 @@ fn compile_inner(
         sealed_waf = Some(sealed.rules_json);
     }
 
-    // Compute the artifact hash after every hashed input is final (specs,
-    // checksums, plugin capability surface, capabilities_enforced, waf).
-    let artifact_hash = compute_artifact_hash(
-        &source_specs,
-        &checksums,
-        &bundled_plugins,
-        capabilities_authoritative,
-        &waf,
-    );
-
     let mut manifest = Manifest {
         barbacane_artifact_version: ARTIFACT_VERSION,
         compiled_at: now_utc_iso8601(),
@@ -1675,13 +1669,15 @@ fn compile_inner(
         routes_count: routes.operations.len(),
         checksums,
         plugins: bundled_plugins,
-        artifact_hash,
+        artifact_hash: String::new(),
         provenance,
         waf,
         signature: None,
         signing_public_key: None,
         capabilities_enforced: capabilities_authoritative,
     };
+    // Every hashed field is final here.
+    manifest.artifact_hash = recompute_artifact_hash(&manifest);
 
     // AR-1: sign the artifact when a signing key is configured. The signature
     // covers `artifact_hash`, which binds every spec, route, and plugin WASM
@@ -1861,25 +1857,58 @@ pub enum IntegrityError {
 
 /// Decode a hex string into bytes (the local `hex` module only encodes).
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    let s = s.trim();
-    if !s.len().is_multiple_of(2) {
+    let digits = s.trim().as_bytes();
+    if !digits.len().is_multiple_of(2) {
         return Err("odd-length hex string".to_string());
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
+    let nibble = |digit: u8| {
+        char::from(digit)
+            .to_digit(16)
+            .ok_or_else(|| "not a hex digit".to_string())
+    };
+    digits
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|[high, low]| Ok(((nibble(*high)? << 4) | nibble(*low)?) as u8))
         .collect()
 }
 
-/// Recompute the combined artifact hash from the manifest's recorded inputs.
+/// The first artifact format whose `artifact_hash` also covers the manifest's
+/// labels: the format version, `compiler_version`, `routes_count` and
+/// `provenance`. `compiled_at` stays out, so that compiling the same inputs
+/// gives the same hash.
+const LABELS_HASHED_SINCE: u32 = 9;
+
+/// Recompute the combined artifact hash from the manifest's recorded inputs,
+/// by the rule of the manifest's format.
 pub fn recompute_artifact_hash(manifest: &Manifest) -> String {
-    compute_artifact_hash(
+    let content = compute_artifact_hash(
         &manifest.source_specs,
         &manifest.checksums,
         &manifest.plugins,
         manifest.capabilities_enforced,
         &manifest.waf,
-    )
+    );
+    if manifest.barbacane_artifact_version < LABELS_HASHED_SINCE {
+        return content;
+    }
+    // Strings are written with `{:?}`, which quotes and escapes them, so no
+    // value can pass for another field.
+    let mut hasher = Sha256::new();
+    hasher.update(
+        format!(
+            "{content}\nartifact_version={}\ncompiler_version={:?}\nroutes_count={}\n\
+             provenance_commit={:?}\nprovenance_source={:?}\n",
+            manifest.barbacane_artifact_version,
+            manifest.compiler_version,
+            manifest.routes_count,
+            manifest.provenance.commit,
+            manifest.provenance.source,
+        )
+        .as_bytes(),
+    );
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 /// Verify the manifest's `artifact_hash` is internally consistent with its
@@ -6108,7 +6137,7 @@ paths:
     }
 
     #[test]
-    fn provenance_does_not_affect_artifact_hash() {
+    fn provenance_is_bound_by_the_artifact_hash() {
         let temp = TempDir::new().unwrap();
 
         let spec_content = r#"
@@ -6149,9 +6178,9 @@ paths:
         )
         .unwrap();
 
-        assert_eq!(
+        assert_ne!(
             r1.manifest.artifact_hash, r2.manifest.artifact_hash,
-            "Provenance metadata must not affect artifact hash"
+            "provenance is bound by the artifact hash"
         );
     }
 
@@ -6317,6 +6346,81 @@ paths:
                 "recomputing the hash after tampering must invalidate the signature"
             );
         }
+    }
+
+    #[test]
+    fn signed_hash_binds_the_build_labels() {
+        let mut manifest = integrity_test_manifest();
+        manifest.provenance = Provenance {
+            commit: Some("1111111".to_string()),
+            source: Some("ci/release".to_string()),
+        };
+        manifest.artifact_hash = recompute_artifact_hash(&manifest);
+        let pubkey = sign_for_test(&mut manifest);
+        assert!(verify_artifact_hash(&manifest).is_ok());
+        assert!(verify_artifact_signature(&manifest, &pubkey).is_ok());
+
+        let other_commit = |m: &mut Manifest| m.provenance.commit = Some("2222222".to_string());
+        let other_source = |m: &mut Manifest| m.provenance.source = None;
+        let other_compiler = |m: &mut Manifest| m.compiler_version = "9.9.9".to_string();
+        let other_route_count = |m: &mut Manifest| m.routes_count = 7;
+        let older_format = |m: &mut Manifest| m.barbacane_artifact_version = 8;
+        type Relabel<'a> = (&'a str, &'a dyn Fn(&mut Manifest));
+        let relabels: Vec<Relabel> = vec![
+            ("provenance.commit", &other_commit),
+            ("provenance.source", &other_source),
+            ("compiler_version", &other_compiler),
+            ("routes_count", &other_route_count),
+            ("barbacane_artifact_version", &older_format),
+        ];
+        for (field, relabel) in relabels {
+            let mut relabelled = manifest.clone();
+            relabel(&mut relabelled);
+            assert!(
+                matches!(
+                    verify_artifact_hash(&relabelled),
+                    Err(IntegrityError::ArtifactHashMismatch { .. })
+                ),
+                "changing {field} must break the recomputed hash"
+            );
+        }
+
+        // The build time is the one label left out, so a rebuild of the same
+        // inputs has the same hash.
+        let mut rebuilt = manifest.clone();
+        rebuilt.compiled_at = "2030-01-01T00:00:00Z".to_string();
+        assert!(verify_artifact_hash(&rebuilt).is_ok());
+    }
+
+    #[test]
+    fn a_format_8_hash_leaves_the_labels_out() {
+        let mut manifest = integrity_test_manifest();
+        manifest.barbacane_artifact_version = 8;
+        manifest.artifact_hash = recompute_artifact_hash(&manifest);
+        manifest.provenance.commit = Some("2222222".to_string());
+        assert!(verify_artifact_hash(&manifest).is_ok());
+    }
+
+    #[test]
+    fn a_signature_that_is_not_hex_is_refused() {
+        let mut manifest = integrity_test_manifest();
+        let pubkey = sign_for_test(&mut manifest);
+        // `aéb` is four bytes with a character across the second and third.
+        for signature in ["aéb", "éé", "zz", "abc"] {
+            manifest.signature = Some(signature.to_string());
+            assert!(
+                matches!(
+                    verify_artifact_signature(&manifest, &pubkey),
+                    Err(IntegrityError::InvalidMaterial(_))
+                ),
+                "{signature:?}"
+            );
+        }
+        manifest.signature = Some("00".repeat(64));
+        assert!(matches!(
+            verify_artifact_signature(&manifest, "aéb"),
+            Err(IntegrityError::InvalidMaterial(_))
+        ));
     }
 }
 

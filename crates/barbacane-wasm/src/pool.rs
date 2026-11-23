@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
 
+use crate::balancer::{pool_key, Endpoint, PoolKey};
 use crate::cache::ResponseCache;
 use crate::engine::{CompiledModule, WasmEngine};
 use crate::error::WasmError;
@@ -96,6 +97,10 @@ pub struct InstancePool {
     /// Plugin configs by key.
     configs: DashMap<InstanceKey, Vec<u8>>,
 
+    /// What each config names, by key: the TLS files and endpoint pools an
+    /// instance's calls may use.
+    config_scopes: DashMap<InstanceKey, Arc<ConfigScope>>,
+
     /// Secret references (env://… / file://…) each plugin declares in its config,
     /// keyed by plugin name. Used to scope `host_get_secret` to a plugin's own
     /// secrets (WA-3). A plugin absent from this map gets an empty secrets store.
@@ -122,6 +127,7 @@ impl InstancePool {
             modules: DashMap::new(),
             snapshots: DashMap::new(),
             configs: DashMap::new(),
+            config_scopes: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
             metrics: None,
@@ -154,6 +160,7 @@ impl InstancePool {
             modules: DashMap::new(),
             snapshots: DashMap::new(),
             configs: DashMap::new(),
+            config_scopes: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
             metrics: None,
@@ -193,6 +200,8 @@ impl InstancePool {
 
     /// Register a plugin config.
     pub fn register_config(&self, key: InstanceKey, config_json: Vec<u8>) {
+        self.config_scopes
+            .insert(key.clone(), Arc::new(ConfigScope::of(&config_json)));
         self.configs.insert(key, config_json);
     }
 
@@ -240,6 +249,9 @@ impl InstancePool {
         )?;
         instance.set_metrics(self.metrics.clone());
         instance.set_config_hash(&key.config_hash);
+        if let Some(scope) = self.config_scopes.get(key) {
+            instance.set_config_scope(Arc::clone(&scope));
+        }
         if let Some(metrics) = &self.metrics {
             instance.count_in(Arc::clone(metrics));
         }
@@ -283,15 +295,126 @@ impl InstancePool {
             .unwrap_or(false)
     }
 
+    /// Every endpoint pool a registered config lists: the pools its plugin's
+    /// calls may use.
+    pub fn pools(&self) -> Vec<PoolKey> {
+        let pools: HashSet<PoolKey> = self
+            .config_scopes
+            .iter()
+            .flat_map(|scope| scope.pools.iter().cloned().collect::<Vec<_>>())
+            .collect();
+        pools.into_iter().collect()
+    }
+
     /// Get the number of registered modules.
     pub fn module_count(&self) -> usize {
         self.modules.len()
     }
 }
 
+/// What a plugin's config names, which bounds what its host calls may use, as
+/// `host_get_secret` serves only the references a plugin's config holds.
+#[derive(Debug, Default)]
+pub(crate) struct ConfigScope {
+    /// Every string value, at any depth: the TLS files a call may name.
+    pub(crate) strings: HashSet<String>,
+    /// Every list of endpoints (objects with a `url`), at any depth: the pools
+    /// a pool call may use, with their weights.
+    pub(crate) pools: HashSet<PoolKey>,
+}
+
+impl ConfigScope {
+    /// The scope of a JSON config; empty when it does not parse.
+    pub(crate) fn of(config_json: &[u8]) -> Self {
+        let mut scope = Self::default();
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(config_json) {
+            scope.walk(&value);
+        }
+        scope
+    }
+
+    fn walk(&mut self, value: &serde_json::Value) {
+        match value {
+            serde_json::Value::String(s) => {
+                self.strings.insert(s.clone());
+            }
+            serde_json::Value::Array(items) => {
+                let is_pool = !items.is_empty()
+                    && items
+                        .iter()
+                        .all(|item| item.get("url").is_some_and(|u| u.is_string()));
+                if is_pool {
+                    if let Ok(pool) = serde_json::from_value::<Vec<Endpoint>>(value.clone()) {
+                        self.pools.insert(pool_key(&pool));
+                    }
+                }
+                items.iter().for_each(|item| self.walk(item));
+            }
+            serde_json::Value::Object(map) => map.values().for_each(|v| self.walk(v)),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_config_scope_holds_its_strings_and_endpoint_lists() {
+        let scope = ConfigScope::of(
+            br#"{
+                "tls": {"ca": "certs/ca.pem"},
+                "endpoints": [{"url": "https://a"}, {"url": "https://b", "weight": 3}],
+                "nested": {"backup": [{"url": "https://c", "weight": 2}]},
+                "tags": ["x", "y"],
+                "mixed": [{"url": "https://d"}, {"name": "e"}],
+                "count": 4
+            }"#,
+        );
+        for s in ["certs/ca.pem", "https://a", "x", "y", "e"] {
+            assert!(scope.strings.contains(s), "{s}");
+        }
+        let expected: HashSet<PoolKey> = [
+            vec![("https://a".to_string(), 1), ("https://b".to_string(), 3)],
+            vec![("https://c".to_string(), 2)],
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(scope.pools, expected);
+
+        let empty = ConfigScope::of(b"not json");
+        assert!(empty.strings.is_empty() && empty.pools.is_empty());
+    }
+
+    #[test]
+    fn the_pools_of_every_registered_config_are_listed() {
+        let engine = Arc::new(WasmEngine::new().unwrap());
+        let pool = InstancePool::new(engine, PluginLimits::default());
+        for (name, config) in [
+            ("one", json!({"endpoints": [{"url": "https://a"}]})),
+            ("two", json!({"endpoints": [{"url": "https://a"}]})),
+            (
+                "three",
+                json!({"backends": [{"url": "https://b", "weight": 2}]}),
+            ),
+            ("four", json!({"url": "https://c"})),
+        ] {
+            pool.register_config(
+                InstanceKey::new(name, &config),
+                config.to_string().into_bytes(),
+            );
+        }
+        let mut pools = pool.pools();
+        pools.sort();
+        assert_eq!(
+            pools,
+            [
+                vec![("https://a".to_string(), 1)],
+                vec![("https://b".to_string(), 2)],
+            ]
+        );
+    }
     use serde_json::json;
 
     #[test]

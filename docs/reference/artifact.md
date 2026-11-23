@@ -28,7 +28,7 @@ Metadata about the artifact.
 
 ```json
 {
-  "barbacane_artifact_version": 8,
+  "barbacane_artifact_version": 9,
   "compiled_at": "2026-07-10T10:30:00Z",
   "compiler_version": "1.0.0",
   "source_specs": [
@@ -71,7 +71,7 @@ Metadata about the artifact.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `barbacane_artifact_version` | integer | Format version (currently `8`). The data plane loads the versions its major release reads (see the [stability policy](stability.md#artifacts)), and refuses an older one with a message to recompile and a newer one with a message to upgrade the data plane. |
+| `barbacane_artifact_version` | integer | Format version (currently `9`). The data plane loads the versions its major release reads (see the [stability policy](stability.md#artifacts)), and refuses an older one with a message to recompile and a newer one with a message to upgrade the data plane. |
 | `compiled_at` | string | ISO 8601 timestamp of compilation |
 | `compiler_version` | string | Version of `barbacane` compiler |
 | `source_specs` | array | List of source specifications |
@@ -89,7 +89,13 @@ Metadata about the artifact.
 `artifact_hash` binds not just the spec/route/plugin-WASM checksums but also the
 **capability-enforcement surface** — `capabilities_enforced`, each plugin's
 declared `host_functions` / `body_access` / `limits` / type / version, so a tampered artifact cannot flip the sandbox off while still passing signature
-verification. The data plane recomputes and verifies `artifact_hash` on **every**
+verification. From format 9 it also binds the manifest's labels:
+`barbacane_artifact_version`, `compiler_version`, `routes_count` and
+`provenance`, so a signed artifact cannot be relabelled to another build.
+`compiled_at` is not bound, so compiling the same inputs with the same compiler
+gives the same hash; it is the build machine's clock and nothing vouches for it.
+A format 8 artifact is verified by the format 8 rule, which binds no label.
+The data plane recomputes and verifies `artifact_hash` on **every**
 load, independent of signing.
 
 #### source_specs entry
@@ -173,6 +179,7 @@ Files retain their original names.
 
 | Version | Changes |
 |---------|---------|
+| 9 | `artifact_hash` also binds `barbacane_artifact_version`, `compiler_version`, `routes_count` and `provenance` |
 | 2 | Added `artifact_hash` (combined SHA-256 fingerprint) and `provenance` (build metadata) fields |
 | 1 | Initial format |
 

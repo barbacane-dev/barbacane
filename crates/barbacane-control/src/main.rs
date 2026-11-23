@@ -50,7 +50,7 @@ enum Command {
         listen: SocketAddr,
 
         /// PostgreSQL database URL.
-        #[arg(long, env = "DATABASE_URL")]
+        #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
         database_url: String,
 
         /// Run database migrations on startup.
@@ -65,7 +65,7 @@ enum Command {
         plugins_dir: String,
 
         /// PostgreSQL database URL.
-        #[arg(long, env = "DATABASE_URL")]
+        #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
         database_url: String,
 
         /// Force re-seed plugins that already exist (update metadata and binary).
@@ -368,6 +368,40 @@ async fn seed_plugins(
     }
 
     Ok(seeded_count)
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Arguments read from these variables carry credentials.
+    fn is_credential(variable: &str) -> bool {
+        ["API_KEY", "TOKEN", "PASSWORD", "SECRET", "DATABASE_URL"]
+            .iter()
+            .any(|word| variable.contains(word))
+    }
+
+    /// The arguments of `command` and its subcommands whose help would print
+    /// a credential from the environment.
+    fn credentials_shown(command: &clap::Command, path: &str, shown: &mut Vec<String>) {
+        for arg in command.get_arguments() {
+            let variable = arg.get_env().and_then(|v| v.to_str()).unwrap_or_default();
+            if is_credential(variable) && !arg.is_hide_env_values_set() {
+                shown.push(format!("{path} --{} ({variable})", arg.get_id()));
+            }
+        }
+        for sub in command.get_subcommands() {
+            credentials_shown(sub, &format!("{path} {}", sub.get_name()), shown);
+        }
+    }
+
+    #[test]
+    fn help_prints_no_credential_from_the_environment() {
+        let mut shown = Vec::new();
+        credentials_shown(&Cli::command(), "barbacane-control", &mut shown);
+        assert!(shown.is_empty(), "{shown:?}");
+    }
 }
 
 #[cfg(test)]

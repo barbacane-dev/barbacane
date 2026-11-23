@@ -120,6 +120,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).
 - `cache`, `opa-authz`, `http-log` and `observability` now receive bodies, so a cache hit carries the body, `include_body` works, and body sizes are reported.
 - `ldap-auth` refuses a user in none of the `required_groups` with `urn:barbacane:error:authorization-failed` (see [Observability](#observability)).
+- `kafka` refuses a broker named by an IPv6 address while the plugin egress guard is on (`BARBACANE_ALLOW_INTERNAL_EGRESS` unset): name the broker by a host name.
 - `ip-restriction` and `rate-limit` no longer take `trusted_proxies`; a configuration that sets it fails compilation with `E1023`. Remove the key and list the proxies on the data plane with `--trusted-proxies` (`BARBACANE_TRUSTED_PROXIES`), which accepts CIDR ranges and applies to every plugin, the WAF and the audit records ([client address](../reference/cli.md#client-address)).
 - `s3` forwards a client's query parameters only when its `query_params` lists them, and drops the others. A route whose clients send `versionId`, `response-content-type` or another S3 query parameter lists it. A bucket taken from a path parameter must follow S3's naming rules, and a key with a `.` or `..` segment answers `400`.
 
