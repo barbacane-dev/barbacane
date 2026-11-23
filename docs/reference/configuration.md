@@ -37,7 +37,14 @@ These defaults are deliberate. Adopt them as follows:
    `BARBACANE_SECRETS_DIR=/run/secrets`. `env://` references are unaffected.
 
 3. **Plugin egress to internal addresses is blocked by default.** This covers
-   plugin HTTP calls, Kafka/NATS broker connections, and WebSocket upstreams. If
+   plugin HTTP calls, Kafka/NATS broker connections, and WebSocket upstreams.
+   Blocked: loopback, unspecified, broadcast and multicast addresses;
+   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`,
+   `169.254.0.0/16` (cloud metadata), `0.0.0.0/8`, `192.0.0.0/24`,
+   `198.18.0.0/15` and `240.0.0.0/4`; `fc00::/7`, `fe80::/10`, `100::/64`,
+   `2001::/32` (Teredo) and `64:ff9b:1::/48`. An IPv6 address that carries an
+   IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4
+   `2002::/16`) is judged by the IPv4 address. If
    a plugin legitimately reaches an internal upstream or broker, set
    `BARBACANE_ALLOW_INTERNAL_EGRESS=1` (or prefer an explicit allowlist when one
    is available).

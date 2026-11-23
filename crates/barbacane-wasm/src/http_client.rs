@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -615,22 +615,22 @@ impl HttpClient {
 pub(crate) fn ip_is_internal(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let [a, b, c, _] = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local() // 169.254.0.0/16, incl. 169.254.169.254 cloud metadata
                 || v4.is_unspecified()
                 || v4.is_broadcast()
                 || v4.is_multicast()
-                || v4.octets()[0] == 0 // 0.0.0.0/8
-                || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64) // 100.64.0.0/10 CGNAT
+                || a == 0 // 0.0.0.0/8
+                || (a == 100 && (b & 0xC0) == 64) // 100.64.0.0/10 CGNAT
+                || (a == 192 && b == 0 && c == 0) // 192.0.0.0/24 IETF protocol assignments
+                || (a == 198 && (b & 0xFE) == 18) // 198.18.0.0/15 benchmarking
+                || a >= 240 // 240.0.0.0/4 reserved
         }
         IpAddr::V6(v6) => {
-            // Unwrap IPv4-in-IPv6 forms and apply the v4 rules.
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return ip_is_internal(&IpAddr::V4(mapped));
-            }
-            if let Some(compat) = v6.to_ipv4() {
-                return ip_is_internal(&IpAddr::V4(compat));
+            if let Some(v4) = embedded_ipv4(v6) {
+                return ip_is_internal(&IpAddr::V4(v4));
             }
             let seg = v6.segments();
             v6.is_loopback()
@@ -638,7 +638,25 @@ pub(crate) fn ip_is_internal(ip: &IpAddr) -> bool {
                 || v6.is_multicast()
                 || (seg[0] & 0xfe00) == 0xfc00 // fc00::/7 unique-local
                 || (seg[0] & 0xffc0) == 0xfe80 // fe80::/10 link-local
+                || (seg[0] == 0x64 && seg[1] == 0xff9b && seg[2] == 1) // 64:ff9b:1::/48 local-use NAT64
+                || (seg[0] == 0x2001 && seg[1] == 0) // 2001::/32 Teredo
+                || seg[..4] == [0x100, 0, 0, 0] // 100::/64 discard-only
         }
+    }
+}
+
+/// The IPv4 address a translator reaches for this IPv6 address: IPv4-mapped and
+/// IPv4-compatible (`::ffff:a.b.c.d`, `::a.b.c.d`), NAT64 (`64:ff9b::/96`) and
+/// 6to4 (`2002:aabb:ccdd::/48`).
+fn embedded_ipv4(v6: &Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = v6.to_ipv4() {
+        return Some(v4);
+    }
+    let v4 = |hi: u16, lo: u16| Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo));
+    match v6.segments() {
+        [0x64, 0xff9b, 0, 0, 0, 0, hi, lo] => Some(v4(hi, lo)),
+        [0x2002, hi, lo, ..] => Some(v4(hi, lo)),
+        _ => None,
     }
 }
 
@@ -1135,6 +1153,17 @@ mod tests {
             "fe80::1",          // IPv6 link-local
             "::ffff:127.0.0.1", // IPv4-mapped loopback
             "::ffff:169.254.169.254",
+            "192.0.0.170",                          // IETF protocol assignments
+            "198.18.0.1",                           // benchmarking
+            "198.19.255.254",                       // benchmarking
+            "240.0.0.1",                            // reserved
+            "64:ff9b::a00:5",                       // NAT64 of 10.0.0.5
+            "64:ff9b::a9fe:a9fe",                   // NAT64 of 169.254.169.254
+            "64:ff9b:1::8.8.8.8",                   // local-use NAT64
+            "2002:a00:5::1",                        // 6to4 of 10.0.0.5
+            "2002:7f00:1::",                        // 6to4 of 127.0.0.1
+            "2001:0:4136:e378:8000:63bf:f5ff:fffa", // Teredo, client 10.0.0.5
+            "100::1",                               // discard-only
         ];
         for s in blocked {
             let ip: IpAddr = s.parse().unwrap();
@@ -1146,6 +1175,9 @@ mod tests {
             "1.1.1.1",
             "93.184.216.34",
             "2606:4700:4700::1111",
+            "198.20.0.1",
+            "64:ff9b::808:808", // NAT64 of 8.8.8.8
+            "2002:808:808::1",  // 6to4 of 8.8.8.8
         ];
         for s in allowed {
             let ip: IpAddr = s.parse().unwrap();
