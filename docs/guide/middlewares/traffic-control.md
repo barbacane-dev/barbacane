@@ -59,6 +59,8 @@ On rate-limited requests (429):
 
 Each rate-limit entry counts requests in its own buckets, one per partition value. A request counts until it is older than the entry's `window`, whatever other entries do. Entries with the same configuration share their buckets: a global entry counts every operation it applies to, and the same configuration repeated on several operations counts them together. Give such entries different `policy_name`s to count each operation on its own. Changing an entry's configuration starts its counts afresh.
 
+Each entry tracks at most 100,000 partition values at once. When an entry's table is full of partitions with requests still counting, a request with a new partition value is answered `429` until one of them expires; the other entries are not affected. A partition value over 256 bytes is tracked by its SHA-256.
+
 ### Layered rate limits (stacking)
 
 Stack multiple instances with **distinct `policy_name`**s to enforce layered limits — for example, a per-IP burst cap *and* a per-user daily budget:

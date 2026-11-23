@@ -111,10 +111,10 @@ fn namespace_key(plugin_name: &str, key: &str) -> String {
     format!("{plugin_name}\u{0}{key}")
 }
 
-/// The rate-limit bucket of `key` for one configured plugin instance: plugin
-/// entries with different configurations never share a bucket.
-fn rate_limit_key(plugin_name: &str, config_hash: &str, key: &str) -> String {
-    namespace_key(plugin_name, &format!("{config_hash}\u{0}{key}"))
+/// The rate-limit scope of one configured plugin instance: plugin entries with
+/// different configurations never share a bucket or a partition table.
+fn rate_limit_scope(plugin_name: &str, config_hash: &str) -> String {
+    namespace_key(plugin_name, config_hash)
 }
 
 /// Bounds-check a guest `(offset, size)` span against WASM linear memory for the
@@ -1790,10 +1790,10 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                 };
 
                 let state = caller.data();
-                let namespaced = rate_limit_key(&state.plugin_name, &state.config_hash, &key);
+                let scope = rate_limit_scope(&state.plugin_name, &state.config_hash);
 
                 // Check the rate limit
-                let result = rate_limiter.check(&namespaced, quota, window_secs as u64);
+                let result = rate_limiter.check(&scope, &key, quota, window_secs as u64);
 
                 // Serialize the result
                 match serde_json::to_vec(&result) {
