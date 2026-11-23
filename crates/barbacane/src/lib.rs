@@ -28,3 +28,20 @@ pub mod router;
 pub mod tls;
 #[doc(hidden)]
 pub mod validator;
+
+#[cfg(test)]
+mod tests {
+    /// A call's budget never passes what a plugin may declare: the runtime's
+    /// ceilings are the compiler's `E1044` ceilings.
+    #[test]
+    fn the_call_budget_ceilings_are_the_declared_ceilings() {
+        assert_eq!(
+            barbacane_wasm::MAX_CALL_FUEL,
+            barbacane_compiler::limits::MAX_FUEL
+        );
+        assert_eq!(
+            barbacane_wasm::MAX_CALL_TIMEOUT_MS,
+            barbacane_compiler::limits::MAX_TIMEOUT_MS
+        );
+    }
+}

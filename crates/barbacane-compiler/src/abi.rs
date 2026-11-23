@@ -60,6 +60,10 @@ pub enum AbiMismatch {
     Version(u32),
     /// An export the gateway calls is missing.
     MissingExport(String),
+    /// More than one linear memory, defined or imported.
+    Memories(u32),
+    /// More than one table, defined or imported.
+    Tables(u32),
 }
 
 impl std::fmt::Display for AbiMismatch {
@@ -72,6 +76,8 @@ impl std::fmt::Display for AbiMismatch {
                 "it is built for plugin ABI {v}, and this release supports ABI {ABI_VERSION}"
             ),
             Self::MissingExport(name) => write!(f, "it does not export `{name}`"),
+            Self::Memories(n) => write!(f, "it has {n} linear memories, and a plugin has one"),
+            Self::Tables(n) => write!(f, "it has {n} tables, and a plugin has at most one"),
         }
     }
 }
@@ -98,9 +104,21 @@ pub fn abi_version(wasm: &[u8]) -> Result<Option<u32>, String> {
 pub fn check(wasm: &[u8], plugin_type: &str) -> Result<Option<AbiMismatch>, String> {
     let mut version = None;
     let mut exports = Vec::new();
+    let (mut memories, mut tables) = (0u32, 0u32);
     for payload in wasmparser::Parser::new(0).parse_all(wasm) {
         let payload = payload.map_err(|e| format!("not a WebAssembly module: {e}"))?;
         match payload {
+            wasmparser::Payload::MemorySection(reader) => memories += reader.count(),
+            wasmparser::Payload::TableSection(reader) => tables += reader.count(),
+            wasmparser::Payload::ImportSection(reader) => {
+                for import in reader.into_imports() {
+                    match import.map_err(|e| format!("unreadable import: {e}"))?.ty {
+                        wasmparser::TypeRef::Memory(_) => memories += 1,
+                        wasmparser::TypeRef::Table(_) => tables += 1,
+                        _ => {}
+                    }
+                }
+            }
             wasmparser::Payload::CustomSection(section) if section.name() == ABI_SECTION => {
                 let Ok(bytes) = <[u8; 4]>::try_from(section.data()) else {
                     return Ok(Some(AbiMismatch::MalformedVersion));
@@ -125,6 +143,12 @@ pub fn check(wasm: &[u8], plugin_type: &str) -> Result<Option<AbiMismatch>, Stri
         if !exports.iter().any(|name| name == required) {
             return Ok(Some(AbiMismatch::MissingExport((*required).to_string())));
         }
+    }
+    if memories > 1 {
+        return Ok(Some(AbiMismatch::Memories(memories)));
+    }
+    if tables > 1 {
+        return Ok(Some(AbiMismatch::Tables(tables)));
     }
     Ok(None)
 }
@@ -194,6 +218,24 @@ mod tests {
         ));
         assert_eq!(abi_version(&wasm), Ok(Some(1)));
         assert_eq!(check(&wasm, "dispatcher"), Ok(None));
+    }
+
+    #[test]
+    fn a_second_memory_or_table_is_named() {
+        let with = |extra: &str| {
+            module(&format!(
+                r#"{extra} (@custom "barbacane_abi" "\01\00\00\00") {DISPATCHER_EXPORTS}"#
+            ))
+        };
+        assert_eq!(check(&with("(table 1 funcref)"), "dispatcher"), Ok(None));
+        assert_eq!(
+            check(&with(r#"(import "env" "m" (memory 1))"#), "dispatcher"),
+            Ok(Some(AbiMismatch::Memories(2)))
+        );
+        assert_eq!(
+            check(&with("(table 1 funcref) (table 1 funcref)"), "dispatcher"),
+            Ok(Some(AbiMismatch::Tables(2)))
+        );
     }
 
     #[test]

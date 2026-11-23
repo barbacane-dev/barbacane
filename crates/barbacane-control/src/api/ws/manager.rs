@@ -33,6 +33,8 @@ pub struct ConnectionManager {
     project_connections: DashMap<Uuid, Vec<Uuid>>,
     /// Bounds concurrent WebSocket session handlers (pre-auth + registered).
     session_slots: Arc<Semaphore>,
+    /// How long a registered session may receive nothing before it is ended.
+    silence_limit: std::time::Duration,
 }
 
 impl Default for ConnectionManager {
@@ -48,7 +50,25 @@ impl ConnectionManager {
             connections: DashMap::new(),
             project_connections: DashMap::new(),
             session_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_WS_SESSIONS)),
+            silence_limit: std::time::Duration::from_secs(
+                3 * u64::from(super::protocol::DEFAULT_HEARTBEAT_INTERVAL_SECS),
+            ),
         }
+    }
+
+    /// A manager whose sessions end after `silence_limit` without a message.
+    #[cfg(test)]
+    pub fn with_silence_limit(silence_limit: std::time::Duration) -> Self {
+        Self {
+            silence_limit,
+            ..Self::new()
+        }
+    }
+
+    /// How long a registered session may receive nothing before it is ended:
+    /// three heartbeat intervals.
+    pub fn silence_limit(&self) -> std::time::Duration {
+        self.silence_limit
     }
 
     /// Try to reserve a slot for a new (as-yet-unauthenticated) WebSocket

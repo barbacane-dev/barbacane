@@ -48,7 +48,7 @@ pub use chain::{
 pub use engine::{PoolSize, WasmEngine};
 pub use error::WasmError;
 pub use instance::{PluginInstance, RequestContext, StreamEvent};
-pub use limits::PluginLimits;
+pub use limits::{PluginLimits, MAX_CALL_FUEL, MAX_CALL_TIMEOUT_MS};
 pub use manifest::{Capabilities, PluginManifest, PluginMeta, PluginType};
 pub use pool::{InstanceKey, InstancePool};
 pub use schema::ConfigSchema;

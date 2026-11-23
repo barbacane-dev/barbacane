@@ -112,7 +112,85 @@ enum SpecType {
     Unknown,
 }
 
-/// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
+/// A spec as the introspection endpoints serve it, in both formats.
+struct ServedSpec {
+    json: Bytes,
+    yaml: Bytes,
+}
+
+impl ServedSpec {
+    fn new(value: &serde_json::Value) -> Self {
+        Self {
+            json: Bytes::from(serde_json::to_string_pretty(value).unwrap_or_default()),
+            yaml: Bytes::from(barbacane_compiler::yaml::to_string(value).unwrap_or_default()),
+        }
+    }
+}
+
+/// What the introspection endpoints serve, built from the artifact's specs
+/// when it is loaded, so a request parses and serializes nothing.
+struct Introspection {
+    /// `/__barbacane/specs`.
+    index: Bytes,
+    /// `/__barbacane/specs/{file}`: each spec stripped of `x-barbacane-*`
+    /// keys, `None` for one that does not parse.
+    files: HashMap<String, Option<ServedSpec>>,
+    /// All embedded OpenAPI specs merged; none when the artifact holds none.
+    merged_openapi: Option<ServedSpec>,
+    /// All embedded AsyncAPI specs merged.
+    merged_asyncapi: Option<ServedSpec>,
+}
+
+impl Introspection {
+    fn new(specs: &HashMap<String, String>) -> Self {
+        let mut openapi_specs = Vec::new();
+        let mut asyncapi_specs = Vec::new();
+        let mut files = HashMap::with_capacity(specs.len());
+        for (name, content) in specs {
+            let entry = serde_json::json!({
+                "name": name,
+                "url": format!("/__barbacane/specs/{}", name),
+            });
+            match detect_spec_type(content) {
+                SpecType::OpenApi => openapi_specs.push(entry),
+                SpecType::AsyncApi => asyncapi_specs.push(entry),
+                SpecType::Unknown => {}
+            }
+            let served = match barbacane_compiler::yaml::from_str::<serde_json::Value>(content) {
+                Ok(mut value) => {
+                    strip_barbacane_keys_recursive(&mut value);
+                    Some(ServedSpec::new(&value))
+                }
+                Err(e) => {
+                    tracing::error!(spec = %name, error = %e, "spec cannot be parsed for serving");
+                    None
+                }
+            };
+            files.insert(name.clone(), served);
+        }
+        let index = serde_json::json!({
+            "openapi": {
+                "specs": openapi_specs,
+                "count": openapi_specs.len(),
+                "merged_url": "/__barbacane/specs/openapi"
+            },
+            "asyncapi": {
+                "specs": asyncapi_specs,
+                "count": asyncapi_specs.len(),
+                "merged_url": "/__barbacane/specs/asyncapi"
+            }
+        });
+        Self {
+            index: Bytes::from(index.to_string()),
+            files,
+            merged_openapi: merged_specs(specs, SpecType::OpenApi, merge_openapi_specs)
+                .map(|v| ServedSpec::new(&v)),
+            merged_asyncapi: merged_specs(specs, SpecType::AsyncApi, merge_asyncapi_specs)
+                .map(|v| ServedSpec::new(&v)),
+        }
+    }
+}
+
 /// The specs of `kind` in `specs` merged with `merge`, or `None` when there
 /// is none.
 fn merged_specs(
@@ -127,6 +205,7 @@ fn merged_specs(
     (!of_kind.is_empty()).then(|| merge(&of_kind))
 }
 
+/// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
 fn detect_spec_type(content: &str) -> SpecType {
     // Try to parse as YAML (also handles JSON)
     let parsed: Result<serde_json::Value, _> = barbacane_compiler::yaml::from_str(content);
@@ -788,13 +867,8 @@ struct Gateway {
     /// WAF stage, when the artifact carries a rule set. Compiled once at
     /// startup; evaluation borrows it.
     waf: Option<waf::WafStage>,
-    /// Source specs embedded in the artifact (filename -> content).
-    specs: HashMap<String, String>,
-    /// All embedded OpenAPI specs merged, for `/__barbacane/specs/openapi`;
-    /// none when the artifact holds no OpenAPI spec.
-    merged_openapi: Option<serde_json::Value>,
-    /// All embedded AsyncAPI specs merged, for `/__barbacane/specs/asyncapi`.
-    merged_asyncapi: Option<serde_json::Value>,
+    /// What the introspection endpoints serve, built once at load.
+    introspection: Introspection,
     /// Request limits (body size, headers, URI length).
     limits: RequestLimits,
     dev_mode: bool,
@@ -1226,20 +1300,16 @@ impl Gateway {
             .collect();
         balancer.retain(&pools);
 
-        // The merged specs are built once here, not on each introspection
-        // request.
-        let merged_openapi = merged_specs(&specs, SpecType::OpenApi, merge_openapi_specs);
-        let merged_asyncapi = merged_specs(&specs, SpecType::AsyncApi, merge_asyncapi_specs);
+        // Parsed and serialized here, not on each introspection request.
+        let introspection = Introspection::new(&specs);
 
         Ok(Gateway {
-            merged_openapi,
-            merged_asyncapi,
+            introspection,
             manifest,
             router,
             operations: resolved_operations,
             validators,
             waf: waf_stage,
-            specs,
             limits,
             dev_mode,
             allow_internal_egress,
@@ -1542,7 +1612,14 @@ impl Gateway {
                 let is_ws_upgrade = is_websocket_handshake(&method_str, &headers);
 
                 let (body_bytes, upgrade_handle) = if is_ws_upgrade {
-                    (Bytes::new(), Some(hyper::upgrade::on(req)))
+                    let permit = req.extensions().get::<ConnectionPermit>().cloned();
+                    (
+                        Bytes::new(),
+                        Some(PendingUpgrade {
+                            on_upgrade: hyper::upgrade::on(req),
+                            permit,
+                        }),
+                    )
                 } else {
                     // Cap the bytes read while collecting so a chunked body with
                     // no content-length can't be buffered past the limit (DoS).
@@ -1946,7 +2023,7 @@ impl Gateway {
         request_body: &[u8],
         headers: &HashMap<String, String>,
         client_ip: Option<IpAddr>,
-        upgrade_handle: Option<hyper::upgrade::OnUpgrade>,
+        upgrade_handle: Option<PendingUpgrade>,
     ) -> Result<Response<AnyBody>, Infallible> {
         let dispatch = &operation.dispatch;
 
@@ -2374,7 +2451,7 @@ impl Gateway {
         request_body: Option<Vec<u8>>,
         middleware_instances: Vec<barbacane_wasm::PluginInstance>,
         middleware_context: barbacane_wasm::RequestContext,
-        upgrade_handle: Option<hyper::upgrade::OnUpgrade>,
+        upgrade_handle: Option<PendingUpgrade>,
     ) -> Result<Response<AnyBody>, Response<Full<Bytes>>> {
         use barbacane_wasm::StreamEvent;
         use futures_util::stream;
@@ -2699,9 +2776,12 @@ impl Gateway {
                     // the drain waits for. The client-side upgrade completes
                     // when we return the 101 response.
                     let shutdown = background().shutdown();
+                    let PendingUpgrade { on_upgrade, permit } = upgrade_handle;
                     background().spawn(async move {
+                        // The relay counts against --max-connections.
+                        let _permit = permit;
                         // Wait for hyper to complete the HTTP upgrade.
-                        let upgraded = match upgrade_handle.await {
+                        let upgraded = match on_upgrade.await {
                             Ok(u) => u,
                             Err(e) => {
                                 tracing::warn!(
@@ -2721,7 +2801,13 @@ impl Gateway {
                         .await;
 
                         // Relay frames bidirectionally.
-                        Self::relay_websocket(client_ws, ws_upstream, shutdown).await;
+                        Self::relay_websocket(
+                            client_ws,
+                            ws_upstream,
+                            shutdown,
+                            WEBSOCKET_IDLE_TIMEOUT,
+                        )
+                        .await;
                     });
 
                     // Return 101 Switching Protocols to the client.
@@ -2820,98 +2906,54 @@ impl Gateway {
         response
     }
 
-    /// Build the specs index response (always JSON).
+    /// The specs index (always JSON).
     fn specs_index_response(&self) -> Response<Full<Bytes>> {
-        let mut openapi_specs = Vec::new();
-        let mut asyncapi_specs = Vec::new();
-
-        for (name, content) in &self.specs {
-            let spec_type = detect_spec_type(content);
-            let entry = serde_json::json!({
-                "name": name,
-                "url": format!("/__barbacane/specs/{}", name),
-            });
-            match spec_type {
-                SpecType::OpenApi => openapi_specs.push(entry),
-                SpecType::AsyncApi => asyncapi_specs.push(entry),
-                SpecType::Unknown => {} // Skip unknown specs
-            }
-        }
-
-        let body = serde_json::json!({
-            "openapi": {
-                "specs": openapi_specs,
-                "count": openapi_specs.len(),
-                "merged_url": "/__barbacane/specs/openapi"
-            },
-            "asyncapi": {
-                "specs": asyncapi_specs,
-                "count": asyncapi_specs.len(),
-                "merged_url": "/__barbacane/specs/asyncapi"
-            }
-        });
-
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body.to_string())))
+            .body(Full::new(self.introspection.index.clone()))
             .expect("valid response")
     }
 
-    /// Serve the merged OpenAPI spec, merged once at load.
+    /// Serve the merged OpenAPI spec.
     fn merged_openapi_response(&self, format: &str) -> Response<Full<Bytes>> {
-        match &self.merged_openapi {
+        match &self.introspection.merged_openapi {
             Some(merged) => self.serve_spec_content(merged, format),
             None => self.not_found_response(),
         }
     }
 
-    /// Serve the merged AsyncAPI spec, merged once at load.
+    /// Serve the merged AsyncAPI spec.
     fn merged_asyncapi_response(&self, format: &str) -> Response<Full<Bytes>> {
-        match &self.merged_asyncapi {
+        match &self.introspection.merged_asyncapi {
             Some(merged) => self.serve_spec_content(merged, format),
             None => self.not_found_response(),
         }
     }
 
     /// Serve spec content in requested format.
-    fn serve_spec_content(&self, value: &serde_json::Value, format: &str) -> Response<Full<Bytes>> {
+    fn serve_spec_content(&self, spec: &ServedSpec, format: &str) -> Response<Full<Bytes>> {
         let (content, content_type) = if format == "json" {
-            (
-                serde_json::to_string_pretty(value).unwrap_or_default(),
-                "application/json",
-            )
+            (spec.json.clone(), "application/json")
         } else {
-            (
-                barbacane_compiler::yaml::to_string(value).unwrap_or_default(),
-                "text/yaml",
-            )
+            (spec.yaml.clone(), "text/yaml")
         };
 
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", content_type)
-            .body(Full::new(Bytes::from(content)))
+            .body(Full::new(content))
             .expect("valid response")
     }
 
-    /// Serve a specific spec file, parsed and stripped of `x-barbacane-*`
-    /// extensions. It is read with the compiler's parser, which takes YAML and
-    /// JSON alike whatever the file name says. A spec that does not parse is
-    /// not served: its source carries the gateway configuration.
+    /// Serve a specific spec file, stripped of `x-barbacane-*` extensions. A
+    /// spec that does not parse is not served: its source carries the gateway
+    /// configuration.
     fn spec_file_response(&self, filename: &str, format: &str) -> Response<Full<Bytes>> {
-        let Some(content) = self.specs.get(filename) else {
-            return self.not_found_response();
-        };
-        match barbacane_compiler::yaml::from_str::<serde_json::Value>(content) {
-            Ok(mut value) => {
-                strip_barbacane_keys_recursive(&mut value);
-                self.serve_spec_content(&value, format)
-            }
-            Err(e) => {
-                tracing::error!(spec = %filename, error = %e, "spec cannot be parsed for serving");
-                self.internal_error_response(Some("the spec cannot be parsed"))
-            }
+        match self.introspection.files.get(filename) {
+            None => self.not_found_response(),
+            Some(Some(spec)) => self.serve_spec_content(spec, format),
+            Some(None) => self.internal_error_response(Some("the spec cannot be parsed")),
         }
     }
 
@@ -3332,12 +3374,15 @@ impl Gateway {
 
     /// Relay WebSocket frames bidirectionally between client and upstream (ADR-0026).
     ///
-    /// Runs until either side closes or an error occurs. Frames are forwarded
-    /// as-is with no inspection or transformation.
+    /// Runs until either side closes, an error occurs, or no frame (control
+    /// frames included) crosses in either direction for `idle`; then both peers
+    /// are sent a Close 1001, as at shutdown. Frames are forwarded as-is with
+    /// no inspection or transformation.
     async fn relay_websocket<C, U>(
         client_ws: C,
         upstream_ws: U,
         shutdown: tokio_util::sync::CancellationToken,
+        idle: Duration,
     ) where
         C: futures_util::Sink<
                 tokio_tungstenite::tungstenite::Message,
@@ -3365,10 +3410,45 @@ impl Gateway {
         let (mut client_tx, mut client_rx) = client_ws.split();
         let (mut upstream_tx, mut upstream_rx) = upstream_ws.split();
 
+        // Shutdown or an idle relay stops both directions.
+        let stop = shutdown.child_token();
+        let started = tokio::time::Instant::now();
+        let last_frame = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mark = |last: &std::sync::atomic::AtomicU64| {
+            last.store(
+                started.elapsed().as_millis() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+        };
+        let watchdog = {
+            let stop = stop.clone();
+            let last_frame = Arc::clone(&last_frame);
+            async move {
+                loop {
+                    let last = Duration::from_millis(
+                        last_frame.load(std::sync::atomic::Ordering::Relaxed),
+                    );
+                    let quiet_until = started + last + idle;
+                    if tokio::time::Instant::now() >= quiet_until {
+                        tracing::debug!("WebSocket relay idle; closing");
+                        stop.cancel();
+                        return;
+                    }
+                    tokio::select! {
+                        () = stop.cancelled() => return,
+                        () = tokio::time::sleep_until(quiet_until) => {}
+                    }
+                }
+            }
+        };
+        let shutdown = stop;
+        let end_watchdog = shutdown.clone();
+
         // Each direction forwards frames until its peer closes, and at
         // shutdown sends its sink a Close 1001 (going away). Each returns
         // whether shutdown ended it.
         let upstream_shutdown = shutdown.clone();
+        let client_last = Arc::clone(&last_frame);
         let client_to_upstream = async move {
             loop {
                 tokio::select! {
@@ -3384,6 +3464,7 @@ impl Gateway {
                             return false;
                         }
                         Some(Ok(m)) => {
+                            mark(&client_last);
                             if upstream_tx.send(m).await.is_err() {
                                 return false;
                             }
@@ -3409,6 +3490,7 @@ impl Gateway {
                             return false;
                         }
                         Some(Ok(m)) => {
+                            mark(&last_frame);
                             if client_tx.send(m).await.is_err() {
                                 return false;
                             }
@@ -3421,6 +3503,7 @@ impl Gateway {
 
         // When a peer ends its direction, the other is dropped. When shutdown
         // ends one, the other has seen it too and sends its own Close.
+        tokio::spawn(watchdog);
         let mut client_to_upstream = std::pin::pin!(client_to_upstream);
         let mut upstream_to_client = std::pin::pin!(upstream_to_client);
         let (by_shutdown, client_side_done) = tokio::select! {
@@ -3437,6 +3520,7 @@ impl Gateway {
             };
             let _ = tokio::time::timeout(RELAY_CLOSE_GRACE, rest).await;
         }
+        end_watchdog.cancel();
 
         tracing::debug!("WebSocket relay closed");
     }
@@ -4819,6 +4903,24 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 /// send its Close frame.
 const RELAY_CLOSE_GRACE: Duration = Duration::from_secs(2);
 
+/// How long a WebSocket relay may pass no frame, in either direction, before
+/// the gateway closes it.
+const WEBSOCKET_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A connection's slot under `--max-connections`, shared by the connection and
+/// a WebSocket relay it becomes.
+#[derive(Clone)]
+struct ConnectionPermit {
+    _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+}
+
+/// A WebSocket handshake hyper completes after the `101`, with the slot of the
+/// connection it upgrades.
+struct PendingUpgrade {
+    on_upgrade: hyper::upgrade::OnUpgrade,
+    permit: Option<ConnectionPermit>,
+}
+
 /// The Close frame a relay sends both peers at shutdown.
 fn going_away() -> tokio_tungstenite::tungstenite::Message {
     use tokio_tungstenite::tungstenite::protocol::frame::{coding::CloseCode, CloseFrame};
@@ -5328,9 +5430,13 @@ async fn run_serve(
                 let conn_keepalive = keepalive_duration;
 
                 tokio::spawn(async move {
-                    // Held for the connection's lifetime; released on drop.
-                    let _permit = permit;
-                    let service = service_fn(move |req| {
+                    // Held for the connection's lifetime, and by a WebSocket
+                    // relay the connection becomes; released when both end.
+                    let permit = ConnectionPermit {
+                        _permit: Arc::new(permit),
+                    };
+                    let service = service_fn(move |mut req: Request<hyper::body::Incoming>| {
+                        req.extensions_mut().insert(permit.clone());
                         let gateway = gateway_swap.load_full();
                         let client_addr = client_addr;
                         let trusted_proxies = Arc::clone(&conn_trusted_proxies);
@@ -6200,6 +6306,13 @@ mod relay_tests {
 
     /// A relay between a client and an upstream, with the peers' ends.
     async fn relay(shutdown: CancellationToken) -> (Ws, Ws, tokio::task::JoinHandle<()>) {
+        relay_idle_after(shutdown, Duration::from_secs(60)).await
+    }
+
+    async fn relay_idle_after(
+        shutdown: CancellationToken,
+        idle: Duration,
+    ) -> (Ws, Ws, tokio::task::JoinHandle<()>) {
         let (client, gateway_client) = tokio::io::duplex(4096);
         let (gateway_upstream, upstream) = tokio::io::duplex(4096);
         let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
@@ -6212,6 +6325,7 @@ mod relay_tests {
             gateway_client,
             gateway_upstream,
             shutdown,
+            idle,
         ));
         (client, upstream, task)
     }
@@ -6235,6 +6349,47 @@ mod relay_tests {
         client.close(None).await.unwrap();
         assert!(next(&mut upstream).await.is_close());
         tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the relay ends")
+            .unwrap();
+    }
+
+    /// The next frame other than a pong: the upstream answers a relayed ping.
+    async fn next_not_pong(ws: &mut Ws) -> Message {
+        loop {
+            let frame = next(ws).await;
+            if !matches!(frame, Message::Pong(_)) {
+                return frame;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_idle_relay_is_closed_and_traffic_keeps_it_open() {
+        let idle = Duration::from_millis(300);
+        let (mut client, mut upstream, task) =
+            relay_idle_after(CancellationToken::new(), idle).await;
+
+        // Frames in either direction, more often than the idle time.
+        for i in 0..8 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if i % 2 == 0 {
+                client.send(Message::Ping(vec![].into())).await.unwrap();
+                assert!(matches!(next(&mut upstream).await, Message::Ping(_)));
+            } else {
+                upstream.send(Message::text("tick")).await.unwrap();
+                assert_eq!(next_not_pong(&mut client).await, Message::text("tick"));
+            }
+        }
+        assert!(!task.is_finished(), "traffic kept the relay open");
+
+        for peer in [&mut client, &mut upstream] {
+            match next_not_pong(peer).await {
+                Message::Close(Some(frame)) => assert_eq!(frame.code, CloseCode::Away),
+                other => panic!("expected Close 1001, got {other:?}"),
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(3), task)
             .await
             .expect("the relay ends")
             .unwrap();
@@ -6542,6 +6697,36 @@ mod request_header_map_tests {
 
         assert_eq!(map["cookie"], "a=1; b=2");
         assert_eq!(map["x-tag"], "last");
+    }
+}
+
+#[cfg(test)]
+mod introspection_tests {
+    use super::Introspection;
+    use std::collections::HashMap;
+
+    #[test]
+    fn the_served_specs_are_built_at_load() {
+        let specs = HashMap::from([
+            (
+                "api.yaml".to_string(),
+                "openapi: 3.1.0\ninfo: {title: A, version: '1'}\nx-barbacane-middlewares: []\npaths: {}\n"
+                    .to_string(),
+            ),
+            ("broken.yaml".to_string(), "openapi: [unclosed".to_string()),
+        ]);
+        let built = Introspection::new(&specs);
+
+        let index: serde_json::Value = serde_json::from_slice(&built.index).unwrap();
+        assert_eq!(index["openapi"]["count"], 1);
+        let api = built.files["api.yaml"].as_ref().expect("parsed");
+        let json: serde_json::Value = serde_json::from_slice(&api.json).unwrap();
+        assert_eq!(json["info"]["title"], "A");
+        assert!(json.get("x-barbacane-middlewares").is_none(), "stripped");
+        assert!(String::from_utf8_lossy(&api.yaml).contains("title: A"));
+        assert!(built.files["broken.yaml"].is_none());
+        assert!(built.merged_openapi.is_some());
+        assert!(built.merged_asyncapi.is_none());
     }
 }
 

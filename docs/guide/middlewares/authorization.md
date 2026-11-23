@@ -107,7 +107,7 @@ x-barbacane-middlewares:
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `opa_url` | string | *(required)* | OPA Data API endpoint URL (e.g., `http://opa:8181/v1/data/authz/allow`) |
-| `timeout` | number | `5` | HTTP request timeout in seconds for OPA calls |
+| `timeout` | number | `5` | HTTP request timeout in seconds for OPA calls, at most 60 |
 | `include_body` | boolean | `false` | Include the request body in the OPA input payload |
 | `include_claims` | boolean | `true` | Include parsed `x-auth-claims` header (set by upstream auth plugins) in the OPA input |
 | `deny_message` | string | `Authorization denied by policy` | Custom message returned in the 403 response body |

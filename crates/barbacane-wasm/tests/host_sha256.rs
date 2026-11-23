@@ -262,6 +262,49 @@ fn hashing_a_large_input_does_not_spend_the_plugins_time_budget() {
     assert_eq!(rc, 0);
 }
 
+/// Calls `host_sha256` on `[DATA, DATA + len)` `times` times, then runs a
+/// short loop whose back-edge checks the deadline.
+fn repeated_hashing_module(len: usize, pages: usize, times: u32) -> String {
+    format!(
+        r#"(module
+  (import "barbacane" "host_sha256" (func $sha256 (param i32 i32 i32) (result i32)))
+  (memory (export "memory") {pages})
+  (func (export "alloc") (param i32) (result i32) (i32.const 512))
+  (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "dispatch") (param i32 i32) (result i32)
+    (local $n i32) (local $i i32)
+    (block $hashed
+      (loop $again
+        (br_if $hashed (i32.ge_u (local.get $n) (i32.const {times})))
+        (drop (call $sha256 (i32.const {DATA}) (i32.const {len}) (i32.const {OUT})))
+        (local.set $n (i32.add (local.get $n) (i32.const 1)))
+        (br $again)))
+    (block $done
+      (loop $next
+        (br_if $done (i32.ge_u (local.get $i) (i32.const 16)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $next)))
+    (i32.const 0))
+)"#
+    )
+}
+
+/// Hashing past twice the memory limit in one call spends the call's time:
+/// a loop of hashes runs into the deadline.
+#[test]
+fn hashing_past_twice_the_memory_limit_spends_the_time_budget() {
+    let len = input_slower_than_the_deadline();
+    let pages = (DATA + len).div_ceil(PAGE);
+    let engine = WasmEngine::new().expect("engine");
+    let mut plugin = instance(
+        &engine,
+        &repeated_hashing_module(len, pages, 4),
+        deadline_limits(pages),
+    );
+    let err = plugin.dispatch(b"{}").expect_err("the deadline must pass");
+    assert!(matches!(err, WasmError::Timeout(_)), "{err}");
+}
+
 #[test]
 fn control_touching_each_byte_in_wasm_overruns_that_deadline() {
     let engine = WasmEngine::new().expect("engine");

@@ -55,9 +55,7 @@ async fn registered_session(pool: &PgPool, base: &str) -> (Uuid, Uuid, Socket) {
         .expect("key")
         .key;
     let ws_url = format!("{}/ws/data-plane", base.replacen("http://", "ws://", 1));
-    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
-        .await
-        .expect("connect");
+    let mut ws = super::connect(&ws_url, Some(&key)).await.expect("connect");
     let register = serde_json::json!({"type": "register", "project_id": project, "api_key": key});
     ws.send(Message::Text(register.to_string().into()))
         .await

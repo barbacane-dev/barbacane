@@ -329,6 +329,10 @@ context::set(context::AUTH_GROUPS, "admin,editor");
 let consumer = context::get(context::AUTH_SUB);
 ```
 
+A request's context holds at most 256 values and 256 KiB, keys and values
+together. A `context::set` past either is not applied, and the gateway logs a
+warning naming the plugin.
+
 ### Logging
 
 ```toml
@@ -712,8 +716,19 @@ timeout_ms = 50     # wall-clock budget for one call, in ms
 | Wall clock per call | `timeout_ms` | 100 ms | 10,000 ms |
 | Stack | (not declared) | 1 MiB | |
 
+A plugin module has one linear memory and at most one table (of up to 10,000
+elements); a module with more fails compilation with `E1045`. The gateway does
+not enable the WebAssembly features that add memories or heaps (multi-memory,
+memory64, GC, function references, exceptions), so a module using them is
+refused when it is compiled and loaded.
+
 The wall clock restarts after each host function that waits on the network, so
-that wait does not count. A key outside the table above, a value below 1 or a value
+that wait does not count. An outbound HTTP call waits at most 60 seconds (a
+longer `timeout_ms` is cut to 60,000) and a WebSocket connect at most 30.
+`host_sha256` restarts the wall clock too, while the call has hashed at most
+twice the plugin's memory limit; past that, hashing time counts. A call whose
+payload is large gets 100 fuel per byte of it, and a deadline raised by the same
+factor, up to the ceilings in the table. A key outside the table above, a value below 1 or a value
 above its ceiling fails compilation with `E1044`, and the data plane refuses an
 artifact that records one.
 

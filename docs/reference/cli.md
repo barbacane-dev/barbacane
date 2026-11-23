@@ -262,7 +262,7 @@ plugins and builds an artifact.
 | E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
 | E1043 | Plugin | A plugin imports a function the gateway does not provide: anything outside the `barbacane` host functions and the supported WASI functions (see the [plugin guide](../contributing/plugins.md#wasi)) |
 | E1044 | Plugin | Limits for a plugin, in its `plugin.toml`, in `barbacane.yaml` or on the control plane, name an unknown key, or a value below 1 or above the gateway's ceiling (see the [plugin guide](../contributing/plugins.md#resource-limits)) |
-| E1045 | Plugin | A plugin is not built for this gateway's plugin ABI: it carries no ABI version, names another one, or lacks an export the gateway calls (see the [plugin guide](../contributing/plugins.md#abi-version)); rebuild it with `barbacane-plugin-sdk` 1.x |
+| E1045 | Plugin | A plugin is not built for this gateway's plugin ABI: it carries no ABI version, names another one, or lacks an export the gateway calls (see the [plugin guide](../contributing/plugins.md#abi-version)), or it has more than one linear memory or table; rebuild it with `barbacane-plugin-sdk` 1.x |
 | E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
 | E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
 | E1059 | Schema | A request schema cannot be enforced: its `$schema` names neither a JSON Schema draft nor an OpenAPI dialect, it refers to a resource outside the spec, or it does not compile (an invalid `pattern`, for one) |
@@ -756,7 +756,7 @@ The gateway serves at most `--max-connections` connections at once (default 1000
 serving at most 10000 concurrent connections; open-file limit 1048576
 ```
 
-Each connection holds at least one file descriptor. When the open-file limit is not above the cap, connections fail at accept before the cap sheds them, and the gateway logs a warning. Raise the limit (`ulimit -n`, `LimitNOFILE=` in a systemd unit, `--ulimit nofile=` for a container) or lower `--max-connections`. A systemd service gets a soft limit of 1024 unless its unit sets one.
+A WebSocket connection keeps its place while its relay is open. Each connection holds at least one file descriptor; a relayed WebSocket holds two, its own and the upstream's. When the open-file limit is not above the cap, connections fail at accept before the cap sheds them, and the gateway logs a warning. Raise the limit (`ulimit -n`, `LimitNOFILE=` in a systemd unit, `--ulimit nofile=` for a container) or lower `--max-connections`. A systemd service gets a soft limit of 1024 unless its unit sets one.
 
 ### Plugin instance pool
 

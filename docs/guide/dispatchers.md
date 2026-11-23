@@ -140,7 +140,7 @@ x-barbacane-dispatch:
 | `endpoints` | array | One of `url`, `endpoints` | - | Instances of the upstream to balance requests across (see below) |
 | `retries` | integer | No | 1 | With `endpoints`: how many other endpoints a failed request may be sent to |
 | `path` | string | No | Same as operation path | Upstream path template with `{param}` substitution |
-| `timeout` | number | No | 30.0 | Request timeout in seconds |
+| `timeout` | number | No | 30.0 | Request timeout in seconds, at most 60 |
 | `tls` | object | No | - | Client certificate and CA for the upstream connection (see below) |
 
 ##### TLS Configuration (mTLS)
@@ -259,7 +259,7 @@ Proxy any path to upstream using a greedy wildcard parameter (`{param+}`):
 
 #### Timeout Override
 
-Per-operation timeout for long-running operations:
+Per-operation timeout for long-running operations, up to 60 seconds:
 
 ```yaml
 /reports/generate:
@@ -269,7 +269,7 @@ Per-operation timeout for long-running operations:
       config:
         url: "https://reports.internal"
         path: "/generate"
-        timeout: 120.0  # 2 minutes for report generation
+        timeout: 60.0  # the longest a plugin's outbound call may take
 ```
 
 #### Error Handling
@@ -307,7 +307,7 @@ x-barbacane-dispatch:
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `url` | string | Yes | - | Lambda Function URL |
-| `timeout` | number | No | 30.0 | Request timeout in seconds |
+| `timeout` | number | No | 30.0 | Request timeout in seconds, at most 60 |
 | `pass_through_headers` | boolean | No | true | Pass incoming headers to Lambda |
 
 #### Setup
@@ -345,7 +345,7 @@ aws lambda get-function-url-config --function-name my-function
       name: lambda
       config:
         url: "https://xyz789.lambda-url.eu-west-1.on.aws/"
-        timeout: 120.0
+        timeout: 60.0
 ```
 
 #### Request/Response Format
@@ -604,7 +604,7 @@ x-barbacane-dispatch:
 | `key_param` | string | No | `"key"` | Name of the path parameter that holds the object key |
 | `fallback_key` | string | No | - | Fallback object key for SPA routing. When set, a 404 on a GET request triggers a second S3 fetch with this key (e.g. `index.html`). Query parameters are stripped from the S3 request to avoid SigV4 signature errors |
 | `query_params` | array | No | `[]` | Query parameters forwarded to S3, by name as the client writes them (e.g. `[versionId]`). They are signed with the gateway's credentials; other query parameters are dropped. Ignored when `fallback_key` is set |
-| `timeout` | number | No | `30` | Request timeout in seconds |
+| `timeout` | number | No | `30` | Request timeout in seconds, at most 60 |
 
 #### URL Styles
 
@@ -782,7 +782,7 @@ x-barbacane-dispatch:
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `url` | string | Yes | - | Upstream WebSocket URL (`ws://` or `wss://`) |
-| `connect_timeout` | number | No | 5 | Connection timeout in seconds (0.1–300) |
+| `connect_timeout` | number | No | 5 | Connection timeout in seconds (0.1–30) |
 | `path` | string | No | Same as operation path | Upstream path template with `{param}` substitution |
 
 #### How It Works
@@ -790,7 +790,9 @@ x-barbacane-dispatch:
 1. Client sends an HTTP request with `Upgrade: websocket`
 2. The plugin validates the upgrade header and connects to the upstream WebSocket server
 3. On success, the gateway returns `101 Switching Protocols` to the client
-4. Frames are relayed bidirectionally between client and upstream until either side closes
+4. Frames are relayed bidirectionally between client and upstream until either side closes, or until no frame (pings included) crosses in either direction for 5 minutes; the gateway then sends both a Close 1001 (going away)
+
+A relayed connection counts against `--max-connections` until it closes.
 
 The middleware chain (`x-barbacane-middlewares`) runs on the initial HTTP request and can inspect/modify headers, enforce authentication, apply rate limiting, etc. Once the connection is upgraded, middleware is bypassed for individual frames.
 
@@ -908,7 +910,7 @@ x-barbacane-dispatch:
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `url` | string | Yes | - | Upstream URL to forward the request to |
-| `timeout_ms` | integer | No | 5000 | Timeout in milliseconds for the upstream HTTP call |
+| `timeout_ms` | integer | No | 5000 | Timeout in milliseconds for the upstream HTTP call, at most 60000 |
 | `response` | object | No | See below | Static response returned to the client |
 
 ##### Response Object

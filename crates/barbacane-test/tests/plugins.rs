@@ -1652,6 +1652,72 @@ async fn test_ws_relay_stays_alive_and_echoes_frames() {
     ws.close(None).await.expect("close failed");
 }
 
+/// Whether a new connection to `port` is answered: an HTTP request on it
+/// gets a response before the gateway closes it.
+fn a_new_connection_is_answered(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ =
+        stream.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    let mut buf = [0u8; 16];
+    matches!(stream.read(&mut buf), Ok(n) if n > 0)
+}
+
+/// A WebSocket relay holds its connection's place under `--max-connections`
+/// until it closes.
+#[tokio::test]
+async fn test_ws_relay_counts_against_the_connection_cap() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (_echo_handle, echo_url) = start_ws_echo_server();
+    let (_temp_dir, spec_path) = create_ws_spec(&echo_url);
+    let gateway =
+        TestGateway::from_spec_with_args(spec_path.to_str().unwrap(), &["--max-connections", "2"])
+            .await
+            .expect("failed to start gateway");
+
+    // One place: the harness's kept-alive connection.
+    assert_eq!(gateway.get("/health").await.unwrap().status(), 200);
+    // The other: the relay.
+    let ws_url = format!("ws://127.0.0.1:{}/ws/echo", gateway.port());
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .expect("WebSocket connection through gateway failed");
+    ws.send(Message::text("hello")).await.unwrap();
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+        .await
+        .expect("an echo in time")
+        .expect("open")
+        .expect("valid");
+    assert_eq!(reply, Message::text("hello"));
+
+    let port = gateway.port();
+    assert!(
+        !tokio::task::spawn_blocking(move || a_new_connection_is_answered(port))
+            .await
+            .unwrap(),
+        "a connection past the cap was served while the relay was open"
+    );
+
+    ws.close(None).await.unwrap();
+    let mut freed = false;
+    for _ in 0..50 {
+        if tokio::task::spawn_blocking(move || a_new_connection_is_answered(port))
+            .await
+            .unwrap()
+        {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(freed, "the closed relay frees its place");
+}
+
 #[tokio::test]
 async fn test_ws_relay_upstream_close_propagates_to_client() {
     use futures_util::{SinkExt, StreamExt};

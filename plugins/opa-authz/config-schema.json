@@ -13,9 +13,10 @@
     },
     "timeout": {
       "type": "number",
-      "description": "HTTP request timeout in seconds for OPA calls",
+      "description": "HTTP request timeout in seconds for OPA calls, at most 60",
       "default": 5,
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 60
     },
     "include_body": {
       "type": "boolean",

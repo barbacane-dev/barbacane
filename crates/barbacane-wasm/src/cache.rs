@@ -15,8 +15,15 @@ const MAX_TTL_SECS: u64 = 366 * 24 * 60 * 60;
 
 /// Upper bound on the number of cached entries. A plugin can write arbitrary
 /// keys, so the table is capped to bound host memory; inserts past the cap evict
-/// expired entries first, then the entry closest to expiry.
+/// expired entries first, then the entries closest to expiry.
 const MAX_CACHE_ENTRIES: usize = 10_000;
+
+/// Upper bound on the bytes the cache holds: keys, headers and bodies. Inserts
+/// past it evict as the entry cap does.
+const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+/// The largest entry the cache stores, in bytes; a larger one is not stored.
+const MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
 
 /// A cached response entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -50,6 +57,78 @@ struct InternalEntry {
     expires_at: Instant,
     created_at: Instant,
     _ttl_secs: u64,
+    /// What the entry counts against [`MAX_CACHE_BYTES`].
+    size: usize,
+}
+
+/// The bytes an entry holds: its key, header names and values, and body.
+fn entry_size(key: &str, entry: &CacheEntry) -> usize {
+    let headers: usize = entry.headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    key.len() + headers + entry.body.as_ref().map_or(0, Vec::len)
+}
+
+/// How much the cache holds.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    entries: usize,
+    bytes: usize,
+    entry_bytes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            entries: MAX_CACHE_ENTRIES,
+            bytes: MAX_CACHE_BYTES,
+            entry_bytes: MAX_ENTRY_BYTES,
+        }
+    }
+}
+
+/// The entries with the bytes they hold.
+#[derive(Default)]
+struct Entries {
+    map: HashMap<String, InternalEntry>,
+    bytes: usize,
+}
+
+impl Entries {
+    fn remove(&mut self, key: &str) {
+        if let Some(old) = self.map.remove(key) {
+            self.bytes -= old.size;
+        }
+    }
+
+    fn remove_expired(&mut self, now: Instant) {
+        self.map.retain(|_, v| v.expires_at > now);
+        self.bytes = self.map.values().map(|v| v.size).sum();
+    }
+
+    /// Evict until an entry of `size` bytes fits: expired entries first, then
+    /// those closest to expiry.
+    fn make_room(&mut self, size: usize, now: Instant, limits: Limits) {
+        let full =
+            |e: &Self| e.map.len() >= limits.entries || e.bytes.saturating_add(size) > limits.bytes;
+        if !full(self) {
+            return;
+        }
+        self.remove_expired(now);
+        if !full(self) {
+            return;
+        }
+        let mut by_expiry: Vec<(Instant, String)> = self
+            .map
+            .iter()
+            .map(|(k, v)| (v.expires_at, k.clone()))
+            .collect();
+        by_expiry.sort_unstable();
+        for (_, key) in by_expiry {
+            if !full(self) {
+                break;
+            }
+            self.remove(&key);
+        }
+    }
 }
 
 /// Result of a cache lookup.
@@ -66,7 +145,8 @@ pub struct CacheResult {
 #[derive(Clone)]
 pub struct ResponseCache {
     /// Cached entries by key.
-    entries: Arc<RwLock<HashMap<String, InternalEntry>>>,
+    entries: Arc<RwLock<Entries>>,
+    limits: Limits,
     /// Cleanup interval.
     cleanup_interval: Duration,
     /// Last cleanup time.
@@ -83,7 +163,8 @@ impl ResponseCache {
     /// Create a new response cache.
     pub fn new() -> Self {
         Self {
-            entries: Arc::new(RwLock::new(HashMap::new())),
+            entries: Arc::new(RwLock::new(Entries::default())),
+            limits: Limits::default(),
             cleanup_interval: Duration::from_secs(60),
             last_cleanup: Arc::new(RwLock::new(Instant::now())),
         }
@@ -96,7 +177,7 @@ impl ResponseCache {
         let entries = self.entries.read();
         let now = Instant::now();
 
-        if let Some(internal) = entries.get(key) {
+        if let Some(internal) = entries.map.get(key) {
             if internal.expires_at > now {
                 // Cache hit
                 let ttl_remaining = internal.expires_at.saturating_duration_since(now).as_secs();
@@ -136,41 +217,33 @@ impl ResponseCache {
             .checked_add(Duration::from_secs(ttl_secs))
             .unwrap_or(now);
 
+        let size = entry_size(key, &entry);
+        if size > self.limits.entry_bytes {
+            return;
+        }
         let internal = InternalEntry {
             entry,
             expires_at,
             created_at: now,
             _ttl_secs: ttl_secs,
+            size,
         };
 
         let mut entries = self.entries.write();
-        if entries.len() >= MAX_CACHE_ENTRIES && !entries.contains_key(key) {
-            // Make room: drop expired entries first.
-            entries.retain(|_, v| v.expires_at > now);
-            // Still full of live entries? Evict the one closest to expiry.
-            if entries.len() >= MAX_CACHE_ENTRIES {
-                if let Some(victim) = entries
-                    .iter()
-                    .min_by_key(|(_, v)| v.expires_at)
-                    .map(|(k, _)| k.clone())
-                {
-                    entries.remove(&victim);
-                }
-            }
-        }
-        entries.insert(key.to_string(), internal);
+        entries.remove(key);
+        entries.make_room(size, now, self.limits);
+        entries.bytes += size;
+        entries.map.insert(key.to_string(), internal);
     }
 
     /// Invalidate a cache entry.
     pub fn invalidate(&self, key: &str) {
-        let mut entries = self.entries.write();
-        entries.remove(key);
+        self.entries.write().remove(key);
     }
 
     /// Clear all cache entries.
     pub fn clear(&self) {
-        let mut entries = self.entries.write();
-        entries.clear();
+        *self.entries.write() = Entries::default();
     }
 
     /// Periodically clean up expired entries.
@@ -189,7 +262,7 @@ impl ResponseCache {
                 *last = now;
 
                 if let Some(mut entries) = self.entries.try_write() {
-                    entries.retain(|_, v| v.expires_at > now);
+                    entries.remove_expired(now);
                 }
             }
         }
@@ -199,11 +272,12 @@ impl ResponseCache {
     pub fn stats(&self) -> CacheStats {
         let entries = self.entries.read();
         let now = Instant::now();
-        let valid_count = entries.values().filter(|e| e.expires_at > now).count();
+        let valid_count = entries.map.values().filter(|e| e.expires_at > now).count();
 
         CacheStats {
-            total_entries: entries.len(),
+            total_entries: entries.map.len(),
             valid_entries: valid_count,
+            bytes: entries.bytes,
         }
     }
 }
@@ -215,11 +289,56 @@ pub struct CacheStats {
     pub total_entries: usize,
     /// Number of non-expired entries.
     pub valid_entries: usize,
+    /// Bytes the entries hold.
+    pub bytes: usize,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn body(bytes: usize) -> CacheEntry {
+        CacheEntry {
+            status: 200,
+            headers: HashMap::new(),
+            body: Some(vec![b'x'; bytes]),
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn the_cache_holds_a_bounded_number_of_bytes() {
+        let cache = ResponseCache {
+            limits: Limits {
+                entries: 100,
+                bytes: 1_000,
+                entry_bytes: 400,
+            },
+            ..ResponseCache::new()
+        };
+
+        cache.set("too-big", body(401), 60);
+        assert!(!cache.get("too-big").hit, "an entry over the entry limit");
+
+        cache.set("a", body(300), 10);
+        cache.set("b", body(300), 30);
+        cache.set("c", body(300), 20);
+        cache.set("d", body(300), 40);
+        assert!(cache.stats().bytes <= 1_000, "{:?}", cache.stats());
+        assert!(
+            !cache.get("a").hit,
+            "the entry closest to expiry is evicted"
+        );
+        for key in ["b", "c", "d"] {
+            assert!(cache.get(key).hit, "{key}");
+        }
+
+        cache.set("b", body(10), 30);
+        // Each entry counts its one-byte key with its body.
+        assert_eq!(cache.stats().bytes, 301 + 301 + 11);
+        cache.invalidate("c");
+        assert_eq!(cache.stats().bytes, 301 + 11);
+    }
 
     #[test]
     fn test_cache_miss() {

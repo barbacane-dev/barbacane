@@ -21,13 +21,12 @@ type Socket =
 
 /// The pool and the WebSocket URL of a control plane served on loopback.
 async fn serve() -> Option<(PgPool, String)> {
+    serve_with(ConnectionManager::new()).await
+}
+
+async fn serve_with(manager: ConnectionManager) -> Option<(PgPool, String)> {
     let pool = crate::api::test_pool().await?;
-    let app = create_router(
-        pool.clone(),
-        None,
-        Arc::new(ConnectionManager::new()),
-        AdminAuth::Disabled,
-    );
+    let app = create_router(pool.clone(), None, Arc::new(manager), AdminAuth::Disabled);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.ok()?;
     let addr = listener.local_addr().ok()?;
     tokio::spawn(async move {
@@ -53,7 +52,7 @@ async fn key(pool: &PgPool, project_id: Uuid, scopes: &[&str]) -> String {
         .create(
             project_id,
             NewApiKey {
-                name: "data-plane".into(),
+                name: format!("data-plane-{}", Uuid::new_v4().simple()),
                 scopes: scopes.iter().map(|s| s.to_string()).collect(),
                 expires_at: None,
             },
@@ -77,11 +76,8 @@ async fn artifact(pool: &PgPool, project_id: Uuid) -> Uuid {
         .id
 }
 
-async fn connect(url: &str) -> Socket {
-    tokio_tungstenite::connect_async(url)
-        .await
-        .expect("connect")
-        .0
+async fn connect(url: &str, key: &str) -> Socket {
+    super::connect(url, Some(key)).await.expect("connect")
 }
 
 async fn send(ws: &mut Socket, message: serde_json::Value) {
@@ -114,7 +110,7 @@ async fn an_artifact_of_another_project_cannot_be_claimed() {
     let data_planes = DataPlanesRepository::new(pool.clone());
 
     // Claimed at registration: ignored.
-    let mut ws = connect(&url).await;
+    let mut ws = connect(&url, &api_key).await;
     send(
         &mut ws,
         serde_json::json!({"type": "register", "project_id": mine, "api_key": api_key, "artifact_id": foreign_artifact}),
@@ -181,15 +177,129 @@ async fn a_refused_registration_is_told_one_reason() {
     let foreign_key = key(&pool, theirs, &["data-plane:connect"]).await;
     let scopeless_key = key(&pool, mine, &[]).await;
 
-    for api_key in ["bbk_unknown", foreign_key.as_str(), scopeless_key.as_str()] {
-        let mut ws = connect(&url).await;
+    let own_key = key(&pool, mine, &["data-plane:connect"]).await;
+    let second_key = key(&pool, mine, &["data-plane:connect"]).await;
+
+    // Refused before the upgrade.
+    for api_key in ["bbk_unknown", scopeless_key.as_str()] {
+        let error = super::connect(&url, Some(api_key))
+            .await
+            .expect_err("upgraded");
+        assert_eq!(super::refused_status(error), 401, "{api_key}");
+    }
+
+    // Refused at registration: a key of another project, or a registration
+    // naming another key than the upgrade's.
+    for (upgrade_key, registered_key) in [
+        (foreign_key.as_str(), foreign_key.as_str()),
+        (own_key.as_str(), second_key.as_str()),
+    ] {
+        let mut ws = connect(&url, upgrade_key).await;
         send(
             &mut ws,
-            serde_json::json!({"type": "register", "project_id": mine, "api_key": api_key}),
+            serde_json::json!({"type": "register", "project_id": mine, "api_key": registered_key}),
         )
         .await;
         let refused = reply(&mut ws).await;
         assert_eq!(refused["type"], "registration_failed", "{refused}");
         assert_eq!(refused["reason"], "registration refused", "{refused}");
     }
+}
+
+/// The next text frame within five seconds, or `None` once the server closes.
+async fn next_text(ws: &mut Socket) -> Option<String> {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => return Some(text.to_string()),
+            Ok(Some(Ok(Message::Close(_)))) | Ok(Some(Err(_))) | Ok(None) => return None,
+            Ok(Some(Ok(_))) => continue,
+            Err(_) => panic!("no reply within five seconds"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_message_larger_than_the_cap_ends_the_connection_before_registration() {
+    let Some((pool, url)) = serve().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let mine = project(&pool).await;
+    let mut ws = connect(&url, &key(&pool, mine, &["data-plane:connect"]).await).await;
+    let oversize = format!(
+        r#"{{"type":"register","pad":"{}"}}"#,
+        "x".repeat(1024 * 1024)
+    );
+    // The send may succeed before the server reads: it is the read that is refused.
+    let _ = ws.send(Message::Text(oversize.into())).await;
+    assert_eq!(
+        next_text(&mut ws).await,
+        None,
+        "the server must close the socket"
+    );
+}
+
+#[tokio::test]
+async fn a_registration_with_an_oversized_name_is_refused() {
+    let Some((pool, url)) = serve().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let mine = project(&pool).await;
+    let api_key = key(&pool, mine, &["data-plane:connect"]).await;
+    let mut ws = connect(&url, &api_key).await;
+    send(
+        &mut ws,
+        serde_json::json!({"type": "register", "project_id": mine, "api_key": api_key, "name": "n".repeat(10_000)}),
+    )
+    .await;
+    let reply = next_text(&mut ws).await.expect("a reply");
+    assert!(reply.contains("registration_failed"), "{reply}");
+    assert!(reply.contains("invalid registration"), "{reply}");
+}
+
+/// A registered data plane that sends nothing for the silence limit is
+/// ended, as one gone without closing its connection is.
+#[tokio::test]
+async fn a_silent_session_is_ended() {
+    let Some((pool, url)) = serve_with(ConnectionManager::with_silence_limit(
+        Duration::from_millis(500),
+    ))
+    .await
+    else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let mine = project(&pool).await;
+    let api_key = key(&pool, mine, &["data-plane:connect"]).await;
+    let mut ws = connect(&url, &api_key).await;
+    send(
+        &mut ws,
+        serde_json::json!({"type": "register", "project_id": mine, "api_key": api_key}),
+    )
+    .await;
+    assert_eq!(reply(&mut ws).await["type"], "registered");
+
+    // A heartbeat keeps the session.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    send(
+        &mut ws,
+        serde_json::json!({"type": "heartbeat", "uptime_secs": 1, "requests_total": 0}),
+    )
+    .await;
+    assert_eq!(reply(&mut ws).await["type"], "heartbeat_ack");
+
+    // Then silence ends it.
+    let ended = loop {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+            Ok(Some(Ok(Message::Close(frame)))) => break frame,
+            Ok(Some(Ok(_))) => continue,
+            other => panic!("the session was not ended: {other:?}"),
+        }
+    };
+    let frame = ended.expect("a close frame");
+    assert!(
+        frame.reason.contains("no message from the data plane"),
+        "{frame:?}"
+    );
 }

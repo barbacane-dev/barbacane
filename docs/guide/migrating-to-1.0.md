@@ -57,6 +57,7 @@ An artifact compiled without a manifest, with `barbacane_compiler::compile` from
 
 ### Connecting to the control plane
 
+- A data plane presents its API key on the WebSocket upgrade, and the control plane refuses an upgrade without a valid one. Upgrade the data planes before the control plane: a 1.0 data plane also registers with an older control plane.
 - The data plane reads its API key from `BARBACANE_CONTROL_API_KEY` (or `--api-key`). `BARBACANE_API_KEY` is not read.
 - A `ws://` link to a control plane on a host other than loopback is refused at start, since the link carries the API key: use `wss://` behind TLS, or pass `--allow-plaintext-control-plane` on a network you trust.
 - The data plane downloads deployed artifacts with its own API key. Nothing to configure; a 0.12 data plane could not download them at all.
@@ -115,6 +116,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 ### Official plugins
 
 - `ws-upstream` follows the plaintext rules of `http-upstream`: a `ws://` URL needs `--allow-plaintext` to compile and `--allow-plaintext-upstream` to connect. The handshake sends the upstream URL's host as `Host`, not the client's.
+- A plugin's outbound HTTP call waits at most 60 seconds. A `timeout` above 60 in `http-upstream`, `lambda`, `s3`, `oidc-auth`, `oauth2-auth` or `opa-authz`, a `fire-and-forget` `timeout_ms` above 60000, or a `ws-upstream` `connect_timeout` above 30 fails compilation with `E1023`.
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).
 - `cache`, `opa-authz`, `http-log` and `observability` now receive bodies, so a cache hit carries the body, `include_body` works, and body sizes are reported.
 - `ldap-auth` refuses a user in none of the `required_groups` with `urn:barbacane:error:authorization-failed` (see [Observability](#observability)).

@@ -329,3 +329,17 @@ async fn url_and_endpoints_are_exclusive_and_retries_needs_endpoints() {
         assert!(error.contains("E1023"), "{config}: {error}");
     }
 }
+
+/// A plugin's outbound call lasts at most 60 seconds, so a longer `timeout`
+/// does not compile.
+#[tokio::test]
+async fn a_timeout_past_sixty_seconds_does_not_compile() {
+    let ok = Upstream::ok("ok");
+    let dir = tempfile::TempDir::new().unwrap();
+    let spec = project(dir.path(), &format!("url: \"{}\"\ntimeout: 61", ok.url));
+    let error = match TestGateway::from_spec(spec.to_str().unwrap()).await {
+        Ok(_) => panic!("compiled a 61 s timeout"),
+        Err(e) => e.to_string(),
+    };
+    assert!(error.contains("E1023") && error.contains("61"), "{error}");
+}

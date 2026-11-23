@@ -47,9 +47,10 @@
     },
     "timeout": {
       "type": "number",
-      "description": "Request timeout in seconds",
+      "description": "Request timeout in seconds, at most 60",
       "default": 30,
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 60
     },
     "tls": {
       "type": "object",

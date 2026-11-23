@@ -12,10 +12,10 @@
     },
     "connect_timeout": {
       "type": "number",
-      "description": "Connection timeout in seconds",
+      "description": "Connection timeout in seconds, at most 30",
       "default": 5,
       "minimum": 0.1,
-      "maximum": 300
+      "maximum": 30
     },
     "path": {
       "type": "string",

@@ -236,6 +236,8 @@ The response carries the key, prefixed `bbk_`, under `key`.
 
 **Note:** The API key is only shown once at creation time. Store it securely.
 
+The data plane presents its key as `Authorization: Bearer <key>` on the WebSocket upgrade, and the control plane checks it before upgrading: an unknown or expired key, or one without the `data-plane:connect` scope, is answered `401`, and the connection holds no session. The data plane then has 10 seconds to send its registration, which names the same key. A data plane that sends nothing, not even its heartbeat, for three heartbeat intervals (90 seconds) is taken as gone and its session ended.
+
 Revoking a key (`DELETE /projects/{id}/api-keys/{key_id}`) ends the data plane sessions registered with it: each receives a `disconnect` message and the socket closes. Every session also rechecks its key at the heartbeat interval (30 seconds), so an expired key, or one revoked through another control-plane instance, ends the session too.
 
 ### List Connected Data Planes

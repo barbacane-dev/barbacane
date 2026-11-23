@@ -385,7 +385,15 @@ async fn sigterm_ends_data_plane_sessions_and_exits_zero() {
         .to_string();
 
     let ws_url = format!("{}/ws/data-plane", cp.url.replacen("http://", "ws://", 1));
-    let (mut session, _) = tokio_tungstenite::connect_async(ws_url)
+    let mut upgrade = {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        ws_url.into_client_request().expect("request")
+    };
+    upgrade.headers_mut().insert(
+        "authorization",
+        format!("Bearer {key}").parse().expect("header"),
+    );
+    let (mut session, _) = tokio_tungstenite::connect_async(upgrade)
         .await
         .expect("open a data-plane session");
     session

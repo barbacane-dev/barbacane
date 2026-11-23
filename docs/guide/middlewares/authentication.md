@@ -122,7 +122,7 @@ The `client_secret` uses a secret reference (`env://`) which is resolved at gate
 | `client_id` | string | **required** | Client ID for introspection auth |
 | `client_secret` | string | **required** | Client secret for introspection auth |
 | `required_scopes` | string | - | Space-separated required scopes |
-| `timeout` | float | `5.0` | Introspection request timeout (seconds) |
+| `timeout` | float | `5.0` | Introspection request timeout (seconds), at most 60 |
 
 ### Context headers
 
@@ -173,7 +173,7 @@ x-barbacane-middlewares:
 | `issuer_override` | string | - | Override expected `iss` claim (for split-network setups like Docker). Empty means unset, so an `env://` reference to an empty variable falls back to the discovery issuer |
 | `clock_skew_seconds` | integer | `60` | Clock skew tolerance for `exp`/`nbf` validation |
 | `jwks_refresh_seconds` | integer | `300` | How long the discovery document and the JWKS are kept, shared by every request, before they are fetched again (seconds) |
-| `timeout` | float | `5.0` | HTTP timeout for discovery and JWKS calls (seconds) |
+| `timeout` | float | `5.0` | HTTP timeout for discovery and JWKS calls (seconds), at most 60 |
 | `allow_query_token` | boolean | `false` | Allow token extraction from the `access_token` query parameter ([RFC 6750 §2.3](https://datatracker.ietf.org/doc/html/rfc6750#section-2.3)). Use with caution — tokens in URLs risk leaking via logs and referer headers. |
 
 ### How it works

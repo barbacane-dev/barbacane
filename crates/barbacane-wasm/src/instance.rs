@@ -67,6 +67,17 @@ pub enum StreamEvent {
 ///
 /// The `body` field uses base64 encoding over JSON to support binary payloads
 /// (e.g. multipart/form-data with file uploads).
+/// Longest outbound HTTP call a plugin may ask for, in milliseconds. A call
+/// holds a blocking host thread while it waits, so a longer `timeout_ms` is cut
+/// to this.
+pub const MAX_PLUGIN_HTTP_TIMEOUT_MS: u64 = 60_000;
+
+/// The timeout a plugin's outbound HTTP call runs with: the one it asks for,
+/// never past [`MAX_PLUGIN_HTTP_TIMEOUT_MS`].
+fn plugin_http_timeout(timeout_ms: Option<u64>) -> Option<std::time::Duration> {
+    timeout_ms.map(|ms| std::time::Duration::from_millis(ms.min(MAX_PLUGIN_HTTP_TIMEOUT_MS)))
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct PluginHttpRequest {
     pub(crate) method: String,
@@ -100,10 +111,10 @@ fn namespace_key(plugin_name: &str, key: &str) -> String {
     format!("{plugin_name}\u{0}{key}")
 }
 
-/// The rate-limit bucket of `key` for one configured plugin instance: plugin
-/// entries with different configurations never share a bucket.
-fn rate_limit_key(plugin_name: &str, config_hash: &str, key: &str) -> String {
-    namespace_key(plugin_name, &format!("{config_hash}\u{0}{key}"))
+/// The rate-limit scope of one configured plugin instance: plugin entries with
+/// different configurations never share a bucket or a partition table.
+fn rate_limit_scope(plugin_name: &str, config_hash: &str) -> String {
+    namespace_key(plugin_name, config_hash)
 }
 
 /// Bounds-check a guest `(offset, size)` span against WASM linear memory for the
@@ -132,6 +143,12 @@ pub struct RequestContext {
     pub request_id: String,
 }
 
+/// The most values a request's context holds.
+pub const MAX_CONTEXT_ENTRIES: usize = 256;
+
+/// The most bytes, keys and values together, a request's context holds.
+pub const MAX_CONTEXT_BYTES: usize = 256 * 1024;
+
 impl RequestContext {
     /// Create a new request context.
     pub fn new(trace_id: String, request_id: String) -> Self {
@@ -141,6 +158,21 @@ impl RequestContext {
             trace_id,
             request_id,
         }
+    }
+
+    /// Set `key` to `value`, unless the context would then hold more than 256
+    /// values or 256 KiB. Returns whether it was set.
+    pub fn set(&mut self, key: String, value: String) -> bool {
+        let replaced = self.values.get(&key).map_or(0, |v| key.len() + v.len());
+        let bytes: usize = self.values.iter().map(|(k, v)| k.len() + v.len()).sum();
+        let entries = self.values.len() + usize::from(!self.values.contains_key(&key));
+        if entries > MAX_CONTEXT_ENTRIES
+            || bytes - replaced + key.len() + value.len() > MAX_CONTEXT_BYTES
+        {
+            return false;
+        }
+        self.values.insert(key, value);
+        true
     }
 }
 
@@ -167,6 +199,10 @@ pub struct PluginState {
     /// that time spent waiting on an upstream/broker doesn't count against the
     /// plugin's CPU-execution budget and spuriously trap the dispatch.
     pub max_execution_ms: u64,
+
+    /// Bytes `host_sha256` has hashed in the current call. Its time stops
+    /// counting against the deadline only up to twice the memory limit.
+    pub hashed_bytes: u64,
 
     /// HTTP client for outbound requests (shared).
     pub http_client: Option<Arc<HttpClient>>,
@@ -260,6 +296,7 @@ impl PluginState {
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
             max_execution_ms: limits.max_execution_ms,
+            hashed_bytes: 0,
             http_client: None,
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
@@ -334,10 +371,27 @@ impl wasmtime::ResourceLimiter for PluginState {
         desired: usize,
         _maximum: Option<usize>,
     ) -> Result<bool, wasmtime::Error> {
-        // Allow reasonable table growth
-        Ok(desired <= 10_000)
+        Ok(desired <= MAX_TABLE_ELEMENTS)
+    }
+
+    /// One instance per store: the plugin's.
+    fn instances(&self) -> usize {
+        1
+    }
+
+    /// One linear memory, which `max_memory` bounds.
+    fn memories(&self) -> usize {
+        1
+    }
+
+    /// One table, which [`MAX_TABLE_ELEMENTS`] bounds.
+    fn tables(&self) -> usize {
+        1
     }
 }
+
+/// The most elements a plugin's table may hold.
+const MAX_TABLE_ELEMENTS: usize = 10_000;
 
 /// A WASM plugin instance ready for execution.
 pub struct PluginInstance {
@@ -517,6 +571,7 @@ impl PluginInstance {
 
     /// Reset fuel and the wall-clock deadline to one call's budget.
     fn reset_budget(&mut self) {
+        self.store.data_mut().hashed_bytes = 0;
         if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
             tracing::warn!(error = %e, "failed to reset WASM fuel");
         }
@@ -590,22 +645,15 @@ impl PluginInstance {
     ) -> Result<i32, WasmError> {
         // Clear output buffer
         self.store.data_mut().output_buffer.clear();
+        self.store.data_mut().hashed_bytes = 0;
 
         // Reset fuel before write_to_memory — the `alloc` call runs plugin
         // code and needs fuel. Scale fuel with payload size: large bodies
         // require proportionally more instructions for serde + base64.
-        let fuel = self.limits.max_fuel.max(data.len() as u64 * 100);
+        let (fuel, deadline) = self.limits.call_budget(data.len());
         if let Err(e) = self.store.set_fuel(fuel) {
             tracing::warn!(error = %e, "failed to reset WASM fuel");
         }
-        // Reset the wall-clock deadline, scaled by the same factor as fuel so a
-        // large payload's extra serialization work isn't spuriously trapped.
-        let fuel_ratio = (fuel / self.limits.max_fuel.max(1)).max(1);
-        let deadline = self
-            .limits
-            .max_execution_ms
-            .max(1)
-            .saturating_mul(fuel_ratio);
         self.store.set_epoch_deadline(deadline);
 
         // Write data to memory (may call plugin's `alloc` export)
@@ -851,9 +899,7 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
         url: plugin_request.url,
         headers: plugin_request.headers.into_iter().collect(),
         body,
-        timeout: plugin_request
-            .timeout_ms
-            .map(std::time::Duration::from_millis),
+        timeout: plugin_http_timeout(plugin_request.timeout_ms),
     };
 
     let metrics = caller.data().metrics.clone();
@@ -1116,10 +1162,18 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     data_len,
                     out_ptr,
                 );
-                // A large input takes wall-clock time the plugin did not spend
-                // running; refresh the deadline as the blocking host calls do.
-                let deadline = caller.data().max_execution_ms.max(1);
-                caller.as_context_mut().set_epoch_deadline(deadline);
+                // Hashing the body takes wall-clock time the plugin did not
+                // spend running, so the deadline is refreshed, as the blocking
+                // host calls do, while the call has hashed at most twice its
+                // memory limit. Past that, hashing time counts.
+                let state = caller.data_mut();
+                state.hashed_bytes = state
+                    .hashed_bytes
+                    .saturating_add(u64::try_from(data_len).unwrap_or(0));
+                if state.hashed_bytes <= (state.max_memory as u64).saturating_mul(2) {
+                    let deadline = state.max_execution_ms.max(1);
+                    caller.as_context_mut().set_epoch_deadline(deadline);
+                }
                 match result {
                     Ok(()) => 0,
                     Err(_) => -1,
@@ -1230,7 +1284,13 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                         std::str::from_utf8(&data[val_start..val_end]).map(String::from);
 
                     if let (Ok(key), Ok(value)) = (key_result, val_result) {
-                        caller.data_mut().context.values.insert(key, value);
+                        let state = caller.data_mut();
+                        if !state.context.set(key, value) {
+                            tracing::warn!(
+                                plugin = %state.plugin_name,
+                                "request context full; the value is not set"
+                            );
+                        }
                     }
                 }
             },
@@ -1386,9 +1446,7 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     url: plugin_request.url,
                     headers: plugin_request.headers.into_iter().collect(),
                     body,
-                    timeout: plugin_request
-                        .timeout_ms
-                        .map(std::time::Duration::from_millis),
+                    timeout: plugin_http_timeout(plugin_request.timeout_ms),
                 };
 
                 let http_client = match caller.data().http_client.clone() {
@@ -1731,10 +1789,10 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                 };
 
                 let state = caller.data();
-                let namespaced = rate_limit_key(&state.plugin_name, &state.config_hash, &key);
+                let scope = rate_limit_scope(&state.plugin_name, &state.config_hash);
 
                 // Check the rate limit
-                let result = rate_limiter.check(&namespaced, quota, window_secs as u64);
+                let result = rate_limiter.check(&scope, &key, quota, window_secs as u64);
 
                 // Serialize the result
                 match serde_json::to_vec(&result) {
@@ -2614,6 +2672,52 @@ mod tests {
         assert_eq!(wasi_span(-1, 8, 64), None);
         assert_eq!(wasi_span(-8, 8, 64), None);
         assert_eq!(wasi_span(i32::MIN, 4, 64), None);
+    }
+
+    #[test]
+    fn a_plugin_http_timeout_is_cut_to_sixty_seconds() {
+        use std::time::Duration;
+        assert_eq!(plugin_http_timeout(None), None);
+        assert_eq!(
+            plugin_http_timeout(Some(500)),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            plugin_http_timeout(Some(60_000)),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            plugin_http_timeout(Some(900_000)),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            plugin_http_timeout(Some(u64::MAX)),
+            Some(Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn the_request_context_is_bounded() {
+        let mut context = RequestContext::new(String::new(), String::new());
+        assert!(context.set("a".into(), "x".repeat(MAX_CONTEXT_BYTES - 1)));
+        assert!(!context.set("b".into(), "y".into()), "past the byte bound");
+        assert!(
+            context.set("a".into(), "short".into()),
+            "a replacement frees its bytes"
+        );
+
+        let mut context = RequestContext::new(String::new(), String::new());
+        for i in 0..MAX_CONTEXT_ENTRIES {
+            assert!(context.set(format!("k{i}"), String::new()));
+        }
+        assert!(
+            !context.set("one-more".into(), String::new()),
+            "past the entry bound"
+        );
+        assert!(
+            context.set("k0".into(), "updated".into()),
+            "an existing key"
+        );
     }
 
     #[test]
