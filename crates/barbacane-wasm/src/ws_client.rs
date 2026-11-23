@@ -40,9 +40,12 @@ fn connect_timeout(requested_ms: u64) -> Duration {
 ///
 /// Returns the established WebSocket stream on success, or an error string
 /// on failure (to be stored in `last_http_result` for the plugin to read).
+/// A `ws://` URL is refused unless `allow_plaintext` is set
+/// (`--allow-plaintext-upstream`), as `http://` is for HTTP upstreams.
 pub async fn connect_upstream(
     req: WsUpgradeRequest,
     allow_internal_egress: bool,
+    allow_plaintext: bool,
 ) -> Result<UpstreamWsStream, String> {
     // SSRF guard: resolve the upstream host and refuse internal / loopback /
     // link-local / cloud-metadata targets unless egress is explicitly allowed.
@@ -52,6 +55,17 @@ pub async fn connect_upstream(
     // via its custom resolver, and which this mirrors for ws:// / wss://.
     let parsed = reqwest::Url::parse(&req.url)
         .map_err(|e| format!("invalid WebSocket URL '{}': {}", req.url, e))?;
+    match parsed.scheme() {
+        "wss" => {}
+        "ws" if allow_plaintext => {}
+        "ws" => {
+            return Err(format!(
+            "plaintext WebSocket upstream '{}' refused; use wss:// or --allow-plaintext-upstream",
+            req.url
+        ))
+        }
+        other => return Err(format!("'{other}' is not a WebSocket scheme")),
+    }
     let host = parsed
         .host_str()
         .ok_or_else(|| format!("WebSocket URL '{}' has no host", req.url))?;
@@ -77,7 +91,12 @@ pub async fn connect_upstream(
         .into_client_request()
         .map_err(|e| format!("invalid WebSocket URL '{}': {}", req.url, e))?;
 
+    // The handshake's Host, framing and upgrade headers are the client
+    // library's; a plugin's copy of the client's would override the URL's host.
     for (key, value) in &req.headers {
+        if crate::http_client::is_forbidden_outbound_header(key) {
+            continue;
+        }
         if let Ok(header_value) = HeaderValue::from_str(value) {
             if let Ok(header_name) =
                 tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(key.as_bytes())
@@ -123,13 +142,66 @@ mod tests {
         };
         // Egress disallowed: the SSRF guard must reject the loopback target
         // before any connection attempt.
-        let err = connect_upstream(req, false)
+        let err = connect_upstream(req, false, true)
             .await
             .expect_err("loopback must be blocked when egress is disallowed");
         assert!(
             err.contains("internal address"),
             "expected SSRF block, got: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod upstream_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_plaintext_upstream_needs_the_plaintext_flag() {
+        let req = WsUpgradeRequest {
+            url: "ws://chat.example/ws".to_string(),
+            connect_timeout_ms: 1000,
+            headers: BTreeMap::new(),
+        };
+        let err = connect_upstream(req, true, false)
+            .await
+            .expect_err("ws:// without the flag");
+        assert!(err.contains("--allow-plaintext-upstream"), "{err}");
+    }
+
+    /// The handshake names the URL's host, whatever `Host` the plugin passes.
+    #[tokio::test]
+    async fn the_handshake_names_the_upstream_host() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        let received = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = vec![0u8; 4096];
+            let n = socket.read(&mut request).await.expect("read");
+            String::from_utf8_lossy(&request[..n]).to_ascii_lowercase()
+        });
+
+        let mut headers = BTreeMap::new();
+        headers.insert("host".to_string(), "evil.example".to_string());
+        headers.insert("x-trace".to_string(), "kept".to_string());
+        let req = WsUpgradeRequest {
+            url: format!("ws://127.0.0.1:{port}/ws"),
+            connect_timeout_ms: 1000,
+            headers,
+        };
+        let _ = connect_upstream(req, true, true).await;
+
+        let request = received.await.expect("handshake read");
+        assert!(
+            request.contains(&format!("host: 127.0.0.1:{port}\r\n")),
+            "{request}"
+        );
+        assert!(!request.contains("evil.example"), "{request}");
+        assert!(request.contains("x-trace: kept\r\n"), "{request}");
     }
 }
 

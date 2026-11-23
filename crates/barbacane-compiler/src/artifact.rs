@@ -1236,10 +1236,10 @@ fn compile_inner(
                 ))
             })?;
 
-            // Check for plaintext HTTP upstream URLs (E1031)
+            // Check for plaintext HTTP and WebSocket upstream URLs (E1031)
             if !options.allow_plaintext {
                 let urls = extract_upstream_urls(&dispatch.config);
-                if let Some(url) = urls.iter().find(|u| u.starts_with("http://")) {
+                if let Some(url) = urls.iter().find(|u| is_plaintext_url(u)) {
                     return Err(CompileError::PlaintextUpstream(format!(
                         "{} {} in '{}' - upstream URL: {}",
                         op.method, op.path, spec_file, url
@@ -2066,6 +2066,12 @@ fn scan_plaintext_secrets(
         }
         _ => {}
     }
+}
+
+/// Whether a URL's scheme is `http` or `ws`, in any case.
+fn is_plaintext_url(url: &str) -> bool {
+    let url = url.trim_start().to_ascii_lowercase();
+    url.starts_with("http://") || url.starts_with("ws://")
 }
 
 /// The upstream URLs a dispatch config names: `url`, `upstream` when it is a
@@ -4321,6 +4327,46 @@ paths:
 
         let routes = load_routes(&output_path).unwrap();
         assert_eq!(routes.operations.len(), 2);
+    }
+
+    /// E1031 covers plaintext WebSocket URLs and any spelling of the scheme.
+    #[test]
+    fn compile_rejects_plaintext_websocket_and_upper_case_schemes() {
+        for (dispatcher, url) in [
+            ("ws-upstream", "ws://chat.internal:8080/ws"),
+            ("ws-upstream", "WS://chat.internal:8080/ws"),
+            ("http-upstream", "HTTP://backend.internal:8080"),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let spec_content = format!(
+                r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /proxy:
+    get:
+      x-barbacane-dispatch:
+        name: {dispatcher}
+        config:
+          url: "{url}"
+"#
+            );
+            let spec_path = create_test_spec(temp.path(), "test.yaml", &spec_content);
+            let output_path = temp.path().join("artifact.bca");
+            match compile(
+                &[spec_path.as_path()],
+                &[],
+                &output_path,
+                &CompileOptions::default(),
+            ) {
+                Err(CompileError::PlaintextUpstream(message)) => {
+                    assert!(message.contains(url), "{message}")
+                }
+                other => panic!("{url}: expected E1031, got {other:?}"),
+            }
+        }
     }
 
     /// E1031 applies to every endpoint of a pool, not only to `url`.

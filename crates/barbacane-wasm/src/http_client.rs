@@ -775,7 +775,7 @@ fn with_plugin_headers(
 /// HTTP client. Allowing a plugin to override any of these enables routing
 /// confusion or request smuggling. `authorization` is deliberately absent:
 /// dispatchers legitimately authenticate to their upstream.
-fn is_forbidden_outbound_header(name: &str) -> bool {
+pub(crate) fn is_forbidden_outbound_header(name: &str) -> bool {
     const FORBIDDEN: &[&str] = &[
         "host",
         "content-length",

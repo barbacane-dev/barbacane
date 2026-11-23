@@ -528,7 +528,7 @@ Errors you might see:
 |------------|---------|
 | E1010 | Routing conflict (same path+method in multiple specs) |
 | E1020 | Missing `x-barbacane-dispatch` on operation |
-| E1031 | Plaintext `http://` upstream URL (use HTTPS or `--allow-plaintext` at compile time) |
+| E1031 | Plaintext `http://` or `ws://` upstream URL (use HTTPS or WSS, or `--allow-plaintext` at compile time) |
 | E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards) |
 
 ### References

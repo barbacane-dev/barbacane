@@ -113,6 +113,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 
 ### Official plugins
 
+- `ws-upstream` follows the plaintext rules of `http-upstream`: a `ws://` URL needs `--allow-plaintext` to compile and `--allow-plaintext-upstream` to connect. The handshake sends the upstream URL's host as `Host`, not the client's.
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).
 - `cache`, `opa-authz`, `http-log` and `observability` now receive bodies, so a cache hit carries the body, `include_body` works, and body sizes are reported.
 - `ldap-auth` refuses a user in none of the `required_groups` with `urn:barbacane:error:authorization-failed` (see [Observability](#observability)).

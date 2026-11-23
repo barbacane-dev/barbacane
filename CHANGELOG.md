@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Upgrade note (breaking):** a rule whose `prefix` ends inside a segment (`/api/v` meant to match `/api/v1` and `/api/v2`) matches neither; write one rule per segment.
 - **ip-restriction**: an `allow` or `deny` entry that is not an IP address or a CIDR range (`203.0.113/24`, `10.0.0.0/33`) fails compilation with `E1023`, and fails the plugin's configuration if it reaches the gateway.
 - **basic-auth**: a credential entry whose password is empty, as written or as its secret reference resolves it, matches no request; the config schema requires a non-empty `password`.
+- **ws-upstream**: a `ws://` upstream fails compilation with `E1031` unless `--allow-plaintext`, and the gateway refuses to connect to one unless `--allow-plaintext-upstream`, as for `http://`; E1031 also matches the schemes in upper case. The WebSocket handshake's `Host` names the upstream URL's host, and the client's `Host`, framing and upgrade headers are not sent.
+  > **Upgrade note (breaking):** a spec with a `ws://` upstream compiles with `--allow-plaintext` and is served with `--allow-plaintext-upstream`, or moves to `wss://`.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security

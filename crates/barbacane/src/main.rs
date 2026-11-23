@@ -802,6 +802,8 @@ struct Gateway {
     /// (BARBACANE_ALLOW_INTERNAL_EGRESS). The HTTP/broker clients carry their own
     /// copy; this one guards WebSocket upstream connections.
     allow_internal_egress: bool,
+    /// Whether `ws://` upstreams are allowed (`--allow-plaintext-upstream`).
+    allow_plaintext_upstream: bool,
     /// WASM engine for plugin execution (kept alive for engine lifetime).
     _wasm_engine: Arc<WasmEngine>,
     /// Plugin instance pool.
@@ -1241,6 +1243,7 @@ impl Gateway {
             limits,
             dev_mode,
             allow_internal_egress,
+            allow_plaintext_upstream,
             _wasm_engine: wasm_engine,
             plugin_pool: Arc::new(plugin_pool),
             plugin_instance_pool,
@@ -2666,6 +2669,7 @@ impl Gateway {
                     let ws_upstream = match barbacane_wasm::ws_client::connect_upstream(
                         ws_request,
                         self.allow_internal_egress,
+                        self.allow_plaintext_upstream,
                     )
                     .await
                     {

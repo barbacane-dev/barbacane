@@ -882,8 +882,9 @@ Client: GET /ws/echo?token=abc → Upstream: wss://echo.internal:8443/?token=abc
 
 #### Security
 
-- **WSS in production**: Use `wss://` for encrypted upstream connections
-- **Development mode**: `ws://` URLs are allowed with `--allow-plaintext-upstream`
+- **WSS in production**: `ws://` URLs are rejected by the compiler (E1031) and refused by the gateway
+- **Development mode**: Use `--allow-plaintext` at compile time and `--allow-plaintext-upstream` at runtime
+- **Host**: the handshake's `Host` names the upstream URL's host; the client's `Host` is not sent
 - **Authentication**: Apply auth middleware (jwt-auth, oidc-auth, etc.) to protect WebSocket endpoints — middleware runs on the initial upgrade request
 
 ### fire-and-forget
@@ -1029,8 +1030,8 @@ Barbacane enforces HTTPS for upstream connections at two levels:
 
 | Flag | Command | Purpose |
 |------|---------|---------|
-| `--allow-plaintext` | `compile` | Allow `http://` URLs in spec (bypasses E1031 validation) |
-| `--allow-plaintext-upstream` | `serve` | Allow runtime HTTP client to connect to `http://` upstreams |
+| `--allow-plaintext` | `compile` | Allow `http://` and `ws://` URLs in spec (bypasses E1031 validation) |
+| `--allow-plaintext-upstream` | `serve` | Allow the gateway to connect to `http://` and `ws://` upstreams |
 
 **Why two flags?**
 
