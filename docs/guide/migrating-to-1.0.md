@@ -41,6 +41,7 @@ An artifact compiled without a manifest, with `barbacane_compiler::compile` from
 ### Requests the gateway treats differently
 
 - `HEAD` on a route declared for `GET` is answered like the `GET`, with no body, where it was 405.
+- A request whose path holds a `.` or `..` segment, in any spelling (`%2e%2e`, or one set apart by an encoded `%2F` or `%5C`), is answered `400` before routing. In `http-upstream` and `ws-upstream`, a path parameter fills only its own place in the `path` template: its value is percent-encoded, so `?`, `#` and `%` in it stay part of the path, and a value with a `.` or `..` segment answers `400`.
 - A client's `x-request-id` is kept only when it is at most 128 bytes of visible ASCII, and a `traceparent` yields the trace id only when well-formed; otherwise the gateway generates ids. Clients that sent longer ids see generated ones in `x-request-id`.
 - Only a request shaped as a WebSocket handshake (a `GET` with `Upgrade: websocket`, `Connection: upgrade` and `Sec-WebSocket-Key`) skips body handling. Any other request carrying an `Upgrade` header has its body read, validated and inspected like every request.
 - The request body must arrive within `--keepalive-timeout` seconds (60 by default), the deadline its headers already had; a body still incomplete at the deadline is answered `408` and the connection closed.
