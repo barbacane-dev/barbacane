@@ -429,8 +429,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # 0.12's test harness finds the gateway binary where cargo 1.99 puts it;
+      # cargo 1.100 builds it elsewhere, and every test that runs it fails.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           # Needed so barbacane-test's build.rs can compile the fixture WASM
           # plugins (streaming-echo, body-echo). Without the target it fails with
@@ -749,7 +751,9 @@ jobs:
   # UI E2E tests (Playwright)
   ui-e2e:
     name: UI E2E Tests
-    runs-on: ubuntu-latest
+    # Playwright 1.58 has no Chromium build for Ubuntu 26.04, which
+    # ubuntu-latest is.
+    runs-on: ubuntu-24.04
     needs: [changes, ui-tests]
     if: needs.changes.outputs.ui == 'true'
     defaults:
