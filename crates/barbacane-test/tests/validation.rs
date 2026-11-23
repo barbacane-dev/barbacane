@@ -309,3 +309,54 @@ async fn test_limits_body_size_exceeds_limit() {
         }
     }
 }
+
+/// Values are checked as the types their schemas name: a query parameter as
+/// an integer, cookies (an HTTP/2 client may send them in several fields), and
+/// the fields of a form body.
+#[tokio::test]
+async fn test_typed_parameters_cookies_and_form_fields_are_validated() {
+    let gateway = TestGateway::from_spec(&fixture("typed-values.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let get = |query: &str, cookies: &[&str]| {
+        let mut request = gateway.request_builder(reqwest::Method::GET, &format!("/items{query}"));
+        for cookie in cookies {
+            request = request.header("cookie", *cookie);
+        }
+        async move { request.send().await.unwrap().status().as_u16() }
+    };
+
+    assert_eq!(
+        get("?limit=10", &["session=0123abcd", "theme=dark"]).await,
+        200
+    );
+    assert_eq!(
+        get("?limit=10", &["session=0123abcd; theme=dark"]).await,
+        200
+    );
+    assert_eq!(
+        get("?limit=ten", &["session=0123abcd; theme=dark"]).await,
+        400
+    );
+    assert_eq!(
+        get("?limit=101", &["session=0123abcd; theme=dark"]).await,
+        400
+    );
+    assert_eq!(
+        get("", &["session=0123abcd"]).await,
+        400,
+        "required cookie missing"
+    );
+    assert_eq!(get("", &["session=zzz; theme=dark"]).await, 400);
+
+    let post = |body: &'static str| {
+        let request = gateway
+            .request_builder(reqwest::Method::POST, "/items")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body);
+        async move { request.send().await.unwrap().status().as_u16() }
+    };
+    assert_eq!(post("name=Ada&age=36").await, 201);
+    assert_eq!(post("name=Ada&age=old").await, 400);
+    assert_eq!(post("name=Ada").await, 400);
+}

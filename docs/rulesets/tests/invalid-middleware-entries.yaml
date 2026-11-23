@@ -1,0 +1,30 @@
+openapi: "3.1.0"
+info:
+  title: Malformed middleware entries
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: cors
+    confg:
+      allowed_origins: ["https://app.example"]
+paths:
+  /null-list:
+    get:
+      x-barbacane-middlewares: ~
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK
+  /not-a-list:
+    get:
+      x-barbacane-middlewares:
+        name: cors
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK

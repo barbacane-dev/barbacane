@@ -292,26 +292,39 @@ impl OidcError {
         }
     }
 
-    fn description(&self) -> String {
+    /// The text the client receives, in `WWW-Authenticate` and the body. It is
+    /// fixed per error, so no token or provider content reaches the header's
+    /// quoted string.
+    fn description(&self) -> &'static str {
         match self {
-            OidcError::MissingToken => "Bearer token required".to_string(),
-            OidcError::InvalidAuthHeader => "Invalid Authorization header format".to_string(),
-            OidcError::DiscoveryFailed(msg) => format!("OIDC discovery failed: {}", msg),
-            OidcError::JwksFetchFailed(msg) => format!("JWKS fetch failed: {}", msg),
-            OidcError::MalformedToken => "Malformed JWT token".to_string(),
-            OidcError::InvalidBase64 => "Invalid base64 encoding in token".to_string(),
-            OidcError::InvalidJson => "Invalid JSON in token".to_string(),
-            OidcError::KeyNotFound(kid) => format!("No matching key found (kid: {})", kid),
-            OidcError::SignatureInvalid => "Token signature verification failed".to_string(),
-            OidcError::SignatureVerificationFailed(msg) => {
-                format!("Signature verification error: {}", msg)
-            }
-            OidcError::TokenExpired => "Token has expired".to_string(),
-            OidcError::TokenNotYetValid => "Token is not yet valid".to_string(),
-            OidcError::InvalidIssuer => "Token issuer mismatch".to_string(),
-            OidcError::InvalidAudience => "Token audience mismatch".to_string(),
-            OidcError::InsufficientScope => "Token does not have required scopes".to_string(),
-            OidcError::UnsupportedAlgorithm(alg) => format!("Unsupported algorithm: {}", alg),
+            OidcError::MissingToken => "Bearer token required",
+            OidcError::InvalidAuthHeader => "Invalid Authorization header format",
+            OidcError::DiscoveryFailed(_) => "OIDC discovery failed",
+            OidcError::JwksFetchFailed(_) => "JWKS fetch failed",
+            OidcError::MalformedToken => "Malformed JWT token",
+            OidcError::InvalidBase64 => "Invalid base64 encoding in token",
+            OidcError::InvalidJson => "Invalid JSON in token",
+            OidcError::KeyNotFound(_) => "No matching key found",
+            OidcError::SignatureInvalid => "Token signature verification failed",
+            OidcError::SignatureVerificationFailed(_) => "Signature verification error",
+            OidcError::TokenExpired => "Token has expired",
+            OidcError::TokenNotYetValid => "Token is not yet valid",
+            OidcError::InvalidIssuer => "Token issuer mismatch",
+            OidcError::InvalidAudience => "Token audience mismatch",
+            OidcError::InsufficientScope => "Token does not have required scopes",
+            OidcError::UnsupportedAlgorithm(_) => "Unsupported algorithm",
+        }
+    }
+
+    /// The detail behind an error, for the gateway's log.
+    fn detail(&self) -> Option<String> {
+        match self {
+            OidcError::DiscoveryFailed(msg)
+            | OidcError::JwksFetchFailed(msg)
+            | OidcError::SignatureVerificationFailed(msg) => Some(msg.clone()),
+            OidcError::KeyNotFound(kid) => Some(format!("kid {kid:?}")),
+            OidcError::UnsupportedAlgorithm(alg) => Some(format!("alg {alg:?}")),
+            _ => None,
         }
     }
 
@@ -825,6 +838,12 @@ impl OidcAuth {
 
     /// Generate error response.
     fn error_response(&self, error: &OidcError) -> Response {
+        if let Some(detail) = error.detail() {
+            barbacane_plugin_sdk::log::warn(&format!(
+                "oidc-auth: {}: {detail}",
+                error.description()
+            ));
+        }
         let status = error.status_code();
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
@@ -1605,6 +1624,29 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], 403);
         assert_eq!(json["type"], "urn:barbacane:error:authorization-failed");
+    }
+
+    #[test]
+    fn token_content_never_reaches_the_challenge() {
+        let config = create_test_config();
+        let injected = "k\", error=\"none\", scope=\"admin";
+        for error in [
+            OidcError::KeyNotFound(injected.to_string()),
+            OidcError::UnsupportedAlgorithm(injected.to_string()),
+            OidcError::SignatureVerificationFailed(injected.to_string()),
+        ] {
+            let response = config.error_response(&error);
+            let www_auth = &response.headers["www-authenticate"];
+            assert_eq!(
+                www_auth,
+                &format!(
+                    "Bearer realm=\"api\", error=\"invalid_token\", error_description=\"{}\"",
+                    error.description()
+                )
+            );
+            let body = String::from_utf8(response.body.unwrap()).unwrap();
+            assert!(!body.contains("admin"), "{body}");
+        }
     }
 
     #[test]

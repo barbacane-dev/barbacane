@@ -424,6 +424,8 @@ A parameter with a `schema`, as AsyncAPI 2 writes it, is validated against that 
 
 Message payloads are validated against the schema before dispatch. Invalid messages receive a 400 response with validation details.
 
+A `send` operation's body is valid when it matches one of the operation's messages (the channel's messages when the operation names none) of its content type. A payload written as a Multi Format Schema Object is applied when its `schemaFormat` is JSON Schema, AsyncAPI or OpenAPI; a payload in another format (Avro, RAML, Protobuf) is not applied, and compilation warns with `E1073`.
+
 ### HTTP Method Mapping
 
 | AsyncAPI Action | HTTP Method |
@@ -528,8 +530,13 @@ Errors you might see:
 |------------|---------|
 | E1010 | Routing conflict (same path+method in multiple specs) |
 | E1020 | Missing `x-barbacane-dispatch` on operation |
-| E1031 | Plaintext `http://` upstream URL (use HTTPS or `--allow-plaintext` at compile time) |
+| E1031 | Plaintext `http://` or `ws://` upstream URL (use HTTPS or WSS, or `--allow-plaintext` at compile time) |
 | E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards) |
+
+### Request values
+
+- Path, query, header and cookie parameters are checked against their `schema`, each value read as the type the schema names: under `type: integer`, `?limit=10` is the integer `10` and `?limit=ten` fails validation; under `type: boolean`, `true` and `false` are booleans. A declared query parameter or cookie sent twice is refused.
+- A request body is checked when its content type is JSON (`application/json`, or a `+json` type), `application/x-www-form-urlencoded` or `multipart/form-data`. A form body is checked as the object its fields make, each field read as the type its property names; a field sent twice is an array, which only an `array` property accepts. A schema for another content type (XML, plain text) is not applied, and compilation warns with `E1073`.
 
 ### References
 

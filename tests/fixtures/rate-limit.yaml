@@ -26,6 +26,72 @@ paths:
         "429":
           description: Rate limit exceeded
 
+  /login:
+    get:
+      operationId: login
+      summary: Two requests an hour per client
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 2
+            window: 3600
+            policy_name: "login"
+            partition_key: "header:x-client-id"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+      responses:
+        "200":
+          description: Success
+        "429":
+          description: Rate limit exceeded
+
+  /items:
+    get:
+      operationId: listItems
+      summary: A hundred requests a second per client, on the same partition key as /login
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 100
+            window: 1
+            policy_name: "items"
+            partition_key: "header:x-client-id"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+      responses:
+        "200":
+          description: Success
+        "429":
+          description: Rate limit exceeded
+
+  /reports:
+    get:
+      operationId: listReports
+      summary: One request an hour per client, the same window and partition key as /login
+      x-barbacane-middlewares:
+        - name: rate-limit
+          config:
+            quota: 1
+            window: 3600
+            policy_name: "reports"
+            partition_key: "header:x-client-id"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message":"ok"}'
+      responses:
+        "200":
+          description: Success
+        "429":
+          description: Rate limit exceeded
+
   /unlimited:
     get:
       operationId: unlimitedEndpoint

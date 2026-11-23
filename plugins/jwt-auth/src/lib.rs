@@ -168,19 +168,21 @@ impl JwtError {
         }
     }
 
-    fn description(&self) -> String {
+    /// The text the client receives, in `WWW-Authenticate` and the body. It is
+    /// fixed per error, so no token content reaches the header's quoted string.
+    fn description(&self) -> &'static str {
         match self {
-            JwtError::MissingAuthHeader => "Bearer token required".to_string(),
-            JwtError::InvalidAuthHeader => "Invalid Authorization header format".to_string(),
-            JwtError::MalformedToken => "Malformed JWT token".to_string(),
-            JwtError::InvalidBase64 => "Invalid base64 encoding in token".to_string(),
-            JwtError::InvalidJson => "Invalid JSON in token".to_string(),
-            JwtError::TokenExpired => "Token has expired".to_string(),
-            JwtError::TokenNotYetValid => "Token is not yet valid".to_string(),
-            JwtError::InvalidIssuer => "Token issuer mismatch".to_string(),
-            JwtError::InvalidAudience => "Token audience mismatch".to_string(),
-            JwtError::UnsupportedAlgorithm(alg) => format!("Unsupported algorithm: {}", alg),
-            JwtError::SignatureInvalid => "Token signature verification failed".to_string(),
+            JwtError::MissingAuthHeader => "Bearer token required",
+            JwtError::InvalidAuthHeader => "Invalid Authorization header format",
+            JwtError::MalformedToken => "Malformed JWT token",
+            JwtError::InvalidBase64 => "Invalid base64 encoding in token",
+            JwtError::InvalidJson => "Invalid JSON in token",
+            JwtError::TokenExpired => "Token has expired",
+            JwtError::TokenNotYetValid => "Token is not yet valid",
+            JwtError::InvalidIssuer => "Token issuer mismatch",
+            JwtError::InvalidAudience => "Token audience mismatch",
+            JwtError::UnsupportedAlgorithm(_) => "Unsupported algorithm",
+            JwtError::SignatureInvalid => "Token signature verification failed",
         }
     }
 }
@@ -412,6 +414,9 @@ impl JwtAuth {
 
     /// Generate 401 Unauthorized response.
     fn unauthorized_response(&self, error: &JwtError) -> Response {
+        if let JwtError::UnsupportedAlgorithm(alg) = error {
+            barbacane_plugin_sdk::log::warn(&format!("jwt-auth: unsupported algorithm {alg:?}"));
+        }
         let mut headers = BTreeMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
 
@@ -935,6 +940,27 @@ mod tests {
         assert_eq!(json["title"], "Authentication failed");
         assert_eq!(json["type"], "urn:barbacane:error:authentication-failed");
         assert_eq!(json["detail"], "Bearer token required");
+    }
+
+    #[test]
+    fn token_content_never_reaches_the_challenge() {
+        let config = JwtAuth {
+            issuer: None,
+            audience: None,
+            clock_skew_seconds: 60,
+            groups_claim: None,
+            skip_signature_validation: true,
+            public_key_jwk: None,
+        };
+        let error =
+            JwtError::UnsupportedAlgorithm("x\", error=\"none\", scope=\"admin".to_string());
+        let response = config.unauthorized_response(&error);
+        assert_eq!(
+            response.headers["www-authenticate"],
+            "Bearer realm=\"api\", error=\"invalid_token\", error_description=\"Unsupported algorithm\""
+        );
+        let body = String::from_utf8(response.body.unwrap()).unwrap();
+        assert!(!body.contains("admin"), "{body}");
     }
 
     #[test]

@@ -674,7 +674,8 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     let extensions = extract_extensions(root_obj);
 
     // Extract global middlewares
-    let global_middlewares = extract_middlewares(root_obj);
+    let global_middlewares =
+        extract_middlewares(root_obj, "the document root")?.unwrap_or_default();
 
     // Security schemes and the root-level requirement they are referenced by
     let mut security_schemes = parse_security_schemes(&root)?;
@@ -763,16 +764,54 @@ fn extract_extensions(obj: &serde_json::Map<String, Value>) -> BTreeMap<String, 
         .collect()
 }
 
-/// Extract x-barbacane-middlewares from an object.
-fn extract_middlewares(obj: &serde_json::Map<String, Value>) -> Vec<MiddlewareConfig> {
-    obj.get("x-barbacane-middlewares")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                .collect()
+/// The keys a middleware entry may set.
+const MIDDLEWARE_ENTRY_KEYS: &[&str] = &["name", "config", "enabled"];
+
+/// The `x-barbacane-middlewares` of an object, `None` when it has none.
+/// `location` names the object in errors. A value that is not a list, or an
+/// entry that is not an object of the keys above with their types, is E1011.
+fn extract_middlewares(
+    obj: &serde_json::Map<String, Value>,
+    location: &str,
+) -> Result<Option<Vec<MiddlewareConfig>>, ParseError> {
+    let Some(value) = obj.get("x-barbacane-middlewares") else {
+        return Ok(None);
+    };
+    let Value::Array(entries) = value else {
+        return Err(ParseError::InvalidMiddleware(format!(
+            "x-barbacane-middlewares in {location} must be a list"
+        )));
+    };
+    entries
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| {
+            let at = || {
+                format!(
+                    "entry #{} of x-barbacane-middlewares in {location}",
+                    idx + 1
+                )
+            };
+            let Value::Object(fields) = entry else {
+                return Err(ParseError::InvalidMiddleware(format!(
+                    "{} must be an object",
+                    at()
+                )));
+            };
+            if let Some(key) = fields
+                .keys()
+                .find(|k| !MIDDLEWARE_ENTRY_KEYS.contains(&k.as_str()))
+            {
+                return Err(ParseError::InvalidMiddleware(format!(
+                    "{} sets unknown key '{key}' (expected name, config, enabled)",
+                    at()
+                )));
+            }
+            serde_json::from_value(entry.clone())
+                .map_err(|e| ParseError::InvalidMiddleware(format!("{}: {e}", at())))
         })
-        .unwrap_or_default()
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 /// Extract x-barbacane-dispatch from an operation object.
@@ -843,11 +882,8 @@ fn parse_openapi_paths(
 
                 let dispatch = extract_dispatch(op_obj);
 
-                let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
-                    Some(extract_middlewares(op_obj))
-                } else {
-                    None
-                };
+                let middlewares =
+                    extract_middlewares(op_obj, &format!("{} {}", method.to_uppercase(), path))?;
 
                 // Extract deprecated flag (standard OpenAPI field)
                 let deprecated = op_obj
@@ -919,11 +955,10 @@ fn parse_openapi_paths(
                 let responses = parse_responses(op_obj, spec_root, defs)?;
                 let dispatch = extract_dispatch(op_obj);
 
-                let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
-                    Some(extract_middlewares(op_obj))
-                } else {
-                    None
-                };
+                let middlewares = extract_middlewares(
+                    op_obj,
+                    &format!("{} {}", method_name.to_uppercase(), path),
+                )?;
 
                 let deprecated = op_obj
                     .get("deprecated")
@@ -1174,27 +1209,8 @@ fn parse_asyncapi_channels(
         // Parse operation-level messages (may override or filter channel messages)
         let messages = parse_operation_messages(op_obj, &channel_messages, spec_root, defs)?;
 
-        // For SEND operations, create a request body from the first message payload
-        let request_body = if method == "SEND" && !messages.is_empty() {
-            messages.first().and_then(|msg| {
-                msg.payload.as_ref().map(|schema| {
-                    let content_type = msg
-                        .content_type
-                        .clone()
-                        .unwrap_or_else(|| "application/json".to_string());
-                    let mut content = BTreeMap::new();
-                    content.insert(
-                        content_type,
-                        ContentSchema {
-                            schema: Some(schema.clone()),
-                        },
-                    );
-                    RequestBody {
-                        required: true,
-                        content,
-                    }
-                })
-            })
+        let request_body = if method == "SEND" {
+            send_request_body(&messages)
         } else {
             None
         };
@@ -1211,11 +1227,7 @@ fn parse_asyncapi_channels(
         let dispatch = extract_dispatch(op_obj);
 
         // Extract middlewares
-        let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
-            Some(extract_middlewares(op_obj))
-        } else {
-            None
-        };
+        let middlewares = extract_middlewares(op_obj, &format!("operation '{op_id}'"))?;
 
         // Extract deprecated and sunset
         let deprecated = op_obj
@@ -1563,6 +1575,63 @@ fn parse_channel_messages(
     Ok(messages)
 }
 
+/// The request body of a `send` operation: a body matches when it is one of
+/// the operation's messages. Per content type, the schema is the message's
+/// payload, or the `anyOf` of several; a message of that type without a
+/// payload the gateway applies leaves the type unconstrained. `None` when no
+/// message has such a payload.
+fn send_request_body(messages: &[Message]) -> Option<RequestBody> {
+    if messages.iter().all(|m| m.payload.is_none()) {
+        return None;
+    }
+    let mut by_type: BTreeMap<String, Option<Vec<Value>>> = BTreeMap::new();
+    for msg in messages {
+        let content_type = msg
+            .content_type
+            .clone()
+            .unwrap_or_else(|| "application/json".to_string());
+        let schemas = by_type
+            .entry(content_type)
+            .or_insert_with(|| Some(Vec::new()));
+        match (&msg.payload, schemas.as_mut()) {
+            (Some(payload), Some(list)) => list.push(payload.clone()),
+            (None, _) => *schemas = None,
+            (Some(_), None) => {}
+        }
+    }
+    let content = by_type
+        .into_iter()
+        .map(|(content_type, schemas)| {
+            let schema = schemas.map(|mut list| {
+                if list.len() == 1 {
+                    list.remove(0)
+                } else {
+                    serde_json::json!({ "anyOf": list })
+                }
+            });
+            (content_type, ContentSchema { schema })
+        })
+        .collect();
+    Some(RequestBody {
+        required: true,
+        content,
+    })
+}
+
+/// Whether a Multi Format Schema Object's `schemaFormat` is JSON Schema or a
+/// dialect of it: the AsyncAPI, JSON Schema and OpenAPI schema formats.
+fn is_json_schema_format(format: &str) -> bool {
+    let base = format
+        .split(';')
+        .next()
+        .unwrap_or(format)
+        .trim()
+        .to_ascii_lowercase();
+    base.starts_with("application/vnd.aai.asyncapi")
+        || base.starts_with("application/schema+")
+        || base.starts_with("application/vnd.oai.openapi")
+}
+
 /// Parse one message, following a Reference Object to the message it names.
 /// Returns `None` for an entry that is not an object.
 fn parse_message(
@@ -1578,10 +1647,26 @@ fn parse_message(
         return Ok(None);
     };
 
-    let payload = msg_obj
-        .get("payload")
-        .map(|p| resolve_schema(p, spec_root, defs))
-        .transpose()?;
+    // A Multi Format Schema Object names its format; a JSON Schema format is
+    // read as its `schema`, any other is recorded and not applied.
+    let (payload, payload_schema_format) = match msg_obj.get("payload") {
+        None => (None, None),
+        Some(p) => match p.get("schemaFormat").and_then(Value::as_str) {
+            None => (Some(resolve_schema(p, spec_root, defs)?), None),
+            Some(format) => {
+                let schema = p.get("schema").ok_or_else(|| {
+                    ParseError::SchemaError(format!(
+                        "message '{name}' has a payload with schemaFormat '{format}' and no schema"
+                    ))
+                })?;
+                if is_json_schema_format(format) {
+                    (Some(resolve_schema(schema, spec_root, defs)?), None)
+                } else {
+                    (None, Some(format.to_string()))
+                }
+            }
+        },
+    };
 
     let content_type = msg_obj
         .get("contentType")
@@ -1601,6 +1686,7 @@ fn parse_message(
     Ok(Some(Message {
         name,
         payload,
+        payload_schema_format,
         content_type,
         bindings,
     }))
@@ -1815,6 +1901,87 @@ paths:
         assert_eq!(param.name, "id");
         assert_eq!(param.location, "path");
         assert!(param.required);
+    }
+
+    /// A spec with a global `jwt-auth` and one operation whose
+    /// `x-barbacane-middlewares` is `value`.
+    fn spec_with_operation_middlewares(value: &str) -> String {
+        format!(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: https://issuer.example
+paths:
+  /admin:
+    get:
+      x-barbacane-middlewares: {value}
+      x-barbacane-dispatch:
+        name: mock
+"#
+        )
+    }
+
+    #[test]
+    fn a_malformed_middleware_list_is_refused() {
+        for (value, expected) in [
+            ("~", "must be a list"),
+            ("{ name: acl }", "must be a list"),
+            (
+                "[ acl ]",
+                "entry #1 of x-barbacane-middlewares in GET /admin must be an object",
+            ),
+            (
+                "[ { name: acl, confg: { allow: [admins] } } ]",
+                "unknown key 'confg'",
+            ),
+            (
+                "[ { config: { allow: [admins] } } ]",
+                "missing field `name`",
+            ),
+            (
+                "[ { name: acl }, { name: cors, enabled: \"no\" } ]",
+                "entry #2",
+            ),
+        ] {
+            let err = parse_spec(&spec_with_operation_middlewares(value))
+                .expect_err(value)
+                .to_string();
+            assert!(err.starts_with("E1011: "), "{value}: {err}");
+            assert!(err.contains(expected), "{value}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_global_middleware_entry_is_refused() {
+        let yaml = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: jwt-auth
+    confg: {}
+paths: {}
+"#;
+        let err = parse_spec(yaml).expect_err("unknown key").to_string();
+        assert!(
+            err.contains("in the document root sets unknown key 'confg'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_middleware_list_opts_out_of_the_global_chain() {
+        let spec = parse_spec(&spec_with_operation_middlewares("[]")).expect("parses");
+        assert!(spec.operations[0]
+            .middlewares
+            .as_ref()
+            .is_some_and(Vec::is_empty));
     }
 
     #[test]
@@ -2064,6 +2231,124 @@ operations:
         assert_eq!(op.messages.len(), 1);
         assert_eq!(op.messages[0].name, "UserSignedUpMessage");
         assert!(op.messages[0].payload.is_some());
+    }
+
+    /// The body schema a spec gives one content type of its first operation.
+    fn send_body_accepts(spec: &ApiSpec, content_type: &str, body: serde_json::Value) -> bool {
+        let schema = spec.operations[0]
+            .request_body
+            .as_ref()
+            .expect("body")
+            .content[content_type]
+            .schema
+            .as_ref()
+            .expect("schema");
+        crate::request_validator(schema, spec.schema_defs.as_ref())
+            .expect("validator")
+            .is_valid(&body)
+    }
+
+    #[test]
+    fn a_send_operation_accepts_any_of_its_messages() {
+        let yaml = r#"
+asyncapi: "3.0.0"
+info: { title: Orders, version: "1.0.0" }
+channels:
+  orders:
+    address: orders
+    messages:
+      Cancelled:
+        payload: { type: object, required: [reason], properties: { reason: { type: string } } }
+      Created:
+        payload: { type: object, required: [sku], properties: { sku: { type: string } } }
+      Raw:
+        contentType: text/plain
+operations:
+  publish:
+    action: send
+    channel: { $ref: '#/channels/orders' }
+    x-barbacane-dispatch: { name: nats, config: { subject: orders } }
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        assert!(send_body_accepts(
+            &spec,
+            "application/json",
+            serde_json::json!({"reason": "late"})
+        ));
+        assert!(send_body_accepts(
+            &spec,
+            "application/json",
+            serde_json::json!({"sku": "A1"})
+        ));
+        assert!(!send_body_accepts(
+            &spec,
+            "application/json",
+            serde_json::json!({"other": 1})
+        ));
+        let body = spec.operations[0].request_body.as_ref().unwrap();
+        assert!(
+            body.content["text/plain"].schema.is_none(),
+            "a message without a payload"
+        );
+    }
+
+    #[test]
+    fn a_multi_format_payload_is_read_by_its_format() {
+        let yaml = r#"
+asyncapi: "3.0.0"
+info: { title: Orders, version: "1.0.0" }
+channels:
+  orders:
+    address: orders
+    messages:
+      Created:
+        payload:
+          schemaFormat: application/schema+json;version=draft-07
+          schema: { type: object, required: [sku], properties: { sku: { type: string } } }
+  audit:
+    address: audit
+    messages:
+      Entry:
+        contentType: application/vnd.apache.avro+json
+        payload:
+          schemaFormat: application/vnd.apache.avro+json;version=1.9.0
+          schema: { type: record, name: Entry, fields: [ { name: id, type: string } ] }
+operations:
+  publish:
+    action: send
+    channel: { $ref: '#/channels/orders' }
+    x-barbacane-dispatch: { name: nats, config: { subject: orders } }
+  record:
+    action: send
+    channel: { $ref: '#/channels/audit' }
+    x-barbacane-dispatch: { name: nats, config: { subject: audit } }
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        let publish = spec
+            .operations
+            .iter()
+            .position(|o| o.path == "orders")
+            .unwrap();
+        let mut ordered = spec.clone();
+        ordered.operations.swap(0, publish);
+        assert!(send_body_accepts(
+            &ordered,
+            "application/json",
+            serde_json::json!({"sku": "A1"})
+        ));
+        assert!(!send_body_accepts(
+            &ordered,
+            "application/json",
+            serde_json::json!({})
+        ));
+
+        let record = spec.operations.iter().find(|o| o.path == "audit").unwrap();
+        assert!(record.messages[0].payload.is_none());
+        assert_eq!(
+            record.messages[0].payload_schema_format.as_deref(),
+            Some("application/vnd.apache.avro+json;version=1.9.0")
+        );
+        assert!(record.request_body.is_none());
     }
 
     #[test]

@@ -293,6 +293,11 @@ pub struct Message {
     pub name: String,
     /// Message payload schema.
     pub payload: Option<serde_json::Value>,
+    /// The `schemaFormat` of a payload written in a format other than JSON
+    /// Schema (Avro, RAML, Protobuf). Such a payload is not applied, and
+    /// `payload` is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_schema_format: Option<String>,
     /// Content type (e.g., "application/json").
     pub content_type: Option<String>,
     /// Protocol-specific bindings (kafka, nats, mqtt, amqp, ws, etc.).

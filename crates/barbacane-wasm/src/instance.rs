@@ -100,6 +100,12 @@ fn namespace_key(plugin_name: &str, key: &str) -> String {
     format!("{plugin_name}\u{0}{key}")
 }
 
+/// The rate-limit bucket of `key` for one configured plugin instance: plugin
+/// entries with different configurations never share a bucket.
+fn rate_limit_key(plugin_name: &str, config_hash: &str, key: &str) -> String {
+    namespace_key(plugin_name, &format!("{config_hash}\u{0}{key}"))
+}
+
 /// Bounds-check a guest `(offset, size)` span against WASM linear memory for the
 /// WASI stubs, using checked arithmetic so a negative or huge guest offset (an
 /// `i32` sign-extends to a large `usize`) cannot wrap past the check. Returns the
@@ -142,6 +148,10 @@ impl RequestContext {
 pub struct PluginState {
     /// Plugin name for logging.
     pub plugin_name: String,
+
+    /// Hash of the configuration this instance was initialised with; it scopes
+    /// the instance's rate-limit buckets.
+    pub config_hash: String,
 
     /// Output buffer for plugin results.
     pub output_buffer: Vec<u8>,
@@ -245,6 +255,7 @@ impl PluginState {
     pub fn new(plugin_name: String, limits: &PluginLimits) -> Self {
         Self {
             plugin_name,
+            config_hash: String::new(),
             output_buffer: Vec::new(),
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
@@ -650,6 +661,11 @@ impl PluginInstance {
     /// Set the registry host functions record metrics in.
     pub fn set_metrics(&mut self, metrics: Option<Arc<barbacane_telemetry::MetricsRegistry>>) {
         self.store.data_mut().metrics = metrics;
+    }
+
+    /// Set the hash of the configuration this instance runs with.
+    pub fn set_config_hash(&mut self, config_hash: &str) {
+        self.store.data_mut().config_hash = config_hash.to_string();
     }
 
     /// Set the request/response body for the next handler call (side-channel).
@@ -1714,10 +1730,8 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     }
                 };
 
-                // Namespace the partition key by the calling plugin so one plugin
-                // cannot exhaust the shared partition table for another, or collide
-                // on another plugin's victim key (rate-limiter isolation).
-                let namespaced = namespace_key(&caller.data().plugin_name, &key);
+                let state = caller.data();
+                let namespaced = rate_limit_key(&state.plugin_name, &state.config_hash, &key);
 
                 // Check the rate limit
                 let result = rate_limiter.check(&namespaced, quota, window_secs as u64);

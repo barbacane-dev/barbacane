@@ -102,6 +102,18 @@ fn validate_disabled_middleware_matching_no_global_exits_one() {
 }
 
 #[test]
+fn validate_a_null_middleware_list_exits_one() {
+    barbacane()
+        .args(["validate", "--spec"])
+        .arg(fixtures().join("invalid-middleware-entry.yaml"))
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(contains("E1011"))
+        .stderr(contains("GET /admin must be a list"));
+}
+
+#[test]
 fn validate_json_format_outputs_valid_json() {
     let output = barbacane()
         .args(["validate", "--spec"])

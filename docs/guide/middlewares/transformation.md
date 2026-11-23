@@ -345,7 +345,7 @@ x-barbacane-middlewares:
 | Property | Type | Description |
 |----------|------|-------------|
 | `path` | string | Exact path to match. Mutually exclusive with `prefix` |
-| `prefix` | string | Path prefix to match. The matched prefix is stripped and the remainder is appended to `target` |
+| `prefix` | string | Path prefix to match at a segment boundary. The matched prefix is stripped and the remainder is appended to `target` as a path below it |
 | `target` | string | **Required.** Redirect target URL or path |
 | `status_code` | integer | Override the top-level `status_code` for this rule |
 
@@ -355,7 +355,7 @@ If neither `path` nor `prefix` is set, the rule matches all requests (catch-all)
 
 - Rules are evaluated in order. The first matching rule wins.
 - **Exact match** (`path`): redirects only when the request path equals the value exactly.
-- **Prefix match** (`prefix`): strips the matched prefix and appends the remainder to `target`. For example, `prefix: /api/v1` with `target: /api/v2` redirects `/api/v1/users?page=2` to `/api/v2/users?page=2`.
+- **Prefix match** (`prefix`): strips the matched prefix and appends the remainder to `target`. For example, `prefix: /api/v1` with `target: /api/v2` redirects `/api/v1/users?page=2` to `/api/v2/users?page=2`. The prefix matches whole segments: `/api/v1` matches `/api/v1` and `/api/v1/users`, not `/api/v10`. Target and remainder are joined by exactly one `/`, and the slashes that open the remainder collapse into it, so the location stays below `target`: with `target: /`, `/api/v1//evil.example` redirects to `/evil.example`, a path on the same host.
 - **Catch-all**: omit both `path` and `prefix` to redirect all requests hitting the route.
 
 ### Status codes

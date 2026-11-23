@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
+
+use crate::coercion::{self, Coercion};
 use thiserror::Error;
 
 use barbacane_compiler::{Parameter, RequestBody};
@@ -336,6 +338,8 @@ pub struct OperationValidator {
     query_params: Vec<CompiledParam>,
     /// Header parameters with their compiled schemas.
     header_params: Vec<CompiledParam>,
+    /// Cookie parameters with their compiled schemas.
+    cookie_params: Vec<CompiledParam>,
     /// OpenAPI 3.2: querystring parameter (entire query string as single value).
     querystring_param: Option<CompiledParam>,
     /// Request body configuration.
@@ -346,12 +350,20 @@ struct CompiledParam {
     name: String,
     required: bool,
     schema: Option<jsonschema::Validator>,
+    /// How the parameter's text becomes the value its schema checks.
+    coercion: Coercion,
 }
 
 struct CompiledRequestBody {
     required: bool,
     /// Content type -> compiled schema
-    content: HashMap<String, Option<jsonschema::Validator>>,
+    content: HashMap<String, Option<CompiledBodySchema>>,
+}
+
+struct CompiledBodySchema {
+    validator: jsonschema::Validator,
+    /// How each form field becomes the value its property's schema checks.
+    fields: HashMap<String, Coercion>,
 }
 
 /// Validate a set of compiled parameters against a value lookup.
@@ -368,7 +380,7 @@ fn validate_params(
         match lookup(&param.name) {
             Some(value) => {
                 if let Some(schema) = &param.schema {
-                    let json_value = Value::String(value);
+                    let json_value = param.coercion.coerce(&value);
                     let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
                     if !validation_errors.is_empty() {
                         let reasons: Vec<String> =
@@ -417,6 +429,7 @@ impl OperationValidator {
         let mut path_params = Vec::new();
         let mut query_params = Vec::new();
         let mut header_params = Vec::new();
+        let mut cookie_params = Vec::new();
         let mut querystring_param = None;
 
         for param in parameters {
@@ -434,14 +447,21 @@ impl OperationValidator {
                         )
                     })
                     .transpose()?,
+                coercion: match (&param.schema, param.location.as_str()) {
+                    (Some(schema), loc) if loc != "querystring" => {
+                        Coercion::of(schema, schema_defs)
+                    }
+                    _ => Coercion::Text,
+                },
             };
 
             match param.location.as_str() {
                 "path" => path_params.push(compiled),
                 "query" => query_params.push(compiled),
                 "header" => header_params.push(compiled),
+                "cookie" => cookie_params.push(compiled),
                 "querystring" => querystring_param = Some(compiled),
-                _ => {} // Ignore cookie params for now
+                _ => {}
             }
         }
 
@@ -453,11 +473,14 @@ impl OperationValidator {
                         .schema
                         .as_ref()
                         .map(|s| {
-                            compile_schema_with_defs(
-                                s,
-                                schema_defs,
-                                &format!("request body ({media_type})"),
-                            )
+                            Ok::<_, String>(CompiledBodySchema {
+                                validator: compile_schema_with_defs(
+                                    s,
+                                    schema_defs,
+                                    &format!("request body ({media_type})"),
+                                )?,
+                                fields: coercion::form_fields(s, schema_defs),
+                            })
                         })
                         .transpose()?;
                     content.insert(media_type.clone(), schema);
@@ -474,6 +497,7 @@ impl OperationValidator {
             path_params,
             query_params,
             header_params,
+            cookie_params,
             querystring_param,
             request_body: compiled_body,
         })
@@ -595,6 +619,43 @@ impl OperationValidator {
         )
     }
 
+    /// Validate cookie parameters, read from the `Cookie` header. A declared
+    /// cookie sent twice is refused, as a repeated query parameter is.
+    pub fn validate_cookies(
+        &self,
+        headers: &HashMap<String, String>,
+    ) -> Result<(), Vec<ValidationError2>> {
+        if self.cookie_params.is_empty() {
+            return Ok(());
+        }
+        let pairs: Vec<(String, String)> = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+            .flat_map(|(_, value)| coercion::cookie_pairs(value))
+            .collect();
+
+        let errors: Vec<ValidationError2> = self
+            .cookie_params
+            .iter()
+            .filter(|p| pairs.iter().filter(|(name, _)| *name == p.name).count() > 1)
+            .map(|p| ValidationError2::InvalidParameter {
+                name: p.name.clone(),
+                location: "cookie".into(),
+                reason: "duplicate cookie is not allowed".into(),
+            })
+            .collect();
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        let cookies: HashMap<String, String> = pairs.into_iter().collect();
+        validate_params(
+            &self.cookie_params,
+            |name| cookies.get(name).cloned(),
+            "cookie",
+        )
+    }
+
     /// Validate request body.
     pub fn validate_body(
         &self,
@@ -631,26 +692,41 @@ impl OperationValidator {
             )]);
         };
 
-        // Validate JSON body against schema
-        if let Some(schema) = schema {
-            if base_ct.contains("json") {
-                let json_body: Value = match serde_json::from_slice(body) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(vec![ValidationError2::InvalidBody(format!(
-                            "invalid JSON: {}",
-                            e
-                        ))]);
-                    }
-                };
-
-                let validation_errors: Vec<_> = schema.iter_errors(&json_body).collect();
-                if !validation_errors.is_empty() {
-                    let reasons: Vec<String> =
-                        validation_errors.iter().map(|e| e.to_string()).collect();
-                    return Err(vec![ValidationError2::InvalidBody(reasons.join("; "))]);
+        // JSON bodies are checked as they are, form bodies as the object their
+        // fields make. A schema on another content type is not applied; the
+        // compiler warns of it.
+        let Some(schema) = schema else {
+            return Ok(());
+        };
+        let value: Value = if base_ct.contains("json") {
+            match serde_json::from_slice(body) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(vec![ValidationError2::InvalidBody(format!(
+                        "invalid JSON: {}",
+                        e
+                    ))]);
                 }
             }
+        } else if base_ct.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
+            coercion::form_object(coercion::urlencoded_pairs(body), &schema.fields)
+        } else if base_ct.eq_ignore_ascii_case("multipart/form-data") {
+            match coercion::multipart_pairs(ct, body) {
+                Ok(pairs) => coercion::form_object(pairs, &schema.fields),
+                Err(e) => {
+                    return Err(vec![ValidationError2::InvalidBody(format!(
+                        "invalid multipart body: {e}"
+                    ))]);
+                }
+            }
+        } else {
+            return Ok(());
+        };
+
+        let validation_errors: Vec<_> = schema.validator.iter_errors(&value).collect();
+        if !validation_errors.is_empty() {
+            let reasons: Vec<String> = validation_errors.iter().map(|e| e.to_string()).collect();
+            return Err(vec![ValidationError2::InvalidBody(reasons.join("; "))]);
         }
 
         Ok(())
@@ -670,6 +746,7 @@ impl OperationValidator {
         self.validate_query_params(query_string)?;
         self.validate_querystring(query_string)?;
         self.validate_headers(headers)?;
+        self.validate_cookies(headers)?;
         self.validate_body(content_type, body)?;
         Ok(())
     }
@@ -863,6 +940,162 @@ mod tests {
         // Present body
         let result = validator.validate_body(Some("application/json"), b"{}");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn a_typed_parameter_is_checked_as_its_type() {
+        let params = vec![
+            make_param(
+                "limit",
+                "query",
+                false,
+                Some(serde_json::json!({"type": "integer", "maximum": 100})),
+            ),
+            make_param(
+                "id",
+                "path",
+                true,
+                Some(serde_json::json!({"type": "integer"})),
+            ),
+            make_param(
+                "x-dry-run",
+                "header",
+                false,
+                Some(serde_json::json!({"type": "boolean"})),
+            ),
+        ];
+        let validator = OperationValidator::new(&params, None).unwrap();
+
+        assert!(validator.validate_query_params(Some("limit=10")).is_ok());
+        assert!(validator.validate_query_params(Some("limit=ten")).is_err());
+        assert!(validator.validate_query_params(Some("limit=101")).is_err());
+        assert!(validator
+            .validate_path_params(&[("id".into(), "42".into())])
+            .is_ok());
+        assert!(validator
+            .validate_path_params(&[("id".into(), "4x".into())])
+            .is_err());
+        let header = |v: &str| HashMap::from([("X-Dry-Run".to_string(), v.to_string())]);
+        assert!(validator.validate_headers(&header("true")).is_ok());
+        assert!(validator.validate_headers(&header("yes")).is_err());
+    }
+
+    #[test]
+    fn cookie_parameters_are_validated() {
+        let params = vec![
+            make_param(
+                "session",
+                "cookie",
+                true,
+                Some(serde_json::json!({"type": "string", "pattern": "^[a-f0-9]{8}$"})),
+            ),
+            make_param(
+                "page",
+                "cookie",
+                false,
+                Some(serde_json::json!({"type": "integer"})),
+            ),
+        ];
+        let validator = OperationValidator::new(&params, None).unwrap();
+        let cookie = |v: &str| HashMap::from([("cookie".to_string(), v.to_string())]);
+
+        assert!(validator
+            .validate_cookies(&cookie("session=0123abcd; page=2"))
+            .is_ok());
+        assert!(
+            validator.validate_cookies(&HashMap::new()).is_err(),
+            "required cookie missing"
+        );
+        assert!(validator.validate_cookies(&cookie("session=nope")).is_err());
+        assert!(validator
+            .validate_cookies(&cookie("session=0123abcd; page=two"))
+            .is_err());
+        assert!(
+            validator
+                .validate_cookies(&cookie("session=0123abcd; session=ffffffff"))
+                .is_err(),
+            "a declared cookie sent twice"
+        );
+        assert!(validator
+            .validate_request(&[], None, &cookie("page=2"), None, &[])
+            .is_err());
+    }
+
+    #[test]
+    fn form_bodies_are_validated_against_their_schema() {
+        use barbacane_compiler::ContentSchema;
+        use std::collections::BTreeMap;
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["name", "age"],
+            "properties": {
+                "name": { "type": "string", "maxLength": 8 },
+                "age": { "type": "integer", "minimum": 0 }
+            }
+        });
+        let mut content = BTreeMap::new();
+        for media_type in [
+            "application/x-www-form-urlencoded",
+            "multipart/form-data",
+            "application/xml",
+        ] {
+            content.insert(
+                media_type.to_string(),
+                ContentSchema {
+                    schema: Some(schema.clone()),
+                },
+            );
+        }
+        let request_body = RequestBody {
+            required: true,
+            content,
+        };
+        let validator = OperationValidator::new(&[], Some(&request_body)).unwrap();
+
+        let form = Some("application/x-www-form-urlencoded");
+        assert!(validator.validate_body(form, b"name=Ada&age=36").is_ok());
+        assert!(
+            validator.validate_body(form, b"name=Ada").is_err(),
+            "missing field"
+        );
+        assert!(validator.validate_body(form, b"name=Ada&age=old").is_err());
+        assert!(validator.validate_body(form, b"name=Ada&age=-1").is_err());
+        assert!(
+            validator
+                .validate_body(form, b"name=Ada&age=36&age=37")
+                .is_err(),
+            "repeated field"
+        );
+
+        let multipart = Some("multipart/form-data; boundary=b0undary");
+        let part = |name: &str, value: &str| {
+            format!(
+                "--b0undary\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+        };
+        let body = |parts: &[(&str, &str)]| {
+            let mut b: String = parts.iter().map(|(n, v)| part(n, v)).collect();
+            b.push_str("--b0undary--\r\n");
+            b.into_bytes()
+        };
+        assert!(validator
+            .validate_body(multipart, &body(&[("name", "Ada"), ("age", "36")]))
+            .is_ok());
+        assert!(validator
+            .validate_body(multipart, &body(&[("name", "Ada Lovelace"), ("age", "36")]))
+            .is_err());
+        assert!(validator
+            .validate_body(multipart, &body(&[("name", "Ada")]))
+            .is_err());
+        assert!(validator
+            .validate_body(multipart, b"--b0undary\r\nbroken")
+            .is_err());
+
+        // Not applied to other content types; the compiler warns of such a schema.
+        assert!(validator
+            .validate_body(Some("application/xml"), b"<a/>")
+            .is_ok());
     }
 
     #[test]

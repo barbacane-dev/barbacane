@@ -42,6 +42,7 @@ An artifact compiled without a manifest, with `barbacane_compiler::compile` from
 
 - `HEAD` on a route declared for `GET` is answered like the `GET`, with no body, where it was 405.
 - A request whose path holds a `.` or `..` segment, in any spelling (`%2e%2e`, or one set apart by an encoded `%2F` or `%5C`), is answered `400` before routing. In `http-upstream` and `ws-upstream`, a path parameter fills only its own place in the `path` template: its value is percent-encoded, so `?`, `#` and `%` in it stay part of the path, and a value with a `.` or `..` segment answers `400`.
+- More of a spec is enforced. Parameter values are checked as the type their schema names, so a `type: integer` parameter accepts `10` where every value answered 400. `in: cookie` parameters, `application/x-www-form-urlencoded` and `multipart/form-data` bodies are validated, so a client that sent a form or cookie the spec does not allow is answered 400. Compilation warns with `E1073` of a body schema still not applied.
 - A client's `x-request-id` is kept only when it is at most 128 bytes of visible ASCII, and a `traceparent` yields the trace id only when well-formed; otherwise the gateway generates ids. Clients that sent longer ids see generated ones in `x-request-id`.
 - Only a request shaped as a WebSocket handshake (a `GET` with `Upgrade: websocket`, `Connection: upgrade` and `Sec-WebSocket-Key`) skips body handling. Any other request carrying an `Upgrade` header has its body read, validated and inspected like every request.
 - The request body must arrive within `--keepalive-timeout` seconds (60 by default), the deadline its headers already had; a body still incomplete at the deadline is answered `408` and the connection closed.
@@ -71,6 +72,8 @@ A key the format does not have, at the top level or in a plugin entry, fails com
 An operation's middleware entry matches the global one by plugin name, without the `@version` suffix. A spec that named `rate-limit@0.1.0` globally and `rate-limit` on an operation ran both; the operation entry now replaces the global one. Check operations that meant to add a second instance of a plugin already in the global chain.
 
 `enabled: false` on an operation's entry drops that one global middleware and keeps the rest; `x-barbacane-middlewares: []` keeps dropping them all.
+
+`x-barbacane-middlewares` must be a list, and each entry an object setting only `name`, `config` and `enabled`. A `null` value, a misspelled key (`confg`) or a wrong type fails compilation with `E1011`; such entries were ignored.
 
 ### Schemas the gateway cannot build are errors
 
@@ -111,6 +114,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 
 ### Official plugins
 
+- `ws-upstream` follows the plaintext rules of `http-upstream`: a `ws://` URL needs `--allow-plaintext` to compile and `--allow-plaintext-upstream` to connect. The handshake sends the upstream URL's host as `Host`, not the client's.
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).
 - `cache`, `opa-authz`, `http-log` and `observability` now receive bodies, so a cache hit carries the body, `include_body` works, and body sizes are reported.
 - `ldap-auth` refuses a user in none of the `required_groups` with `urn:barbacane:error:authorization-failed` (see [Observability](#observability)).

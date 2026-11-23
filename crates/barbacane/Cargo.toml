@@ -50,6 +50,8 @@ hex = { workspace = true }
 notify = { workspace = true }
 tempfile = { workspace = true }
 ipnet = "2"
+form_urlencoded = "1.2"
+multer = "3.1"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }

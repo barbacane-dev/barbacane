@@ -28,8 +28,9 @@
           },
           "password": {
             "type": "string",
+            "minLength": 1,
             "writeOnly": true,
-            "description": "Password for this user. Supports secret references (e.g. env://MY_PASSWORD)."
+            "description": "Password for this user. Supports secret references (e.g. env://MY_PASSWORD). An entry whose password resolves to an empty value matches no request."
           },
           "roles": {
             "type": "array",

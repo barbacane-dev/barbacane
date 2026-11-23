@@ -1,0 +1,19 @@
+openapi: "3.1.0"
+info:
+  title: An operation whose middleware list is null
+  version: "1.0.0"
+
+x-barbacane-middlewares:
+  - name: correlation-id
+
+paths:
+  /admin:
+    get:
+      x-barbacane-middlewares: ~
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK

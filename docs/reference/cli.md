@@ -211,7 +211,7 @@ barbacane compile [--spec <FILES>...] --manifest <PATH> --output <PATH>
 | `--spec`, `-s` | No | - | One or more spec files (YAML or JSON). If omitted, discovers specs from the manifest's `specs` folder |
 | `--output`, `-o` | Yes | - | Output artifact path |
 | `--manifest`, `-m` | Yes | - | Path to `barbacane.yaml` manifest |
-| `--allow-plaintext` | No | `false` | Allow `http://` upstream URLs during compilation |
+| `--allow-plaintext` | No | `false` | Allow `http://` and `ws://` upstream URLs during compilation |
 | `--provenance-commit` | No | - | Git commit SHA to embed in artifact provenance metadata |
 | `--provenance-source` | No | - | Build source identifier (e.g., `ci/github-actions`) to embed in artifact provenance |
 | `--no-cache` | No | `false` | Bypass the plugin download cache entirely — remote plugins are re-downloaded and not cached |
@@ -249,14 +249,14 @@ plugins and builds an artifact.
 | E1003 | Spec validity | Unresolved `$ref` reference |
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
 | E1010 | Extension | Routing conflict (same path+method in multiple specs) |
-| E1011 | Extension | Middleware entry missing `name` |
+| E1011 | Extension | `x-barbacane-middlewares` is not a list, or an entry is not an object of `name` (string, required), `config` and `enabled` (boolean) |
 | E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
 | E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
 | E1016 | Plugin | A plugin imports a deprecated host function; it still loads until the release named in the [plugin guide](../contributing/plugins.md#deprecated-host-functions) (warning) |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
-| E1031 | Extension | Plaintext HTTP URL not allowed (use `--allow-plaintext` to override) |
+| E1031 | Extension | Plaintext `http://` or `ws://` upstream URL not allowed (use `--allow-plaintext` to override) |
 | E1032 | Security | An operation runs an authentication middleware that reads none of the schemes its `security` requirement names |
 | E1033 | Security | An operation requires a credential and runs no authentication middleware (warning) |
 | E1040 | Manifest | Plugin used in spec but not declared in `barbacane.yaml` |
@@ -268,6 +268,7 @@ plugins and builds an artifact.
 | E1059 | Schema | A request schema cannot be enforced: its `$schema` names neither a JSON Schema draft nor an OpenAPI dialect, it refers to a resource outside the spec, or it does not compile (an invalid `pattern`, for one) |
 | E1071 | Manifest | A plugin was bundled without its manifest or config schema, so its configured headers are not admitted (warning) |
 | E1072 | Security | A security scheme and an authentication plugin's configuration name different credential headers (warning) |
+| E1073 | Schema | A request body schema the gateway does not apply: one for a content type other than JSON and form bodies, or an AsyncAPI message payload in a format other than JSON Schema (warning) |
 
 ### Exit Codes
 
@@ -306,7 +307,7 @@ no artifact, so it reports only the codes that need neither.
 | E1002 | Spec validity | YAML/JSON parse error |
 | E1003 | Spec validity | Unresolved `$ref` reference |
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
-| E1011 | Extension | Middleware entry missing `name` |
+| E1011 | Extension | `x-barbacane-middlewares` is not a list, or an entry is not an object of `name` (string, required), `config` and `enabled` (boolean) |
 | E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
@@ -625,7 +626,7 @@ The examples below assume the key is set.
 | `--max-headers` | No | `100` | Maximum number of request headers |
 | `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
 | `--max-uri-length` | No | `8192` | Maximum URI length in bytes (8KB) |
-| `--allow-plaintext-upstream` | No | `false` | Allow `http://` upstream URLs (dev only) |
+| `--allow-plaintext-upstream` | No | `false` | Allow `http://` and `ws://` upstream URLs (dev only) |
 | `--allow-unsigned` | No | `false` | Load artifacts no trusted key has signed, when `BARBACANE_TRUSTED_PUBKEY` is unset (development and testing only; every load logs a warning) |
 | `--tls-cert` | No | - | Path to TLS certificate file (PEM format) |
 | `--tls-key` | No | - | Path to TLS private key file (PEM format) |
