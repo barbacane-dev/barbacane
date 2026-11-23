@@ -22,6 +22,17 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          # The whole history, to find the tagged commit on main.
+          fetch-depth: 0
+
+      # Every other job needs this one, so a `v*` tag on a commit that is not
+      # on main publishes nothing.
+      - name: Check the tagged commit is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA, which $GITHUB_REF names, is not on main"
+            exit 1
+          fi
 
       - name: Extract version from tag
         id: tag
@@ -114,8 +125,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
+          toolchain: "1.100.0"
           components: clippy
           targets: wasm32-unknown-unknown
 
@@ -176,13 +188,16 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
+          toolchain: "1.100.0"
           targets: ${{ matrix.target }}
 
       - name: Install cross
         if: matrix.cross
-        run: cargo install cross --locked --git https://github.com/cross-rs/cross --rev a9301e91f72b
+        # A development build, pinned by full commit; Cross.toml pins the
+        # images cross-rs built from the same commit.
+        run: cargo install cross --locked --git https://github.com/cross-rs/cross --rev a9301e91f72bba3850460512685f6b16062015ff
 
       - name: Build data plane with cargo
         if: ${{ !matrix.cross }}
@@ -213,7 +228,10 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Build container images per architecture using native runners
+  # Build container images per architecture using native runners. No build
+  # cache: the images are signed and published, so their only inputs are the
+  # checked-out sources and the pinned base images, not a cache another
+  # workflow can write to.
   build-containers:
     name: Build Containers (${{ matrix.platform }})
     needs: [validate-version, validate-changelog, verify]
@@ -229,6 +247,8 @@ jobs:
             suffix: arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    # The publishing secrets live in the `release` environment.
+    environment: release
     permissions:
       contents: read
       packages: write
@@ -267,8 +287,6 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
             docker.io/barbacane/barbacane:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
-          cache-from: type=gha,scope=barbacane-${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=barbacane-${{ matrix.suffix }}
 
       - name: Build and push control plane
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -280,8 +298,6 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
             docker.io/barbacane/barbacane-control:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
-          cache-from: type=gha,scope=barbacane-control-${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=barbacane-control-${{ matrix.suffix }}
 
       - name: Build and push standalone
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -293,8 +309,6 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
             docker.io/barbacane/barbacane-standalone:${{ steps.tag.outputs.version }}-${{ matrix.suffix }}
-          cache-from: type=gha,scope=barbacane-standalone-${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=barbacane-standalone-${{ matrix.suffix }}
 
   # Create multi-arch manifests combining platform-specific images
   create-manifests:
@@ -302,6 +316,7 @@ jobs:
     needs: [validate-version, build-containers]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment: release
     permissions:
       contents: read
       packages: write
@@ -360,8 +375,10 @@ jobs:
     uses: ./.github/workflows/sign-and-sbom.yml
     with:
       version: ${{ github.ref_name }}
-    # Only the registry credentials it declares. GITHUB_TOKEN is provided to
-    # called workflows automatically and does not need passing.
+    # Only the registry credentials it declares, while they are repository
+    # secrets; once they live in the `release` environment, the called job
+    # reads them there. GITHUB_TOKEN is provided to called workflows
+    # automatically and does not need passing.
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -423,13 +440,16 @@ jobs:
     needs: [validate-version, validate-changelog, verify, build-binaries, build-plugins, scan-containers, sign-and-sbom]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: release
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: "1.100.0"
 
       # Publish in dependency order (leaves first, roots last)
       # Wait between publishes for crates.io index to update
@@ -519,8 +539,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
+          toolchain: "1.100.0"
           targets: wasm32-unknown-unknown
 
       # No dependency cache. These plugins ship as release artifacts and are

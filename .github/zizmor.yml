@@ -3,11 +3,11 @@
 rules:
   unpinned-uses:
     config:
-      # Third-party actions are pinned to a full commit; a tag they control is
-      # a tag they can move. Actions published by GitHub itself are pinned to a
-      # major version, so security fixes arrive without a commit bump.
+      # Third-party actions are pinned to a full commit; a tag or branch they
+      # control is one they can move. Actions published by GitHub itself are
+      # pinned to a major version, so security fixes arrive without a commit
+      # bump.
       policies:
         actions/*: ref-pin
         github/*: ref-pin
-        dtolnay/rust-toolchain: ref-pin
         "*": hash-pin

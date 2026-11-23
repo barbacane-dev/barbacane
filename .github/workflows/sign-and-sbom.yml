@@ -4,10 +4,10 @@ name: Sign & SBOM
 # container images. Identity is the GitHub Actions OIDC token — no long-lived
 # signing keys (#87, option A).
 #
-# Two entry points:
-#   - workflow_call: invoked by release.yml after the multi-arch manifests exist.
-#   - workflow_dispatch: run manually against an already-published version to
-#     (re)sign it or to dry-run the mechanism (e.g. against the current release).
+# Called only by release.yml, from a `v*` tag, after the multi-arch manifests
+# exist. The certificate names this file at that tag, which is the identity
+# docs/reference/configuration.md tells users to verify. To sign again, re-run
+# the release's Sign & SBOM job.
 
 on:
   workflow_call:
@@ -18,15 +18,9 @@ on:
         type: string
     secrets:
       DOCKERHUB_USERNAME:
-        required: true
+        required: false
       DOCKERHUB_TOKEN:
-        required: true
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to sign, e.g. 0.8.0 (with or without leading v)"
-        required: true
-        type: string
+        required: false
 
 permissions:
   contents: read
@@ -36,8 +30,12 @@ permissions:
 jobs:
   sign:
     name: Sign & SBOM (${{ matrix.image }})
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Environment secrets, when the `release` environment holds the Docker Hub
+    # credentials, take the place of those the caller passes.
+    environment: release
     strategy:
       fail-fast: false
       matrix:

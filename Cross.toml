@@ -1,0 +1,12 @@
+# Images for the release binaries `cross` builds (.github/workflows/release.yml),
+# pinned by digest: cross-rs moves their `main` tag. Each is the image cross-rs
+# built from the commit release.yml installs cross at; bump both together.
+
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu@sha256:dbf985a1666e506cc1b27c6d4b1a757413eb4c17ce855c5647f24f3da54e7871"
+
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:de9ccd1ae2d7068f7a91d737a4a1b5464ee5ab06f9d22624f61c4ff0f754a8ac"
+
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:db510fe1196e43156e0fdffbe5e5e42a2c95e72b4e5471d48a4916770e6f370b"
