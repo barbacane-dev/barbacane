@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.3] - 2026-11-23
+
+Fixes for the vulnerabilities the pre-release review found, published as security advisories with this release, and plugin instances from Wasmtime's pooling allocator. Eight changes are breaking; each has an **Upgrade note (breaking)** below, and the [migration guide](docs/guide/migrating-to-1.0.md) gathers them. Upgrade data planes before the control plane. Artifacts move to format 9; the format 8 artifacts of rc.1 and rc.2 still load.
+
 ### Added
 
 - **data plane**: `--plugin-instance-pool` (`BARBACANE_PLUGIN_INSTANCE_POOL`, default 1000) sets how many plugin instances alive at once the gateway keeps memory set up for; `0` turns the pool off. Instances past it are allocated for their request alone. Each pool slot reserves about 4 GiB of virtual address space; where the host cannot reserve the pool, the gateway logs `cannot set up the plugin instance pool` and allocates every instance for its request (#422).
@@ -1113,7 +1117,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.2...HEAD
+[Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.3...HEAD
+[1.0.0-rc.3]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.2...v1.0.0-rc.3
 [1.0.0-rc.2]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.1...v1.0.0-rc.2
 [1.0.0-rc.1]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...v1.0.0-rc.1
 [0.12.5]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...v0.12.5
