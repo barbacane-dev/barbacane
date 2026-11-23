@@ -328,7 +328,17 @@ async fn revoking_an_api_key_closes_its_data_plane_sessions() {
     let key_id = key["id"].as_str().expect("key id").to_string();
 
     let ws_url = cp.url("/ws/data-plane").replacen("http", "ws", 1);
-    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url)
+    let mut upgrade = {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        ws_url.into_client_request().expect("request")
+    };
+    upgrade.headers_mut().insert(
+        "authorization",
+        format!("Bearer {}", key["key"].as_str().expect("key"))
+            .parse()
+            .expect("header"),
+    );
+    let (mut ws, _) = tokio_tungstenite::connect_async(upgrade)
         .await
         .expect("connect");
     let register = serde_json::json!({

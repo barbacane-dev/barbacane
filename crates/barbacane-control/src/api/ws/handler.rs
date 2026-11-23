@@ -5,7 +5,8 @@ use axum::{
         ws::{close_code, CloseFrame, Message, WebSocket},
         State, WebSocketUpgrade,
     },
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -28,18 +29,58 @@ use crate::api::router::AppState;
 use crate::db::{ApiKeysRepository, ArtifactsRepository, DataPlanesRepository, NewDataPlane};
 use sqlx::PgPool;
 
-/// WebSocket endpoint handler.
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+/// How long a data plane has, once upgraded, to send its registration.
+const REGISTRATION_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// WebSocket endpoint handler. The upgrade request carries the data plane's
+/// API key as a bearer token; a key that is unknown, expired or without the
+/// `data-plane:connect` scope is answered 401 before any upgrade, so a client
+/// without one holds no session.
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(token) = crate::api::auth::bearer_token(&headers) else {
+        return crate::api::auth::unauthorized("a data-plane API key is required");
+    };
+    let api_key = match ApiKeysRepository::new(state.pool.clone())
+        .validate_and_touch(token)
+        .await
+    {
+        Ok(Some(key))
+            if crate::api::auth::key_has_scope(
+                &key.scopes,
+                crate::api::auth::scopes::DATA_PLANE_CONNECT,
+            ) =>
+        {
+            key
+        }
+        Ok(_) => {
+            tracing::warn!("Data-plane upgrade refused: unknown, expired or unscoped API key");
+            return crate::api::auth::unauthorized("a valid data-plane API key is required");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to validate API key");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let token = token.to_string();
     ws.max_message_size(MAX_MESSAGE_BYTES)
         .max_frame_size(MAX_MESSAGE_BYTES)
-        .on_upgrade(|socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, state, api_key, token))
 }
 
-/// Handle an individual WebSocket connection.
-async fn handle_socket(socket: WebSocket, state: AppState) {
-    // Reserve a session slot up front so unauthenticated sockets can't pile up
-    // during the registration window. Held for the whole session (released on
-    // drop when this function returns).
+/// Handle an individual WebSocket connection, whose upgrade presented
+/// `api_key` as `token`.
+async fn handle_socket(
+    socket: WebSocket,
+    state: AppState,
+    api_key: crate::db::ApiKey,
+    token: String,
+) {
+    // A session slot, held from registration to the end of the session
+    // (released on drop when this function returns).
     let _session_permit = match state.connection_manager.try_acquire_session() {
         Some(permit) => permit,
         None => {
@@ -67,42 +108,17 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     };
 
-    // Validate API key
+    // The registration names the key the upgrade presented.
     let api_keys_repo = ApiKeysRepository::new(state.pool.clone());
-    let api_key = match api_keys_repo
-        .validate_and_touch(&registration.api_key)
-        .await
-    {
-        Ok(Some(key)) => key,
-        Ok(None) => {
-            tracing::warn!(project_id = %registration.project_id, "Registration refused: invalid or expired API key");
-            let _ = sender.send(to_ws_message(&registration_refused())).await;
-            return;
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to validate API key");
-            let msg = ControlPlaneMessage::RegistrationFailed {
-                reason: "Internal error".to_string(),
-            };
-            let _ = sender.send(to_ws_message(&msg)).await;
-            return;
-        }
-    };
-
-    // Verify project_id matches
-    if api_key.project_id != registration.project_id {
-        tracing::warn!(project_id = %registration.project_id, key_id = %api_key.id, "Registration refused: API key of another project");
+    if !same_key(&registration.api_key, &token) {
+        tracing::warn!(project_id = %registration.project_id, key_id = %api_key.id, "Registration refused: another API key than the upgrade's");
         let _ = sender.send(to_ws_message(&registration_refused())).await;
         return;
     }
 
-    // Enforce the data-plane:connect scope: a key valid for the project must
-    // also be authorized for this action (api_keys.scopes), not merely exist.
-    if !crate::api::auth::key_has_scope(
-        &api_key.scopes,
-        crate::api::auth::scopes::DATA_PLANE_CONNECT,
-    ) {
-        tracing::warn!(project_id = %registration.project_id, key_id = %api_key.id, "Registration refused: API key lacks the data-plane:connect scope");
+    // Verify project_id matches
+    if api_key.project_id != registration.project_id {
+        tracing::warn!(project_id = %registration.project_id, key_id = %api_key.id, "Registration refused: API key of another project");
         let _ = sender.send(to_ws_message(&registration_refused())).await;
         return;
     }
@@ -186,9 +202,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         "Data plane connected"
     );
 
+    // A data plane sends a heartbeat every interval; one that sends nothing for
+    // three is gone, though its connection may never report it.
+    let silence_limit = state.connection_manager.silence_limit();
+    let silence = tokio::time::sleep(silence_limit);
+    tokio::pin!(silence);
+
     // Main message loop
     loop {
         tokio::select! {
+            () = &mut silence => {
+                tracing::warn!(data_plane_id = %data_plane_id, "Data plane silent; ending the session");
+                end_session(&mut sender, "no message from the data plane").await;
+                break;
+            }
+
             // The API key was revoked through this control plane.
             _ = close.notified() => {
                 end_session(&mut sender, "API key revoked").await;
@@ -223,6 +251,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 
             // Messages from data plane
             result = receiver.next() => {
+                if matches!(result, Some(Ok(_))) {
+                    silence.as_mut().reset(tokio::time::Instant::now() + silence_limit);
+                }
                 match result {
                     Some(Ok(Message::Text(text))) => {
                         if let Err(e) = handle_message(
@@ -263,6 +294,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     tracing::info!(data_plane_id = %data_plane_id, "Data plane disconnected");
+}
+
+/// Whether two keys are the same, compared by their SHA-256 digests so the
+/// comparison's time says nothing of the key.
+fn same_key(a: &str, b: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(a.as_bytes()) == Sha256::digest(b.as_bytes())
 }
 
 /// The one answer to a registration the control plane refuses, whatever the
@@ -324,8 +362,7 @@ struct RegistrationInfo {
 async fn wait_for_registration(
     receiver: &mut futures_util::stream::SplitStream<WebSocket>,
 ) -> Option<Result<RegistrationInfo, &'static str>> {
-    // Timeout after 30 seconds
-    let timeout = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    let timeout = tokio::time::timeout(REGISTRATION_WINDOW, async {
         while let Some(result) = receiver.next().await {
             match result {
                 Ok(Message::Text(text)) => match serde_json::from_str::<DataPlaneMessage>(&text) {

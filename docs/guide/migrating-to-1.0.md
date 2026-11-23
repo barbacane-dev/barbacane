@@ -57,6 +57,7 @@ An artifact compiled without a manifest, with `barbacane_compiler::compile` from
 
 ### Connecting to the control plane
 
+- A data plane presents its API key on the WebSocket upgrade, and the control plane refuses an upgrade without a valid one. Upgrade the data planes before the control plane: a 1.0 data plane also registers with an older control plane.
 - The data plane reads its API key from `BARBACANE_CONTROL_API_KEY` (or `--api-key`). `BARBACANE_API_KEY` is not read.
 - A `ws://` link to a control plane on a host other than loopback is refused at start, since the link carries the API key: use `wss://` behind TLS, or pass `--allow-plaintext-control-plane` on a network you trust.
 - The data plane downloads deployed artifacts with its own API key. Nothing to configure; a 0.12 data plane could not download them at all.

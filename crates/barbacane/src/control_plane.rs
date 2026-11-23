@@ -74,6 +74,24 @@ pub enum ControlPlaneMessage {
 /// heartbeat. Process-wide, so a hot-reload does not reset it.
 pub static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+/// The upgrade request to the control plane at `url`, carrying `api_key` as a
+/// bearer token: the control plane checks it before upgrading.
+fn upgrade_request(
+    url: &str,
+    api_key: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::http::{header::AUTHORIZATION, HeaderValue};
+
+    let mut request = url
+        .into_client_request()
+        .map_err(|e| format!("invalid control plane URL: {e}"))?;
+    let bearer = HeaderValue::from_str(&format!("Bearer {api_key}"))
+        .map_err(|_| "the API key is not a valid header value".to_string())?;
+    request.headers_mut().insert(AUTHORIZATION, bearer);
+    Ok(request)
+}
+
 /// The heartbeat sent every period.
 fn heartbeat_message(
     artifact_id: Option<Uuid>,
@@ -247,8 +265,12 @@ impl ControlPlaneClient {
         artifact_id_rx: &watch::Receiver<Option<Uuid>>,
         drift_flag: &Arc<AtomicBool>,
     ) -> ConnectOutcome {
-        // Connect to WebSocket
-        let (ws_stream, _response) = match connect_async(&self.config.control_plane_url).await {
+        // Connect to WebSocket, presenting the API key on the upgrade.
+        let request = match upgrade_request(&self.config.control_plane_url, &self.config.api_key) {
+            Ok(request) => request,
+            Err(e) => return ConnectOutcome::ConnectionFailed(e),
+        };
+        let (ws_stream, _response) = match connect_async(request).await {
             Ok(conn) => conn,
             Err(e) => {
                 return ConnectOutcome::ConnectionFailed(format!(
@@ -526,6 +548,13 @@ fn heartbeat_period(interval_secs: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_upgrade_presents_the_api_key() {
+        let request = upgrade_request("wss://control.example/ws/data-plane", "bbk_key").unwrap();
+        assert_eq!(request.headers()["authorization"], "Bearer bbk_key");
+        assert!(upgrade_request("wss://control.example/ws/data-plane", "bad\nkey").is_err());
+    }
 
     #[test]
     fn a_zero_heartbeat_interval_becomes_one_second() {
