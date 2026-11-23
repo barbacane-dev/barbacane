@@ -112,7 +112,85 @@ enum SpecType {
     Unknown,
 }
 
-/// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
+/// A spec as the introspection endpoints serve it, in both formats.
+struct ServedSpec {
+    json: Bytes,
+    yaml: Bytes,
+}
+
+impl ServedSpec {
+    fn new(value: &serde_json::Value) -> Self {
+        Self {
+            json: Bytes::from(serde_json::to_string_pretty(value).unwrap_or_default()),
+            yaml: Bytes::from(barbacane_compiler::yaml::to_string(value).unwrap_or_default()),
+        }
+    }
+}
+
+/// What the introspection endpoints serve, built from the artifact's specs
+/// when it is loaded, so a request parses and serializes nothing.
+struct Introspection {
+    /// `/__barbacane/specs`.
+    index: Bytes,
+    /// `/__barbacane/specs/{file}`: each spec stripped of `x-barbacane-*`
+    /// keys, `None` for one that does not parse.
+    files: HashMap<String, Option<ServedSpec>>,
+    /// All embedded OpenAPI specs merged; none when the artifact holds none.
+    merged_openapi: Option<ServedSpec>,
+    /// All embedded AsyncAPI specs merged.
+    merged_asyncapi: Option<ServedSpec>,
+}
+
+impl Introspection {
+    fn new(specs: &HashMap<String, String>) -> Self {
+        let mut openapi_specs = Vec::new();
+        let mut asyncapi_specs = Vec::new();
+        let mut files = HashMap::with_capacity(specs.len());
+        for (name, content) in specs {
+            let entry = serde_json::json!({
+                "name": name,
+                "url": format!("/__barbacane/specs/{}", name),
+            });
+            match detect_spec_type(content) {
+                SpecType::OpenApi => openapi_specs.push(entry),
+                SpecType::AsyncApi => asyncapi_specs.push(entry),
+                SpecType::Unknown => {}
+            }
+            let served = match barbacane_compiler::yaml::from_str::<serde_json::Value>(content) {
+                Ok(mut value) => {
+                    strip_barbacane_keys_recursive(&mut value);
+                    Some(ServedSpec::new(&value))
+                }
+                Err(e) => {
+                    tracing::error!(spec = %name, error = %e, "spec cannot be parsed for serving");
+                    None
+                }
+            };
+            files.insert(name.clone(), served);
+        }
+        let index = serde_json::json!({
+            "openapi": {
+                "specs": openapi_specs,
+                "count": openapi_specs.len(),
+                "merged_url": "/__barbacane/specs/openapi"
+            },
+            "asyncapi": {
+                "specs": asyncapi_specs,
+                "count": asyncapi_specs.len(),
+                "merged_url": "/__barbacane/specs/asyncapi"
+            }
+        });
+        Self {
+            index: Bytes::from(index.to_string()),
+            files,
+            merged_openapi: merged_specs(specs, SpecType::OpenApi, merge_openapi_specs)
+                .map(|v| ServedSpec::new(&v)),
+            merged_asyncapi: merged_specs(specs, SpecType::AsyncApi, merge_asyncapi_specs)
+                .map(|v| ServedSpec::new(&v)),
+        }
+    }
+}
+
 /// The specs of `kind` in `specs` merged with `merge`, or `None` when there
 /// is none.
 fn merged_specs(
@@ -127,6 +205,7 @@ fn merged_specs(
     (!of_kind.is_empty()).then(|| merge(&of_kind))
 }
 
+/// Detect whether a spec is OpenAPI or AsyncAPI by checking root keys.
 fn detect_spec_type(content: &str) -> SpecType {
     // Try to parse as YAML (also handles JSON)
     let parsed: Result<serde_json::Value, _> = barbacane_compiler::yaml::from_str(content);
@@ -788,13 +867,8 @@ struct Gateway {
     /// WAF stage, when the artifact carries a rule set. Compiled once at
     /// startup; evaluation borrows it.
     waf: Option<waf::WafStage>,
-    /// Source specs embedded in the artifact (filename -> content).
-    specs: HashMap<String, String>,
-    /// All embedded OpenAPI specs merged, for `/__barbacane/specs/openapi`;
-    /// none when the artifact holds no OpenAPI spec.
-    merged_openapi: Option<serde_json::Value>,
-    /// All embedded AsyncAPI specs merged, for `/__barbacane/specs/asyncapi`.
-    merged_asyncapi: Option<serde_json::Value>,
+    /// What the introspection endpoints serve, built once at load.
+    introspection: Introspection,
     /// Request limits (body size, headers, URI length).
     limits: RequestLimits,
     dev_mode: bool,
@@ -1226,20 +1300,16 @@ impl Gateway {
             .collect();
         balancer.retain(&pools);
 
-        // The merged specs are built once here, not on each introspection
-        // request.
-        let merged_openapi = merged_specs(&specs, SpecType::OpenApi, merge_openapi_specs);
-        let merged_asyncapi = merged_specs(&specs, SpecType::AsyncApi, merge_asyncapi_specs);
+        // Parsed and serialized here, not on each introspection request.
+        let introspection = Introspection::new(&specs);
 
         Ok(Gateway {
-            merged_openapi,
-            merged_asyncapi,
+            introspection,
             manifest,
             router,
             operations: resolved_operations,
             validators,
             waf: waf_stage,
-            specs,
             limits,
             dev_mode,
             allow_internal_egress,
@@ -2836,98 +2906,54 @@ impl Gateway {
         response
     }
 
-    /// Build the specs index response (always JSON).
+    /// The specs index (always JSON).
     fn specs_index_response(&self) -> Response<Full<Bytes>> {
-        let mut openapi_specs = Vec::new();
-        let mut asyncapi_specs = Vec::new();
-
-        for (name, content) in &self.specs {
-            let spec_type = detect_spec_type(content);
-            let entry = serde_json::json!({
-                "name": name,
-                "url": format!("/__barbacane/specs/{}", name),
-            });
-            match spec_type {
-                SpecType::OpenApi => openapi_specs.push(entry),
-                SpecType::AsyncApi => asyncapi_specs.push(entry),
-                SpecType::Unknown => {} // Skip unknown specs
-            }
-        }
-
-        let body = serde_json::json!({
-            "openapi": {
-                "specs": openapi_specs,
-                "count": openapi_specs.len(),
-                "merged_url": "/__barbacane/specs/openapi"
-            },
-            "asyncapi": {
-                "specs": asyncapi_specs,
-                "count": asyncapi_specs.len(),
-                "merged_url": "/__barbacane/specs/asyncapi"
-            }
-        });
-
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body.to_string())))
+            .body(Full::new(self.introspection.index.clone()))
             .expect("valid response")
     }
 
-    /// Serve the merged OpenAPI spec, merged once at load.
+    /// Serve the merged OpenAPI spec.
     fn merged_openapi_response(&self, format: &str) -> Response<Full<Bytes>> {
-        match &self.merged_openapi {
+        match &self.introspection.merged_openapi {
             Some(merged) => self.serve_spec_content(merged, format),
             None => self.not_found_response(),
         }
     }
 
-    /// Serve the merged AsyncAPI spec, merged once at load.
+    /// Serve the merged AsyncAPI spec.
     fn merged_asyncapi_response(&self, format: &str) -> Response<Full<Bytes>> {
-        match &self.merged_asyncapi {
+        match &self.introspection.merged_asyncapi {
             Some(merged) => self.serve_spec_content(merged, format),
             None => self.not_found_response(),
         }
     }
 
     /// Serve spec content in requested format.
-    fn serve_spec_content(&self, value: &serde_json::Value, format: &str) -> Response<Full<Bytes>> {
+    fn serve_spec_content(&self, spec: &ServedSpec, format: &str) -> Response<Full<Bytes>> {
         let (content, content_type) = if format == "json" {
-            (
-                serde_json::to_string_pretty(value).unwrap_or_default(),
-                "application/json",
-            )
+            (spec.json.clone(), "application/json")
         } else {
-            (
-                barbacane_compiler::yaml::to_string(value).unwrap_or_default(),
-                "text/yaml",
-            )
+            (spec.yaml.clone(), "text/yaml")
         };
 
         Response::builder()
             .status(StatusCode::OK)
             .header("content-type", content_type)
-            .body(Full::new(Bytes::from(content)))
+            .body(Full::new(content))
             .expect("valid response")
     }
 
-    /// Serve a specific spec file, parsed and stripped of `x-barbacane-*`
-    /// extensions. It is read with the compiler's parser, which takes YAML and
-    /// JSON alike whatever the file name says. A spec that does not parse is
-    /// not served: its source carries the gateway configuration.
+    /// Serve a specific spec file, stripped of `x-barbacane-*` extensions. A
+    /// spec that does not parse is not served: its source carries the gateway
+    /// configuration.
     fn spec_file_response(&self, filename: &str, format: &str) -> Response<Full<Bytes>> {
-        let Some(content) = self.specs.get(filename) else {
-            return self.not_found_response();
-        };
-        match barbacane_compiler::yaml::from_str::<serde_json::Value>(content) {
-            Ok(mut value) => {
-                strip_barbacane_keys_recursive(&mut value);
-                self.serve_spec_content(&value, format)
-            }
-            Err(e) => {
-                tracing::error!(spec = %filename, error = %e, "spec cannot be parsed for serving");
-                self.internal_error_response(Some("the spec cannot be parsed"))
-            }
+        match self.introspection.files.get(filename) {
+            None => self.not_found_response(),
+            Some(Some(spec)) => self.serve_spec_content(spec, format),
+            Some(None) => self.internal_error_response(Some("the spec cannot be parsed")),
         }
     }
 
@@ -6671,6 +6697,36 @@ mod request_header_map_tests {
 
         assert_eq!(map["cookie"], "a=1; b=2");
         assert_eq!(map["x-tag"], "last");
+    }
+}
+
+#[cfg(test)]
+mod introspection_tests {
+    use super::Introspection;
+    use std::collections::HashMap;
+
+    #[test]
+    fn the_served_specs_are_built_at_load() {
+        let specs = HashMap::from([
+            (
+                "api.yaml".to_string(),
+                "openapi: 3.1.0\ninfo: {title: A, version: '1'}\nx-barbacane-middlewares: []\npaths: {}\n"
+                    .to_string(),
+            ),
+            ("broken.yaml".to_string(), "openapi: [unclosed".to_string()),
+        ]);
+        let built = Introspection::new(&specs);
+
+        let index: serde_json::Value = serde_json::from_slice(&built.index).unwrap();
+        assert_eq!(index["openapi"]["count"], 1);
+        let api = built.files["api.yaml"].as_ref().expect("parsed");
+        let json: serde_json::Value = serde_json::from_slice(&api.json).unwrap();
+        assert_eq!(json["info"]["title"], "A");
+        assert!(json.get("x-barbacane-middlewares").is_none(), "stripped");
+        assert!(String::from_utf8_lossy(&api.yaml).contains("title: A"));
+        assert!(built.files["broken.yaml"].is_none());
+        assert!(built.merged_openapi.is_some());
+        assert!(built.merged_asyncapi.is_none());
     }
 }
 

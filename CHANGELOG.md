@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WebSocket**: a relayed WebSocket keeps its connection's place under `--max-connections` until the relay ends, and a relay through which no frame, pings included, crosses in either direction for 5 minutes is closed with a Close 1001 to both peers.
 - **control plane**: a data plane's WebSocket upgrade carries its API key as `Authorization: Bearer`, and the control plane answers `401` to an unknown, expired or unscoped key before upgrading, so a client without a key holds no session; the registration that follows names the same key, within 10 seconds. A registered session that receives nothing for three heartbeat intervals is ended.
   > **Upgrade note (breaking):** upgrade the data planes before the control plane: a 1.0 control plane refuses a data plane that does not send its key on the upgrade, and a 1.0 data plane also registers with an older control plane.
+- **data plane**: the introspection endpoints (`/__barbacane/specs` and the specs under it) are built when the artifact is loaded, each spec parsed, stripped and serialized in JSON and YAML once, so a request parses nothing.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security
