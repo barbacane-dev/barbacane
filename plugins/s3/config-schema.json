@@ -52,6 +52,12 @@
       "type": "string",
       "description": "Fallback object key for SPA routing. When set, a 404 on a GET request triggers a second S3 fetch with this key (e.g. index.html)."
     },
+    "query_params": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Query parameters forwarded to S3, by name as the client writes them; they are signed with the gateway's credentials. Other query parameters are dropped. Ignored when fallback_key is set."
+    },
     "timeout": {
       "type": "number",
       "default": 30,

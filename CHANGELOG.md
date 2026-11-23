@@ -11,13 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **data plane**: `--plugin-instance-pool` (`BARBACANE_PLUGIN_INSTANCE_POOL`, default 1000) sets how many plugin instances alive at once the gateway keeps memory set up for; `0` turns the pool off. Instances past it are allocated for their request alone. Each pool slot reserves about 4 GiB of virtual address space; where the host cannot reserve the pool, the gateway logs `cannot set up the plugin instance pool` and allocates every instance for its request (#422).
 - **metrics**: `barbacane_wasm_instances`, the plugin instances alive, and `barbacane_wasm_instances_unpooled_total`, the instances allocated per request because the pool was full (#422).
+- **plugin SDK**: `path::fill_path_template` fills a path template from a request's path parameters, each value percent-encoded part by part, and returns `DotSegmentParam` for a value with a `.` or `..` segment.
+- **s3**: `query_params` lists the query parameters forwarded to S3, by name as the client writes them (for example `[versionId]`); they are signed with the gateway's credentials.
+- **plugin SDK**: `forwarding::upstream_headers` gives a request's headers to send to a backend: without hop-by-hop headers and the client's `X-Forwarded-For`, `X-Real-IP` and `Forwarded`, and with `X-Forwarded-For` and `X-Real-IP` set to `client_ip`.
 
 ### Changed
 
 - **wasm runtime**: plugin instances come from Wasmtime's pooling allocator. Each instance mapped its linear memory when it was created and unmapped it when its request ended, and the kernel time that took (memory-map locks, TLB shootdowns, page faults) was over half the gateway's CPU under load. On Linux 6.7 and later, up to 256 KiB of the pages an instance wrote are cleared in place for the slot's next instance (`PAGEMAP_SCAN`), and the rest are returned to the kernel; on earlier kernels all are returned. In a benchmark (wrk, 64 connections, routes behind two middlewares, Linux 7.0), the gateway served 2.0x the requests on a mock route and 1.5x on a proxied one, and the mock route's p99 went from 43-51 ms to 26-27 ms; with every page returned, as on earlier kernels, 1.7x and 1.4x. Resident memory after the load was 126 MiB, against 80 to 117 MiB: the pool keeps the slots it used. A module whose memory or table cannot fit a pool slot is compiled for per-request allocation and logged as `plugin does not fit the instance pool` (#422).
+- **s3**: a client's query parameters reach S3 only when `query_params` lists them; the others are dropped.
+  > **Upgrade note (breaking):** a route whose clients send query parameters meant for S3 (`versionId`, `response-content-type`, `partNumber`) lists them in `query_params`.
 
 ### Fixed
 
+- **data plane**: a request whose path holds a `.` or `..` segment, in any spelling (`..`, `%2e%2e`, `.%2E`, or one that a decoded `%2F` or `%5C` sets apart), answers `400` (`urn:barbacane:error:bad-request`) before routing.
+- **http-upstream, ws-upstream**: a path parameter fills only its own place in the `path` template. Its value is percent-encoded part by part (a `/` stays a separator, so `{param+}` wildcards keep their segments), so `?`, `#`, `;`, `%` and `{` in it stay part of the path, and a value with a `.` or `..` segment answers `400`. Each `{name}` is filled once, so a value no longer fills another parameter's place.
+- **s3**: a bucket taken from a path parameter must follow S3's naming rules (3 to 63 lowercase letters, digits, `.` or `-`, starting and ending with a letter or digit, not an IP address); another value answers `400` (`invalid bucket name`). A key with a `.` or `..` segment answers `400` (`invalid key`). The key is sent percent-encoded exactly as it is signed, so `?`, `#` and `%` in a key are part of the key.
+- **request-transformer**: a body `add` value taken from the request is written as a JSON number or boolean when it reads as one, and as a string otherwise. A header, query parameter, cookie or path parameter holding `{...}`, `[...]` or `null` is written as that text, not as an object, array or null.
+- **http-upstream, ws-upstream, lambda, fire-and-forget**: the backend receives `X-Forwarded-For` and `X-Real-IP` set to the client address the gateway resolved (the peer, or the address a proxy in `--trusted-proxies` reported). The client's own `X-Forwarded-For`, `X-Real-IP` and `Forwarded` are no longer sent.
+  > **Upgrade note (breaking):** a backend that read the client from a chain a proxy in front of the gateway wrote gets the gateway's resolved address; list that proxy in `--trusted-proxies` so the address is the client's.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security

@@ -1373,6 +1373,25 @@ impl Gateway {
         let method = req.method().clone();
         let method_str = method.as_str().to_string();
 
+        // A `.` or `..` segment, in any spelling, would name another path to
+        // a dispatcher or upstream that resolves it than the route matched.
+        if barbacane_lib::validator::has_dot_segment(&path) {
+            let response = self.bad_request_response("the path holds a `.` or `..` segment");
+            self.record_request_metrics(
+                &method_str,
+                UNMATCHED_ROUTE_LABEL,
+                response.status().as_u16(),
+                0,
+                0,
+                start_time,
+            );
+            return Ok(box_full(Self::add_standard_headers(
+                response,
+                &request_id,
+                &trace_id,
+            )));
+        }
+
         // Check URI length limit early
         if let Err(e) = self.limits.validate_uri(&uri_string) {
             let response = self.validation_error_response(&[e]);

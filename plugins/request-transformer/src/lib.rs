@@ -642,12 +642,14 @@ fn is_variable(template: &str) -> bool {
     template.starts_with('$') || template.starts_with("context:")
 }
 
-/// Parse a string as a JSON value, falling back to a JSON string.
-///
-/// This preserves numeric/boolean types when interpolating variable values
-/// into JSON bodies (e.g. `$query.page` = `"2"` becomes the JSON number `2`).
+/// The JSON value of an interpolated string: a number or boolean when the
+/// string reads as one (`$query.page` = `"2"` gives `2`), a string otherwise.
+/// A value never becomes an object, array or null, since a client supplies it.
 fn to_json_value(s: &str) -> Value {
-    serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.to_string()))
+    match serde_json::from_str(s) {
+        Ok(v @ (Value::Number(_) | Value::Bool(_))) => v,
+        _ => Value::String(s.to_string()),
+    }
 }
 
 // Native mock implementations for testing
@@ -1582,6 +1584,35 @@ mod tests {
             to_json_value("192.168.1.1"),
             Value::String("192.168.1.1".to_string())
         );
+    }
+
+    #[test]
+    fn a_value_is_never_more_than_a_scalar() {
+        for s in [r#"{"role":"admin"}"#, r#"["admin"]"#, "null", r#""quoted""#] {
+            assert_eq!(to_json_value(s), Value::String(s.to_string()), "{s}");
+        }
+    }
+
+    #[test]
+    fn a_header_cannot_add_structure_to_the_body() {
+        let req = Request::new("POST", "/users")
+            .with_header("x-user", r#"{"id":"u1","roles":["admin"]}"#)
+            .with_query("tags=%5B%22a%22%5D");
+        let body = Some(br#"{"name":"n"}"#.to_vec());
+        let mut config = BodyConfig::default();
+        config
+            .add
+            .insert("/user".to_string(), "$header.x-user".to_string());
+        config
+            .add
+            .insert("/tags".to_string(), "$query.tags".to_string());
+
+        let result = transform_body(&body, &config, &req, false);
+        let json: Value =
+            serde_json::from_slice(&result.expect("should have body")).expect("valid json");
+
+        assert_eq!(json["user"], r#"{"id":"u1","roles":["admin"]}"#);
+        assert_eq!(json["tags"], r#"["a"]"#);
     }
 
     // -- Integration / snapshot tests ---------------------------------------

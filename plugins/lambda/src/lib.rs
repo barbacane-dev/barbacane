@@ -3,6 +3,7 @@
 //! Invokes AWS Lambda functions via Lambda Function URLs.
 //! Supports passing request headers and body to Lambda.
 
+use barbacane_plugin_sdk::forwarding;
 use barbacane_plugin_sdk::http::{self, HttpError, HttpRequest};
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
@@ -34,34 +35,24 @@ fn default_pass_through_headers() -> bool {
 }
 
 impl LambdaDispatcher {
-    /// Invoke the Lambda function and return the response.
-    pub fn dispatch(&mut self, req: Request) -> Response {
-        // Build headers to send to Lambda
-        let mut headers: BTreeMap<String, String> = BTreeMap::new();
-
+    /// The headers sent to Lambda: with `pass_through_headers`, the client's
+    /// headers as [`forwarding::upstream_headers`] gives them, without `host`;
+    /// `content-type` defaults to `application/json` when there is a body.
+    fn lambda_headers(&self, req: &Request) -> BTreeMap<String, String> {
+        let mut headers = BTreeMap::new();
         if self.pass_through_headers {
-            // Pass through incoming headers (filter hop-by-hop headers)
-            for (key, value) in &req.headers {
-                let key_lower = key.to_lowercase();
-                if !matches!(
-                    key_lower.as_str(),
-                    "connection"
-                        | "keep-alive"
-                        | "transfer-encoding"
-                        | "te"
-                        | "trailer"
-                        | "upgrade"
-                        | "host"
-                ) {
-                    headers.insert(key.clone(), value.clone());
-                }
-            }
+            headers = forwarding::upstream_headers(req);
+            headers.retain(|name, _| !name.eq_ignore_ascii_case("host"));
         }
-
-        // Always set content-type if we have a body
         if req.body.is_some() && !headers.contains_key("content-type") {
             headers.insert("content-type".to_string(), "application/json".to_string());
         }
+        headers
+    }
+
+    /// Invoke the Lambda function and return the response.
+    pub fn dispatch(&mut self, req: Request) -> Response {
+        let headers = self.lambda_headers(&req);
 
         // Build the HTTP request to Lambda. The request body travels via the
         // SDK side-channel inside `http::call`, not embedded in JSON.
@@ -279,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_header_filtering_removes_hop_by_hop_headers() {
-        let mut config = LambdaDispatcher {
+        let config = LambdaDispatcher {
             url: "https://example.lambda-url.us-east-1.on.aws/".to_string(),
             timeout: 30.0,
             pass_through_headers: true,
@@ -301,14 +292,38 @@ mod tests {
             .with_client_ip("127.0.0.1")
             .with_headers(headers);
 
-        let response = config.dispatch(req);
+        let sent = config.lambda_headers(&req);
+        let names: Vec<&str> = sent.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "authorization",
+                "content-type",
+                "x-custom-header",
+                "x-forwarded-for",
+                "x-real-ip"
+            ]
+        );
+    }
 
-        // Response will be 502 due to native stub, but we can verify the logic
-        // by checking that the error occurred (meaning request was built)
-        assert_eq!(response.status, 502);
+    #[test]
+    fn the_function_learns_the_client_from_the_gateway() {
+        let config = LambdaDispatcher {
+            url: "https://example.lambda-url.us-east-1.on.aws/".to_string(),
+            timeout: 30.0,
+            pass_through_headers: true,
+        };
+        let req = Request::new("GET", "/test")
+            .with_client_ip("10.0.0.1")
+            .with_header("x-forwarded-for", "6.6.6.6")
+            .with_header("x-real-ip", "6.6.6.6")
+            .with_header("forwarded", "for=6.6.6.6");
 
-        // The actual filtering logic is tested by the fact that dispatch
-        // successfully builds the HttpRequest without panicking
+        let sent = config.lambda_headers(&req);
+
+        assert_eq!(sent["x-forwarded-for"], "10.0.0.1");
+        assert_eq!(sent["x-real-ip"], "10.0.0.1");
+        assert!(!sent.contains_key("forwarded"));
     }
 
     #[test]

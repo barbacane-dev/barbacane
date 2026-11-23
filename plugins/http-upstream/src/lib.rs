@@ -6,8 +6,9 @@
 //! - Header forwarding
 //! - Configurable timeouts
 
-use barbacane_plugin_sdk::http;
+use barbacane_plugin_sdk::path::{self, DotSegmentParam};
 use barbacane_plugin_sdk::prelude::*;
+use barbacane_plugin_sdk::{forwarding, http};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -52,6 +53,7 @@ fn default_timeout() -> f64 {
 impl HttpUpstreamDispatcher {
     /// Proxy the request to the upstream and return the response.
     pub fn dispatch(&mut self, req: Request) -> Response {
+        let mut headers = forwarding::upstream_headers(&req);
         let Request {
             method,
             path,
@@ -64,7 +66,17 @@ impl HttpUpstreamDispatcher {
 
         // Build the upstream path
         let upstream_path = match &self.path {
-            Some(template) => self.substitute_path_params(template, &path_params),
+            Some(template) => match self.substitute_path_params(template, &path_params) {
+                Ok(filled) => filled,
+                Err(e) => {
+                    return self.error_response(
+                        400,
+                        "Bad Request",
+                        "invalid path parameter",
+                        &e.to_string(),
+                    )
+                }
+            },
             None => path,
         };
 
@@ -97,21 +109,6 @@ impl HttpUpstreamDispatcher {
             }
         };
 
-        // Build headers to send to upstream
-        let mut headers: BTreeMap<String, String> = BTreeMap::new();
-
-        // Forward incoming headers (filter hop-by-hop headers)
-        for (key, value) in &req_headers {
-            let key_lower = key.to_lowercase();
-            if !matches!(
-                key_lower.as_str(),
-                "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
-            ) {
-                headers.insert(key.clone(), value.clone());
-            }
-        }
-
-        // Add X-Forwarded headers
         if let Some(host) = req_headers.get("host") {
             headers.insert("x-forwarded-host".to_string(), host.clone());
         }
@@ -192,18 +189,20 @@ impl HttpUpstreamDispatcher {
         }
     }
 
-    /// Substitute path parameters in the template.
-    fn substitute_path_params(&self, template: &str, params: &BTreeMap<String, String>) -> String {
-        let mut result = template.to_string();
-        for (key, value) in params {
-            result = result.replace(&format!("{{{}}}", key), value);
-        }
-        result
+    /// The `path` template with each `{name}` filled with that path
+    /// parameter, encoded so that it stays within the path.
+    fn substitute_path_params(
+        &self,
+        template: &str,
+        params: &BTreeMap<String, String>,
+    ) -> Result<String, DotSegmentParam> {
+        path::fill_path_template(template, params)
     }
 
     /// Create an error response in RFC 9457 format.
     fn error_response(&self, status: u16, title: &str, detail: &str, debug: &str) -> Response {
         let error_type = match status {
+            400 => "urn:barbacane:error:bad-request",
             502 | 503 => "urn:barbacane:error:upstream-unavailable",
             504 => "urn:barbacane:error:upstream-timeout",
             _ => "urn:barbacane:error:internal-error",
@@ -254,7 +253,9 @@ mod tests {
         let mut params = BTreeMap::new();
         params.insert("id".to_string(), "123".to_string());
 
-        let result = dispatcher.substitute_path_params("/users/{id}", &params);
+        let result = dispatcher
+            .substitute_path_params("/users/{id}", &params)
+            .unwrap();
         assert_eq!(result, "/users/123");
     }
 
@@ -274,8 +275,9 @@ mod tests {
         params.insert("repo".to_string(), "myapp".to_string());
         params.insert("id".to_string(), "456".to_string());
 
-        let result =
-            dispatcher.substitute_path_params("/orgs/{org}/repos/{repo}/issues/{id}", &params);
+        let result = dispatcher
+            .substitute_path_params("/orgs/{org}/repos/{repo}/issues/{id}", &params)
+            .unwrap();
         assert_eq!(result, "/orgs/acme/repos/myapp/issues/456");
     }
 
@@ -293,7 +295,9 @@ mod tests {
         let mut params = BTreeMap::new();
         params.insert("id".to_string(), "123".to_string());
 
-        let result = dispatcher.substitute_path_params("/users/{id}/posts/{post_id}", &params);
+        let result = dispatcher
+            .substitute_path_params("/users/{id}/posts/{post_id}", &params)
+            .unwrap();
         assert_eq!(result, "/users/123/posts/{post_id}");
     }
 
@@ -310,8 +314,32 @@ mod tests {
 
         let params = BTreeMap::new();
 
-        let result = dispatcher.substitute_path_params("/users", &params);
+        let result = dispatcher
+            .substitute_path_params("/users", &params)
+            .unwrap();
         assert_eq!(result, "/users");
+    }
+
+    #[test]
+    fn a_path_parameter_stays_within_the_template() {
+        let dispatcher = HttpUpstreamDispatcher {
+            url: Some("http://example.com".to_string()),
+            endpoints: None,
+            retries: None,
+            path: None,
+            timeout: 30.0,
+            tls: None,
+        };
+        let params = |value: &str| BTreeMap::from([("id".to_string(), value.to_string())]);
+
+        let filled = dispatcher
+            .substitute_path_params("/process/{id}", &params("x?amount=0#f"))
+            .unwrap();
+        assert_eq!(filled, "/process/x%3Famount=0%23f");
+        let refused = dispatcher
+            .substitute_path_params("/process/{id}", &params("../../admin"))
+            .unwrap_err();
+        assert_eq!(refused.name, "id");
     }
 
     #[test]

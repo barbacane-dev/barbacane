@@ -41,9 +41,11 @@ An artifact compiled without a manifest, with `barbacane_compiler::compile` from
 ### Requests the gateway treats differently
 
 - `HEAD` on a route declared for `GET` is answered like the `GET`, with no body, where it was 405.
+- A request whose path holds a `.` or `..` segment, in any spelling (`%2e%2e`, or one set apart by an encoded `%2F` or `%5C`), is answered `400` before routing. In `http-upstream` and `ws-upstream`, a path parameter fills only its own place in the `path` template: its value is percent-encoded, so `?`, `#` and `%` in it stay part of the path, and a value with a `.` or `..` segment answers `400`.
 - A client's `x-request-id` is kept only when it is at most 128 bytes of visible ASCII, and a `traceparent` yields the trace id only when well-formed; otherwise the gateway generates ids. Clients that sent longer ids see generated ones in `x-request-id`.
 - Only a request shaped as a WebSocket handshake (a `GET` with `Upgrade: websocket`, `Connection: upgrade` and `Sec-WebSocket-Key`) skips body handling. Any other request carrying an `Upgrade` header has its body read, validated and inspected like every request.
 - The request body must arrive within `--keepalive-timeout` seconds (60 by default), the deadline its headers already had; a body still incomplete at the deadline is answered `408` and the connection closed.
+- `http-upstream`, `ws-upstream`, `lambda` and `fire-and-forget` send `X-Forwarded-For` and `X-Real-IP` set to the client the gateway resolved, and drop the client's own `X-Forwarded-For`, `X-Real-IP` and `Forwarded`. A backend behind a load balancer that wrote the chain sees the load balancer's address unless it is listed in `--trusted-proxies`.
 - An IPv4 client of a dual-stack listener is reported as its IPv4 address (`10.0.0.1`, not `::ffff:10.0.0.1`) to plugins, the WAF and logs. In `ip-restriction`, a rule like `::/0` no longer covers IPv4 clients; write `0.0.0.0/0`, and write `10.0.0.0/8` for what was `::ffff:10.0.0.0/104`.
 
 ### Shutdown and reload
@@ -113,6 +115,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 - `cache`, `opa-authz`, `http-log` and `observability` now receive bodies, so a cache hit carries the body, `include_body` works, and body sizes are reported.
 - `ldap-auth` refuses a user in none of the `required_groups` with `urn:barbacane:error:authorization-failed` (see [Observability](#observability)).
 - `ip-restriction` and `rate-limit` no longer take `trusted_proxies`; a configuration that sets it fails compilation with `E1023`. Remove the key and list the proxies on the data plane with `--trusted-proxies` (`BARBACANE_TRUSTED_PROXIES`), which accepts CIDR ranges and applies to every plugin, the WAF and the audit records ([client address](../reference/cli.md#client-address)).
+- `s3` forwards a client's query parameters only when its `query_params` lists them, and drops the others. A route whose clients send `versionId`, `response-content-type` or another S3 query parameter lists it. A bucket taken from a path parameter must follow S3's naming rules, and a key with a `.` or `..` segment answers `400`.
 
 ## Control plane
 

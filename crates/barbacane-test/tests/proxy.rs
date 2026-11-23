@@ -353,6 +353,84 @@ async fn test_http_upstream_headers_forwarded() {
     );
 }
 
+/// The forwarding headers the upstream receives name the client the gateway
+/// resolved: the peer, or behind a trusted proxy the address it reported. A
+/// hop the client wrote never reaches the upstream.
+#[tokio::test]
+async fn test_the_upstream_learns_the_client_from_the_gateway() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    /// Answer with the forwarding headers the upstream received.
+    struct EchoForwarding;
+    impl Respond for EchoForwarding {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let get = |name: &str| {
+                let values: Vec<&str> = req
+                    .headers
+                    .get_all(name)
+                    .iter()
+                    .filter_map(|v| v.to_str().ok())
+                    .collect();
+                values.join(" | ")
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "x-forwarded-for": get("x-forwarded-for"),
+                "x-real-ip": get("x-real-ip"),
+                "forwarded": get("forwarded"),
+            }))
+        }
+    }
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/headers"))
+        .respond_with(EchoForwarding)
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = http_upstream_spec(&upstream.uri());
+
+    async fn received(gateway: &TestGateway) -> serde_json::Value {
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/proxy/headers")
+            .header("X-Forwarded-For", "6.6.6.6, 203.0.113.9")
+            .header("X-Real-IP", "6.6.6.6")
+            .header("Forwarded", "for=6.6.6.6")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        resp.json().await.unwrap()
+    }
+
+    let direct = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    assert_eq!(
+        received(&direct).await,
+        serde_json::json!({
+            "x-forwarded-for": "127.0.0.1",
+            "x-real-ip": "127.0.0.1",
+            "forwarded": "",
+        })
+    );
+
+    let proxied = TestGateway::from_spec_with_args(
+        spec.to_str().unwrap(),
+        &["--trusted-proxies", "127.0.0.1"],
+    )
+    .await
+    .expect("failed to start gateway");
+    assert_eq!(
+        received(&proxied).await,
+        serde_json::json!({
+            "x-forwarded-for": "203.0.113.9",
+            "x-real-ip": "203.0.113.9",
+            "forwarded": "",
+        })
+    );
+}
+
 /// An upstream that accepts each connection, reads the request and closes the
 /// connection without answering. Returns its base URL.
 async fn start_hang_up_upstream() -> String {
@@ -1787,4 +1865,189 @@ paths:
 
     let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
     assert_eq!(body["received_bytes"], payload_len);
+}
+
+/// A spec routing `/files/{name}` to `/public/{name}`, `/wild/{path+}` to
+/// `/{path}`, and `/raw/{path+}` to the request's own path, on `upstream_url`.
+fn upstream_paths_spec(upstream_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let spec = r#"openapi: "3.1.0"
+info:
+  title: Upstream paths
+  version: "1.0.0"
+paths:
+  /files/{name}:
+    get:
+      operationId: getFile
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "UPSTREAM"
+          path: "/public/{name}"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /wild/{path+}:
+    get:
+      operationId: getWild
+      parameters:
+        - name: path
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "UPSTREAM"
+          path: "/{path}"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /raw/{path+}:
+    get:
+      operationId: getRaw
+      parameters:
+        - name: path
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "UPSTREAM"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+"#
+    .replace("UPSTREAM", upstream_url);
+    std::fs::write(temp.path().join("upstream-paths.yaml"), spec).expect("write spec");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  http-upstream:\n    path: {}\n",
+            plugin_wasm("http-upstream").display()
+        ),
+    )
+    .expect("write manifest");
+    let path = temp.path().join("upstream-paths.yaml");
+    (temp, path)
+}
+
+/// The status of `GET target`, sent as written: an HTTP client would resolve
+/// the dot segments some of these targets hold before sending them.
+async fn raw_get_status(port: u16, target: &str) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let request = format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    socket.write_all(request.as_bytes()).await.expect("send");
+    let mut response = Vec::new();
+    socket.read_to_end(&mut response).await.expect("read");
+    String::from_utf8_lossy(&response)
+        .split_whitespace()
+        .nth(1)
+        .and_then(|status| status.parse().ok())
+        .unwrap_or_else(|| panic!("no status line for {target}"))
+}
+
+/// What the upstream received, as `path?query`, in order.
+async fn received_targets(upstream: &wiremock::MockServer) -> Vec<String> {
+    upstream
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| match r.url.query() {
+            Some(query) => format!("{}?{}", r.url.path(), query),
+            None => r.url.path().to_string(),
+        })
+        .collect()
+}
+
+/// A path parameter fills its own place in the `path` template: a decoded `/`
+/// with `..` cannot climb out of it, and a decoded `?` cannot start a query.
+#[tokio::test]
+async fn test_a_path_parameter_stays_within_its_upstream_path() {
+    use wiremock::matchers::any;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = upstream_paths_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    let port = gateway.port();
+
+    assert_eq!(raw_get_status(port, "/files/report.v2.pdf").await, 200);
+    assert_eq!(raw_get_status(port, "/files/x%3Famount%3D0").await, 200);
+    assert_eq!(
+        raw_get_status(port, "/files/..%2F..%2Fadmin%2Fusers").await,
+        400
+    );
+
+    assert_eq!(
+        received_targets(&upstream).await,
+        ["/public/report.v2.pdf", "/public/x%3Famount=0"]
+    );
+}
+
+/// A `.` or `..` segment, in any spelling, is refused before routing: it
+/// reaches no upstream, whether the path is forwarded as is or a wildcard
+/// fills a template. Paths without one are forwarded.
+#[tokio::test]
+async fn test_a_dot_segment_never_reaches_the_upstream() {
+    use wiremock::matchers::any;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = upstream_paths_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    let port = gateway.port();
+
+    for target in [
+        "/raw/../admin/users",
+        "/raw/%2e%2e/admin/users",
+        "/raw/.%2E/admin/users",
+        "/raw/a/..%2F..%2Fadmin",
+        "/wild/a/..%2F..%2Fsecret",
+        "/wild/%2e%2e/secret",
+    ] {
+        assert_eq!(raw_get_status(port, target).await, 400, "{target}");
+    }
+    assert!(
+        received_targets(&upstream).await.is_empty(),
+        "the upstream received {:?}",
+        received_targets(&upstream).await
+    );
+
+    assert_eq!(raw_get_status(port, "/raw/x/y").await, 200);
+    assert_eq!(raw_get_status(port, "/wild/a/b/c.txt").await, 200);
+    assert_eq!(
+        received_targets(&upstream).await,
+        ["/raw/x/y", "/a/b/c.txt"]
+    );
 }

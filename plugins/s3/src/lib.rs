@@ -72,9 +72,31 @@ pub struct S3Dispatcher {
     fallback_key: Option<String>,
 
     // ── Request options ────────────────────────────────────────────────────
+    /// Query parameters forwarded to S3, by name as the client writes them;
+    /// they are signed with the gateway's credentials. Other parameters are
+    /// dropped (default: none).
+    #[serde(default)]
+    query_params: Vec<String>,
+
     /// Request timeout in seconds (default: 30).
     #[serde(default = "default_timeout")]
     timeout: f64,
+}
+
+/// Whether `name` is a valid S3 bucket name: 3 to 63 characters among
+/// lowercase letters, digits, `.` and `-`, starting and ending with a letter or
+/// a digit, without `..`, and not written as an IPv4 address. The name becomes
+/// part of the host in virtual-hosted style.
+fn valid_bucket_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (3..=63).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-'))
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && !name.contains("..")
+        && name.parse::<std::net::Ipv4Addr>().is_err()
 }
 
 fn default_bucket_param() -> String {
@@ -117,7 +139,7 @@ impl S3Dispatcher {
         // ── URL style + Host ───────────────────────────────────────────────
         let use_path_style = self.force_path_style || self.endpoint.is_some();
 
-        let (host, s3_path, base_url) = if use_path_style {
+        let (host, s3_path, origin) = if use_path_style {
             match &self.endpoint {
                 Some(ep) => {
                     // Custom endpoint: extract host for the Host header; keep
@@ -128,23 +150,27 @@ impl S3Dispatcher {
                         .trim_end_matches('/');
                     let host = without_scheme.to_string();
                     let path = format!("/{}/{}", bucket, key);
-                    let base = ep.trim_end_matches('/').to_string();
-                    (host, path.clone(), format!("{}{}", base, path))
+                    (host, path, ep.trim_end_matches('/').to_string())
                 }
                 None => {
                     let host = format!("s3.{}.amazonaws.com", self.region);
                     let path = format!("/{}/{}", bucket, key);
-                    let base = format!("https://s3.{}.amazonaws.com", self.region);
-                    (host, path.clone(), format!("{}{}", base, path))
+                    let origin = format!("https://s3.{}.amazonaws.com", self.region);
+                    (host, path, origin)
                 }
             }
         } else {
             // Virtual-hosted style
             let host = format!("{}.s3.{}.amazonaws.com", bucket, self.region);
             let path = format!("/{}", key);
-            let base = format!("https://{}", host);
-            (host, path.clone(), format!("{}{}", base, path))
+            let origin = format!("https://{}", host);
+            (host, path, origin)
         };
+
+        // The URL carries the path exactly as it is signed: percent-encoded, so
+        // a `?`, `#` or `%` in a key stays part of the key.
+        let canonical_uri_str = sigv4::canonical_uri(&s3_path);
+        let base_url = format!("{}{}", origin, canonical_uri_str);
 
         // Canonicalize the query ONCE and use the same form for both signing and
         // the outbound URL ("sign exactly what you send"). Sending the raw query
@@ -177,7 +203,6 @@ impl S3Dispatcher {
             region: &self.region,
             service: "s3",
         };
-        let canonical_uri_str = sigv4::canonical_uri(&s3_path);
         let signing_input = sigv4::SigningInput {
             method,
             canonical_uri: &canonical_uri_str,
@@ -308,6 +333,15 @@ impl S3Dispatcher {
             }
         };
 
+        if !valid_bucket_name(&bucket) {
+            return self.error_response(
+                400,
+                "Bad Request",
+                "invalid bucket name",
+                "a bucket name has 3 to 63 lowercase letters, digits, `.` or `-`",
+            );
+        }
+
         // ── 2. Resolve key ─────────────────────────────────────────────────
         let key = match req.path_params.get(&self.key_param) {
             Some(k) => k.clone(),
@@ -321,19 +355,28 @@ impl S3Dispatcher {
             }
         };
 
+        if key.split('/').any(|part| part == "." || part == "..") {
+            return self.error_response(
+                400,
+                "Bad Request",
+                "invalid key",
+                "the key holds a `.` or `..` segment",
+            );
+        }
+
         // ── 3. Call S3 ─────────────────────────────────────────────────────
         // When fallback_key is set (SPA mode), ignore query params — they belong
         // to the frontend router, not S3, and would invalidate SigV4 signatures.
         let query = if self.fallback_key.is_some() {
             None
         } else {
-            req.query.as_deref()
+            self.forwarded_query(req.query.as_deref())
         };
         let (http_response, response_body) = match self.call_s3(
             &bucket,
             &key,
             &req.method,
-            query,
+            query.as_deref(),
             req.body.as_deref(),
             &req.headers,
         ) {
@@ -353,6 +396,19 @@ impl S3Dispatcher {
 
         // ── 5. Pass through response ───────────────────────────────────────
         Self::build_response(http_response, response_body)
+    }
+
+    /// The pairs of `query` whose parameter name, as written, is listed in
+    /// `query_params`, in their order; `None` when none is.
+    fn forwarded_query(&self, query: Option<&str>) -> Option<String> {
+        let kept: Vec<&str> = query?
+            .split('&')
+            .filter(|pair| {
+                let name = pair.split('=').next().unwrap_or_default();
+                self.query_params.iter().any(|allowed| allowed == name)
+            })
+            .collect();
+        (!kept.is_empty()).then(|| kept.join("&"))
     }
 
     /// Create an error response in RFC 9457 Problem Details format.
@@ -413,6 +469,7 @@ mod tests {
             bucket_param: "bucket".to_string(),
             key_param: "key".to_string(),
             fallback_key: None,
+            query_params: Vec::new(),
             timeout: 30.0,
         }
     }
@@ -893,23 +950,85 @@ mod tests {
     }
 
     #[test]
-    fn test_key_with_special_chars_percent_encoded_in_signing() {
-        // Spaces and special characters in the key must be percent-encoded in the
-        // canonical URI (used for signing), but the raw key appears in the URL.
+    fn a_key_is_sent_percent_encoded_as_it_is_signed() {
         let d = make_dispatcher(Some("bucket"), None);
-        let req = d.build_s3_request(
-            "bucket",
-            "my file (1).txt",
-            "GET",
-            None,
-            None,
-            &BTreeMap::new(),
-            TEST_TS,
+        for (key, encoded) in [
+            ("my file (1).txt", "my%20file%20%281%29.txt"),
+            ("a?b#c%d", "a%3Fb%23c%25d"),
+            ("dir/sub/x.txt", "dir/sub/x.txt"),
+        ] {
+            let req =
+                d.build_s3_request("bucket", key, "GET", None, None, &BTreeMap::new(), TEST_TS);
+            assert_eq!(
+                req.url,
+                format!("https://bucket.s3.us-east-1.amazonaws.com/{encoded}"),
+                "{key}"
+            );
+            assert!(req.headers["authorization"].starts_with("AWS4-HMAC-SHA256 "));
+        }
+    }
+
+    #[test]
+    fn bucket_names_follow_the_s3_rules() {
+        for name in ["abc", "my-bucket", "my.bucket.v2", "a1b", &"b".repeat(63)] {
+            assert!(valid_bucket_name(name), "{name}");
+        }
+        for name in [
+            "ab",
+            &"b".repeat(64),
+            "Uppercase",
+            "evil.example#",
+            "evil.example/x",
+            "evil.example?",
+            "user@evil.example",
+            "evil.example:443",
+            "-bucket",
+            "bucket-",
+            "a..b",
+            "192.168.1.10",
+            "bucket%23",
+            "",
+        ] {
+            assert!(!valid_bucket_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_bucket_from_the_path_cannot_choose_the_host() {
+        let mut d = make_dispatcher(None, None);
+        let params = BTreeMap::from([
+            ("bucket".to_string(), "evil.example#".to_string()),
+            ("key".to_string(), "x".to_string()),
+        ]);
+        let response = d.dispatch(make_get_request(params));
+        assert_eq!(response.status, 400);
+        let body: serde_json::Value =
+            serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["type"], "urn:barbacane:error:bad-request");
+    }
+
+    #[test]
+    fn a_key_with_a_dot_segment_is_refused() {
+        let mut d = make_dispatcher(Some("bucket"), None);
+        for key in ["../other", "a/../../b", ".", "a/./b"] {
+            let params = BTreeMap::from([("key".to_string(), key.to_string())]);
+            assert_eq!(d.dispatch(make_get_request(params)).status, 400, "{key}");
+        }
+    }
+
+    #[test]
+    fn only_listed_query_parameters_are_forwarded() {
+        let mut d = make_dispatcher(Some("bucket"), None);
+        let query = Some("response-content-type=text/html&versionId=3&acl");
+        assert_eq!(d.forwarded_query(query), None);
+        d.query_params = vec!["versionId".to_string()];
+        assert_eq!(d.forwarded_query(query).as_deref(), Some("versionId=3"));
+        // An encoded spelling of a parameter that is not listed is dropped.
+        assert_eq!(
+            d.forwarded_query(Some("%72esponse-content-type=text/html")),
+            None
         );
-        // The URL should contain the key as-is (gateway already decoded it)
-        assert!(req.url.contains("my file (1).txt"), "url: {}", req.url);
-        // Authorization header must still be present (signing did not panic)
-        assert!(req.headers["authorization"].starts_with("AWS4-HMAC-SHA256 "));
+        assert_eq!(d.forwarded_query(None), None);
     }
 
     #[test]
