@@ -53,6 +53,13 @@ impl SlidingWindow {
         }
     }
 
+    /// Whether a request recorded in this window still counts at `now`.
+    fn is_live(&self, now: Instant) -> bool {
+        self.timestamps
+            .last()
+            .is_some_and(|&t| now.duration_since(t) < self.window)
+    }
+
     /// Check if a request is allowed and record it if so.
     fn check_and_record(&mut self, quota: u32) -> RateLimitResult {
         let now = Instant::now();
@@ -108,13 +115,14 @@ impl SlidingWindow {
 }
 
 /// Thread-safe rate limiter using sliding window algorithm.
+///
+/// Each (key, window length) pair has its own log, so calls with the same key
+/// and different windows never count against, or prune, each other.
 #[derive(Clone)]
 pub struct RateLimiter {
-    /// Partitioned rate limit windows: partition_key -> window
-    windows: Arc<RwLock<HashMap<String, SlidingWindow>>>,
-    /// Cleanup threshold: remove entries older than this
-    cleanup_threshold: Duration,
-    /// Last cleanup time
+    windows: Arc<RwLock<HashMap<(String, u64), SlidingWindow>>>,
+    /// How often windows with no request left in them are removed.
+    cleanup_interval: Duration,
     last_cleanup: Arc<RwLock<Instant>>,
 }
 
@@ -127,9 +135,13 @@ impl Default for RateLimiter {
 impl RateLimiter {
     /// Create a new rate limiter.
     pub fn new() -> Self {
+        Self::with_cleanup_interval(Duration::from_secs(300))
+    }
+
+    fn with_cleanup_interval(cleanup_interval: Duration) -> Self {
         Self {
             windows: Arc::new(RwLock::new(HashMap::new())),
-            cleanup_threshold: Duration::from_secs(300), // 5 minutes
+            cleanup_interval,
             last_cleanup: Arc::new(RwLock::new(Instant::now())),
         }
     }
@@ -160,13 +172,10 @@ impl RateLimiter {
         // a spoofable header) could otherwise create unbounded windows. When the
         // table is full of a fresh key, evict stale partitions first; if it is
         // still saturated with active keys, fail closed for the new key.
-        if windows.len() >= MAX_PARTITIONS && !windows.contains_key(key) {
+        let window_key = (key.to_string(), window_secs);
+        if windows.len() >= MAX_PARTITIONS && !windows.contains_key(&window_key) {
             let now = Instant::now();
-            windows.retain(|_, w| {
-                w.timestamps
-                    .iter()
-                    .any(|&t| now.duration_since(t) < self.cleanup_threshold)
-            });
+            windows.retain(|_, w| w.is_live(now));
             if windows.len() >= MAX_PARTITIONS {
                 let reset = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -183,45 +192,28 @@ impl RateLimiter {
             }
         }
 
-        let window = windows
-            .entry(key.to_string())
-            .or_insert_with(|| SlidingWindow::new(window_duration));
-
-        // Update window duration if changed
-        window.window = window_duration;
-
-        window.check_and_record(quota)
+        windows
+            .entry(window_key)
+            .or_insert_with(|| SlidingWindow::new(window_duration))
+            .check_and_record(quota)
     }
 
     /// Periodically clean up old entries to prevent memory bloat.
     fn maybe_cleanup(&self) {
         let now = Instant::now();
 
-        // Check if we need to cleanup (every cleanup_threshold duration)
         {
             let last = self.last_cleanup.read();
-            if now.duration_since(*last) < self.cleanup_threshold {
+            if now.duration_since(*last) < self.cleanup_interval {
                 return;
             }
         }
 
-        // Try to acquire write lock for cleanup
         if let Some(mut last) = self.last_cleanup.try_write() {
-            // Double-check after acquiring lock
-            if now.duration_since(*last) >= self.cleanup_threshold {
+            if now.duration_since(*last) >= self.cleanup_interval {
                 *last = now;
-
-                // Cleanup old windows. Compare via `duration_since` (recorded
-                // timestamps are <= now) rather than `now - threshold`, which
-                // underflow-panics early in the process's uptime.
                 if let Some(mut windows) = self.windows.try_write() {
-                    windows.retain(|_, window| {
-                        // Keep if any timestamp is recent
-                        window
-                            .timestamps
-                            .iter()
-                            .any(|&t| now.duration_since(t) < self.cleanup_threshold)
-                    });
+                    windows.retain(|_, window| window.is_live(now));
                 }
             }
         }
@@ -295,6 +287,38 @@ mod tests {
         assert!(result2.allowed);
         assert_eq!(result1.remaining, 1);
         assert_eq!(result2.remaining, 1);
+    }
+
+    #[test]
+    fn a_short_window_does_not_prune_a_long_one_on_the_same_key() {
+        let limiter = RateLimiter::new();
+        for _ in 0..2 {
+            assert!(limiter.check("client", 2, 3600).allowed);
+        }
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(limiter.check("client", 100, 1).allowed);
+
+        assert!(!limiter.check("client", 2, 3600).allowed);
+    }
+
+    #[test]
+    fn cleanup_keeps_a_window_while_its_requests_count() {
+        let limiter = RateLimiter::with_cleanup_interval(Duration::from_millis(50));
+        assert!(limiter.check("client", 1, 3600).allowed);
+        std::thread::sleep(Duration::from_millis(100));
+        limiter.check("someone-else", 1, 3600);
+
+        assert!(!limiter.check("client", 1, 3600).allowed);
+    }
+
+    #[test]
+    fn cleanup_removes_a_window_once_its_requests_expired() {
+        let limiter = RateLimiter::with_cleanup_interval(Duration::from_millis(50));
+        assert!(limiter.check("client", 1, 1).allowed);
+        std::thread::sleep(Duration::from_millis(1100));
+        limiter.check("someone-else", 1, 3600);
+
+        assert_eq!(limiter.stats().active_keys, 1);
     }
 
     #[test]

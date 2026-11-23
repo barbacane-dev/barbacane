@@ -128,6 +128,36 @@ async fn test_rate_limit_different_clients_separate_quotas() {
     assert_eq!(resp.status(), 200, "client B should not be rate limited");
 }
 
+/// Rate-limit entries with different configurations count separately, even
+/// on the same partition key: requests to `/items` neither use `/login`'s
+/// quota nor shorten its window, and `/login`'s requests do not use the quota
+/// of `/reports`, which has the same window.
+#[tokio::test]
+async fn test_rate_limit_entries_keep_their_own_counts() {
+    let gateway = TestGateway::from_spec(&fixture("rate-limit.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let get = |path: &'static str| {
+        let request = gateway
+            .request_builder(reqwest::Method::GET, path)
+            .header("x-client-id", "same-client");
+        async move { request.send().await.unwrap().status().as_u16() }
+    };
+
+    assert_eq!(get("/items").await, 200);
+    assert_eq!(get("/items").await, 200);
+    assert_eq!(get("/login").await, 200, "/items used /login's quota");
+    assert_eq!(get("/login").await, 200);
+    assert_eq!(get("/login").await, 429);
+
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert_eq!(get("/items").await, 200);
+    assert_eq!(get("/login").await, 429, "/items shortened /login's window");
+
+    assert_eq!(get("/reports").await, 200, "/login used /reports' quota");
+    assert_eq!(get("/reports").await, 429);
+}
+
 #[tokio::test]
 async fn test_rate_limit_unlimited_endpoint() {
     let gateway = TestGateway::from_spec(&fixture("rate-limit.yaml"))

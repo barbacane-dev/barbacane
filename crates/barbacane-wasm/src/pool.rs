@@ -239,6 +239,7 @@ impl InstancePool {
             self.ldap_client.clone(),
         )?;
         instance.set_metrics(self.metrics.clone());
+        instance.set_config_hash(&key.config_hash);
         if let Some(metrics) = &self.metrics {
             instance.count_in(Arc::clone(metrics));
         }
