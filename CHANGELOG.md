@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **wasm runtime**: a plugin's HTTP call may name only TLS files (client certificate, key, CA) that the plugin's own configuration names, as `host_get_secret` serves only the references a plugin's configuration holds. A call naming another file is answered 502 without being sent (`host_http_stream` returns `-1`), and the refusal is logged.
 - **artifacts**: an artifact whose manifest `signature` holds a non-ASCII character is refused as invalid hex; it stopped the gateway at load, before the signature was checked.
 - **artifacts**: format 9. `artifact_hash`, and so the signature, also binds the manifest's labels: `barbacane_artifact_version`, `compiler_version`, `routes_count` and `provenance` (`--provenance-commit`, `--provenance-source`). `compiled_at` is left out, so the same inputs and compiler give the same hash. The data plane still loads format 8 artifacts, verified by their own rule.
+- **cli**: `barbacane serve --help` names `BARBACANE_CONTROL_API_KEY` without printing its value, and `barbacane-control serve --help` and `seed-plugins --help` do the same for `DATABASE_URL`.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security

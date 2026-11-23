@@ -804,7 +804,7 @@ enum Commands {
 
         /// API key for control plane authentication.
         /// Required if --control-plane is specified.
-        #[arg(long, env = "BARBACANE_CONTROL_API_KEY")]
+        #[arg(long, env = "BARBACANE_CONTROL_API_KEY", hide_env_values = true)]
         api_key: Option<String>,
 
         /// Data plane name for identification in control plane.
@@ -7008,5 +7008,39 @@ mod trust_boundary_tests {
         assert!(control_plane_link_allowed("ws://control:9090/ws/data-plane", false).is_err());
         assert!(control_plane_link_allowed("ws://10.0.0.5:9090/ws/data-plane", false).is_err());
         assert!(control_plane_link_allowed("ws://control:9090/ws/data-plane", true).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    /// Arguments read from these variables carry credentials.
+    fn is_credential(variable: &str) -> bool {
+        ["API_KEY", "TOKEN", "PASSWORD", "SECRET", "DATABASE_URL"]
+            .iter()
+            .any(|word| variable.contains(word))
+    }
+
+    /// The arguments of `command` and its subcommands whose help would print
+    /// a credential from the environment.
+    fn credentials_shown(command: &clap::Command, path: &str, shown: &mut Vec<String>) {
+        for arg in command.get_arguments() {
+            let variable = arg.get_env().and_then(|v| v.to_str()).unwrap_or_default();
+            if is_credential(variable) && !arg.is_hide_env_values_set() {
+                shown.push(format!("{path} --{} ({variable})", arg.get_id()));
+            }
+        }
+        for sub in command.get_subcommands() {
+            credentials_shown(sub, &format!("{path} {}", sub.get_name()), shown);
+        }
+    }
+
+    #[test]
+    fn help_prints_no_credential_from_the_environment() {
+        let command = Cli::command().subcommand(barbacane_lib::control::command());
+        let mut shown = Vec::new();
+        credentials_shown(&command, "barbacane", &mut shown);
+        assert!(shown.is_empty(), "{shown:?}");
     }
 }
