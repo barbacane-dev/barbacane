@@ -329,6 +329,10 @@ context::set(context::AUTH_GROUPS, "admin,editor");
 let consumer = context::get(context::AUTH_SUB);
 ```
 
+A request's context holds at most 256 values and 256 KiB, keys and values
+together. A `context::set` past either is not applied, and the gateway logs a
+warning naming the plugin.
+
 ### Logging
 
 ```toml

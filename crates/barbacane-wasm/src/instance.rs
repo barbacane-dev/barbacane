@@ -143,6 +143,12 @@ pub struct RequestContext {
     pub request_id: String,
 }
 
+/// The most values a request's context holds.
+pub const MAX_CONTEXT_ENTRIES: usize = 256;
+
+/// The most bytes, keys and values together, a request's context holds.
+pub const MAX_CONTEXT_BYTES: usize = 256 * 1024;
+
 impl RequestContext {
     /// Create a new request context.
     pub fn new(trace_id: String, request_id: String) -> Self {
@@ -152,6 +158,22 @@ impl RequestContext {
             trace_id,
             request_id,
         }
+    }
+
+    /// Set `key` to `value`, unless the context would then hold more than
+    /// [`MAX_CONTEXT_ENTRIES`] values or [`MAX_CONTEXT_BYTES`] bytes. Returns
+    /// whether it was set.
+    pub fn set(&mut self, key: String, value: String) -> bool {
+        let replaced = self.values.get(&key).map_or(0, |v| key.len() + v.len());
+        let bytes: usize = self.values.iter().map(|(k, v)| k.len() + v.len()).sum();
+        let entries = self.values.len() + usize::from(!self.values.contains_key(&key));
+        if entries > MAX_CONTEXT_ENTRIES
+            || bytes - replaced + key.len() + value.len() > MAX_CONTEXT_BYTES
+        {
+            return false;
+        }
+        self.values.insert(key, value);
+        true
     }
 }
 
@@ -1263,7 +1285,13 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                         std::str::from_utf8(&data[val_start..val_end]).map(String::from);
 
                     if let (Ok(key), Ok(value)) = (key_result, val_result) {
-                        caller.data_mut().context.values.insert(key, value);
+                        let state = caller.data_mut();
+                        if !state.context.set(key, value) {
+                            tracing::warn!(
+                                plugin = %state.plugin_name,
+                                "request context full; the value is not set"
+                            );
+                        }
                     }
                 }
             },
@@ -2666,6 +2694,30 @@ mod tests {
         assert_eq!(
             plugin_http_timeout(Some(u64::MAX)),
             Some(Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn the_request_context_is_bounded() {
+        let mut context = RequestContext::new(String::new(), String::new());
+        assert!(context.set("a".into(), "x".repeat(MAX_CONTEXT_BYTES - 1)));
+        assert!(!context.set("b".into(), "y".into()), "past the byte bound");
+        assert!(
+            context.set("a".into(), "short".into()),
+            "a replacement frees its bytes"
+        );
+
+        let mut context = RequestContext::new(String::new(), String::new());
+        for i in 0..MAX_CONTEXT_ENTRIES {
+            assert!(context.set(format!("k{i}"), String::new()));
+        }
+        assert!(
+            !context.set("one-more".into(), String::new()),
+            "past the entry bound"
+        );
+        assert!(
+            context.set("k0".into(), "updated".into()),
+            "an existing key"
         );
     }
 
