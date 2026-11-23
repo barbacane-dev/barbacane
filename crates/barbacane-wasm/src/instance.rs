@@ -160,9 +160,8 @@ impl RequestContext {
         }
     }
 
-    /// Set `key` to `value`, unless the context would then hold more than
-    /// [`MAX_CONTEXT_ENTRIES`] values or [`MAX_CONTEXT_BYTES`] bytes. Returns
-    /// whether it was set.
+    /// Set `key` to `value`, unless the context would then hold more than 256
+    /// values or 256 KiB. Returns whether it was set.
     pub fn set(&mut self, key: String, value: String) -> bool {
         let replaced = self.values.get(&key).map_or(0, |v| key.len() + v.len());
         let bytes: usize = self.values.iter().map(|(k, v)| k.len() + v.len()).sum();
