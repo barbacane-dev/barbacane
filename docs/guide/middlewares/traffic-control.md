@@ -172,7 +172,7 @@ x-barbacane-middlewares:
 - If `deny` is configured, IPs in the list are blocked (denylist takes precedence)
 - If `allow` is configured, only IPs in the list are permitted (allowlist mode)
 - The client IP is the address the gateway attributes the request to: the TCP peer, or behind the gateway's `--trusted-proxies` the address they report ([client address](../../reference/cli.md#client-address)); a client cannot set its address with `X-Forwarded-For` or `X-Real-IP`
-- Supports both single IPs (`10.0.0.1`) and CIDR notation (`10.0.0.0/8`)
+- Supports both single IPs (`10.0.0.1`) and CIDR notation (`10.0.0.0/8`). An entry that is neither, such as `203.0.113/24` or `10.0.0.0/33`, fails compilation with `E1023`
 - An IPv4 client on a dual-stack listener arrives as an IPv4-mapped IPv6 address (`::ffff:10.0.0.1`); it is matched as the IPv4 address it carries, and so is a rule written in that form
 
 ### Error response

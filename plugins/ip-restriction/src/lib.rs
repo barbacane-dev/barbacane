@@ -4,7 +4,7 @@
 //! Supports both allowlist and denylist modes.
 
 use barbacane_plugin_sdk::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::net::IpAddr;
 
 /// IP restriction middleware configuration.
@@ -14,13 +14,13 @@ use std::net::IpAddr;
 pub struct IpRestriction {
     /// List of allowed IPs or CIDR ranges.
     /// If non-empty, only these IPs are allowed (allowlist mode).
-    #[serde(default)]
-    allow: Vec<String>,
+    #[serde(default, deserialize_with = "rules")]
+    allow: Vec<Rule>,
 
     /// List of denied IPs or CIDR ranges.
     /// These IPs are blocked (denylist mode).
-    #[serde(default)]
-    deny: Vec<String>,
+    #[serde(default, deserialize_with = "rules")]
+    deny: Vec<Rule>,
 
     /// Custom error message for denied requests.
     #[serde(default = "default_message")]
@@ -77,10 +77,9 @@ impl IpRestriction {
         resp
     }
 
-    /// Check if an IP matches any entry in a list (single IPs and CIDR ranges,
-    /// IPv4 and IPv6).
-    fn is_ip_in_list(&self, client_ip: IpAddr, list: &[String]) -> bool {
-        list.iter().any(|entry| ip_matches(client_ip, entry))
+    /// Check if an IP matches any rule in a list.
+    fn is_ip_in_list(&self, client_ip: IpAddr, list: &[Rule]) -> bool {
+        list.iter().any(|rule| rule.matches(client_ip))
     }
 
     /// Generate 403 Forbidden response.
@@ -96,30 +95,56 @@ impl IpRestriction {
     }
 }
 
-/// Whether `client` matches a list entry: either a single IP (`10.0.0.5`,
-/// `2001:db8::1`) or a CIDR range (`10.0.0.0/8`, `2001:db8::/32`). IPv4 and IPv6
-/// are both supported; a family mismatch never matches. An IPv4-mapped IPv6
-/// address (`::ffff:10.0.0.5`), in the client or the entry, is the IPv4
-/// address it carries.
-fn ip_matches(client: IpAddr, entry: &str) -> bool {
-    let client = client.to_canonical();
-    match entry.split_once('/') {
-        Some((network, prefix)) => match (
-            network.trim().parse::<IpAddr>(),
-            prefix.trim().parse::<u8>(),
-        ) {
-            (Ok(network), Ok(prefix)) => {
-                let (network, prefix) = canonical_range(network, prefix);
-                ip_in_cidr(client, network, prefix)
+/// A list entry: a single IP (`10.0.0.5`, `2001:db8::1`) or a CIDR range
+/// (`10.0.0.0/8`, `2001:db8::/32`). An entry in IPv4-mapped form
+/// (`::ffff:10.0.0.0/104`) is the IPv4 range it covers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Rule {
+    network: IpAddr,
+    prefix: u8,
+}
+
+impl Rule {
+    /// The rule an entry writes, or `None` when it is not an IP address or a
+    /// CIDR range with a prefix the address family allows.
+    fn parse(entry: &str) -> Option<Self> {
+        let (network, prefix) = match entry.trim().split_once('/') {
+            Some((network, prefix)) => (
+                network.trim().parse::<IpAddr>().ok()?,
+                prefix.trim().parse::<u8>().ok()?,
+            ),
+            None => {
+                let ip = entry.trim().parse::<IpAddr>().ok()?;
+                (ip, if ip.is_ipv4() { 32 } else { 128 })
             }
-            _ => false,
-        },
-        None => entry
-            .trim()
-            .parse::<IpAddr>()
-            .map(|e| e.to_canonical() == client)
-            .unwrap_or(false),
+        };
+        let max = if network.is_ipv4() { 32 } else { 128 };
+        if prefix > max {
+            return None;
+        }
+        let (network, prefix) = canonical_range(network, prefix);
+        Some(Self { network, prefix })
     }
+
+    /// Whether `client` is in this rule's range. A family mismatch never
+    /// matches; an IPv4-mapped client is the IPv4 address it carries.
+    fn matches(&self, client: IpAddr) -> bool {
+        ip_in_cidr(client.to_canonical(), self.network, self.prefix)
+    }
+}
+
+/// Read a list of entries as rules; an entry that is not an IP address or a
+/// CIDR range fails the configuration, so the plugin never runs with a rule
+/// that matches nothing.
+fn rules<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Rule>, D::Error> {
+    Vec::<String>::deserialize(deserializer)?
+        .iter()
+        .map(|entry| {
+            Rule::parse(entry).ok_or_else(|| {
+                serde::de::Error::custom(format!("`{entry}` is not an IP address or a CIDR range"))
+            })
+        })
+        .collect()
 }
 
 /// A range written in IPv4-mapped form (`::ffff:10.0.0.0/104`) as the IPv4
@@ -185,6 +210,12 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn ip_matches(client: IpAddr, entry: &str) -> bool {
+        Rule::parse(entry)
+            .unwrap_or_else(|| panic!("`{entry}` is a rule"))
+            .matches(client)
+    }
+
     #[test]
     fn matches_exact_ipv4_and_ipv6() {
         assert!(ip_matches(ip("192.168.1.100"), "192.168.1.100"));
@@ -242,9 +273,22 @@ mod tests {
     }
 
     #[test]
-    fn invalid_entry_never_matches() {
-        assert!(!ip_matches(ip("10.0.0.1"), "not-an-ip"));
-        assert!(!ip_matches(ip("10.0.0.1"), "10.0.0.0/99"));
+    fn an_entry_that_is_not_an_address_or_range_fails_the_configuration() {
+        for entry in [
+            "not-an-ip",
+            "203.0.113/24",
+            "10.0.0.0/33",
+            "2001:db8::/129",
+            "",
+        ] {
+            for list in ["allow", "deny"] {
+                let config = serde_json::json!({ list: ["10.0.0.0/8", entry] });
+                let error = serde_json::from_value::<IpRestriction>(config)
+                    .err()
+                    .unwrap_or_else(|| panic!("{list} accepted `{entry}`"));
+                assert!(error.to_string().contains(&format!("`{entry}`")), "{error}");
+            }
+        }
     }
 
     #[test]

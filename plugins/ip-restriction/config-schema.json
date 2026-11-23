@@ -6,15 +6,15 @@
   "properties": {
     "allow": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": { "type": "string", "anyOf": [{ "pattern": "^\\s*(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(\\s*/\\s*(3[0-2]|[12]?[0-9]))?\\s*$" }, { "pattern": "^\\s*[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(\\s*/\\s*(12[0-8]|1[01][0-9]|[1-9]?[0-9]))?\\s*$" }] },
       "default": [],
-      "description": "Allowlist of IPs or CIDR ranges. If non-empty, only these IPs are permitted."
+      "description": "Allowlist of IPs or CIDR ranges. If non-empty, only these IPs are permitted. An entry that is not an IP address or a CIDR range fails the configuration."
     },
     "deny": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": { "type": "string", "anyOf": [{ "pattern": "^\\s*(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}(\\s*/\\s*(3[0-2]|[12]?[0-9]))?\\s*$" }, { "pattern": "^\\s*[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(\\s*/\\s*(12[0-8]|1[01][0-9]|[1-9]?[0-9]))?\\s*$" }] },
       "default": [],
-      "description": "Denylist of IPs or CIDR ranges (IPv4 and IPv6). These IPs are always blocked (takes precedence over allow)."
+      "description": "Denylist of IPs or CIDR ranges (IPv4 and IPv6). These IPs are always blocked (takes precedence over allow). An entry that is not an IP address or a CIDR range fails the configuration."
     },
     "message": {
       "type": "string",

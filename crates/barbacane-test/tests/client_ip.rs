@@ -237,3 +237,46 @@ paths:
         );
     }
 }
+
+/// An `ip-restriction` entry that is not an IP address or a CIDR range does
+/// not compile, so a typo cannot leave an address out of a list.
+#[tokio::test]
+async fn an_ip_restriction_entry_that_is_not_an_address_does_not_compile() {
+    let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    for entry in ["203.0.113/24", "10.0.0.0/33", "office"] {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::write(
+            dir.path().join("barbacane.yaml"),
+            format!(
+                "plugins:\n  ip-restriction:\n    path: {}\n  mock:\n    path: {}\n",
+                plugins.join("ip-restriction/ip-restriction.wasm").display(),
+                plugins.join("mock/mock.wasm").display(),
+            ),
+        )
+        .expect("manifest");
+        let spec = dir.path().join("api.yaml");
+        std::fs::write(
+            &spec,
+            format!(
+                r#"openapi: "3.1.0"
+info: {{ title: Lists, version: "1.0.0" }}
+paths:
+  /admin:
+    get:
+      operationId: admin
+      x-barbacane-middlewares:
+        - name: ip-restriction
+          config: {{ deny: ["198.51.100.7", "{entry}"] }}
+      x-barbacane-dispatch: {{ name: mock, config: {{ status: 200 }} }}
+      responses: {{ "200": {{ description: ok }} }}
+"#
+            ),
+        )
+        .expect("spec");
+        let error = match TestGateway::from_spec(spec.to_str().expect("utf-8 path")).await {
+            Ok(_) => panic!("ip-restriction compiled with `{entry}`"),
+            Err(e) => e.to_string(),
+        };
+        assert!(error.contains("E1023"), "{entry}: {error}");
+    }
+}
