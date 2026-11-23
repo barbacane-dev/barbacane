@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
+### Security
+
+- **dependencies**: url 2.5.9, for RUSTSEC-2026-0592: `Url::origin()` overflows the stack on a deeply nested `blob:` URL. Neither Barbacane nor any crate in its tree that uses `url` calls `Url::origin()`.
+
 ## [1.0.0-rc.2] - 2026-11-19
 
 One change is breaking: the control-plane image has no shell, so a health check that runs a shell command in it fails; its **Upgrade note (breaking)** says what to use.
@@ -199,6 +203,16 @@ The breaking changes below are gathered, with what to do and in which order, in 
 - **docs**: the control-plane guide's examples match the API. They showed `deployment_id`, `current_artifact_id` and a `connected` status, which it does not have.
 - **wasm runtime**: `host_http_stream` drops the headers a plugin may not set (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Upgrade`, `TE`, `Trailer`), as `host_http_call` does. It forwarded every header a plugin set.
 - **CLI**: the example spec `barbacane init` writes answers `GET /users/{id}` with the requested id, where it answered `"{id}"`, and the `.gitignore` it writes ignores `*.pk8` signing keys.
+
+## [0.12.5] - 2026-11-23
+
+Dependency updates for advisories published since 0.12.4. None of them reaches Barbacane 0.12.
+
+### Security
+
+- **wasm runtime**: Wasmtime 48.0.9, for RUSTSEC-2026-0566 to RUSTSEC-2026-0573. None of them reaches the gateway: two are in `wasmtime-wasi` and `wasmtime-wasi-http`, which it does not build, and one in the component model, which it does not load; two abort builds without the `threads` or `gc` feature, and it builds both; one is a panic in `Caller::get_module_export`, which it does not call; one needs a host function that hands the guest a GC reference, and none does; one needs a GC heap reservation that is not a multiple of the page size, and it configures none.
+- **dependencies**: tar 0.4.46 and rand 0.8.6. tar 0.4.45 applied a PAX header to the extension header after it rather than to the file, so a crafted archive lists different members under tar-rs than under other tar readers (GHSA-3pv8-6f4r-ffg2). Barbacane opens a `.bca` only with tar-rs, so its own readers agree; a review of the archive with another tool could miss a member. rand 0.8.5 is unsound when a custom `log` logger draws from `thread_rng` (GHSA-cq8v-f236-94qc); Barbacane builds rand 0.8 without its `log` feature. Neither advisory has a RustSec id, so `cargo deny` does not report them.
+- **dependencies**: url 2.5.9, for RUSTSEC-2026-0592: `Url::origin()` overflows the stack on a deeply nested `blob:` URL. Neither Barbacane nor any crate in its tree that uses `url` calls `Url::origin()`.
 
 ## [0.12.4] - 2026-11-06
 
@@ -1057,6 +1071,7 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 [Unreleased]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.2...HEAD
 [1.0.0-rc.2]: https://github.com/barbacane-dev/barbacane/compare/v1.0.0-rc.1...v1.0.0-rc.2
 [1.0.0-rc.1]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...v1.0.0-rc.1
+[0.12.5]: https://github.com/barbacane-dev/barbacane/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/barbacane-dev/barbacane/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...v0.12.2
