@@ -790,7 +790,9 @@ x-barbacane-dispatch:
 1. Client sends an HTTP request with `Upgrade: websocket`
 2. The plugin validates the upgrade header and connects to the upstream WebSocket server
 3. On success, the gateway returns `101 Switching Protocols` to the client
-4. Frames are relayed bidirectionally between client and upstream until either side closes
+4. Frames are relayed bidirectionally between client and upstream until either side closes, or until no frame (pings included) crosses in either direction for 5 minutes; the gateway then sends both a Close 1001 (going away)
+
+A relayed connection counts against `--max-connections` until it closes.
 
 The middleware chain (`x-barbacane-middlewares`) runs on the initial HTTP request and can inspect/modify headers, enforce authentication, apply rate limiting, etc. Once the connection is upgraded, middleware is bypassed for individual frames.
 

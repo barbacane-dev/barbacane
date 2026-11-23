@@ -756,7 +756,7 @@ The gateway serves at most `--max-connections` connections at once (default 1000
 serving at most 10000 concurrent connections; open-file limit 1048576
 ```
 
-Each connection holds at least one file descriptor. When the open-file limit is not above the cap, connections fail at accept before the cap sheds them, and the gateway logs a warning. Raise the limit (`ulimit -n`, `LimitNOFILE=` in a systemd unit, `--ulimit nofile=` for a container) or lower `--max-connections`. A systemd service gets a soft limit of 1024 unless its unit sets one.
+A WebSocket connection keeps its place while its relay is open. Each connection holds at least one file descriptor; a relayed WebSocket holds two, its own and the upstream's. When the open-file limit is not above the cap, connections fail at accept before the cap sheds them, and the gateway logs a warning. Raise the limit (`ulimit -n`, `LimitNOFILE=` in a systemd unit, `--ulimit nofile=` for a container) or lower `--max-connections`. A systemd service gets a soft limit of 1024 unless its unit sets one.
 
 ### Plugin instance pool
 

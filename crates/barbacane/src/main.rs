@@ -1542,7 +1542,14 @@ impl Gateway {
                 let is_ws_upgrade = is_websocket_handshake(&method_str, &headers);
 
                 let (body_bytes, upgrade_handle) = if is_ws_upgrade {
-                    (Bytes::new(), Some(hyper::upgrade::on(req)))
+                    let permit = req.extensions().get::<ConnectionPermit>().cloned();
+                    (
+                        Bytes::new(),
+                        Some(PendingUpgrade {
+                            on_upgrade: hyper::upgrade::on(req),
+                            permit,
+                        }),
+                    )
                 } else {
                     // Cap the bytes read while collecting so a chunked body with
                     // no content-length can't be buffered past the limit (DoS).
@@ -1946,7 +1953,7 @@ impl Gateway {
         request_body: &[u8],
         headers: &HashMap<String, String>,
         client_ip: Option<IpAddr>,
-        upgrade_handle: Option<hyper::upgrade::OnUpgrade>,
+        upgrade_handle: Option<PendingUpgrade>,
     ) -> Result<Response<AnyBody>, Infallible> {
         let dispatch = &operation.dispatch;
 
@@ -2374,7 +2381,7 @@ impl Gateway {
         request_body: Option<Vec<u8>>,
         middleware_instances: Vec<barbacane_wasm::PluginInstance>,
         middleware_context: barbacane_wasm::RequestContext,
-        upgrade_handle: Option<hyper::upgrade::OnUpgrade>,
+        upgrade_handle: Option<PendingUpgrade>,
     ) -> Result<Response<AnyBody>, Response<Full<Bytes>>> {
         use barbacane_wasm::StreamEvent;
         use futures_util::stream;
@@ -2699,9 +2706,12 @@ impl Gateway {
                     // the drain waits for. The client-side upgrade completes
                     // when we return the 101 response.
                     let shutdown = background().shutdown();
+                    let PendingUpgrade { on_upgrade, permit } = upgrade_handle;
                     background().spawn(async move {
+                        // The relay counts against --max-connections.
+                        let _permit = permit;
                         // Wait for hyper to complete the HTTP upgrade.
-                        let upgraded = match upgrade_handle.await {
+                        let upgraded = match on_upgrade.await {
                             Ok(u) => u,
                             Err(e) => {
                                 tracing::warn!(
@@ -2721,7 +2731,13 @@ impl Gateway {
                         .await;
 
                         // Relay frames bidirectionally.
-                        Self::relay_websocket(client_ws, ws_upstream, shutdown).await;
+                        Self::relay_websocket(
+                            client_ws,
+                            ws_upstream,
+                            shutdown,
+                            WEBSOCKET_IDLE_TIMEOUT,
+                        )
+                        .await;
                     });
 
                     // Return 101 Switching Protocols to the client.
@@ -3332,12 +3348,15 @@ impl Gateway {
 
     /// Relay WebSocket frames bidirectionally between client and upstream (ADR-0026).
     ///
-    /// Runs until either side closes or an error occurs. Frames are forwarded
-    /// as-is with no inspection or transformation.
+    /// Runs until either side closes, an error occurs, or no frame (control
+    /// frames included) crosses in either direction for `idle`; then both peers
+    /// are sent a Close 1001, as at shutdown. Frames are forwarded as-is with
+    /// no inspection or transformation.
     async fn relay_websocket<C, U>(
         client_ws: C,
         upstream_ws: U,
         shutdown: tokio_util::sync::CancellationToken,
+        idle: Duration,
     ) where
         C: futures_util::Sink<
                 tokio_tungstenite::tungstenite::Message,
@@ -3365,10 +3384,45 @@ impl Gateway {
         let (mut client_tx, mut client_rx) = client_ws.split();
         let (mut upstream_tx, mut upstream_rx) = upstream_ws.split();
 
+        // Shutdown or an idle relay stops both directions.
+        let stop = shutdown.child_token();
+        let started = tokio::time::Instant::now();
+        let last_frame = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mark = |last: &std::sync::atomic::AtomicU64| {
+            last.store(
+                started.elapsed().as_millis() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+        };
+        let watchdog = {
+            let stop = stop.clone();
+            let last_frame = Arc::clone(&last_frame);
+            async move {
+                loop {
+                    let last = Duration::from_millis(
+                        last_frame.load(std::sync::atomic::Ordering::Relaxed),
+                    );
+                    let quiet_until = started + last + idle;
+                    if tokio::time::Instant::now() >= quiet_until {
+                        tracing::debug!("WebSocket relay idle; closing");
+                        stop.cancel();
+                        return;
+                    }
+                    tokio::select! {
+                        () = stop.cancelled() => return,
+                        () = tokio::time::sleep_until(quiet_until) => {}
+                    }
+                }
+            }
+        };
+        let shutdown = stop;
+        let end_watchdog = shutdown.clone();
+
         // Each direction forwards frames until its peer closes, and at
         // shutdown sends its sink a Close 1001 (going away). Each returns
         // whether shutdown ended it.
         let upstream_shutdown = shutdown.clone();
+        let client_last = Arc::clone(&last_frame);
         let client_to_upstream = async move {
             loop {
                 tokio::select! {
@@ -3384,6 +3438,7 @@ impl Gateway {
                             return false;
                         }
                         Some(Ok(m)) => {
+                            mark(&client_last);
                             if upstream_tx.send(m).await.is_err() {
                                 return false;
                             }
@@ -3409,6 +3464,7 @@ impl Gateway {
                             return false;
                         }
                         Some(Ok(m)) => {
+                            mark(&last_frame);
                             if client_tx.send(m).await.is_err() {
                                 return false;
                             }
@@ -3421,6 +3477,7 @@ impl Gateway {
 
         // When a peer ends its direction, the other is dropped. When shutdown
         // ends one, the other has seen it too and sends its own Close.
+        tokio::spawn(watchdog);
         let mut client_to_upstream = std::pin::pin!(client_to_upstream);
         let mut upstream_to_client = std::pin::pin!(upstream_to_client);
         let (by_shutdown, client_side_done) = tokio::select! {
@@ -3437,6 +3494,7 @@ impl Gateway {
             };
             let _ = tokio::time::timeout(RELAY_CLOSE_GRACE, rest).await;
         }
+        end_watchdog.cancel();
 
         tracing::debug!("WebSocket relay closed");
     }
@@ -4819,6 +4877,24 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 /// send its Close frame.
 const RELAY_CLOSE_GRACE: Duration = Duration::from_secs(2);
 
+/// How long a WebSocket relay may pass no frame, in either direction, before
+/// the gateway closes it.
+const WEBSOCKET_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A connection's slot under `--max-connections`, shared by the connection and
+/// a WebSocket relay it becomes.
+#[derive(Clone)]
+struct ConnectionPermit {
+    _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+}
+
+/// A WebSocket handshake hyper completes after the `101`, with the slot of the
+/// connection it upgrades.
+struct PendingUpgrade {
+    on_upgrade: hyper::upgrade::OnUpgrade,
+    permit: Option<ConnectionPermit>,
+}
+
 /// The Close frame a relay sends both peers at shutdown.
 fn going_away() -> tokio_tungstenite::tungstenite::Message {
     use tokio_tungstenite::tungstenite::protocol::frame::{coding::CloseCode, CloseFrame};
@@ -5328,9 +5404,13 @@ async fn run_serve(
                 let conn_keepalive = keepalive_duration;
 
                 tokio::spawn(async move {
-                    // Held for the connection's lifetime; released on drop.
-                    let _permit = permit;
-                    let service = service_fn(move |req| {
+                    // Held for the connection's lifetime, and by a WebSocket
+                    // relay the connection becomes; released when both end.
+                    let permit = ConnectionPermit {
+                        _permit: Arc::new(permit),
+                    };
+                    let service = service_fn(move |mut req: Request<hyper::body::Incoming>| {
+                        req.extensions_mut().insert(permit.clone());
                         let gateway = gateway_swap.load_full();
                         let client_addr = client_addr;
                         let trusted_proxies = Arc::clone(&conn_trusted_proxies);
@@ -6200,6 +6280,13 @@ mod relay_tests {
 
     /// A relay between a client and an upstream, with the peers' ends.
     async fn relay(shutdown: CancellationToken) -> (Ws, Ws, tokio::task::JoinHandle<()>) {
+        relay_idle_after(shutdown, Duration::from_secs(60)).await
+    }
+
+    async fn relay_idle_after(
+        shutdown: CancellationToken,
+        idle: Duration,
+    ) -> (Ws, Ws, tokio::task::JoinHandle<()>) {
         let (client, gateway_client) = tokio::io::duplex(4096);
         let (gateway_upstream, upstream) = tokio::io::duplex(4096);
         let client = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
@@ -6212,6 +6299,7 @@ mod relay_tests {
             gateway_client,
             gateway_upstream,
             shutdown,
+            idle,
         ));
         (client, upstream, task)
     }
@@ -6235,6 +6323,47 @@ mod relay_tests {
         client.close(None).await.unwrap();
         assert!(next(&mut upstream).await.is_close());
         tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("the relay ends")
+            .unwrap();
+    }
+
+    /// The next frame other than a pong: the upstream answers a relayed ping.
+    async fn next_not_pong(ws: &mut Ws) -> Message {
+        loop {
+            let frame = next(ws).await;
+            if !matches!(frame, Message::Pong(_)) {
+                return frame;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_idle_relay_is_closed_and_traffic_keeps_it_open() {
+        let idle = Duration::from_millis(300);
+        let (mut client, mut upstream, task) =
+            relay_idle_after(CancellationToken::new(), idle).await;
+
+        // Frames in either direction, more often than the idle time.
+        for i in 0..8 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if i % 2 == 0 {
+                client.send(Message::Ping(vec![].into())).await.unwrap();
+                assert!(matches!(next(&mut upstream).await, Message::Ping(_)));
+            } else {
+                upstream.send(Message::text("tick")).await.unwrap();
+                assert_eq!(next_not_pong(&mut client).await, Message::text("tick"));
+            }
+        }
+        assert!(!task.is_finished(), "traffic kept the relay open");
+
+        for peer in [&mut client, &mut upstream] {
+            match next_not_pong(peer).await {
+                Message::Close(Some(frame)) => assert_eq!(frame.code, CloseCode::Away),
+                other => panic!("expected Close 1001, got {other:?}"),
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(3), task)
             .await
             .expect("the relay ends")
             .unwrap();

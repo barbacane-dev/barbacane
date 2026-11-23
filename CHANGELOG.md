@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Upgrade note (breaking):** a `timeout` above 60 (`lambda` allowed 900) or a `ws-upstream` `connect_timeout` above 30 does not compile; lower it.
 - **wasm runtime**: the WebAssembly features that add linear memories or heaps (multi-memory, memory64, GC, function references, exceptions) are off, and an instance holds one memory and one table, so a plugin's memory limit covers all it can hold. A module with more than one memory or table fails compilation with `E1045`.
 - **wasm runtime**: the response cache holds at most 256 MiB as well as 10,000 entries, and does not store a response over 8 MiB; past a bound it evicts expired entries, then those closest to expiry. A request's context holds at most 256 values and 256 KiB; a `host_context_set` past either is not applied and is logged.
+- **WebSocket**: a relayed WebSocket keeps its connection's place under `--max-connections` until the relay ends, and a relay through which no frame, pings included, crosses in either direction for 5 minutes is closed with a Close 1001 to both peers.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security
