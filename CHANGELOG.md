@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **kafka**: connections to the brokers a Kafka cluster advertises pass the plugin egress guard, as those to the configured brokers do. While the guard is on, the gateway relays each Kafka connection through a SOCKS5 relay on a loopback port that resolves and checks it, and a broker named by an IPv6 address is refused (`use a host name`).
 
   > **Upgrade note (breaking):** while the egress guard is on, a `kafka` dispatcher whose `brokers` name a broker by an IPv6 address fails to publish: name it by a host name.
+- **wasm runtime**: a plugin's HTTP call may name only TLS files (client certificate, key, CA) that the plugin's own configuration names, as `host_get_secret` serves only the references a plugin's configuration holds. A call naming another file is answered 502 without being sent (`host_http_stream` returns `-1`), and the refusal is logged.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security

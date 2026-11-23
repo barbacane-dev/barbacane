@@ -213,6 +213,10 @@ pub struct PluginState {
     /// Resolved secrets store (shared across instances).
     pub secrets: crate::secrets::SecretsStore,
 
+    /// The strings the plugin's config holds: the only TLS files a call's
+    /// `tls` may name.
+    pub tls_files: Arc<std::collections::HashSet<String>>,
+
     /// Result buffer for host_secret_read_result.
     pub last_secret_result: Option<Vec<u8>>,
 
@@ -300,6 +304,7 @@ impl PluginState {
             http_client: None,
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
+            tls_files: Arc::default(),
             last_secret_result: None,
             rate_limiter: None,
             last_rate_limit_result: None,
@@ -716,6 +721,12 @@ impl PluginInstance {
         self.store.data_mut().config_hash = config_hash.to_string();
     }
 
+    /// Set the TLS files this instance's calls may name: the strings its
+    /// plugin's config holds.
+    pub(crate) fn set_tls_files(&mut self, files: Arc<std::collections::HashSet<String>>) {
+        self.store.data_mut().tls_files = files;
+    }
+
     /// Set the request/response body for the next handler call (side-channel).
     pub fn set_request_body(&mut self, body: Option<Vec<u8>>) {
         self.store.data_mut().set_request_body(body);
@@ -854,6 +865,19 @@ where
     }
 }
 
+/// The first file `tls` names that the plugin's config does not, as
+/// `host_get_secret` serves only the references a plugin's config holds.
+fn tls_file_outside_config(
+    tls: &crate::http_client::TlsConfig,
+    config_strings: &std::collections::HashSet<String>,
+) -> Option<String> {
+    [&tls.client_cert, &tls.client_key, &tls.ca]
+        .into_iter()
+        .flatten()
+        .map(|path| path.to_string_lossy().into_owned())
+        .find(|path| !config_strings.contains(path))
+}
+
 /// `host_http_call`, and `host_http_pool_call` when `pooled`: send the
 /// plugin's request and leave the response for `host_http_read_result`.
 fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, pooled: bool) -> i32 {
@@ -888,6 +912,26 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
         .or(plugin_request.body);
 
     let tls = plugin_request.tls;
+    if let Some(path) = tls
+        .as_ref()
+        .and_then(|tls| tls_file_outside_config(tls, &caller.data().tls_files))
+    {
+        tracing::error!(path = %path, "refused a TLS file the plugin's config does not name");
+        let mut refused = HttpClientResponse::error(
+            502,
+            "urn:barbacane:error:upstream-unavailable",
+            "Bad Gateway",
+            "Upstream request failed",
+        );
+        let body = refused.body.take();
+        let Ok(json) = serde_json::to_vec(&refused) else {
+            return -1;
+        };
+        let len = json.len() as i32;
+        caller.data_mut().last_http_result = Some(json);
+        caller.data_mut().http_response_body = body;
+        return len;
+    }
     let endpoints = plugin_request.endpoints;
     let retries = plugin_request.retries.unwrap_or(1);
     if pooled && endpoints.is_empty() {
@@ -1441,6 +1485,16 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     .or(plugin_request.body);
 
                 let tls = plugin_request.tls;
+                if let Some(path) = tls
+                    .as_ref()
+                    .and_then(|tls| tls_file_outside_config(tls, &caller.data().tls_files))
+                {
+                    tracing::error!(
+                        path = %path,
+                        "host_http_stream: refused a TLS file the plugin's config does not name"
+                    );
+                    return -1;
+                }
                 let request = HttpClientRequest {
                     method: plugin_request.method,
                     url: plugin_request.url,

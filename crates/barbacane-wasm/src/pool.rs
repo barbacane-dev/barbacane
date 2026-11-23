@@ -96,6 +96,10 @@ pub struct InstancePool {
     /// Plugin configs by key.
     configs: DashMap<InstanceKey, Vec<u8>>,
 
+    /// The strings each config holds, by key: the TLS files an instance's
+    /// calls may name.
+    config_strings: DashMap<InstanceKey, Arc<HashSet<String>>>,
+
     /// Secret references (env://… / file://…) each plugin declares in its config,
     /// keyed by plugin name. Used to scope `host_get_secret` to a plugin's own
     /// secrets (WA-3). A plugin absent from this map gets an empty secrets store.
@@ -122,6 +126,7 @@ impl InstancePool {
             modules: DashMap::new(),
             snapshots: DashMap::new(),
             configs: DashMap::new(),
+            config_strings: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
             metrics: None,
@@ -154,6 +159,7 @@ impl InstancePool {
             modules: DashMap::new(),
             snapshots: DashMap::new(),
             configs: DashMap::new(),
+            config_strings: DashMap::new(),
             secret_refs_by_plugin: HashMap::new(),
             plugin_limits: HashMap::new(),
             metrics: None,
@@ -193,6 +199,8 @@ impl InstancePool {
 
     /// Register a plugin config.
     pub fn register_config(&self, key: InstanceKey, config_json: Vec<u8>) {
+        self.config_strings
+            .insert(key.clone(), Arc::new(strings_in(&config_json)));
         self.configs.insert(key, config_json);
     }
 
@@ -240,6 +248,9 @@ impl InstancePool {
         )?;
         instance.set_metrics(self.metrics.clone());
         instance.set_config_hash(&key.config_hash);
+        if let Some(strings) = self.config_strings.get(key) {
+            instance.set_tls_files(Arc::clone(&strings));
+        }
         if let Some(metrics) = &self.metrics {
             instance.count_in(Arc::clone(metrics));
         }
@@ -287,6 +298,25 @@ impl InstancePool {
     pub fn module_count(&self) -> usize {
         self.modules.len()
     }
+}
+
+/// Every string value in a JSON config, at any depth; none when it does not parse.
+fn strings_in(config_json: &[u8]) -> HashSet<String> {
+    fn walk(value: &serde_json::Value, out: &mut HashSet<String>) {
+        match value {
+            serde_json::Value::String(s) => {
+                out.insert(s.clone());
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = HashSet::new();
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(config_json) {
+        walk(&value, &mut out);
+    }
+    out
 }
 
 #[cfg(test)]
