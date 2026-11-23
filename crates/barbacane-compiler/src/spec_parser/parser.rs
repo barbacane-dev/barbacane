@@ -674,7 +674,8 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
     let extensions = extract_extensions(root_obj);
 
     // Extract global middlewares
-    let global_middlewares = extract_middlewares(root_obj);
+    let global_middlewares =
+        extract_middlewares(root_obj, "the document root")?.unwrap_or_default();
 
     // Security schemes and the root-level requirement they are referenced by
     let mut security_schemes = parse_security_schemes(&root)?;
@@ -763,16 +764,54 @@ fn extract_extensions(obj: &serde_json::Map<String, Value>) -> BTreeMap<String, 
         .collect()
 }
 
-/// Extract x-barbacane-middlewares from an object.
-fn extract_middlewares(obj: &serde_json::Map<String, Value>) -> Vec<MiddlewareConfig> {
-    obj.get("x-barbacane-middlewares")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                .collect()
+/// The keys a middleware entry may set.
+const MIDDLEWARE_ENTRY_KEYS: &[&str] = &["name", "config", "enabled"];
+
+/// The `x-barbacane-middlewares` of an object, `None` when it has none.
+/// `location` names the object in errors. A value that is not a list, or an
+/// entry that is not an object of the keys above with their types, is E1011.
+fn extract_middlewares(
+    obj: &serde_json::Map<String, Value>,
+    location: &str,
+) -> Result<Option<Vec<MiddlewareConfig>>, ParseError> {
+    let Some(value) = obj.get("x-barbacane-middlewares") else {
+        return Ok(None);
+    };
+    let Value::Array(entries) = value else {
+        return Err(ParseError::InvalidMiddleware(format!(
+            "x-barbacane-middlewares in {location} must be a list"
+        )));
+    };
+    entries
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| {
+            let at = || {
+                format!(
+                    "entry #{} of x-barbacane-middlewares in {location}",
+                    idx + 1
+                )
+            };
+            let Value::Object(fields) = entry else {
+                return Err(ParseError::InvalidMiddleware(format!(
+                    "{} must be an object",
+                    at()
+                )));
+            };
+            if let Some(key) = fields
+                .keys()
+                .find(|k| !MIDDLEWARE_ENTRY_KEYS.contains(&k.as_str()))
+            {
+                return Err(ParseError::InvalidMiddleware(format!(
+                    "{} sets unknown key '{key}' (expected name, config, enabled)",
+                    at()
+                )));
+            }
+            serde_json::from_value(entry.clone())
+                .map_err(|e| ParseError::InvalidMiddleware(format!("{}: {e}", at())))
         })
-        .unwrap_or_default()
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 /// Extract x-barbacane-dispatch from an operation object.
@@ -843,11 +882,8 @@ fn parse_openapi_paths(
 
                 let dispatch = extract_dispatch(op_obj);
 
-                let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
-                    Some(extract_middlewares(op_obj))
-                } else {
-                    None
-                };
+                let middlewares =
+                    extract_middlewares(op_obj, &format!("{} {}", method.to_uppercase(), path))?;
 
                 // Extract deprecated flag (standard OpenAPI field)
                 let deprecated = op_obj
@@ -919,11 +955,10 @@ fn parse_openapi_paths(
                 let responses = parse_responses(op_obj, spec_root, defs)?;
                 let dispatch = extract_dispatch(op_obj);
 
-                let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
-                    Some(extract_middlewares(op_obj))
-                } else {
-                    None
-                };
+                let middlewares = extract_middlewares(
+                    op_obj,
+                    &format!("{} {}", method_name.to_uppercase(), path),
+                )?;
 
                 let deprecated = op_obj
                     .get("deprecated")
@@ -1211,11 +1246,7 @@ fn parse_asyncapi_channels(
         let dispatch = extract_dispatch(op_obj);
 
         // Extract middlewares
-        let middlewares = if op_obj.contains_key("x-barbacane-middlewares") {
-            Some(extract_middlewares(op_obj))
-        } else {
-            None
-        };
+        let middlewares = extract_middlewares(op_obj, &format!("operation '{op_id}'"))?;
 
         // Extract deprecated and sunset
         let deprecated = op_obj
@@ -1815,6 +1846,87 @@ paths:
         assert_eq!(param.name, "id");
         assert_eq!(param.location, "path");
         assert!(param.required);
+    }
+
+    /// A spec with a global `jwt-auth` and one operation whose
+    /// `x-barbacane-middlewares` is `value`.
+    fn spec_with_operation_middlewares(value: &str) -> String {
+        format!(
+            r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: jwt-auth
+    config:
+      issuer: https://issuer.example
+paths:
+  /admin:
+    get:
+      x-barbacane-middlewares: {value}
+      x-barbacane-dispatch:
+        name: mock
+"#
+        )
+    }
+
+    #[test]
+    fn a_malformed_middleware_list_is_refused() {
+        for (value, expected) in [
+            ("~", "must be a list"),
+            ("{ name: acl }", "must be a list"),
+            (
+                "[ acl ]",
+                "entry #1 of x-barbacane-middlewares in GET /admin must be an object",
+            ),
+            (
+                "[ { name: acl, confg: { allow: [admins] } } ]",
+                "unknown key 'confg'",
+            ),
+            (
+                "[ { config: { allow: [admins] } } ]",
+                "missing field `name`",
+            ),
+            (
+                "[ { name: acl }, { name: cors, enabled: \"no\" } ]",
+                "entry #2",
+            ),
+        ] {
+            let err = parse_spec(&spec_with_operation_middlewares(value))
+                .expect_err(value)
+                .to_string();
+            assert!(err.starts_with("E1011: "), "{value}: {err}");
+            assert!(err.contains(expected), "{value}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_global_middleware_entry_is_refused() {
+        let yaml = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+x-barbacane-middlewares:
+  - name: jwt-auth
+    confg: {}
+paths: {}
+"#;
+        let err = parse_spec(yaml).expect_err("unknown key").to_string();
+        assert!(
+            err.contains("in the document root sets unknown key 'confg'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_middleware_list_opts_out_of_the_global_chain() {
+        let spec = parse_spec(&spec_with_operation_middlewares("[]")).expect("parses");
+        assert!(spec.operations[0]
+            .middlewares
+            .as_ref()
+            .is_some_and(Vec::is_empty));
     }
 
     #[test]

@@ -249,7 +249,7 @@ plugins and builds an artifact.
 | E1003 | Spec validity | Unresolved `$ref` reference |
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
 | E1010 | Extension | Routing conflict (same path+method in multiple specs) |
-| E1011 | Extension | Middleware entry missing `name` |
+| E1011 | Extension | `x-barbacane-middlewares` is not a list, or an entry is not an object of `name` (string, required), `config` and `enabled` (boolean) |
 | E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
@@ -306,7 +306,7 @@ no artifact, so it reports only the codes that need neither.
 | E1002 | Spec validity | YAML/JSON parse error |
 | E1003 | Spec validity | Unresolved `$ref` reference |
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
-| E1011 | Extension | Middleware entry missing `name` |
+| E1011 | Extension | `x-barbacane-middlewares` is not a list, or an entry is not an object of `name` (string, required), `config` and `enabled` (boolean) |
 | E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |

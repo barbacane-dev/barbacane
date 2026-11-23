@@ -3583,6 +3583,9 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     barbacane_compiler::ParseError::SchemaError(_) => {
                         ("E1004".to_string(), e.to_string())
                     }
+                    barbacane_compiler::ParseError::InvalidMiddleware(_) => {
+                        ("E1011".to_string(), e.to_string())
+                    }
                     barbacane_compiler::ParseError::Io(io_err) => {
                         ("E1000".to_string(), format!("I/O error: {}", io_err))
                     }

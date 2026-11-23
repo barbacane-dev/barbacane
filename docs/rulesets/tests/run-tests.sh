@@ -108,6 +108,13 @@ assert_has_violations "$SCRIPT_DIR/invalid-plaintext-secret.yaml" "invalid-plain
 assert_has_violations "$SCRIPT_DIR/invalid-reserved-headers.yaml" "invalid-reserved-headers" 4
 echo ""
 
+echo "--- middleware entries (exact rule codes) ---"
+# A list that is null or not a list, or an entry with an unknown key, mirrors
+# compiler error E1011.
+assert_codes "$SCRIPT_DIR/invalid-middleware-entries.yaml" "invalid-middleware-entries" \
+  "barbacane-middleware-config-valid,barbacane-middlewares-shape,barbacane-op-middleware-has-name,barbacane-op-middlewares-shape"
+echo ""
+
 echo "--- enabled: false (exact rule codes) ---"
 assert_codes "$SCRIPT_DIR/invalid-disabled-middlewares.yaml" "invalid-disabled-middlewares" \
   "barbacane-auth-plugins-stacked,barbacane-global-auth-disabled,barbacane-global-middleware-disabled,barbacane-middleware-disabled-unmatched,barbacane-middleware-disabled-with-config"

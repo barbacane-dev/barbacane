@@ -72,6 +72,8 @@ An operation's middleware entry matches the global one by plugin name, without t
 
 `enabled: false` on an operation's entry drops that one global middleware and keeps the rest; `x-barbacane-middlewares: []` keeps dropping them all.
 
+`x-barbacane-middlewares` must be a list, and each entry an object setting only `name`, `config` and `enabled`. A `null` value, a misspelled key (`confg`) or a wrong type fails compilation with `E1011`; such entries were ignored.
+
 ### Schemas the gateway cannot build are errors
 
 No schema makes the compiler, the data plane or the control plane fetch a URL or read a file. A request schema the gateway cannot build (another `$schema` dialect, a reference outside the spec, an invalid `pattern`) fails compilation with `E1059` where it was accepted and failed at runtime. Keywords beside a `$ref` apply in OpenAPI 3.1 and later, as JSON Schema 2020-12 defines.

@@ -237,6 +237,8 @@ x-barbacane-middlewares:
 | `config` | object | No | Configuration passed to the middleware |
 | `enabled` | boolean | No | `false` on an operation entry removes the global entries of this plugin from the operation's chain and adds nothing. Default `true`. |
 
+The value must be a list, and each entry an object setting only these keys, with these types. Anything else, `null` and a misspelled key such as `confg` included, fails `compile` and `validate` with `E1011`.
+
 ### Middleware Merging
 
 Operation middlewares are merged with the global chain. Entries match by plugin name without the `@version` suffix. Every global entry that matches an operation entry is removed, then the operation entries are appended, except those with `enabled: false`, which add nothing. So an operation entry replaces the global entries of its plugin, and `enabled: false` removes them while keeping the rest of the global chain. An empty array (`x-barbacane-middlewares: []`) disables all middlewares for that operation.

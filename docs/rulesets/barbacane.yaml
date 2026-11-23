@@ -66,6 +66,14 @@ rules:
   # Middleware validation
   # ---------------------------------------------------------------------------
 
+  barbacane-middlewares-shape:
+    description: x-barbacane-middlewares must be a list of entries setting only name, config and enabled (E1011).
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
+    severity: error
+    given: "$"
+    then:
+      function: barbacane-middleware-entries
+
   barbacane-middleware-has-name:
     description: Each middleware entry must include a "name" field.
     documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
@@ -119,6 +127,14 @@ rules:
   # multiple times with different configs. See docs/guide/middlewares/index.md#stacking.
 
   # Operation-level middleware rules (same checks)
+
+  barbacane-op-middlewares-shape:
+    description: An operation's x-barbacane-middlewares must be a list of entries setting only name, config and enabled (E1011).
+    documentationUrl: https://docs.barbacane.dev/reference/extensions.html#x-barbacane-middlewares
+    severity: error
+    given: "$.paths[*][*]"
+    then:
+      function: barbacane-middleware-entries
 
   barbacane-op-middleware-has-name:
     description: Each operation-level middleware entry must include a "name" field.
