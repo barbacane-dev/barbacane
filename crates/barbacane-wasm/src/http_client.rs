@@ -729,17 +729,30 @@ pub(crate) async fn resolve_permitted_addrs(
     port: u16,
     allow_internal: bool,
 ) -> Result<Vec<SocketAddr>, HostGuardError> {
+    resolve_addrs_where(host, port, |addr| {
+        allow_internal || !ip_is_internal(&addr.ip())
+    })
+    .await
+}
+
+/// Resolve `host`:`port` and keep the addresses `permit` accepts; `Blocked`
+/// when it accepts none.
+pub(crate) async fn resolve_addrs_where(
+    host: &str,
+    port: u16,
+    permit: impl Fn(&SocketAddr) -> bool,
+) -> Result<Vec<SocketAddr>, HostGuardError> {
     let host_clean = host
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
 
     if let Ok(ip) = host_clean.parse::<IpAddr>() {
-        let addrs = permitted_addrs(std::iter::once(SocketAddr::new(ip, port)), allow_internal);
-        if addrs.is_empty() {
+        let addr = SocketAddr::new(ip, port);
+        if !permit(&addr) {
             return Err(HostGuardError::Blocked(host.to_string()));
         }
-        return Ok(addrs);
+        return Ok(vec![addr]);
     }
 
     let resolved: Vec<SocketAddr> = tokio::net::lookup_host((host_clean, port))
@@ -751,7 +764,7 @@ pub(crate) async fn resolve_permitted_addrs(
             "no DNS records for {host}"
         )));
     }
-    let addrs = permitted_addrs(resolved.into_iter(), allow_internal);
+    let addrs: Vec<SocketAddr> = resolved.into_iter().filter(|a| permit(a)).collect();
     if addrs.is_empty() {
         // Records existed but every one was internal → policy block.
         return Err(HostGuardError::Blocked(host.to_string()));

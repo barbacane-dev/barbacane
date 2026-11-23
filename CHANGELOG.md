@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Upgrade note (breaking):** upgrade the data planes before the control plane: a 1.0 control plane refuses a data plane that does not send its key on the upgrade, and a 1.0 data plane also registers with an older control plane.
 - **data plane**: the introspection endpoints (`/__barbacane/specs` and the specs under it) are built when the artifact is loaded, each spec parsed, stripped and serialized in JSON and YAML once, so a request parses nothing.
 - **plugin egress**: the internal-address guard also blocks `192.0.0.0/24`, `198.18.0.0/15`, `240.0.0.0/4`, `100::/64`, Teredo `2001::/32` and local-use NAT64 `64:ff9b:1::/48`, and judges a NAT64 (`64:ff9b::/96`) or 6to4 (`2002::/16`) address by the IPv4 address it carries.
+- **kafka**: connections to the brokers a Kafka cluster advertises pass the plugin egress guard, as those to the configured brokers do. While the guard is on, the gateway relays each Kafka connection through a SOCKS5 relay on a loopback port that resolves and checks it, and a broker named by an IPv6 address is refused (`use a host name`).
+
+  > **Upgrade note (breaking):** while the egress guard is on, a `kafka` dispatcher whose `brokers` name a broker by an IPv6 address fails to publish: name it by a host name.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security

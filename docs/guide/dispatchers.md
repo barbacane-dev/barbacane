@@ -393,6 +393,8 @@ x-barbacane-dispatch:
 | `include_metadata` | boolean | No | false | Include partition/offset in response |
 | `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
 
+Broker connections pass the plugin egress guard ([`BARBACANE_ALLOW_INTERNAL_EGRESS`](../reference/configuration.md#security-environment-variables)): those to the brokers in `brokers` and those to every broker the cluster advertises. While the guard is on, the gateway relays each Kafka connection through a SOCKS5 relay it runs on a loopback port, and a broker in `brokers` is named by a host name or an IPv4 address, not an IPv6 address.
+
 ##### Key Expression
 
 The `key` property supports dynamic expressions:

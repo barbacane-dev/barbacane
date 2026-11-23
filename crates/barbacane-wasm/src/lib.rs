@@ -15,6 +15,7 @@ pub mod cache;
 mod chain;
 mod circuit_breaker;
 pub mod crypto;
+mod egress_relay;
 mod engine;
 mod error;
 pub mod hash;
