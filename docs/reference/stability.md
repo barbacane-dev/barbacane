@@ -68,7 +68,7 @@ A deprecated item may be removed two minor releases later at the earliest: depre
 
 ## Security fixes
 
-Security fixes are released for the latest 1.x minor release only. An advisory names the affected versions and the release that fixes them. 0.12 receives security fixes until 1.0.0 is released.
+Security fixes are released for the latest 1.x minor release only. An advisory names the affected versions and the release that fixes them. 0.12 receives security fixes until 1.0.0 is released, except for three vulnerabilities fixed in 1.0 only: [GHSA-jcq4-h44p-58m5](https://github.com/barbacane-dev/barbacane/security/advisories/GHSA-jcq4-h44p-58m5), [GHSA-5rhc-w38c-cx9p](https://github.com/barbacane-dev/barbacane/security/advisories/GHSA-5rhc-w38c-cx9p) and [GHSA-j9hp-jw55-g24h](https://github.com/barbacane-dev/barbacane/security/advisories/GHSA-j9hp-jw55-g24h). Every 0.12 release is affected by them; the fix is to upgrade to 1.0.
 
 ## Exceptions
 
