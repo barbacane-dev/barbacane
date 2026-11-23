@@ -713,7 +713,12 @@ timeout_ms = 50     # wall-clock budget for one call, in ms
 | Stack | (not declared) | 1 MiB | |
 
 The wall clock restarts after each host function that waits on the network, so
-that wait does not count. A key outside the table above, a value below 1 or a value
+that wait does not count. An outbound HTTP call waits at most 60 seconds (a
+longer `timeout_ms` is cut to 60,000) and a WebSocket connect at most 30.
+`host_sha256` restarts the wall clock too, while the call has hashed at most
+twice the plugin's memory limit; past that, hashing time counts. A call whose
+payload is large gets 100 fuel per byte of it, and a deadline raised by the same
+factor, up to the ceilings in the table. A key outside the table above, a value below 1 or a value
 above its ceiling fails compilation with `E1044`, and the data plane refuses an
 artifact that records one.
 

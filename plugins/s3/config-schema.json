@@ -62,7 +62,8 @@
       "type": "number",
       "default": 30,
       "minimum": 0,
-      "description": "Request timeout in seconds"
+      "maximum": 60,
+      "description": "Request timeout in seconds, at most 60"
     }
   },
   "additionalProperties": false

@@ -67,6 +67,17 @@ pub enum StreamEvent {
 ///
 /// The `body` field uses base64 encoding over JSON to support binary payloads
 /// (e.g. multipart/form-data with file uploads).
+/// Longest outbound HTTP call a plugin may ask for, in milliseconds. A call
+/// holds a blocking host thread while it waits, so a longer `timeout_ms` is cut
+/// to this.
+pub const MAX_PLUGIN_HTTP_TIMEOUT_MS: u64 = 60_000;
+
+/// The timeout a plugin's outbound HTTP call runs with: the one it asks for,
+/// never past [`MAX_PLUGIN_HTTP_TIMEOUT_MS`].
+fn plugin_http_timeout(timeout_ms: Option<u64>) -> Option<std::time::Duration> {
+    timeout_ms.map(|ms| std::time::Duration::from_millis(ms.min(MAX_PLUGIN_HTTP_TIMEOUT_MS)))
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct PluginHttpRequest {
     pub(crate) method: String,
@@ -168,6 +179,10 @@ pub struct PluginState {
     /// plugin's CPU-execution budget and spuriously trap the dispatch.
     pub max_execution_ms: u64,
 
+    /// Bytes `host_sha256` has hashed in the current call. Its time stops
+    /// counting against the deadline only up to twice the memory limit.
+    pub hashed_bytes: u64,
+
     /// HTTP client for outbound requests (shared).
     pub http_client: Option<Arc<HttpClient>>,
 
@@ -260,6 +275,7 @@ impl PluginState {
             context: RequestContext::default(),
             max_memory: limits.max_memory_bytes,
             max_execution_ms: limits.max_execution_ms,
+            hashed_bytes: 0,
             http_client: None,
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
@@ -517,6 +533,7 @@ impl PluginInstance {
 
     /// Reset fuel and the wall-clock deadline to one call's budget.
     fn reset_budget(&mut self) {
+        self.store.data_mut().hashed_bytes = 0;
         if let Err(e) = self.store.set_fuel(self.limits.max_fuel) {
             tracing::warn!(error = %e, "failed to reset WASM fuel");
         }
@@ -590,22 +607,15 @@ impl PluginInstance {
     ) -> Result<i32, WasmError> {
         // Clear output buffer
         self.store.data_mut().output_buffer.clear();
+        self.store.data_mut().hashed_bytes = 0;
 
         // Reset fuel before write_to_memory — the `alloc` call runs plugin
         // code and needs fuel. Scale fuel with payload size: large bodies
         // require proportionally more instructions for serde + base64.
-        let fuel = self.limits.max_fuel.max(data.len() as u64 * 100);
+        let (fuel, deadline) = self.limits.call_budget(data.len());
         if let Err(e) = self.store.set_fuel(fuel) {
             tracing::warn!(error = %e, "failed to reset WASM fuel");
         }
-        // Reset the wall-clock deadline, scaled by the same factor as fuel so a
-        // large payload's extra serialization work isn't spuriously trapped.
-        let fuel_ratio = (fuel / self.limits.max_fuel.max(1)).max(1);
-        let deadline = self
-            .limits
-            .max_execution_ms
-            .max(1)
-            .saturating_mul(fuel_ratio);
         self.store.set_epoch_deadline(deadline);
 
         // Write data to memory (may call plugin's `alloc` export)
@@ -851,9 +861,7 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
         url: plugin_request.url,
         headers: plugin_request.headers.into_iter().collect(),
         body,
-        timeout: plugin_request
-            .timeout_ms
-            .map(std::time::Duration::from_millis),
+        timeout: plugin_http_timeout(plugin_request.timeout_ms),
     };
 
     let metrics = caller.data().metrics.clone();
@@ -1116,10 +1124,18 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     data_len,
                     out_ptr,
                 );
-                // A large input takes wall-clock time the plugin did not spend
-                // running; refresh the deadline as the blocking host calls do.
-                let deadline = caller.data().max_execution_ms.max(1);
-                caller.as_context_mut().set_epoch_deadline(deadline);
+                // Hashing the body takes wall-clock time the plugin did not
+                // spend running, so the deadline is refreshed, as the blocking
+                // host calls do, while the call has hashed at most twice its
+                // memory limit. Past that, hashing time counts.
+                let state = caller.data_mut();
+                state.hashed_bytes = state
+                    .hashed_bytes
+                    .saturating_add(u64::try_from(data_len).unwrap_or(0));
+                if state.hashed_bytes <= (state.max_memory as u64).saturating_mul(2) {
+                    let deadline = state.max_execution_ms.max(1);
+                    caller.as_context_mut().set_epoch_deadline(deadline);
+                }
                 match result {
                     Ok(()) => 0,
                     Err(_) => -1,
@@ -1386,9 +1402,7 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     url: plugin_request.url,
                     headers: plugin_request.headers.into_iter().collect(),
                     body,
-                    timeout: plugin_request
-                        .timeout_ms
-                        .map(std::time::Duration::from_millis),
+                    timeout: plugin_http_timeout(plugin_request.timeout_ms),
                 };
 
                 let http_client = match caller.data().http_client.clone() {
@@ -2614,6 +2628,28 @@ mod tests {
         assert_eq!(wasi_span(-1, 8, 64), None);
         assert_eq!(wasi_span(-8, 8, 64), None);
         assert_eq!(wasi_span(i32::MIN, 4, 64), None);
+    }
+
+    #[test]
+    fn a_plugin_http_timeout_is_cut_to_sixty_seconds() {
+        use std::time::Duration;
+        assert_eq!(plugin_http_timeout(None), None);
+        assert_eq!(
+            plugin_http_timeout(Some(500)),
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            plugin_http_timeout(Some(60_000)),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            plugin_http_timeout(Some(900_000)),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            plugin_http_timeout(Some(u64::MAX)),
+            Some(Duration::from_secs(60))
+        );
     }
 
     #[test]

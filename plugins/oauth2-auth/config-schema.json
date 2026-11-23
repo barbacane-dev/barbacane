@@ -30,9 +30,10 @@
     },
     "timeout": {
       "type": "number",
-      "description": "Request timeout in seconds for introspection call",
+      "description": "Request timeout in seconds for introspection call, at most 60",
       "default": 5,
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 60
     }
   },
   "additionalProperties": false

@@ -41,9 +41,10 @@
     },
     "timeout": {
       "type": "number",
-      "description": "HTTP timeout for discovery and JWKS calls (seconds)",
+      "description": "HTTP timeout for discovery and JWKS calls (seconds), at most 60",
       "default": 5,
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 60
     },
     "allow_query_token": {
       "type": "boolean",

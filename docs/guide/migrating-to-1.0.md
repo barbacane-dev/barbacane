@@ -115,6 +115,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 ### Official plugins
 
 - `ws-upstream` follows the plaintext rules of `http-upstream`: a `ws://` URL needs `--allow-plaintext` to compile and `--allow-plaintext-upstream` to connect. The handshake sends the upstream URL's host as `Host`, not the client's.
+- A plugin's outbound HTTP call waits at most 60 seconds. A `timeout` above 60 in `http-upstream`, `lambda`, `s3`, `oidc-auth`, `oauth2-auth` or `opa-authz`, a `fire-and-forget` `timeout_ms` above 60000, or a `ws-upstream` `connect_timeout` above 30 fails compilation with `E1023`.
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).
 - `cache`, `opa-authz`, `http-log` and `observability` now receive bodies, so a cache hit carries the body, `include_body` works, and body sizes are reported.
 - `ldap-auth` refuses a user in none of the `required_groups` with `urn:barbacane:error:authorization-failed` (see [Observability](#observability)).

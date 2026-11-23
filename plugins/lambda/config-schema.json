@@ -12,10 +12,10 @@
     },
     "timeout": {
       "type": "number",
-      "description": "Request timeout in seconds",
+      "description": "Request timeout in seconds, at most 60",
       "default": 30.0,
       "minimum": 1,
-      "maximum": 900
+      "maximum": 60
     },
     "pass_through_headers": {
       "type": "boolean",
