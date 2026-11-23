@@ -213,9 +213,9 @@ pub struct PluginState {
     /// Resolved secrets store (shared across instances).
     pub secrets: crate::secrets::SecretsStore,
 
-    /// The strings the plugin's config holds: the only TLS files a call's
-    /// `tls` may name.
-    pub tls_files: Arc<std::collections::HashSet<String>>,
+    /// What the plugin's config names: the only TLS files and endpoint pools
+    /// its calls may use.
+    pub(crate) config_scope: Arc<crate::pool::ConfigScope>,
 
     /// Result buffer for host_secret_read_result.
     pub last_secret_result: Option<Vec<u8>>,
@@ -304,7 +304,7 @@ impl PluginState {
             http_client: None,
             last_http_result: None,
             secrets: crate::secrets::SecretsStore::new(),
-            tls_files: Arc::default(),
+            config_scope: Arc::default(),
             last_secret_result: None,
             rate_limiter: None,
             last_rate_limit_result: None,
@@ -721,10 +721,9 @@ impl PluginInstance {
         self.store.data_mut().config_hash = config_hash.to_string();
     }
 
-    /// Set the TLS files this instance's calls may name: the strings its
-    /// plugin's config holds.
-    pub(crate) fn set_tls_files(&mut self, files: Arc<std::collections::HashSet<String>>) {
-        self.store.data_mut().tls_files = files;
+    /// Set what this instance's calls may use: what its plugin's config names.
+    pub(crate) fn set_config_scope(&mut self, scope: Arc<crate::pool::ConfigScope>) {
+        self.store.data_mut().config_scope = scope;
     }
 
     /// Set the request/response body for the next handler call (side-channel).
@@ -914,7 +913,7 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
     let tls = plugin_request.tls;
     if let Some(path) = tls
         .as_ref()
-        .and_then(|tls| tls_file_outside_config(tls, &caller.data().tls_files))
+        .and_then(|tls| tls_file_outside_config(tls, &caller.data().config_scope.strings))
     {
         tracing::error!(path = %path, "refused a TLS file the plugin's config does not name");
         let mut refused = HttpClientResponse::error(
@@ -936,6 +935,16 @@ fn http_call(mut caller: Caller<'_, PluginState>, req_ptr: i32, req_len: i32, po
     let retries = plugin_request.retries.unwrap_or(1);
     if pooled && endpoints.is_empty() {
         tracing::error!("host_http_pool_call: the request lists no endpoint");
+        return -1;
+    }
+    if pooled
+        && !caller
+            .data()
+            .config_scope
+            .pools
+            .contains(&crate::balancer::pool_key(&endpoints))
+    {
+        tracing::error!("host_http_pool_call: refused a pool the plugin's config does not list");
         return -1;
     }
     let request = HttpClientRequest {
@@ -1487,7 +1496,7 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                 let tls = plugin_request.tls;
                 if let Some(path) = tls
                     .as_ref()
-                    .and_then(|tls| tls_file_outside_config(tls, &caller.data().tls_files))
+                    .and_then(|tls| tls_file_outside_config(tls, &caller.data().config_scope.strings))
                 {
                     tracing::error!(
                         path = %path,

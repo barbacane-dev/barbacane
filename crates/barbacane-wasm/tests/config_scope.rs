@@ -1,8 +1,9 @@
-//! A plugin's HTTP call may name only the TLS files its own config names.
+//! A plugin's HTTP calls may use only the TLS files and endpoint pools its own
+//! config names.
 //!
-//! The files sit under `BARBACANE_SECRETS_DIR`, which this binary sets for
-//! all its tests, and the upstream is plain HTTP: a call whose TLS client
-//! builds reaches it, so a refused call is one that never connects.
+//! The TLS files sit under `BARBACANE_SECRETS_DIR`, which this binary sets for
+//! all its tests, and the upstream is plain HTTP: a call the host lets through
+//! reaches it, so a refused call is one that never connects.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -49,13 +50,13 @@ fn upstream() -> (u16, Arc<AtomicUsize>) {
     (port, accepted)
 }
 
-/// A dispatcher whose `dispatch` sends `request` with `host_http_call` and
-/// returns its result code.
-fn calling_module(request: &str) -> String {
+/// A dispatcher whose `dispatch` sends `request` with `host_function`
+/// (`host_http_call` or `host_http_pool_call`) and returns its result code.
+fn calling_module(host_function: &str, request: &str) -> String {
     let escaped: String = request.bytes().map(|b| format!("\\{b:02x}")).collect();
     format!(
         r#"(module
-  (import "barbacane" "host_http_call" (func $call (param i32 i32) (result i32)))
+  (import "barbacane" "{host_function}" (func $call (param i32 i32) (result i32)))
   (memory (export "memory") 1)
   (data (i32.const 1024) "{escaped}")
   (func (export "alloc") (param i32) (result i32) (i32.const 8192))
@@ -69,15 +70,44 @@ fn calling_module(request: &str) -> String {
 /// Connections the upstream accepted while a plugin with `config` called it
 /// naming `tls`.
 fn connections_for(config: serde_json::Value, tls: serde_json::Value) -> usize {
-    secrets_dir();
     let (port, accepted) = upstream();
     let request = json!({
         "method": "GET",
         "url": format!("http://127.0.0.1:{port}/"),
         "headers": {},
         "tls": tls,
-    })
-    .to_string();
+    });
+    call(&config, "host_http_call", &request);
+    accepted.load(Ordering::SeqCst)
+}
+
+/// Connections the upstream accepted while a plugin whose config lists
+/// `listed` (a pool of `upstream` endpoints, by weight) made a pool call to
+/// `called`.
+fn pool_connections_for(listed: &[u32], called: &[u32]) -> usize {
+    let (port, accepted) = upstream();
+    let pool = |weights: &[u32]| -> serde_json::Value {
+        weights
+            .iter()
+            .map(|weight| json!({"url": format!("http://127.0.0.1:{port}"), "weight": weight}))
+            .collect()
+    };
+    let config = json!({"endpoints": pool(listed)});
+    let request = json!({
+        "method": "GET",
+        "url": "/",
+        "headers": {},
+        "endpoints": pool(called),
+    });
+    call(&config, "host_http_pool_call", &request);
+    accepted.load(Ordering::SeqCst)
+}
+
+/// Runs a plugin with `config` whose `dispatch` sends `request` through
+/// `host_function`.
+fn call(config: &serde_json::Value, host_function: &str, request: &serde_json::Value) {
+    secrets_dir();
+    let request = request.to_string();
 
     let engine = Arc::new(WasmEngine::new().expect("engine"));
     let client = HttpClient::new(HttpClientConfig {
@@ -97,18 +127,16 @@ fn connections_for(config: serde_json::Value, tls: serde_json::Value) -> usize {
         None,
         None,
     );
-    let wasm = wat::parse_str(calling_module(&request)).expect("valid WAT");
+    let wasm = wat::parse_str(calling_module(host_function, &request)).expect("valid WAT");
     let module = engine
         .compile(&wasm, "caller".into(), "0.1.0".into(), false)
         .expect("compile");
     pool.register_module(module);
-    let key = InstanceKey::new("caller", &config);
+    let key = InstanceKey::new("caller", config);
     pool.register_config(key.clone(), config.to_string().into_bytes());
 
     let mut instance = pool.get_instance(&key).expect("instance");
-    let rc = instance.dispatch(b"{}").expect("dispatch");
-    assert!(rc > 0, "the host answered the call with no response: {rc}");
-    accepted.load(Ordering::SeqCst)
+    instance.dispatch(b"{}").expect("dispatch");
 }
 
 #[test]
@@ -124,4 +152,16 @@ fn a_call_naming_a_tls_file_its_config_does_not_is_refused() {
 
     let config = json!({"url": "https://upstream.example"});
     assert_eq!(connections_for(config, json!({"ca": "ca.pem"})), 0);
+}
+
+#[test]
+fn a_pool_call_uses_a_pool_its_config_lists() {
+    assert_eq!(pool_connections_for(&[1], &[1]), 1);
+}
+
+#[test]
+fn a_pool_call_to_a_pool_its_config_does_not_list_is_refused() {
+    // Another weight is another pool, with a rotation of its own.
+    assert_eq!(pool_connections_for(&[1], &[2]), 0);
+    assert_eq!(pool_connections_for(&[1], &[1, 1]), 0);
 }

@@ -704,6 +704,22 @@ impl MetricsRegistry {
             .set(state);
     }
 
+    /// Remove a pool endpoint's series, once no pool lists it.
+    pub fn forget_upstream_endpoint(&self, endpoint: &str) {
+        let labels = EndpointLabels {
+            endpoint: endpoint.to_string(),
+        };
+        for outcome in ["success", "failure"] {
+            self.upstream_endpoint_requests_total
+                .remove(&EndpointOutcomeLabels {
+                    endpoint: endpoint.to_string(),
+                    outcome: outcome.to_string(),
+                });
+        }
+        self.upstream_endpoint_retries_total.remove(&labels);
+        self.upstream_endpoint_circuit_state.remove(&labels);
+    }
+
     /// Record a request to a deprecated route.
     pub fn record_deprecated_route(&self, method: &str, path: &str, api: &str) {
         let labels = RouteLabels {
@@ -920,6 +936,27 @@ mod tests {
         );
         assert!(
             rendered.contains("\nbarbacane_wasm_instances_unpooled_total 2\n"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_endpoint_has_no_series_left() {
+        let registry = MetricsRegistry::new();
+        for endpoint in ["https://a:443", "https://b:443"] {
+            registry.record_upstream_endpoint(endpoint, true);
+            registry.record_upstream_endpoint(endpoint, false);
+            registry.record_upstream_retry(endpoint);
+            registry.set_upstream_circuit_state(endpoint, 1);
+        }
+
+        registry.forget_upstream_endpoint("https://a:443");
+
+        let rendered = crate::prometheus::render_metrics(&registry);
+        assert!(!rendered.contains("https://a:443"), "{rendered}");
+        assert_eq!(
+            rendered.matches("endpoint=\"https://b:443\"").count(),
+            4,
             "{rendered}"
         );
     }

@@ -515,7 +515,7 @@ fn merge_asyncapi_specs(specs: &[(&String, &String)]) -> serde_json::Value {
 
     merged
 }
-use barbacane_wasm::balancer::{pool_key, Balancer, Endpoint};
+use barbacane_wasm::balancer::Balancer;
 use barbacane_wasm::{
     HttpClient, HttpClientConfig, InstancePool, PluginLimits, PoolSize, RateLimiter, ResponseCache,
     WasmEngine,
@@ -1290,15 +1290,12 @@ impl Gateway {
             })
             .unwrap_or_else(|| "default".to_string());
 
-        // Keep pool state for the pools this artifact lists, drop the rest
-        // (ADR-0035). Done last, so a load that fails leaves it as it was.
-        let pools: Vec<_> = resolved_operations
-            .iter()
-            .filter_map(|op| op.dispatch.config.get("endpoints"))
-            .filter_map(|e| serde_json::from_value::<Vec<Endpoint>>(e.clone()).ok())
-            .map(|pool| pool_key(&pool))
-            .collect();
-        balancer.retain(&pools);
+        // Keep pool state for the pools this artifact's configs list, drop the
+        // rest with their metric series (ADR-0035). Done last, so a load that
+        // fails leaves it as it was.
+        for endpoint in balancer.retain(&plugin_pool.pools()) {
+            metrics.forget_upstream_endpoint(&endpoint);
+        }
 
         // Parsed and serialized here, not on each introspection request.
         let introspection = Introspection::new(&specs);

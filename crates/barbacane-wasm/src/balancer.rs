@@ -129,7 +129,8 @@ impl Balancer {
     }
 
     /// Keep the state of `pools` and their endpoints, and drop the rest.
-    pub fn retain(&self, pools: &[PoolKey]) {
+    /// Returns the endpoints whose breakers were dropped.
+    pub fn retain(&self, pools: &[PoolKey]) -> Vec<String> {
         let keep: HashSet<&PoolKey> = pools.iter().collect();
         self.rotations.write().retain(|key, _| keep.contains(key));
         let endpoints: HashSet<String> = pools
@@ -137,7 +138,15 @@ impl Balancer {
             .flatten()
             .filter_map(|(url, _)| endpoint_id(url))
             .collect();
-        self.breakers.write().retain(|id, _| endpoints.contains(id));
+        let mut dropped = Vec::new();
+        self.breakers.write().retain(|id, _| {
+            let kept = endpoints.contains(id);
+            if !kept {
+                dropped.push(id.clone());
+            }
+            kept
+        });
+        dropped
     }
 
     /// The state of `endpoint`'s breaker; one never used is closed.
@@ -265,7 +274,7 @@ mod tests {
         balancer.breaker("https://c:443");
         assert_eq!(balancer.counts(), (2, 2));
 
-        balancer.retain(&[pool_key(&kept)]);
+        assert_eq!(balancer.retain(&[pool_key(&kept)]), ["https://c:443"]);
         assert_eq!(balancer.counts(), (1, 1));
         assert_eq!(balancer.select(&kept, &[]), Some(1), "the rotation is kept");
     }
