@@ -65,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **release**: the `Release` workflow publishes nothing unless the tagged commit is on `main`. The jobs that push images, sign them and publish crates run in the `release` environment. `sign-and-sbom.yml` can no longer be started by hand and signs only from a `v*` tag, and the documented `cosign verify` names the exact identity of the version being verified (`sign-and-sbom.yml@refs/tags/v<version>`) in place of a regular expression. Release images are built without the Actions cache. `cross` and its images are pinned by full commit and by digest, and `dtolnay/rust-toolchain` by full commit everywhere.
+- **ci**: the `/bench` comment command is gone; label a pull request `run-benchmarks` instead, which runs in the pull request's own cache scope. The workflow audit runs zizmor's online checks.
 - **dependencies**: url 2.5.9, for RUSTSEC-2026-0592: `Url::origin()` overflows the stack on a deeply nested `blob:` URL. Neither Barbacane nor any crate in its tree that uses `url` calls `Url::origin()`.
 
 ## [1.0.0-rc.2] - 2026-11-19

@@ -160,24 +160,27 @@ carries a CycloneDX SBOM as a cosign attestation. Verify a published image befor
 running it:
 
 ```bash
+VERSION=1.0.0
+IDENTITY="https://github.com/barbacane-dev/barbacane/.github/workflows/sign-and-sbom.yml@refs/tags/v$VERSION"
+
 # Signature
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/sign-and-sbom\.yml@refs/(tags/v|heads/main)' \
+  --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/barbacane-dev/barbacane:1.0.0
+  "ghcr.io/barbacane-dev/barbacane:$VERSION"
 
 # SBOM attestation (CycloneDX)
 cosign verify-attestation --type cyclonedx \
-  --certificate-identity-regexp 'https://github.com/barbacane-dev/barbacane/\.github/workflows/sign-and-sbom\.yml@refs/(tags/v|heads/main)' \
+  --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/barbacane-dev/barbacane:1.0.0
+  "ghcr.io/barbacane-dev/barbacane:$VERSION"
 ```
 
-The same commands work against Docker Hub (`docker.io/barbacane/barbacane:1.0.0`)
+The same commands work against Docker Hub (`docker.io/barbacane/barbacane:$VERSION`)
 and the other images (`barbacane-control`, `barbacane-standalone`). The identity
-regexp names the one workflow that signs, `sign-and-sbom.yml`, run from a
-release tag or, for a manual re-signing, from `main`; no other workflow's
-signature verifies. A successful verification
+is exact: the one workflow that signs, `sign-and-sbom.yml`, run from the tag of
+the version you verify. A signature made by any other workflow, from a branch,
+or from another tag does not verify. A successful verification
 confirms the signature was checked against the Rekor transparency log and a
 trusted Fulcio certificate authority.
 

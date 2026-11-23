@@ -57,8 +57,9 @@ jobs:
 
       - name: Install Rust toolchain
         id: toolchain
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
+          toolchain: "1.100.0"
           targets: wasm32-unknown-unknown
           components: llvm-tools-preview
 
@@ -85,7 +86,7 @@ jobs:
         run: ./scripts/postgres-tls.sh >> "$GITHUB_ENV"
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: cargo-llvm-cov@0.9.1
 
