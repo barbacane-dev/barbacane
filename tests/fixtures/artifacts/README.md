@@ -9,6 +9,7 @@ rebuilt: `crates/barbacane-test/tests/artifact_corpus.rs` loads every one with
 | Format | Compiled by | Artifact | Spec |
 |--------|-------------|----------|------|
 | 8 | 1.0.0-rc.1 | `v8/items.bca` | `v8/api.yaml`, with the `mock` dispatcher |
+| 9 | 1.0.0-rc.2, unreleased build | `v9/items.bca` | `v9/api.yaml`, with the `mock` dispatcher |
 
 A release that changes the format adds a directory with an artifact from its
 compiler.

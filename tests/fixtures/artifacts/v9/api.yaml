@@ -1,0 +1,41 @@
+openapi: "3.1.0"
+info:
+  title: Artifact corpus
+  version: "1.0.0"
+paths:
+  /items/{id}:
+    get:
+      operationId: getItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+        - name: fields
+          in: query
+          schema: { type: string }
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"id":"{{path_params.id}}"}'
+      responses:
+        "200": { description: The item }
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1 }
+                tags: { type: array, items: { type: string } }
+      x-barbacane-dispatch:
+        name: mock
+        config: { status: 201, body: '{"created":true}' }
+      responses:
+        "201": { description: Created }

@@ -395,7 +395,7 @@ Run it where `serve` will run, with the same environment: it reads `BARBACANE_TR
 On success, one line on stdout:
 
 ```
-✓ api.bca: artifact format 8, compiled by barbacane 1.0.0, signature verified; 12 route(s), 5 plugin(s), 9 plugin configuration(s)
+✓ api.bca: artifact format 9, compiled by barbacane 1.0.0, signature verified; 12 route(s), 5 plugin(s), 9 plugin configuration(s)
 ```
 
 Warnings `serve` would log at load (an unsigned artifact, a deprecated host function, WAF rules this build does not enforce) are printed on stderr. Each failure is printed on stderr as `error: ...`; a plugin that does not initialise names the operation that configures it.
