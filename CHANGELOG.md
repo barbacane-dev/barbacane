@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **plugin SDK**: `path::fill_path_template` fills a path template from a request's path parameters, each value percent-encoded part by part, and returns `DotSegmentParam` for a value with a `.` or `..` segment.
 - **s3**: `query_params` lists the query parameters forwarded to S3, by name as the client writes them (for example `[versionId]`); they are signed with the gateway's credentials.
 - **plugin SDK**: `forwarding::upstream_headers` gives a request's headers to send to a backend: without hop-by-hop headers and the client's `X-Forwarded-For`, `X-Real-IP` and `Forwarded`, and with `X-Forwarded-For` and `X-Real-IP` set to `client_ip`.
+- **compiler**: `E1073` warns of a request body schema the gateway does not apply: one for a content type other than JSON, `application/x-www-form-urlencoded` and `multipart/form-data`, or an AsyncAPI message payload whose `schemaFormat` is not JSON Schema, AsyncAPI or OpenAPI.
 
 ### Changed
 
@@ -40,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **basic-auth**: a credential entry whose password is empty, as written or as its secret reference resolves it, matches no request; the config schema requires a non-empty `password`.
 - **ws-upstream**: a `ws://` upstream fails compilation with `E1031` unless `--allow-plaintext`, and the gateway refuses to connect to one unless `--allow-plaintext-upstream`, as for `http://`; E1031 also matches the schemes in upper case. The WebSocket handshake's `Host` names the upstream URL's host, and the client's `Host`, framing and upgrade headers are not sent.
   > **Upgrade note (breaking):** a spec with a `ws://` upstream compiles with `--allow-plaintext` and is served with `--allow-plaintext-upstream`, or moves to `wss://`.
+- **validation**: a path, query, header or cookie parameter value is checked as the type its schema names, so `?limit=10` passes `type: integer` and `?limit=ten` fails it (#431). `in: cookie` parameters are validated, `required` included, and a declared cookie sent twice is refused. `application/x-www-form-urlencoded` and `multipart/form-data` bodies are checked against their schema as the object their fields make. An AsyncAPI `send` operation accepts a body matching any of its messages, and a Multi Format Schema Object payload in a JSON Schema format is applied as its `schema`.
+- **data plane**: `Cookie` header fields, which an HTTP/2 client may send separately, are joined with `; ` for validation and plugins.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security

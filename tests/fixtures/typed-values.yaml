@@ -1,0 +1,58 @@
+openapi: "3.1.0"
+info:
+  title: Typed values
+  version: "1.0.0"
+
+paths:
+  /items:
+    get:
+      operationId: listItems
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: session
+          in: cookie
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-f0-9]{8}$"
+        - name: theme
+          in: cookie
+          required: true
+          schema:
+            type: string
+            enum: [light, dark]
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"ok":true}'
+      responses:
+        "200":
+          description: OK
+    post:
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [name, age]
+              properties:
+                name:
+                  type: string
+                age:
+                  type: integer
+                  minimum: 0
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 201
+      responses:
+        "201":
+          description: Created

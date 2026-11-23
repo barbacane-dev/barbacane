@@ -1442,13 +1442,9 @@ impl Gateway {
             });
 
         // Extract headers for downstream validation and plugin forwarding. This
-        // collapses duplicate names (last value wins), which is fine now that the
-        // limit checks above ran against the raw map.
-        let headers: HashMap<String, String> = req
-            .headers()
-            .iter()
-            .filter_map(|(k, v)| Some((k.as_str().to_string(), v.to_str().ok()?.to_string())))
-            .collect();
+        // collapses duplicate names (last value wins, `cookie` joined), which is
+        // fine now that the limit checks above ran against the raw map.
+        let headers = request_header_map(req.headers());
 
         // The map above is what routing and validation use, and it is lossy in
         // two ways the WAF cannot afford: duplicate header names collapse, and
@@ -6378,6 +6374,27 @@ mod artifact_version_tests {
     }
 }
 
+/// A request's headers by name, for validation and plugins. A repeated header
+/// keeps its last value, except `cookie`, whose values are joined with `; ` as
+/// an HTTP/2 client may split them (RFC 9113 §8.2.3). Values that are not
+/// visible ASCII are left out.
+fn request_header_map(headers: &hyper::HeaderMap) -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = HashMap::with_capacity(headers.len());
+    for (name, value) in headers {
+        let Ok(value) = value.to_str() else { continue };
+        match map.get_mut(name.as_str()) {
+            Some(existing) if name == hyper::header::COOKIE => {
+                existing.push_str("; ");
+                existing.push_str(value);
+            }
+            _ => {
+                map.insert(name.as_str().to_string(), value.to_string());
+            }
+        }
+    }
+    map
+}
+
 /// Keep only the request headers an operation admits.
 ///
 /// The baseline, plus what the spec declares for this operation and what its
@@ -6507,6 +6524,25 @@ fn is_baseline_request_header(name: &str) -> bool {
     BASELINE_REQUEST_HEADERS
         .iter()
         .any(|h| h.eq_ignore_ascii_case(name))
+}
+
+#[cfg(test)]
+mod request_header_map_tests {
+    use super::request_header_map;
+
+    #[test]
+    fn split_cookie_headers_are_joined() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.append("cookie", "a=1".parse().unwrap());
+        headers.append("cookie", "b=2".parse().unwrap());
+        headers.append("x-tag", "first".parse().unwrap());
+        headers.append("x-tag", "last".parse().unwrap());
+
+        let map = request_header_map(&headers);
+
+        assert_eq!(map["cookie"], "a=1; b=2");
+        assert_eq!(map["x-tag"], "last");
+    }
 }
 
 #[cfg(test)]

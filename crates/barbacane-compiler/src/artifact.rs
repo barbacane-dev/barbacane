@@ -1316,6 +1316,30 @@ fn compile_inner(
                             &body_location,
                         )?;
                         check_enforceable(schema, spec.schema_defs.as_ref(), &body_location)?;
+                        if let Some(message) = unenforced_body_schema(content_type) {
+                            warnings.push(CompileWarning {
+                                code: "E1073".to_string(),
+                                message,
+                                location: Some(body_location),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // A message payload in a format other than JSON Schema (E1073).
+            if op.method == "SEND" {
+                for message in &op.messages {
+                    if let Some(format) = &message.payload_schema_format {
+                        warnings.push(CompileWarning {
+                            code: "E1073".to_string(),
+                            message: format!(
+                                "message '{}' has a payload in schema format '{format}', which \
+                                 the gateway does not apply",
+                                message.name
+                            ),
+                            location: Some(location.clone()),
+                        });
                     }
                 }
             }
@@ -2754,6 +2778,35 @@ fn reserved_checked(name: &str, source: &str) -> Result<String, CompileError> {
         )));
     }
     Ok(lowered)
+}
+
+/// Why a request body schema for `content_type` is not applied to every request
+/// it matches (E1073), or `None` when it is. The gateway validates JSON bodies
+/// and the fields of `application/x-www-form-urlencoded` and
+/// `multipart/form-data` bodies.
+fn unenforced_body_schema(content_type: &str) -> Option<String> {
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    if base.contains("json")
+        || base == "application/x-www-form-urlencoded"
+        || base == "multipart/form-data"
+    {
+        return None;
+    }
+    Some(if base == "*/*" {
+        "the schema for '*/*' is applied to JSON and form bodies only; a body of another \
+         content type is not validated"
+            .to_string()
+    } else {
+        format!(
+            "the gateway validates JSON and form request bodies only, so the schema for \
+             '{content_type}' is not enforced"
+        )
+    })
 }
 
 /// Refuse a request schema the data plane cannot build a validator for (E1059).
@@ -4401,6 +4454,99 @@ paths:
             }
             other => panic!("expected E1031, got {other:?}"),
         }
+    }
+
+    /// A body schema the gateway does not apply is reported (E1073).
+    #[test]
+    fn a_body_schema_the_gateway_does_not_apply_is_a_warning() {
+        let temp = TempDir::new().unwrap();
+        let spec_content = r#"
+openapi: "3.1.0"
+info:
+  title: Test API
+  version: "1.0.0"
+paths:
+  /items:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+          application/x-www-form-urlencoded:
+            schema: { type: object }
+          multipart/form-data:
+            schema: { type: object }
+          application/xml:
+            schema: { type: object }
+          "*/*":
+            schema: { type: object }
+      x-barbacane-dispatch:
+        name: mock
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .expect("compiles");
+        let warned: Vec<&str> = result
+            .warnings
+            .iter()
+            .filter(|w| w.code == "E1073")
+            .map(|w| w.message.as_str())
+            .collect();
+        assert_eq!(warned.len(), 2, "{:?}", result.warnings);
+        for expected in [
+            "'*/*' is applied to JSON and form bodies only",
+            "'application/xml' is not enforced",
+        ] {
+            assert!(
+                warned.iter().any(|w| w.contains(expected)),
+                "{expected}: {warned:?}"
+            );
+        }
+    }
+
+    /// A message payload in a format other than JSON Schema is reported (E1073).
+    #[test]
+    fn a_payload_the_gateway_does_not_apply_is_a_warning() {
+        let temp = TempDir::new().unwrap();
+        let spec_content = r#"
+asyncapi: "3.0.0"
+info: { title: Audit, version: "1.0.0" }
+channels:
+  audit:
+    address: audit
+    messages:
+      Entry:
+        payload:
+          schemaFormat: application/vnd.apache.avro;version=1.9.0
+          schema: { type: record, name: Entry, fields: [] }
+operations:
+  record:
+    action: send
+    channel: { $ref: '#/channels/audit' }
+    x-barbacane-dispatch: { name: nats, config: { subject: audit } }
+"#;
+        let spec_path = create_test_spec(temp.path(), "test.yaml", spec_content);
+        let output_path = temp.path().join("artifact.bca");
+        let result = compile(
+            &[spec_path.as_path()],
+            &[],
+            &output_path,
+            &CompileOptions::default(),
+        )
+        .expect("compiles");
+        assert!(
+            result.warnings.iter().any(|w| w.code == "E1073"
+                && w.message.contains("message 'Entry'")
+                && w.message.contains("application/vnd.apache.avro")),
+            "{:?}",
+            result.warnings
+        );
     }
 
     #[test]

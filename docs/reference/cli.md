@@ -268,6 +268,7 @@ plugins and builds an artifact.
 | E1059 | Schema | A request schema cannot be enforced: its `$schema` names neither a JSON Schema draft nor an OpenAPI dialect, it refers to a resource outside the spec, or it does not compile (an invalid `pattern`, for one) |
 | E1071 | Manifest | A plugin was bundled without its manifest or config schema, so its configured headers are not admitted (warning) |
 | E1072 | Security | A security scheme and an authentication plugin's configuration name different credential headers (warning) |
+| E1073 | Schema | A request body schema the gateway does not apply: one for a content type other than JSON and form bodies, or an AsyncAPI message payload in a format other than JSON Schema (warning) |
 
 ### Exit Codes
 
