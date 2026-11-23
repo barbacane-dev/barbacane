@@ -318,13 +318,13 @@ pub static KNOWN: &[KnownDivergence] = &[
         },
     },
     KnownDivergence {
-        name: "`!!null` on mapping keys",
+        name: "`!!null` and `!null` on mapping keys",
         reason: "a JSON value's keys are strings, and serde-saphyr refuses a scalar tagged \
-                 `!!null` as a string (`!!null a: 1`, `!!null : 1`); libyaml reads the key as \
-                 its text",
+                 `!!null` as a string, or tagged `!null`, which it reads as `!!null` \
+                 (`!!null a: 1`, `!null : 1`); libyaml reads the key as its text",
         example: "!!null a: 1\n",
         matches: |input, d| {
-            input.contains("!!null")
+            input.contains("!null")
                 && matches!(d, Difference::OnlyOursFailed { error }
                     if error.contains("cannot deserialize null into string"))
         },
@@ -334,7 +334,12 @@ pub static KNOWN: &[KnownDivergence] = &[
         reason: "YAML 1.2 takes `?` for an explicit key only when whitespace follows it, so \
                  `{?a: 1}` has the key `?a` and `[?:]` the key `?`, and `[?]]` is invalid; in a \
                  flow collection libyaml takes `?` for an explicit key whatever follows, reading \
-                 the key `a`, an empty key, and `[?]]` as `[{\"\": null}]`",
+                 the key `a`, an empty key, and `[?]]` as `[{\"\": null}]`. The plain scalar \
+                 can take in what libyaml reads after the `?`: a quoted scalar or a tag, so that \
+                 the quotes no longer pair and the module refuses the document (`{?\"[\"}`), or \
+                 a key libyaml reads as empty, whose value then replaces another empty key's \
+                 (`{\"\": 1, ?:a}`). With a space after each such `?`, the module reads the \
+                 document as libyaml does",
         example: "{?a: 1}\n",
         matches: |input, d| {
             input.contains(['{', '['])
@@ -345,10 +350,14 @@ pub static KNOWN: &[KnownDivergence] = &[
                             .next()
                             .is_some_and(starts_with_question_mark)
                             || ours.as_str().is_some_and(starts_with_question_mark)
+                            || (has_unspaced_indicator(input, '?')
+                                && explained_by_unspaced_indicators(input, d))
                     }
                     Difference::OnlyOursFailed { error } => {
-                        error.contains("misplaced bracket")
-                            && (input.contains("?]") || input.contains("?}"))
+                        (error.contains("misplaced bracket")
+                            && (input.contains("?]") || input.contains("?}")))
+                            || (has_unspaced_indicator(input, '?')
+                                && explained_by_unspaced_indicators(input, d))
                     }
                     Difference::OnlyReferenceFailed { .. } => false,
                 }
@@ -358,15 +367,28 @@ pub static KNOWN: &[KnownDivergence] = &[
         name: "`:` followed by a character in flow collections",
         reason: "YAML 1.2 starts a plain scalar with `:` when a character it can hold \
                  follows, so `{!t :a}` and `{? :a}` have the key `:a`; after an empty key, \
-                 libyaml takes the `:` for the value indicator, reading `{\"\": \"a\"}`",
+                 libyaml takes the `:` for the value indicator, reading `{\"\": \"a\"}`. That \
+                 value can replace another empty key's (`{\"\": 1, ! :a}`), and a quote after \
+                 the `:` that the plain scalar takes in can leave the quotes unpaired, so that \
+                 the module refuses the document. With a space after each such `:`, the module \
+                 reads the document as libyaml does",
         example: "{!t :a}\n",
         matches: |input, d| {
             input.contains(['{', '['])
-                && matches!(d, Difference::Value { pointer, .. }
-                if pointer.rsplit('/').next().is_some_and(|key| {
-                    key.strip_prefix(':')
-                        .is_some_and(|rest| rest.starts_with(|c: char| !c.is_whitespace()))
-                }))
+                && match d {
+                    Difference::Value { pointer, .. } => {
+                        pointer.rsplit('/').next().is_some_and(|key| {
+                            key.strip_prefix(':')
+                                .is_some_and(|rest| rest.starts_with(|c: char| !c.is_whitespace()))
+                        }) || (has_unspaced_indicator(input, ':')
+                            && explained_by_unspaced_indicators(input, d))
+                    }
+                    Difference::OnlyOursFailed { .. } => {
+                        has_unspaced_indicator(input, ':')
+                            && explained_by_unspaced_indicators(input, d)
+                    }
+                    Difference::OnlyReferenceFailed { .. } => false,
+                }
         },
     },
     KnownDivergence {
@@ -435,6 +457,158 @@ fn has_reused_anchor(input: &str) -> bool {
             .unwrap_or(rest.len());
         end > 0 && !names.insert(&rest[..end])
     })
+}
+
+/// Where a scan of `input` is, for [`unspaced_indicators`].
+enum Scan {
+    /// Where a node may start: after `,`, `[` or `{`, an indicator, or a tag or
+    /// anchor and the whitespace after it.
+    NodeStart,
+    /// In a tag or an anchor.
+    Property,
+    /// In a plain scalar, which a line break does not end.
+    Plain,
+    /// In a scalar quoted with this character.
+    Quoted(char),
+    /// After a quoted scalar, a collection or an alias.
+    AfterNode,
+}
+
+/// The byte offset just past each `?` or `:` in `input` that starts a node and is
+/// directly followed by a character other than whitespace, with the indicator.
+/// A `:` right after such a `?` starts a node too. Inside a plain or quoted
+/// scalar, `?` and `:` are content.
+fn unspaced_indicators(input: &str) -> Vec<(usize, char)> {
+    let chars: Vec<(usize, char)> = input.char_indices().collect();
+    let mut found = Vec::new();
+    let mut scan = Scan::NodeStart;
+    let mut i = 0;
+    while let Some(&(at, c)) = chars.get(i) {
+        let next = chars.get(i + 1).map(|&(_, n)| n);
+        let spaced = next.is_none_or(char::is_whitespace);
+        scan = match scan {
+            Scan::Quoted(quote) => {
+                if (quote == '"' && c == '\\') || (quote == '\'' && c == '\'' && next == Some('\''))
+                {
+                    i += 2;
+                    continue;
+                }
+                if c == quote {
+                    Scan::AfterNode
+                } else {
+                    Scan::Quoted(quote)
+                }
+            }
+            Scan::NodeStart => match c {
+                '?' | ':' if !spaced => {
+                    found.push((at + 1, c));
+                    Scan::NodeStart
+                }
+                '?' | ':' | '-' if spaced => Scan::NodeStart,
+                ',' | '[' | '{' => Scan::NodeStart,
+                '!' | '&' => Scan::Property,
+                '"' | '\'' => Scan::Quoted(c),
+                ']' | '}' | '*' => Scan::AfterNode,
+                c if c.is_whitespace() => Scan::NodeStart,
+                _ => Scan::Plain,
+            },
+            Scan::Property => match c {
+                ',' => Scan::NodeStart,
+                ']' | '}' => Scan::AfterNode,
+                c if c.is_whitespace() => Scan::NodeStart,
+                _ => Scan::Property,
+            },
+            Scan::Plain => match c {
+                ',' | '[' | '{' => Scan::NodeStart,
+                ']' | '}' => Scan::AfterNode,
+                ':' if spaced || next.is_some_and(|n| matches!(n, ',' | '[' | ']' | '{' | '}')) => {
+                    Scan::NodeStart
+                }
+                _ => Scan::Plain,
+            },
+            Scan::AfterNode => match c {
+                ',' | '[' | '{' | ':' => Scan::NodeStart,
+                _ => Scan::AfterNode,
+            },
+        };
+        i += 1;
+    }
+    found
+}
+
+/// Whether `input` has `indicator` starting a node with no whitespace after it.
+fn has_unspaced_indicator(input: &str, indicator: char) -> bool {
+    unspaced_indicators(input)
+        .iter()
+        .any(|&(_, c)| c == indicator)
+}
+
+/// `input` with a space after each `?` and `:` that starts a node with no
+/// whitespace after it, as libyaml reads them in a flow collection; `None`
+/// when it has none.
+fn with_spaced_indicators(input: &str) -> Option<String> {
+    let positions = unspaced_indicators(input);
+    if positions.is_empty() {
+        return None;
+    }
+    let mut spaced = input.to_string();
+    for (at, _) in positions.into_iter().rev() {
+        spaced.insert(at, ' ');
+    }
+    Some(spaced)
+}
+
+/// Whether `difference` comes from `?` and `:` read as indicators with no
+/// whitespace after them:
+///
+/// - two values: with those indicators spaced, the module reads libyaml's value
+///   at the pointer; or libyaml's value is under an empty key and the module's
+///   mapping there has a key `:` or `?:` followed by text that reads as it,
+///   which covers a `:` libyaml reads as part of a multi-line plain scalar;
+/// - a refusal: with those indicators spaced, the module reads the document, or
+///   refuses it for a reason of another known class.
+fn explained_by_unspaced_indicators(input: &str, difference: &Difference) -> bool {
+    let Some(spaced) = with_spaced_indicators(input) else {
+        return false;
+    };
+    match difference {
+        Difference::Value {
+            pointer, reference, ..
+        } => {
+            crate::yaml::from_str::<Value>(&spaced)
+                .is_ok_and(|value| value.pointer(pointer) == Some(reference))
+                || pointer
+                    .strip_suffix('/')
+                    .is_some_and(|parent| has_indicator_key_reading_as(input, parent, reference))
+        }
+        Difference::OnlyOursFailed { .. } => match crate::yaml::from_str::<Value>(&spaced) {
+            Ok(_) => true,
+            Err(error) => classify(&spaced, &Difference::OnlyOursFailed { error }).is_some(),
+        },
+        Difference::OnlyReferenceFailed { .. } => false,
+    }
+}
+
+/// Whether, in the module's reading of `input`, the mapping at `parent` has a
+/// key `:` or `?:` followed by text that reads as `value`: an entry libyaml
+/// reads as an empty key with that value.
+fn has_indicator_key_reading_as(input: &str, parent: &str, value: &Value) -> bool {
+    let Ok(ours) = crate::yaml::from_str::<Value>(input) else {
+        return false;
+    };
+    ours.pointer(parent)
+        .and_then(Value::as_object)
+        .is_some_and(|mapping| {
+            mapping.keys().any(|key| {
+                key.strip_prefix('?')
+                    .unwrap_or(key)
+                    .strip_prefix(':')
+                    .is_some_and(|text| {
+                        text.starts_with(|c: char| !c.is_whitespace())
+                            && crate::yaml::from_str::<Value>(text).ok().as_ref() == Some(value)
+                    })
+            })
+        })
 }
 
 /// Whether `text` starts with `?` not followed by whitespace.
@@ -686,10 +860,42 @@ mod tests {
             "&é &é",
             "\r",
             "",
+            "{?é",
+            "{?\"\\",
+            "{?'",
         ] {
             for difference in &differences {
                 let _ = classify(input, difference);
             }
+        }
+    }
+
+    #[test]
+    fn unspaced_indicators_are_those_starting_a_node() {
+        let found = |input: &str| -> Vec<char> {
+            unspaced_indicators(input)
+                .into_iter()
+                .map(|(_, c)| c)
+                .collect()
+        };
+        assert_eq!(found("{?a: 1}"), ['?']);
+        assert_eq!(found("{!t :a}"), [':']);
+        assert_eq!(found("{\"\": 1, ?:a}"), ['?', ':']);
+        assert_eq!(found("[?! \"a,b\"]"), ['?']);
+        assert_eq!(found("{?\n:\"a\"}"), [':']);
+        // Inside scalars, after a JSON-like key, and with whitespace after.
+        for input in [
+            "{\"a\":\"b\"}",
+            "a: http://x",
+            "{a: \"x ?y\"}",
+            "{a: 'x :y'}",
+            "{a: \"x\\\" :y\"}",
+            "{l ::}",
+            "{a: b\n:c}",
+            "{? a: 1, ! : b}",
+            "a: b?c",
+        ] {
+            assert!(found(input).is_empty(), "{input:?}: {:?}", found(input));
         }
     }
 
