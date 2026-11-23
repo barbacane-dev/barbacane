@@ -117,6 +117,8 @@ Variables always resolve against the **original** incoming request, regardless o
 
 A known variable whose value is absent (a missing header, cookie, query or path parameter) resolves to an empty string. A `$` expression that is not a known variable (for example `$unknown.thing`, or a literal `$5`) is left unchanged.
 
+A body `add` value that starts with a variable is written as a JSON number or boolean when its result reads as one (`$query.page` with `page=2` gives `2`), and as a string otherwise: a client's value never becomes an object, an array or `null`. A value that starts with literal text is always a string.
+
 ### Empty variables
 
 By default an `add` or `set` is written even when its variables resolve to empty, so `Bearer $cookie.sso_token` becomes `Bearer ` for a request without the cookie. With `skip_if_empty: true`, an `add` or `set` whose value references a variable that resolves to an empty string (absent, or present with an empty value such as `sso_token=`) is skipped:
