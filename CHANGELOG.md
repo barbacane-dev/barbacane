@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-11-23
+
+Dependency updates for advisories published since 0.12.4. None of them reaches Barbacane 0.12.
+
+### Security
+
+- **wasm runtime**: Wasmtime 48.0.9, for RUSTSEC-2026-0566 to RUSTSEC-2026-0573. None of them reaches the gateway: two are in `wasmtime-wasi` and `wasmtime-wasi-http`, which it does not build, and one in the component model, which it does not load; two abort builds without the `threads` or `gc` feature, and it builds both; one is a panic in `Caller::get_module_export`, which it does not call; one needs a host function that hands the guest a GC reference, and none does; one needs a GC heap reservation that is not a multiple of the page size, and it configures none.
+- **dependencies**: tar 0.4.46 and rand 0.8.6. tar 0.4.45 applied a PAX header to the extension header after it rather than to the file, so a crafted archive lists different members under tar-rs than under other tar readers (GHSA-3pv8-6f4r-ffg2). Barbacane opens a `.bca` only with tar-rs, so its own readers agree; a review of the archive with another tool could miss a member. rand 0.8.5 is unsound when a custom `log` logger draws from `thread_rng` (GHSA-cq8v-f236-94qc); Barbacane builds rand 0.8 without its `log` feature. Neither advisory has a RustSec id, so `cargo deny` does not report them.
+- **dependencies**: url 2.5.9, for RUSTSEC-2026-0592: `Url::origin()` overflows the stack on a deeply nested `blob:` URL. Neither Barbacane nor any crate in its tree that uses `url` calls `Url::origin()`.
+
 ## [0.12.4] - 2026-11-06
 
 Security fixes and dependency updates. Wasmtime moves to 48.0.8: on aarch64, a plugin could make the host jump to arbitrary code (RUSTSEC-2026-0379). A `.bca` is read once and every member is checked against its manifest before use, and the control plane checks plugin capabilities the way `barbacane compile` does. Auth plugins and `acl` keep group names containing commas whole, which changes how `x-auth-consumer-groups` writes `,` and `%`. `response-transformer` refuses a response whose fields cannot be removed, and its body pointers must start with `/`, so a spec that compiled under 0.12.3 can be refused: compile yours before upgrading a running gateway. The artifact format version does not change.
@@ -861,7 +871,8 @@ Headline: AI gateway extensions land — caller-owned model, glob-based dynamic 
 - Comprehensive documentation
 - GitHub Actions CI
 
-[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.4...HEAD
+[Unreleased]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.5...HEAD
+[0.12.5]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.4...v0.12.5
 [0.12.4]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/barbacane-dev/Barbacane/compare/v0.12.1...v0.12.2
