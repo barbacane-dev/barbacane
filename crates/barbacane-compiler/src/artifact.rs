@@ -1867,8 +1867,10 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
             .ok_or_else(|| "not a hex digit".to_string())
     };
     digits
-        .chunks_exact(2)
-        .map(|pair| Ok(((nibble(pair[0])? << 4) | nibble(pair[1])?) as u8))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|[high, low]| Ok(((nibble(*high)? << 4) | nibble(*low)?) as u8))
         .collect()
 }
 
@@ -6363,7 +6365,8 @@ paths:
         let other_compiler = |m: &mut Manifest| m.compiler_version = "9.9.9".to_string();
         let other_route_count = |m: &mut Manifest| m.routes_count = 7;
         let older_format = |m: &mut Manifest| m.barbacane_artifact_version = 8;
-        let relabels: Vec<(&str, &dyn Fn(&mut Manifest))> = vec![
+        type Relabel<'a> = (&'a str, &'a dyn Fn(&mut Manifest));
+        let relabels: Vec<Relabel> = vec![
             ("provenance.commit", &other_commit),
             ("provenance.source", &other_source),
             ("compiler_version", &other_compiler),
