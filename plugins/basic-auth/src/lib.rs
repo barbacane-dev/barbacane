@@ -35,6 +35,8 @@ struct CredentialEntry {
     username: String,
 
     /// Password for this user. Supports secret references (e.g. `env://MY_PASSWORD`).
+    /// An entry whose password is empty, as written or as resolved, matches no
+    /// request.
     password: String,
 
     /// Optional roles/permissions for this user.
@@ -144,7 +146,7 @@ impl BasicAuth {
         for e in &self.credentials {
             let user_ok = constant_time_eq(e.username.as_bytes(), username.as_bytes());
             let pass_ok = constant_time_eq(e.password.as_bytes(), password.as_bytes());
-            if user_ok && pass_ok {
+            if user_ok && pass_ok && !e.password.is_empty() {
                 matched = Some(e);
             }
         }
@@ -251,6 +253,25 @@ mod tests {
     /// Helper: build an Authorization: Basic header value.
     fn basic_header(user: &str, pass: &str) -> String {
         format!("Basic {}", STANDARD.encode(format!("{}:{}", user, pass)))
+    }
+
+    #[test]
+    fn an_empty_password_matches_no_request() {
+        let mut plugin = test_plugin();
+        plugin.credentials.push(CredentialEntry {
+            username: "unset".to_string(),
+            password: String::new(),
+            roles: vec![],
+        });
+        for header in [
+            basic_header("unset", ""),
+            format!("Basic {}", STANDARD.encode("unset")),
+        ] {
+            let mut headers = BTreeMap::new();
+            headers.insert("authorization".to_string(), header.clone());
+            let result = plugin.validate_request(&request_with_headers(headers));
+            assert!(result.is_err(), "{header} was accepted");
+        }
     }
 
     // ==================== extract_credentials ====================

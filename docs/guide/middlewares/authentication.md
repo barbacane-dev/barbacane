@@ -237,7 +237,7 @@ Each credential entry:
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `username` | string | **required** | Username for this credential |
-| `password` | string | **required** | Password for this user (supports secret references) |
+| `password` | string | **required** | Password for this user (supports secret references). An entry whose password is empty, as written or as a secret reference resolves it, matches no request |
 | `roles` | array | `[]` | Optional roles for authorization |
 
 ### Context headers
