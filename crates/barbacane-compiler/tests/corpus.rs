@@ -34,6 +34,9 @@ const HTTP_METHODS: &[&str] = &[
     "get", "post", "put", "delete", "patch", "head", "options", "trace", "query",
 ];
 
+/// Fixtures that must fail to parse; the CLI tests check the error each gives.
+const UNPARSEABLE: &[&str] = &["invalid-middleware-entry.yaml"];
+
 /// Every spec the corpus covers.
 fn corpus() -> Vec<PathBuf> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -77,7 +80,11 @@ fn collect_specs(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(raw) = parse_document(&text) else {
             continue;
         };
-        if raw.get("openapi").is_some() || raw.get("asyncapi").is_some() {
+        let unparseable = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| UNPARSEABLE.contains(&n));
+        if (raw.get("openapi").is_some() || raw.get("asyncapi").is_some()) && !unparseable {
             out.push(path);
         }
     }
