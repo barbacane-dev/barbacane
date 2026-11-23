@@ -1788,3 +1788,188 @@ paths:
     let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
     assert_eq!(body["received_bytes"], payload_len);
 }
+
+/// A spec routing `/files/{name}` to `/public/{name}`, `/wild/{path+}` to
+/// `/{path}`, and `/raw/{path+}` to the request's own path, on `upstream_url`.
+fn upstream_paths_spec(upstream_url: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let spec = r#"openapi: "3.1.0"
+info:
+  title: Upstream paths
+  version: "1.0.0"
+paths:
+  /files/{name}:
+    get:
+      operationId: getFile
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "UPSTREAM"
+          path: "/public/{name}"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /wild/{path+}:
+    get:
+      operationId: getWild
+      parameters:
+        - name: path
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "UPSTREAM"
+          path: "/{path}"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /raw/{path+}:
+    get:
+      operationId: getRaw
+      parameters:
+        - name: path
+          in: path
+          required: true
+          allowReserved: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "UPSTREAM"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+"#
+    .replace("UPSTREAM", upstream_url);
+    std::fs::write(temp.path().join("upstream-paths.yaml"), spec).expect("write spec");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  http-upstream:\n    path: {}\n",
+            plugin_wasm("http-upstream").display()
+        ),
+    )
+    .expect("write manifest");
+    let path = temp.path().join("upstream-paths.yaml");
+    (temp, path)
+}
+
+/// The status of `GET target`, sent as written: an HTTP client would resolve
+/// the dot segments some of these targets hold before sending them.
+async fn raw_get_status(port: u16, target: &str) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let request = format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    socket.write_all(request.as_bytes()).await.expect("send");
+    let mut response = Vec::new();
+    socket.read_to_end(&mut response).await.expect("read");
+    String::from_utf8_lossy(&response)
+        .split_whitespace()
+        .nth(1)
+        .and_then(|status| status.parse().ok())
+        .unwrap_or_else(|| panic!("no status line for {target}"))
+}
+
+/// What the upstream received, as `path?query`, in order.
+async fn received_targets(upstream: &wiremock::MockServer) -> Vec<String> {
+    upstream
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|r| match r.url.query() {
+            Some(query) => format!("{}?{}", r.url.path(), query),
+            None => r.url.path().to_string(),
+        })
+        .collect()
+}
+
+/// A path parameter fills its own place in the `path` template: a decoded `/`
+/// with `..` cannot climb out of it, and a decoded `?` cannot start a query.
+#[tokio::test]
+async fn test_a_path_parameter_stays_within_its_upstream_path() {
+    use wiremock::matchers::any;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = upstream_paths_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    let port = gateway.port();
+
+    assert_eq!(raw_get_status(port, "/files/report.v2.pdf").await, 200);
+    assert_eq!(raw_get_status(port, "/files/x%3Famount%3D0").await, 200);
+    assert_eq!(
+        raw_get_status(port, "/files/..%2F..%2Fadmin%2Fusers").await,
+        400
+    );
+
+    assert_eq!(
+        received_targets(&upstream).await,
+        ["/public/report.v2.pdf", "/public/x%3Famount=0"]
+    );
+}
+
+/// A `.` or `..` segment, in any spelling, is refused before routing: it
+/// reaches no upstream, whether the path is forwarded as is or a wildcard
+/// fills a template. Paths without one are forwarded.
+#[tokio::test]
+async fn test_a_dot_segment_never_reaches_the_upstream() {
+    use wiremock::matchers::any;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = upstream_paths_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    let port = gateway.port();
+
+    for target in [
+        "/raw/../admin/users",
+        "/raw/%2e%2e/admin/users",
+        "/raw/.%2E/admin/users",
+        "/raw/a/..%2F..%2Fadmin",
+        "/wild/a/..%2F..%2Fsecret",
+        "/wild/%2e%2e/secret",
+    ] {
+        assert_eq!(raw_get_status(port, target).await, 400, "{target}");
+    }
+    assert!(
+        received_targets(&upstream).await.is_empty(),
+        "the upstream received {:?}",
+        received_targets(&upstream).await
+    );
+
+    assert_eq!(raw_get_status(port, "/raw/x/y").await, 200);
+    assert_eq!(raw_get_status(port, "/wild/a/b/c.txt").await, 200);
+    assert_eq!(
+        received_targets(&upstream).await,
+        ["/raw/x/y", "/a/b/c.txt"]
+    );
+}

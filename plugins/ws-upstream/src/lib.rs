@@ -4,6 +4,7 @@
 //! upgrade handshake; the host runtime manages bidirectional frame relay.
 //! See ADR-0026 for the full design.
 
+use barbacane_plugin_sdk::path::{self, DotSegmentParam};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -64,7 +65,17 @@ impl WsUpstreamDispatcher {
 
         // Build the upstream URL
         let upstream_path = match &self.path {
-            Some(template) => self.substitute_path_params(template, &req.path_params),
+            Some(template) => match self.substitute_path_params(template, &req.path_params) {
+                Ok(filled) => filled,
+                Err(e) => {
+                    return self.error_response(
+                        400,
+                        "Bad Request",
+                        "invalid path parameter",
+                        &e.to_string(),
+                    )
+                }
+            },
             None => req.path.clone(),
         };
 
@@ -150,13 +161,14 @@ impl WsUpstreamDispatcher {
         }
     }
 
-    /// Substitute path parameters in the template.
-    fn substitute_path_params(&self, template: &str, params: &BTreeMap<String, String>) -> String {
-        let mut result = template.to_string();
-        for (key, value) in params {
-            result = result.replace(&format!("{{{}}}", key), value);
-        }
-        result
+    /// The `path` template with each `{name}` filled with that path
+    /// parameter, encoded so that it stays within the path.
+    fn substitute_path_params(
+        &self,
+        template: &str,
+        params: &BTreeMap<String, String>,
+    ) -> Result<String, DotSegmentParam> {
+        path::fill_path_template(template, params)
     }
 
     /// Create an error response in RFC 9457 format.
@@ -333,7 +345,9 @@ mod tests {
 
         let mut params = BTreeMap::new();
         params.insert("room".to_string(), "general".to_string());
-        let result = dispatcher.substitute_path_params("/ws/{room}", &params);
+        let result = dispatcher
+            .substitute_path_params("/ws/{room}", &params)
+            .unwrap();
         assert_eq!(result, "/ws/general");
     }
 
@@ -348,7 +362,9 @@ mod tests {
         let mut params = BTreeMap::new();
         params.insert("org".to_string(), "acme".to_string());
         params.insert("channel".to_string(), "alerts".to_string());
-        let result = dispatcher.substitute_path_params("/ws/{org}/{channel}", &params);
+        let result = dispatcher
+            .substitute_path_params("/ws/{org}/{channel}", &params)
+            .unwrap();
         assert_eq!(result, "/ws/acme/alerts");
     }
 
@@ -411,6 +427,25 @@ mod tests {
     }
 
     // -- Error response format tests --
+
+    #[test]
+    fn a_path_parameter_stays_within_the_template() {
+        let dispatcher = WsUpstreamDispatcher {
+            url: "wss://service:8080".to_string(),
+            connect_timeout: 5.0,
+            path: None,
+        };
+        let params = |value: &str| BTreeMap::from([("room".to_string(), value.to_string())]);
+
+        let filled = dispatcher
+            .substitute_path_params("/ws/{room}", &params("lobby?admin=1"))
+            .unwrap();
+        assert_eq!(filled, "/ws/lobby%3Fadmin=1");
+        let refused = dispatcher
+            .substitute_path_params("/ws/{room}", &params("../internal"))
+            .unwrap_err();
+        assert_eq!(refused.name, "room");
+    }
 
     #[test]
     fn error_response_400() {
@@ -536,7 +571,9 @@ mod tests {
 
         let mut params = BTreeMap::new();
         params.insert("room".to_string(), "general".to_string());
-        let result = dispatcher.substitute_path_params("/ws/{room}/sub/{unknown}", &params);
+        let result = dispatcher
+            .substitute_path_params("/ws/{room}/sub/{unknown}", &params)
+            .unwrap();
         assert_eq!(result, "/ws/general/sub/{unknown}");
     }
 

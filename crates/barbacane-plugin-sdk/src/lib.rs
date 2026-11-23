@@ -45,6 +45,7 @@ pub mod http;
 pub mod jwt;
 pub mod ldap;
 pub mod log;
+pub mod path;
 pub mod types;
 
 /// Re-export proc macros for plugin development.
@@ -55,7 +56,8 @@ pub mod prelude {
     pub use crate::errors::ProblemDetails;
     pub use crate::types::*;
     pub use crate::{barbacane_dispatcher, barbacane_middleware};
-    // `context`, `hash`, `http`, `jwt`, `ldap`, and `log` are used via their
-    // module path (e.g. `log::warn`, `hash::sha256`, `http::call`,
-    // `ldap::search`, `context::set`) to keep the prelude unambiguous.
+    // `context`, `hash`, `http`, `jwt`, `ldap`, `log` and `path` are used via
+    // their module path (e.g. `log::warn`, `hash::sha256`, `http::call`,
+    // `ldap::search`, `context::set`, `path::fill_path_template`) to keep the
+    // prelude unambiguous.
 }

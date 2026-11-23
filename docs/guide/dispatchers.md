@@ -213,6 +213,8 @@ Path parameters from the OpenAPI spec are automatically substituted in the `path
 # Backend: GET https://backend.internal/api/users/123/orders/456
 ```
 
+A value fills only its own place in the template. Path parameters arrive percent-decoded, and each value is percent-encoded again before it goes in: a `/` in a `{param+}` wildcard stays a path separator, and every other character outside the unreserved set and `!$&'()*+,=:@` is encoded, so `?`, `#` and `;` stay part of the path. A value with a `.` or `..` segment answers `400` (`urn:barbacane:error:bad-request`). The data plane also refuses, with `400`, any request whose path holds a `.` or `..` segment, in any spelling (`%2e%2e`, `..%2F`), before routing it.
+
 #### Path Rewriting
 
 Map frontend paths to different backend paths:

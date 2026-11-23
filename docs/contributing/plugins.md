@@ -260,6 +260,8 @@ pub struct Request {
 
 Build one with `Request::new(method, path)` and `with_query`, `with_header`, `with_body`, `with_client_ip`, `with_path_param`. Helper methods: `body_str() -> Option<&str>`, `body_string() -> Option<String>`, `set_body_text(&str)`.
 
+`path_params` values are percent-decoded, so one can hold `/`, `?`, `#`, `%` or `..`. To build an upstream path from them, use `path::fill_path_template(template, &req.path_params)`: it fills each `{name}` in one pass with the value percent-encoded part by part (a `/` stays a separator), and returns `DotSegmentParam` when a value holds a `.` or `..` segment.
+
 ### Response
 
 ```rust

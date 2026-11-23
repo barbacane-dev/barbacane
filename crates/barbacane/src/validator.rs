@@ -675,6 +675,16 @@ impl OperationValidator {
     }
 }
 
+/// Whether `path`, once percent-decoded, holds a `.` or `..` segment between
+/// `/` or `\` separators. A URL parser resolves such a segment against the ones
+/// before it, so a path that holds one can name another path than the one it
+/// was routed by.
+pub fn has_dot_segment(path: &str) -> bool {
+    percent_decode(path)
+        .split(['/', '\\'])
+        .any(|segment| segment == "." || segment == "..")
+}
+
 /// Canonical percent-decoding of a URL component (handles `%XX` escapes and `+`).
 ///
 /// Decodes into a byte buffer and interprets the result as UTF-8, so multi-byte
@@ -1558,6 +1568,34 @@ mod tests {
         // A malformed escape is left intact rather than dropped.
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn dot_segments_are_found_in_every_spelling() {
+        for path in [
+            "/a/../b",
+            "/a/./b",
+            "/a/..",
+            "/a/%2e%2e/b",
+            "/a/%2E%2e/b",
+            "/a/.%2e/b",
+            "/orders/..%2F..%2Fadmin/pay",
+            "/a/..%5Cadmin",
+            "/a\\..\\b",
+        ] {
+            assert!(has_dot_segment(path), "{path}");
+        }
+        for path in [
+            "/",
+            "/a/b",
+            "/files/report.v2.pdf",
+            "/a/.../b",
+            "/a/..b/c",
+            "/.well-known/x",
+            "/a/%252e%252e/b",
+        ] {
+            assert!(!has_dot_segment(path), "{path}");
+        }
     }
 
     #[test]

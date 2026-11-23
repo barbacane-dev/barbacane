@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **data plane**: `--plugin-instance-pool` (`BARBACANE_PLUGIN_INSTANCE_POOL`, default 1000) sets how many plugin instances alive at once the gateway keeps memory set up for; `0` turns the pool off. Instances past it are allocated for their request alone. Each pool slot reserves about 4 GiB of virtual address space; where the host cannot reserve the pool, the gateway logs `cannot set up the plugin instance pool` and allocates every instance for its request (#422).
 - **metrics**: `barbacane_wasm_instances`, the plugin instances alive, and `barbacane_wasm_instances_unpooled_total`, the instances allocated per request because the pool was full (#422).
+- **plugin SDK**: `path::fill_path_template` fills a path template from a request's path parameters, each value percent-encoded part by part, and returns `DotSegmentParam` for a value with a `.` or `..` segment.
 
 ### Changed
 
@@ -18,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **data plane**: a request whose path holds a `.` or `..` segment, in any spelling (`..`, `%2e%2e`, `.%2E`, or one that a decoded `%2F` or `%5C` sets apart), answers `400` (`urn:barbacane:error:bad-request`) before routing.
+- **http-upstream, ws-upstream**: a path parameter fills only its own place in the `path` template. Its value is percent-encoded part by part (a `/` stays a separator, so `{param+}` wildcards keep their segments), so `?`, `#`, `;`, `%` and `{` in it stay part of the path, and a value with a `.` or `..` segment answers `400`. Each `{name}` is filled once, so a value no longer fills another parameter's place.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security
