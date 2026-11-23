@@ -18,6 +18,10 @@ paths:
 
 All dispatchers are implemented as WASM plugins and must be declared in your `barbacane.yaml` manifest.
 
+### Client address
+
+`http-upstream`, `ws-upstream`, `lambda` (with `pass_through_headers`) and `fire-and-forget` send the client's headers to their backend, with `X-Forwarded-For` and `X-Real-IP` set to the client address the gateway resolved: the TCP peer, or behind a proxy listed in [`--trusted-proxies`](../reference/cli.md#client-address) the address that proxy reported. The client's own `X-Forwarded-For`, `X-Real-IP` and `Forwarded` are not sent, so a backend can trust these headers from the gateway.
+
 ### mock
 
 Returns static or interpolated responses. Useful for health checks, stubs, and testing.
@@ -285,6 +289,7 @@ The dispatcher returns RFC 9457 error responses:
 - **TLS**: Uses rustls with the built-in CA roots by default
 - **mTLS**: Configure `tls.client_cert` and `tls.client_key` for mutual TLS authentication
 - **Private CA**: `tls.ca` verifies the upstream against that CA alone
+- **Client address**: `X-Forwarded-For` and `X-Real-IP` name the client the gateway resolved, never a value the client wrote (see [Client address](#client-address))
 
 ### lambda
 

@@ -4,6 +4,7 @@
 //! upgrade handshake; the host runtime manages bidirectional frame relay.
 //! See ADR-0026 for the full design.
 
+use barbacane_plugin_sdk::forwarding;
 use barbacane_plugin_sdk::path::{self, DotSegmentParam};
 use barbacane_plugin_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -92,23 +93,10 @@ impl WsUpstreamDispatcher {
             _ => full_url,
         };
 
-        // Forward headers (filter hop-by-hop, keep WebSocket-specific ones)
-        let mut headers: BTreeMap<String, String> = BTreeMap::new();
-        for (key, value) in &req.headers {
-            let key_lower = key.to_lowercase();
-            if !matches!(
-                key_lower.as_str(),
-                "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
-            ) {
-                headers.insert(key.clone(), value.clone());
-            }
-        }
-
-        // Add forwarding headers
+        let mut headers = forwarding::upstream_headers(&req);
         if let Some(host) = req.headers.get("host") {
             headers.insert("x-forwarded-host".to_string(), host.clone());
         }
-        headers.insert("x-forwarded-for".to_string(), req.client_ip.clone());
 
         // Build and serialize upgrade request
         let ws_request = WsUpgradeRequest {

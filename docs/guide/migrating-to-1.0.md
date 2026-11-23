@@ -45,6 +45,7 @@ An artifact compiled without a manifest, with `barbacane_compiler::compile` from
 - A client's `x-request-id` is kept only when it is at most 128 bytes of visible ASCII, and a `traceparent` yields the trace id only when well-formed; otherwise the gateway generates ids. Clients that sent longer ids see generated ones in `x-request-id`.
 - Only a request shaped as a WebSocket handshake (a `GET` with `Upgrade: websocket`, `Connection: upgrade` and `Sec-WebSocket-Key`) skips body handling. Any other request carrying an `Upgrade` header has its body read, validated and inspected like every request.
 - The request body must arrive within `--keepalive-timeout` seconds (60 by default), the deadline its headers already had; a body still incomplete at the deadline is answered `408` and the connection closed.
+- `http-upstream`, `ws-upstream`, `lambda` and `fire-and-forget` send `X-Forwarded-For` and `X-Real-IP` set to the client the gateway resolved, and drop the client's own `X-Forwarded-For`, `X-Real-IP` and `Forwarded`. A backend behind a load balancer that wrote the chain sees the load balancer's address unless it is listed in `--trusted-proxies`.
 - An IPv4 client of a dual-stack listener is reported as its IPv4 address (`10.0.0.1`, not `::ffff:10.0.0.1`) to plugins, the WAF and logs. In `ip-restriction`, a rule like `::/0` no longer covers IPv4 clients; write `0.0.0.0/0`, and write `10.0.0.0/8` for what was `::ffff:10.0.0.0/104`.
 
 ### Shutdown and reload

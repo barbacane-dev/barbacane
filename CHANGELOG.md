@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **metrics**: `barbacane_wasm_instances`, the plugin instances alive, and `barbacane_wasm_instances_unpooled_total`, the instances allocated per request because the pool was full (#422).
 - **plugin SDK**: `path::fill_path_template` fills a path template from a request's path parameters, each value percent-encoded part by part, and returns `DotSegmentParam` for a value with a `.` or `..` segment.
 - **s3**: `query_params` lists the query parameters forwarded to S3, by name as the client writes them (for example `[versionId]`); they are signed with the gateway's credentials.
+- **plugin SDK**: `forwarding::upstream_headers` gives a request's headers to send to a backend: without hop-by-hop headers and the client's `X-Forwarded-For`, `X-Real-IP` and `Forwarded`, and with `X-Forwarded-For` and `X-Real-IP` set to `client_ip`.
 
 ### Changed
 
@@ -26,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **http-upstream, ws-upstream**: a path parameter fills only its own place in the `path` template. Its value is percent-encoded part by part (a `/` stays a separator, so `{param+}` wildcards keep their segments), so `?`, `#`, `;`, `%` and `{` in it stay part of the path, and a value with a `.` or `..` segment answers `400`. Each `{name}` is filled once, so a value no longer fills another parameter's place.
 - **s3**: a bucket taken from a path parameter must follow S3's naming rules (3 to 63 lowercase letters, digits, `.` or `-`, starting and ending with a letter or digit, not an IP address); another value answers `400` (`invalid bucket name`). A key with a `.` or `..` segment answers `400` (`invalid key`). The key is sent percent-encoded exactly as it is signed, so `?`, `#` and `%` in a key are part of the key.
 - **request-transformer**: a body `add` value taken from the request is written as a JSON number or boolean when it reads as one, and as a string otherwise. A header, query parameter, cookie or path parameter holding `{...}`, `[...]` or `null` is written as that text, not as an object, array or null.
+- **http-upstream, ws-upstream, lambda, fire-and-forget**: the backend receives `X-Forwarded-For` and `X-Real-IP` set to the client address the gateway resolved (the peer, or the address a proxy in `--trusted-proxies` reported). The client's own `X-Forwarded-For`, `X-Real-IP` and `Forwarded` are no longer sent.
+  > **Upgrade note (breaking):** a backend that read the client from a chain a proxy in front of the gateway wrote gets the gateway's resolved address; list that proxy in `--trusted-proxies` so the address is the client's.
 - **streamed responses**: a client that leaves a stream ends the dispatcher's read of the upstream at once. The dispatcher noticed only when the upstream sent its next chunk, so a stream the upstream had gone quiet on kept its plugin instances and a blocking thread for as long as the upstream stayed quiet (#422).
 
 ### Security

@@ -6,9 +6,9 @@
 //! - Header forwarding
 //! - Configurable timeouts
 
-use barbacane_plugin_sdk::http;
 use barbacane_plugin_sdk::path::{self, DotSegmentParam};
 use barbacane_plugin_sdk::prelude::*;
+use barbacane_plugin_sdk::{forwarding, http};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -53,6 +53,7 @@ fn default_timeout() -> f64 {
 impl HttpUpstreamDispatcher {
     /// Proxy the request to the upstream and return the response.
     pub fn dispatch(&mut self, req: Request) -> Response {
+        let mut headers = forwarding::upstream_headers(&req);
         let Request {
             method,
             path,
@@ -108,21 +109,6 @@ impl HttpUpstreamDispatcher {
             }
         };
 
-        // Build headers to send to upstream
-        let mut headers: BTreeMap<String, String> = BTreeMap::new();
-
-        // Forward incoming headers (filter hop-by-hop headers)
-        for (key, value) in &req_headers {
-            let key_lower = key.to_lowercase();
-            if !matches!(
-                key_lower.as_str(),
-                "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
-            ) {
-                headers.insert(key.clone(), value.clone());
-            }
-        }
-
-        // Add X-Forwarded headers
         if let Some(host) = req_headers.get("host") {
             headers.insert("x-forwarded-host".to_string(), host.clone());
         }

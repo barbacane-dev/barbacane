@@ -7,11 +7,11 @@
 //! The outbound HTTP call is best-effort: if the upstream is unreachable
 //! or returns an error, the client still receives the configured response.
 
-use barbacane_plugin_sdk::http;
 #[cfg(target_arch = "wasm32")]
 use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
+use barbacane_plugin_sdk::{forwarding, http};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -103,7 +103,7 @@ impl FireAndForgetDispatcher {
     fn forward_to_upstream(&self, req: &Request) {
         let mut request = http::HttpRequest::new(req.method.clone(), self.url.clone())
             .timeout_ms(self.timeout_ms);
-        request.headers = req.headers.clone();
+        request.headers = forwarding::upstream_headers(req);
 
         // Best-effort: the request body travels via the side-channel inside
         // `http::call`, and the response is ignored (fire-and-forget). A
@@ -414,6 +414,25 @@ mod tests {
         assert_eq!(http_req.headers["authorization"], "Bearer tok");
         assert_eq!(http_req.headers["x-custom"], "value");
         assert_eq!(http_req.headers["content-type"], "application/json");
+    }
+
+    #[test]
+    fn the_upstream_learns_the_client_from_the_gateway() {
+        host::reset_mock_state();
+
+        let mut plugin = minimal_plugin();
+        let mut req = test_request();
+        req.headers
+            .insert("x-forwarded-for".to_string(), "6.6.6.6".to_string());
+        req.headers
+            .insert("forwarded".to_string(), "for=6.6.6.6".to_string());
+        plugin.dispatch(req);
+
+        let calls = host::get_http_calls();
+        let http_req: HttpRequest = serde_json::from_slice(&calls[0]).unwrap();
+        assert_eq!(http_req.headers["x-forwarded-for"], "10.0.0.1");
+        assert_eq!(http_req.headers["x-real-ip"], "10.0.0.1");
+        assert!(!http_req.headers.contains_key("forwarded"));
     }
 
     #[test]

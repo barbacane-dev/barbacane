@@ -353,6 +353,84 @@ async fn test_http_upstream_headers_forwarded() {
     );
 }
 
+/// The forwarding headers the upstream receives name the client the gateway
+/// resolved: the peer, or behind a trusted proxy the address it reported. A
+/// hop the client wrote never reaches the upstream.
+#[tokio::test]
+async fn test_the_upstream_learns_the_client_from_the_gateway() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    /// Answer with the forwarding headers the upstream received.
+    struct EchoForwarding;
+    impl Respond for EchoForwarding {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let get = |name: &str| {
+                let values: Vec<&str> = req
+                    .headers
+                    .get_all(name)
+                    .iter()
+                    .filter_map(|v| v.to_str().ok())
+                    .collect();
+                values.join(" | ")
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "x-forwarded-for": get("x-forwarded-for"),
+                "x-real-ip": get("x-real-ip"),
+                "forwarded": get("forwarded"),
+            }))
+        }
+    }
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/headers"))
+        .respond_with(EchoForwarding)
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = http_upstream_spec(&upstream.uri());
+
+    async fn received(gateway: &TestGateway) -> serde_json::Value {
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/proxy/headers")
+            .header("X-Forwarded-For", "6.6.6.6, 203.0.113.9")
+            .header("X-Real-IP", "6.6.6.6")
+            .header("Forwarded", "for=6.6.6.6")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        resp.json().await.unwrap()
+    }
+
+    let direct = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    assert_eq!(
+        received(&direct).await,
+        serde_json::json!({
+            "x-forwarded-for": "127.0.0.1",
+            "x-real-ip": "127.0.0.1",
+            "forwarded": "",
+        })
+    );
+
+    let proxied = TestGateway::from_spec_with_args(
+        spec.to_str().unwrap(),
+        &["--trusted-proxies", "127.0.0.1"],
+    )
+    .await
+    .expect("failed to start gateway");
+    assert_eq!(
+        received(&proxied).await,
+        serde_json::json!({
+            "x-forwarded-for": "203.0.113.9",
+            "x-real-ip": "203.0.113.9",
+            "forwarded": "",
+        })
+    );
+}
+
 /// An upstream that accepts each connection, reads the request and closes the
 /// connection without answering. Returns its base URL.
 async fn start_hang_up_upstream() -> String {

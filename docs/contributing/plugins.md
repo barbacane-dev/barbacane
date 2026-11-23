@@ -386,6 +386,12 @@ these headers when a plugin sets them, on every call, pooled or streamed:
 `Proxy-Connection`, `Upgrade`, `TE` and `Trailer`. `Authorization` is sent as
 set.
 
+A dispatcher that sends the client's headers to its backend takes them from
+`forwarding::upstream_headers(&req)`: the request's headers without hop-by-hop
+headers and without the client's `X-Forwarded-For`, `X-Real-IP` and
+`Forwarded`, with `X-Forwarded-For` and `X-Real-IP` set to `req.client_ip`.
+Copying `req.headers` instead passes on whatever address the client wrote.
+
 ### Hashing
 
 ```toml
