@@ -137,8 +137,22 @@ impl Cache {
             return resp;
         }
 
+        // `no-cache` requires revalidation before reuse, which this cache does
+        // not do, so such a response is not stored (RFC 9111 §5.2.2.4).
         let directives = cache_control_directives(resp.headers.get("cache-control"));
-        if directives.iter().any(|d| d == "no-store" || d == "private") {
+        if directives
+            .iter()
+            .any(|d| matches!(d.as_str(), "no-store" | "private" | "no-cache"))
+        {
+            return resp;
+        }
+
+        // A cookie the response sets belongs to the client it answers.
+        if resp
+            .headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("set-cookie"))
+        {
             return resp;
         }
 
@@ -659,6 +673,39 @@ mod tests {
         call_cache_read_result(&mut buf);
         let cache_result: CacheResult = serde_json::from_slice(&buf).unwrap();
         assert!(!cache_result.hit);
+    }
+
+    #[test]
+    fn a_response_for_one_client_is_not_stored() {
+        for (name, value) in [
+            ("set-cookie", "session=abc; HttpOnly"),
+            ("Set-Cookie", "session=abc"),
+            ("cache-control", "no-cache"),
+            ("cache-control", "max-age=60, no-cache=\"set-cookie\""),
+        ] {
+            setup();
+            let mut cache = Cache {
+                ttl: 300,
+                vary: vec![],
+                methods: default_methods(),
+                cacheable_status: default_cacheable_status(),
+                current_cache_key: Some("GET:/api/me".to_string()),
+                is_cacheable: true,
+                request_authorized: false,
+            };
+            let resp = Response::new(200)
+                .with_header(name, value)
+                .with_body(br#"{"me":"alice"}"#.to_vec());
+
+            let result = cache.on_response(resp);
+
+            assert!(!result.headers.contains_key("x-cache"), "{name}: {value}");
+            let result_len = call_cache_get("GET:/api/me");
+            let mut buf = vec![0u8; result_len as usize];
+            call_cache_read_result(&mut buf);
+            let cache_result: CacheResult = serde_json::from_slice(&buf).unwrap();
+            assert!(!cache_result.hit, "{name}: {value} was stored");
+        }
     }
 
     #[test]

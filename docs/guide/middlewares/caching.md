@@ -42,7 +42,7 @@ The cache key is computed from:
 
 ### Storage rules
 
-A response is stored only when its status is in `cacheable_status`, and never when its `Cache-Control` carries `no-store` or `private`.
+A response is stored only when its status is in `cacheable_status`, and never when its `Cache-Control` carries `no-store`, `private` or `no-cache` (the cache does not revalidate), or when it sets a cookie (`Set-Cookie`).
 
 A response to a request carrying `Authorization` is stored only when it explicitly allows a shared cache to reuse it, through `public`, `s-maxage` or `must-revalidate` ([RFC 9111 §3.5](https://www.rfc-editor.org/rfc/rfc9111#section-3.5)), or when `vary` lists `authorization`, which keys each entry to its credential. Without either, one user's response could be served to another.
 
