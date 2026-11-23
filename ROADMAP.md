@@ -28,12 +28,22 @@ Released on 2026-11-17.
 - [x] **The control plane connects to PostgreSQL over TLS** ([#398](https://github.com/barbacane-dev/barbacane/issues/398)).
 - [x] **The plugin API checked against plugins written for 1.0** on every change ([#401](https://github.com/barbacane-dev/barbacane/issues/401)).
 
+Released on 2026-11-19.
+
+### 1.0.0-rc.3
+
+- [x] **Plugin instances from Wasmtime's pooling allocator**: about 1.7x the requests on a plugin route under load, with a soak run watching memory and tests that a cancelled request gives its slot back ([#422](https://github.com/barbacane-dev/barbacane/issues/422)).
+- [x] **Security fixes from the pre-release review**: the whole repository read crate by crate; the vulnerabilities it found are fixed in this release and published as security advisories.
+
 ### 1.0.0
 
-Between the release candidates and 1.0.0 ([milestone](https://github.com/barbacane-dev/barbacane/milestone/2)):
+Between the release candidates and 1.0.0 ([milestone](https://github.com/barbacane-dev/barbacane/milestone/2)), the pre-release review's other findings:
 
-- [ ] Plugin instances from Wasmtime's pooling allocator: about 1.7x the requests on a plugin route under load, with a soak run watching memory and tests that a cancelled request gives its slot back ([#422](https://github.com/barbacane-dev/barbacane/issues/422))
-- [ ] Pre-release review: the whole repository read crate by crate against what the docs and the website claim
+- [ ] Request validation: arrays, `nullable`, spec constructs compiled without effect ([#431](https://github.com/barbacane-dev/barbacane/issues/431))
+- [ ] Connected mode and the control plane: bootstrap, stored deployments, drift ([#432](https://github.com/barbacane-dev/barbacane/issues/432))
+- [ ] Observability: tracing export, the metrics documented but not recorded ([#433](https://github.com/barbacane-dev/barbacane/issues/433))
+- [ ] The data plane and the plugin runtime ([#434](https://github.com/barbacane-dev/barbacane/issues/434)), and the official plugins ([#435](https://github.com/barbacane-dev/barbacane/issues/435))
+- [ ] Release and CI before tagging 1.0.0 ([#436](https://github.com/barbacane-dev/barbacane/issues/436)), tests that cannot fail ([#437](https://github.com/barbacane-dev/barbacane/issues/437)), docs that do not match 1.0 ([#438](https://github.com/barbacane-dev/barbacane/issues/438))
 
 ---
 

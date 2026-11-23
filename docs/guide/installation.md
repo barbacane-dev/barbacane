@@ -37,8 +37,8 @@ barbacane --version
 `latest` is the last stable release. A release candidate, or any other version, is downloaded by its tag:
 
 ```bash
-curl -LO https://github.com/barbacane-dev/barbacane/releases/download/v1.0.0-rc.2/barbacane-$TARGET
-curl -LO https://github.com/barbacane-dev/barbacane/releases/download/v1.0.0-rc.2/checksums.txt
+curl -LO https://github.com/barbacane-dev/barbacane/releases/download/v1.0.0-rc.3/barbacane-$TARGET
+curl -LO https://github.com/barbacane-dev/barbacane/releases/download/v1.0.0-rc.3/checksums.txt
 ```
 
 The same release carries the official plugins (`<name>.wasm`, with `plugin-checksums.txt`). `barbacane init --fetch-plugins` downloads the ones a new project uses from the release of its own version.
@@ -61,7 +61,7 @@ Tags:
 
 ```bash
 docker pull ghcr.io/barbacane-dev/barbacane:latest
-docker pull barbacane/barbacane-control:1.0.0-rc.2
+docker pull barbacane/barbacane-control:1.0.0-rc.3
 ```
 
 The gateway serves only artifacts signed by the key it pins. Pass that key's public key (see [the getting started guide](getting-started.md#run-it-in-production)):
