@@ -30,8 +30,9 @@ struct Rule {
     /// Exact path to match. If omitted (and no prefix), matches all requests.
     path: Option<String>,
 
-    /// Path prefix to match. The matched prefix is stripped
-    /// and the remainder is appended to target.
+    /// Path prefix to match, at a segment boundary: `/api/v1` matches `/api/v1`
+    /// and `/api/v1/users`, not `/api/v10`. The matched prefix is stripped and
+    /// the remainder is appended to target as a path below it.
     prefix: Option<String>,
 
     /// Redirect target URL or path.
@@ -73,11 +74,9 @@ impl Redirect {
         }
 
         if let Some(prefix) = &rule.prefix {
-            if !req.path.starts_with(prefix.as_str()) {
-                return None;
-            }
-            let remainder = &req.path[prefix.len()..];
-            return Some(self.build_location(&rule.target, remainder, &req.query));
+            let remainder = strip_path_prefix(&req.path, prefix)?;
+            let location = join_below(&rule.target, remainder);
+            return Some(self.build_location(&location, "", &req.query));
         }
 
         // No path or prefix — matches everything
@@ -96,6 +95,27 @@ impl Redirect {
         }
         location
     }
+}
+
+/// The rest of `path` after `prefix`, when `prefix` ends at a segment boundary.
+fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = path.strip_prefix(prefix)?;
+    (rest.is_empty() || rest.starts_with('/') || prefix.ends_with('/')).then_some(rest)
+}
+
+/// `rest` as a path below `target`, joined by exactly one `/`. The separators
+/// that open `rest` collapse into that one, so the location stays below
+/// `target`: with target `/`, a request for `/legacy//evil.example` redirects
+/// to `/evil.example`, never to the host `evil.example`.
+fn join_below(target: &str, rest: &str) -> String {
+    if rest.is_empty() {
+        return target.to_string();
+    }
+    format!(
+        "{}/{}",
+        target.trim_end_matches('/'),
+        rest.trim_start_matches(['/', '\\'])
+    )
 }
 
 fn redirect_response(status: u16, location: &str) -> Response {
@@ -184,6 +204,42 @@ mod tests {
             }
             _ => panic!("expected ShortCircuit"),
         }
+    }
+
+    #[test]
+    fn a_prefix_redirect_stays_below_its_target() {
+        let mut plugin = plugin_from_json(serde_json::json!({
+            "rules": [
+                { "prefix": "/legacy", "target": "/" },
+                { "prefix": "/docs/", "target": "https://docs.example/" }
+            ]
+        }));
+        for (path, expected) in [
+            ("/legacy", "/"),
+            ("/legacy/", "/"),
+            ("/legacy/evil.example/x", "/evil.example/x"),
+            ("/legacy//evil.example/x", "/evil.example/x"),
+            ("/legacy/\\evil.example/x", "/evil.example/x"),
+            ("/docs/guide", "https://docs.example/guide"),
+        ] {
+            match plugin.on_request(make_request(path, None)) {
+                Action::ShortCircuit(resp) => {
+                    assert_eq!(resp.headers["location"], expected, "{path}")
+                }
+                Action::Continue(_) => panic!("{path} was not redirected"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_prefix_matches_whole_segments() {
+        let mut plugin = plugin_from_json(serde_json::json!({
+            "rules": [{ "prefix": "/api/v1", "target": "/api/v2" }]
+        }));
+        assert!(matches!(
+            plugin.on_request(make_request("/api/v10/users", None)),
+            Action::Continue(_)
+        ));
     }
 
     #[test]
