@@ -598,6 +598,7 @@ x-barbacane-dispatch:
 | `bucket_param` | string | No | `"bucket"` | Name of the path parameter that holds the bucket |
 | `key_param` | string | No | `"key"` | Name of the path parameter that holds the object key |
 | `fallback_key` | string | No | - | Fallback object key for SPA routing. When set, a 404 on a GET request triggers a second S3 fetch with this key (e.g. `index.html`). Query parameters are stripped from the S3 request to avoid SigV4 signature errors |
+| `query_params` | array | No | `[]` | Query parameters forwarded to S3, by name as the client writes them (e.g. `[versionId]`). They are signed with the gateway's credentials; other query parameters are dropped. Ignored when `fallback_key` is set |
 | `timeout` | number | No | `30` | Request timeout in seconds |
 
 #### URL Styles
@@ -615,6 +616,8 @@ Path: /{bucket}/{key}
 ```
 
 Custom endpoints always use path-style regardless of `force_path_style`.
+
+A bucket taken from a path parameter must follow S3's naming rules (3 to 63 lowercase letters, digits, `.` or `-`, starting and ending with a letter or digit, not an IP address); any other value answers `400`, so a request cannot choose the host. The key is sent percent-encoded exactly as it is signed, so `?`, `#` and `%` in a key are part of the key; a key with a `.` or `..` segment answers `400`.
 
 #### Wildcard Keys
 
@@ -746,7 +749,7 @@ paths:
 
 | Status | Condition |
 |--------|-----------|
-| 400 Bad Request | Missing bucket or key path parameter |
+| 400 Bad Request | Missing bucket or key path parameter, a bucket name outside S3's naming rules, or a key with a `.` or `..` segment |
 | 502 Bad Gateway | `host_http_call` failed (network error, endpoint unreachable) |
 | 403 / 404 / 5xx | Passed through transparently from S3 |
 
@@ -754,6 +757,7 @@ paths:
 
 - **Credentials**: Use `env://` references so secrets are never baked into spec files or compiled artifacts
 - **Session tokens**: Support for STS, AssumeRole, and IRSA (IAM Roles for Service Accounts) via `session_token`
+- **Query parameters**: only those listed in `query_params` reach S3, signed with the gateway's credentials. By default none does, so a client cannot add `response-content-type` or `response-content-disposition` overrides, a `versionId`, or a subresource such as `acl` to a request the gateway signs
 - **Signing**: All requests are signed with AWS Signature Version 4. The signed headers are `host`, `x-amz-content-sha256`, `x-amz-date`, and `x-amz-security-token` (when a session token is present)
 - **Binary objects**: The current implementation returns the response body as a UTF-8 string. Binary objects (images, archives, etc.) are not suitable for this dispatcher — use pre-signed URLs for binary downloads
 
