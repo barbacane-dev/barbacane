@@ -751,7 +751,9 @@ jobs:
   # UI E2E tests (Playwright)
   ui-e2e:
     name: UI E2E Tests
-    runs-on: ubuntu-latest
+    # Playwright 1.58 has no Chromium build for Ubuntu 26.04, which
+    # ubuntu-latest is.
+    runs-on: ubuntu-24.04
     needs: [changes, ui-tests]
     if: needs.changes.outputs.ui == 'true'
     defaults:
