@@ -332,8 +332,14 @@ impl WasmEngine {
         // Enable multi-value returns
         config.wasm_multi_value(true);
 
-        // Disable WASM features we don't need
+        // Features plugins do not use are off, so a module holds one linear
+        // memory and no GC heap, and the memory limit covers all it can hold.
         config.wasm_threads(false);
+        config.wasm_multi_memory(false);
+        config.wasm_memory64(false);
+        config.wasm_gc(false);
+        config.wasm_function_references(false);
+        config.wasm_exceptions(false);
 
         config
     }

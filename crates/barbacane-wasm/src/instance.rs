@@ -350,10 +350,27 @@ impl wasmtime::ResourceLimiter for PluginState {
         desired: usize,
         _maximum: Option<usize>,
     ) -> Result<bool, wasmtime::Error> {
-        // Allow reasonable table growth
-        Ok(desired <= 10_000)
+        Ok(desired <= MAX_TABLE_ELEMENTS)
+    }
+
+    /// One instance per store: the plugin's.
+    fn instances(&self) -> usize {
+        1
+    }
+
+    /// One linear memory, which `max_memory` bounds.
+    fn memories(&self) -> usize {
+        1
+    }
+
+    /// One table, which [`MAX_TABLE_ELEMENTS`] bounds.
+    fn tables(&self) -> usize {
+        1
     }
 }
+
+/// The most elements a plugin's table may hold.
+const MAX_TABLE_ELEMENTS: usize = 10_000;
 
 /// A WASM plugin instance ready for execution.
 pub struct PluginInstance {
