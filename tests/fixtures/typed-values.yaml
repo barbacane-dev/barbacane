@@ -56,3 +56,74 @@ paths:
       responses:
         "201":
           description: Created
+
+  /reports/{ids}:
+    get:
+      operationId: getReports
+      parameters:
+        - name: ids
+          in: path
+          required: true
+          schema:
+            type: array
+            items:
+              type: integer
+            maxItems: 3
+        - name: filter
+          in: query
+          style: deepObject
+          schema:
+            type: object
+            properties:
+              year:
+                type: integer
+              draft:
+                type: boolean
+            additionalProperties: false
+        - name: fields
+          in: query
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [title, year]
+        - name: tag
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+              maxLength: 5
+        - name: X-Context
+          in: header
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tenant]
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK
+
+  /files/{name}:
+    get:
+      operationId: getFile
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-z]+\\+[a-z]+$"
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+      responses:
+        "200":
+          description: OK

@@ -42,7 +42,7 @@ An artifact compiled without a manifest, with `barbacane_compiler::compile` from
 
 - `HEAD` on a route declared for `GET` is answered like the `GET`, with no body, where it was 405.
 - A request whose path holds a `.` or `..` segment, in any spelling (`%2e%2e`, or one set apart by an encoded `%2F` or `%5C`), is answered `400` before routing. In `http-upstream` and `ws-upstream`, a path parameter fills only its own place in the `path` template: its value is percent-encoded, so `?`, `#` and `%` in it stay part of the path, and a value with a `.` or `..` segment answers `400`.
-- More of a spec is enforced. Parameter values are checked as the type their schema names, so a `type: integer` parameter accepts `10` where every value answered 400. `in: cookie` parameters, `application/x-www-form-urlencoded` and `multipart/form-data` bodies are validated, so a client that sent a form or cookie the spec does not allow is answered 400. Compilation warns with `E1073` of a body schema still not applied.
+- More of a spec is enforced. Parameter values are checked as the type their schema names, so a `type: integer` parameter accepts `10` where every value answered 400. Arrays and objects are read in the parameter's `style` and `explode` (`?tag=a&tag=b`, `?ids=1,2`, `?filter[year]=2026`), and a parameter described by `content: application/json` is parsed as JSON. A path parameter keeps `+` as `+` where it was read as a space. `in: cookie` parameters, `application/x-www-form-urlencoded` and `multipart/form-data` bodies are validated, so a client that sent a form or cookie the spec does not allow is answered 400. Compilation warns with `E1073` of a body schema still not applied.
 - A client's `x-request-id` is kept only when it is at most 128 bytes of visible ASCII, and a `traceparent` yields the trace id only when well-formed; otherwise the gateway generates ids. Clients that sent longer ids see generated ones in `x-request-id`.
 - Only a request shaped as a WebSocket handshake (a `GET` with `Upgrade: websocket`, `Connection: upgrade` and `Sec-WebSocket-Key`) skips body handling. Any other request carrying an `Upgrade` header has its body read, validated and inspected like every request.
 - The request body must arrive within `--keepalive-timeout` seconds (60 by default), the deadline its headers already had; a body still incomplete at the deadline is answered `408` and the connection closed.
@@ -79,6 +79,10 @@ An operation's middleware entry matches the global one by plugin name, without t
 ### Schemas the gateway cannot build are errors
 
 No schema makes the compiler, the data plane or the control plane fetch a URL or read a file. A request schema the gateway cannot build (another `$schema` dialect, a reference outside the spec, an invalid `pattern`) fails compilation with `E1059` where it was accepted and failed at runtime. Keywords beside a `$ref` apply in OpenAPI 3.1 and later, as JSON Schema 2020-12 defines.
+
+### Parameters the gateway cannot read are errors
+
+A parameter without `name` or `in`, with an `in` other than `path`, `query`, `header`, `cookie` and `querystring`, with a `style` its location does not take, with both `schema` and `content`, or with a `content` that names more or fewer than one media type fails compilation with `E1004`. Such a parameter was skipped, or checked as a plain string.
 
 ### YAML is read by a different parser
 

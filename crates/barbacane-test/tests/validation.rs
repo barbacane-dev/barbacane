@@ -360,3 +360,52 @@ async fn test_typed_parameters_cookies_and_form_fields_are_validated() {
     assert_eq!(post("name=Ada&age=old").await, 400);
     assert_eq!(post("name=Ada").await, 400);
 }
+
+#[tokio::test]
+async fn test_parameters_are_read_in_their_style() {
+    let gateway = TestGateway::from_spec(&fixture("typed-values.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let get = |path: &str, context: Option<&'static str>| {
+        let mut request = gateway.request_builder(reqwest::Method::GET, path);
+        if let Some(context) = context {
+            request = request.header("x-context", context);
+        }
+        async move { request.send().await.unwrap().status().as_u16() }
+    };
+
+    let cases = [
+        ("/reports/1,2", 200),
+        ("/reports/1,x", 400),
+        ("/reports/1,2,3,4", 400),
+        ("/reports/1?filter[year]=2026&filter[draft]=true", 200),
+        ("/reports/1?filter%5Byear%5D=2026", 200),
+        ("/reports/1?filter[year]=soon", 400),
+        ("/reports/1?filter[other]=1", 400),
+        ("/reports/1?fields=title,year", 200),
+        ("/reports/1?fields=title%2Cyear", 200),
+        ("/reports/1?fields=title,body", 400),
+        ("/reports/1?fields=title&fields=year", 400),
+        ("/reports/1?tag=a&tag=b", 200),
+        ("/reports/1?tag=a&tag=toolong", 400),
+        ("/files/a+b", 200),
+        ("/files/a%2Bb", 200),
+        ("/files/a%20b", 400),
+    ];
+    let mut wrong = Vec::new();
+    for (path, expected) in cases {
+        let status = get(path, None).await;
+        if status != expected {
+            wrong.push(format!("{path}: {status}, expected {expected}"));
+        }
+    }
+    for (context, expected) in [(r#"{"tenant":"a"}"#, 200), ("{}", 400), ("tenant=a", 400)] {
+        let status = get("/reports/1", Some(context)).await;
+        if status != expected {
+            wrong.push(format!(
+                "X-Context {context}: {status}, expected {expected}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

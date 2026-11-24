@@ -3468,8 +3468,7 @@ mod tests {
                     .map(|(name, location)| Parameter {
                         name: (*name).into(),
                         location: (*location).into(),
-                        required: false,
-                        schema: None,
+                        ..Default::default()
                     })
                     .collect(),
                 request_body: None,

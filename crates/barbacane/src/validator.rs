@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::coercion::{self, Coercion};
+use crate::coercion;
+use crate::params::{ParamReader, ReadError};
 use thiserror::Error;
 
 use barbacane_compiler::{Parameter, RequestBody};
@@ -350,8 +351,8 @@ struct CompiledParam {
     name: String,
     required: bool,
     schema: Option<jsonschema::Validator>,
-    /// How the parameter's text becomes the value its schema checks.
-    coercion: Coercion,
+    /// How the parameter's value is read from the request.
+    reader: ParamReader,
 }
 
 struct CompiledRequestBody {
@@ -363,35 +364,40 @@ struct CompiledRequestBody {
 struct CompiledBodySchema {
     validator: jsonschema::Validator,
     /// How each form field becomes the value its property's schema checks.
-    fields: HashMap<String, Coercion>,
+    fields: HashMap<String, coercion::Coercion>,
 }
 
-/// Validate a set of compiled parameters against a value lookup.
-///
-/// Shared logic for path, query, and header parameter validation.
+/// Validate a set of compiled parameters, each read from the request by
+/// `read` (`None` when the request does not give it).
 fn validate_params(
     params: &[CompiledParam],
-    lookup: impl Fn(&str) -> Option<String>,
+    read: impl Fn(&CompiledParam) -> Option<Result<Value, ReadError>>,
     location: &str,
 ) -> Result<(), Vec<ValidationError2>> {
     let mut errors = Vec::new();
 
     for param in params {
-        match lookup(&param.name) {
-            Some(value) => {
+        let invalid = |reason: String| ValidationError2::InvalidParameter {
+            name: param.name.clone(),
+            location: location.into(),
+            reason,
+        };
+        match read(param) {
+            Some(Ok(value)) => {
                 if let Some(schema) = &param.schema {
-                    let json_value = param.coercion.coerce(&value);
-                    let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
-                    if !validation_errors.is_empty() {
-                        let reasons: Vec<String> =
-                            validation_errors.iter().map(|e| e.to_string()).collect();
-                        errors.push(ValidationError2::InvalidParameter {
-                            name: param.name.clone(),
-                            location: location.into(),
-                            reason: reasons.join("; "),
-                        });
+                    let reasons: Vec<String> =
+                        schema.iter_errors(&value).map(|e| e.to_string()).collect();
+                    if !reasons.is_empty() {
+                        errors.push(invalid(reasons.join("; ")));
                     }
                 }
+            }
+            Some(Err(ReadError::Repeated)) => errors.push(invalid(match location {
+                "cookie" => "duplicate cookie is not allowed".into(),
+                _ => format!("duplicate {location} parameter is not allowed"),
+            })),
+            Some(Err(ReadError::Malformed(reason))) => {
+                errors.push(invalid(format!("value {reason}")))
             }
             None if param.required => {
                 errors.push(ValidationError2::MissingRequiredParameter {
@@ -447,12 +453,7 @@ impl OperationValidator {
                         )
                     })
                     .transpose()?,
-                coercion: match (&param.schema, param.location.as_str()) {
-                    (Some(schema), loc) if loc != "querystring" => {
-                        Coercion::of(schema, schema_defs)
-                    }
-                    _ => Coercion::Text,
-                },
+                reader: ParamReader::new(param, schema_defs),
             };
 
             match param.location.as_str() {
@@ -461,7 +462,7 @@ impl OperationValidator {
                 "header" => header_params.push(compiled),
                 "cookie" => cookie_params.push(compiled),
                 "querystring" => querystring_param = Some(compiled),
-                _ => {}
+                other => return Err(format!("parameter '{}' is in '{other}'", param.name)),
             }
         }
 
@@ -511,7 +512,11 @@ impl OperationValidator {
         let param_map: HashMap<_, _> = params.iter().cloned().collect();
         validate_params(
             &self.path_params,
-            |name| param_map.get(name).cloned(),
+            |p| {
+                param_map
+                    .get(&p.name)
+                    .map(|value| p.reader.from_text(&p.name, value))
+            },
             "path",
         )
     }
@@ -521,46 +526,22 @@ impl OperationValidator {
         &self,
         query_string: Option<&str>,
     ) -> Result<(), Vec<ValidationError2>> {
-        // Parse pairs, tracking how many times each key occurs. The raw query
-        // string is forwarded verbatim to the dispatcher/upstream, but this
-        // validator only sees the collapsed (last-wins) value — so a repeated
-        // declared parameter is an HTTP-parameter-pollution vector: the check
-        // would pass on one value while a different value the upstream may
-        // consume rides along unvalidated. Reject duplicates of declared query
-        // params rather than validate a value the upstream might not use.
-        let mut param_map: HashMap<String, String> = HashMap::new();
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for pair in query_string
+        // The raw query string reaches the dispatcher as sent, so a declared
+        // parameter given twice where its style takes it once is refused: the
+        // upstream could read the value this check did not.
+        let pairs: Vec<(String, String)> = query_string
             .unwrap_or("")
             .split('&')
             .filter(|s| !s.is_empty())
-        {
-            let mut parts = pair.splitn(2, '=');
-            let Some(key) = parts.next() else { continue };
-            let value = parts.next().unwrap_or("");
-            let key = percent_decode(key);
-            *counts.entry(key.clone()).or_insert(0) += 1;
-            param_map.insert(key, percent_decode(value));
-        }
-
-        let mut errors: Vec<ValidationError2> = self
-            .query_params
-            .iter()
-            .filter(|p| counts.get(&p.name).copied().unwrap_or(0) > 1)
-            .map(|p| ValidationError2::InvalidParameter {
-                name: p.name.clone(),
-                location: "query".into(),
-                reason: "duplicate query parameter is not allowed".into(),
+            .map(|pair| {
+                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                (percent_decode(key), percent_decode(value))
             })
             .collect();
-        if !errors.is_empty() {
-            errors.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-            return Err(errors);
-        }
 
         validate_params(
             &self.query_params,
-            |name| param_map.get(name).cloned(),
+            |p| p.reader.from_pairs(&p.name, &pairs),
             "query",
         )
     }
@@ -585,16 +566,26 @@ impl OperationValidator {
 
         if !qs.is_empty() {
             if let Some(schema) = &param.schema {
-                let json_value = Value::String(qs.to_string());
-                let validation_errors: Vec<_> = schema.iter_errors(&json_value).collect();
-                if !validation_errors.is_empty() {
-                    let reasons: Vec<String> =
-                        validation_errors.iter().map(|e| e.to_string()).collect();
-                    return Err(vec![ValidationError2::InvalidParameter {
+                let invalid = |reason: String| {
+                    vec![ValidationError2::InvalidParameter {
                         name: param.name.clone(),
                         location: "querystring".into(),
-                        reason: reasons.join("; "),
-                    }]);
+                        reason,
+                    }]
+                };
+                let value = match param.reader.from_query_string(qs) {
+                    Ok(value) => value,
+                    Err(ReadError::Malformed(reason)) => {
+                        return Err(invalid(format!("value {reason}")))
+                    }
+                    Err(ReadError::Repeated) => {
+                        return Err(invalid("duplicate querystring is not allowed".into()))
+                    }
+                };
+                let reasons: Vec<String> =
+                    schema.iter_errors(&value).map(|e| e.to_string()).collect();
+                if !reasons.is_empty() {
+                    return Err(invalid(reasons.join("; ")));
                 }
             }
         }
@@ -614,7 +605,11 @@ impl OperationValidator {
 
         validate_params(
             &self.header_params,
-            |name| headers_lower.get(&name.to_lowercase()).cloned(),
+            |p| {
+                headers_lower
+                    .get(&p.name.to_lowercase())
+                    .map(|value| p.reader.from_text(&p.name, value))
+            },
             "header",
         )
     }
@@ -634,24 +629,9 @@ impl OperationValidator {
             .flat_map(|(_, value)| coercion::cookie_pairs(value))
             .collect();
 
-        let errors: Vec<ValidationError2> = self
-            .cookie_params
-            .iter()
-            .filter(|p| pairs.iter().filter(|(name, _)| *name == p.name).count() > 1)
-            .map(|p| ValidationError2::InvalidParameter {
-                name: p.name.clone(),
-                location: "cookie".into(),
-                reason: "duplicate cookie is not allowed".into(),
-            })
-            .collect();
-        if !errors.is_empty() {
-            return Err(errors);
-        }
-
-        let cookies: HashMap<String, String> = pairs.into_iter().collect();
         validate_params(
             &self.cookie_params,
-            |name| cookies.get(name).cloned(),
+            |p| p.reader.from_pairs(&p.name, &pairs),
             "cookie",
         )
     }
@@ -762,13 +742,22 @@ pub fn has_dot_segment(path: &str) -> bool {
         .any(|segment| segment == "." || segment == "..")
 }
 
-/// Canonical percent-decoding of a URL component (handles `%XX` escapes and `+`).
+/// Percent-decoding of a query component: `%XX` escapes, and `+` as a space
+/// (`application/x-www-form-urlencoded`).
 ///
 /// Decodes into a byte buffer and interprets the result as UTF-8, so multi-byte
-/// sequences like `%C3%A9` decode to `é` rather than being corrupted by a naive
-/// per-byte `as char` cast. This is the single decoder used for both query and
-/// path parameters so routing and validation agree on the decoded value.
+/// sequences like `%C3%A9` decode to `é`.
 pub fn percent_decode(input: &str) -> String {
+    decode(input, true)
+}
+
+/// Percent-decoding of a path segment: `%XX` escapes only, so `+` stays `+`
+/// (RFC 3986).
+pub fn percent_decode_path(input: &str) -> String {
+    decode(input, false)
+}
+
+fn decode(input: &str, plus_is_space: bool) -> String {
     let bytes = input.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -784,7 +773,7 @@ pub fn percent_decode(input: &str) -> String {
                     i += 1;
                 }
             },
-            b'+' => {
+            b'+' if plus_is_space => {
                 out.push(b' ');
                 i += 1;
             }
@@ -831,6 +820,7 @@ mod tests {
             location: location.to_string(),
             required,
             schema,
+            ..Default::default()
         }
     }
 
@@ -1627,6 +1617,12 @@ mod tests {
     // ========================
 
     #[test]
+    fn a_parameter_in_an_unknown_location_is_an_error() {
+        let params = vec![make_param("p", "body", false, None)];
+        assert!(OperationValidator::new(&params, None).is_err());
+    }
+
+    #[test]
     fn validate_required_header_param() {
         let params = vec![make_param("X-Request-Id", "header", true, None)];
         let validator = OperationValidator::new(&params, None).unwrap();
@@ -1798,6 +1794,8 @@ mod tests {
         assert_eq!(percent_decode("%E2%82%AC"), "€");
         // ASCII, plus-as-space, and passthrough.
         assert_eq!(percent_decode("a%20b+c"), "a b c");
+        // In a path, `+` is itself.
+        assert_eq!(percent_decode_path("a%20b+c%2B"), "a b+c+");
         // A malformed escape is left intact rather than dropped.
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%zz"), "%zz");

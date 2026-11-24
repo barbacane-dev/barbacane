@@ -222,8 +222,8 @@ pub struct ResponseContent {
     pub content: BTreeMap<String, ContentSchema>,
 }
 
-/// A path, query, or header parameter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A path, query, header, cookie or querystring parameter.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Parameter {
     /// Parameter name.
     pub name: String,
@@ -232,8 +232,19 @@ pub struct Parameter {
     pub location: String,
     /// Whether this parameter is required.
     pub required: bool,
-    /// The parameter's schema (for validation in M2).
+    /// The parameter's schema: its `schema`, or the schema of its `content`
+    /// media type.
     pub schema: Option<serde_json::Value>,
+    /// OpenAPI `style`; absent means the location's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// OpenAPI `explode`; absent means `true` for `form` style, `false` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explode: Option<bool>,
+    /// The media type of a parameter described by `content` rather than
+    /// `schema`, lowercased.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
 }
 
 /// Dispatcher configuration extracted from `x-barbacane-dispatch`.

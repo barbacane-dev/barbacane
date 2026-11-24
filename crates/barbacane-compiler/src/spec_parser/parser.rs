@@ -847,7 +847,7 @@ fn parse_openapi_paths(
         })?;
 
         // Path-level parameters (inherited by all operations)
-        let path_params = parse_parameters(path_obj, spec_root, defs)?;
+        let path_params = parse_parameters(path_obj, spec_root, defs, &format!("path {path}"))?;
 
         for method in HTTP_METHODS {
             if let Some(op_value) = path_obj.get(*method) {
@@ -859,8 +859,15 @@ fn parse_openapi_paths(
                     ))
                 })?;
 
-                let params =
-                    merge_parameters(&path_params, parse_parameters(op_obj, spec_root, defs)?);
+                let params = merge_parameters(
+                    &path_params,
+                    parse_parameters(
+                        op_obj,
+                        spec_root,
+                        defs,
+                        &format!("{} {}", method.to_uppercase(), path),
+                    )?,
+                );
 
                 let operation_id = op_obj
                     .get("operationId")
@@ -933,8 +940,15 @@ fn parse_openapi_paths(
                     ))
                 })?;
 
-                let params =
-                    merge_parameters(&path_params, parse_parameters(op_obj, spec_root, defs)?);
+                let params = merge_parameters(
+                    &path_params,
+                    parse_parameters(
+                        op_obj,
+                        spec_root,
+                        defs,
+                        &format!("{} {}", method_name.to_uppercase(), path),
+                    )?,
+                );
 
                 let operation_id = op_obj
                     .get("operationId")
@@ -997,71 +1011,127 @@ fn parse_openapi_paths(
     Ok(operations)
 }
 
-/// Parse parameters from a path item or operation object.
+/// Parse parameters from a path item or operation object. `context` names
+/// the object in errors.
 ///
-/// OpenAPI 3.2: `in: querystring` parameters use `content` instead of `schema`.
-/// The schema is extracted from `content.<media-type>.schema`.
+/// A parameter is described by `schema` with an optional `style` and
+/// `explode`, or by `content` naming one media type; `in: querystring`
+/// (OpenAPI 3.2) takes `content` only.
 fn parse_parameters(
     obj: &serde_json::Map<String, Value>,
     spec_root: &Value,
     defs: &mut SchemaDefs,
+    context: &str,
 ) -> Result<Vec<Parameter>, ParseError> {
     let Some(arr) = obj.get("parameters").and_then(|v| v.as_array()) else {
         return Ok(Vec::new());
     };
 
     let mut params = Vec::with_capacity(arr.len());
-    for item in arr {
+    for (index, item) in arr.iter().enumerate() {
         // An entry may be a `$ref` to `#/components/parameters/...`, which carries
         // `in` and `name` on the target rather than on the entry itself.
         let mut visited = HashSet::new();
-        let Some(resolved) = resolve_component_ref(item, spec_root, &mut visited)? else {
-            continue;
+        let invalid = |reason: String| {
+            ParseError::SchemaError(format!("parameter #{} of {context} {reason}", index + 1))
         };
-        let Some(param_obj) = resolved.as_object() else {
-            continue;
+        let param_obj = resolve_component_ref(item, spec_root, &mut visited)?
+            .and_then(Value::as_object)
+            .ok_or_else(|| invalid("must be an object".into()))?;
+        let name = param_obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| invalid("has no 'name'".into()))?;
+        let invalid = |reason: &str| {
+            ParseError::SchemaError(format!("parameter '{name}' of {context} {reason}"))
         };
-        let Some(location) = param_obj.get("in").and_then(|v| v.as_str()) else {
-            continue;
+        let location = param_obj
+            .get("in")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| invalid("has no 'in'"))?;
+        let styles: &[&str] = match location {
+            "path" => &["simple", "label", "matrix"],
+            "query" => &["form", "spaceDelimited", "pipeDelimited", "deepObject"],
+            "header" => &["simple"],
+            "cookie" => &["form", "cookie"],
+            "querystring" => &[],
+            other => {
+                return Err(invalid(&format!(
+                    "has 'in: {other}'; it must be path, query, header, cookie or querystring"
+                )))
+            }
         };
-        let location = location.to_string();
 
-        // OpenAPI 3.2: querystring params use content instead of schema
-        let raw_schema = if location == "querystring" {
-            extract_content_schema(param_obj)
-        } else {
-            param_obj.get("schema").cloned()
+        let style = match param_obj.get("style") {
+            None => None,
+            Some(Value::String(style)) if styles.contains(&style.as_str()) => Some(style.clone()),
+            Some(style) => {
+                let style = style
+                    .as_str()
+                    .map_or_else(|| style.to_string(), str::to_string);
+                return Err(invalid(&format!(
+                    "has 'style: {style}'; a {location} parameter takes {}",
+                    if styles.is_empty() {
+                        "none".to_string()
+                    } else {
+                        styles.join(", ")
+                    }
+                )));
+            }
+        };
+        let explode = match param_obj.get("explode") {
+            None => None,
+            Some(Value::Bool(explode)) => Some(*explode),
+            Some(_) => return Err(invalid("has an 'explode' that is not a boolean")),
+        };
+
+        let (raw_schema, media_type) = match (param_obj.get("schema"), param_obj.get("content")) {
+            (Some(_), Some(_)) => return Err(invalid("has both 'schema' and 'content'")),
+            (Some(_), None) if location == "querystring" => {
+                return Err(invalid(
+                    "is in the querystring, so it takes 'content', not 'schema'",
+                ))
+            }
+            (Some(schema), None) => (Some(schema.clone()), None),
+            (None, Some(content)) => {
+                if style.is_some() || explode.is_some() {
+                    return Err(invalid(
+                        "has 'content', which takes no 'style' or 'explode'",
+                    ));
+                }
+                let (media_type, media) = content
+                    .as_object()
+                    .filter(|c| c.len() == 1)
+                    .and_then(|c| c.iter().next())
+                    .ok_or_else(|| {
+                        invalid("has a 'content' that does not name exactly one media type")
+                    })?;
+                (
+                    media.get("schema").cloned(),
+                    Some(media_type.to_ascii_lowercase()),
+                )
+            }
+            (None, None) => (None, None),
         };
 
         let schema = raw_schema
             .map(|s| resolve_schema(&s, spec_root, defs))
             .transpose()?;
 
-        let Some(name) = param_obj.get("name").and_then(|v| v.as_str()) else {
-            continue;
-        };
         params.push(Parameter {
             name: name.to_string(),
-            location,
+            location: location.to_string(),
             required: param_obj
                 .get("required")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             schema,
+            style,
+            explode,
+            media_type,
         });
     }
     Ok(params)
-}
-
-/// Extract schema from a parameter's `content` map (first media type entry).
-///
-/// Used for `in: querystring` parameters where the schema lives under
-/// `content.<media-type>.schema` instead of the top-level `schema` field.
-fn extract_content_schema(param_obj: &serde_json::Map<String, Value>) -> Option<Value> {
-    let content = param_obj.get("content")?.as_object()?;
-    // Use the first (and typically only) media type entry
-    let (_media_type, media_obj) = content.iter().next()?;
-    media_obj.as_object()?.get("schema").cloned()
 }
 
 /// Parse request body from an operation object.
@@ -1722,6 +1792,7 @@ fn parse_channel_parameters(
             location: "path".to_string(),
             required: true,
             schema,
+            ..Default::default()
         });
     }
     Ok(result)
@@ -2814,6 +2885,108 @@ paths:
             param.schema.as_ref().unwrap().get("type").unwrap(),
             "string"
         );
+    }
+
+    #[test]
+    fn parameter_styles_and_content_are_read() {
+        let yaml = r#"
+openapi: "3.1.0"
+info: { title: Styles, version: "1.0.0" }
+paths:
+  /items:
+    get:
+      parameters:
+        - { name: filter, in: query, style: deepObject, explode: true, schema: { type: object } }
+        - { name: ids, in: query, explode: false, schema: { type: array, items: { type: integer } } }
+        - name: X-Context
+          in: header
+          content:
+            Application/JSON:
+              schema: { type: object }
+      x-barbacane-dispatch: { name: mock }
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        let params = &spec.operations[0].parameters;
+        let read = |p: &Parameter| (p.style.clone(), p.explode, p.media_type.clone());
+        assert_eq!(
+            read(&params[0]),
+            (Some("deepObject".into()), Some(true), None)
+        );
+        assert_eq!(read(&params[1]), (None, Some(false), None));
+        assert_eq!(
+            read(&params[2]),
+            (None, None, Some("application/json".into()))
+        );
+        assert_eq!(
+            params[2].schema,
+            Some(serde_json::json!({"type": "object"}))
+        );
+    }
+
+    #[test]
+    fn a_parameter_the_gateway_cannot_read_is_refused() {
+        let cases = [
+            (
+                "{ in: query, schema: { type: string } }",
+                "parameter #1 of GET /items has no 'name'",
+            ),
+            ("{ name: p, schema: { type: string } }", "has no 'in'"),
+            (
+                "{ name: p, in: body, schema: { type: string } }",
+                "has 'in: body'",
+            ),
+            (
+                "{ name: p, in: Query, schema: { type: string } }",
+                "has 'in: Query'",
+            ),
+            (
+                "{ name: p, in: header, style: form, schema: { type: string } }",
+                "a header parameter takes simple",
+            ),
+            (
+                "{ name: p, in: query, style: matrix, schema: { type: string } }",
+                "a query parameter takes form",
+            ),
+            (
+                "{ name: p, in: query, explode: \"yes\", schema: { type: string } }",
+                "'explode' that is not a boolean",
+            ),
+            (
+                "{ name: p, in: query, schema: { type: string }, content: { text/plain: {} } }",
+                "both 'schema' and 'content'",
+            ),
+            (
+                "{ name: p, in: query, content: { text/plain: {}, application/json: {} } }",
+                "exactly one media type",
+            ),
+            (
+                "{ name: p, in: query, content: {} }",
+                "exactly one media type",
+            ),
+            (
+                "{ name: p, in: query, style: form, content: { application/json: {} } }",
+                "takes no 'style' or 'explode'",
+            ),
+            (
+                "{ name: p, in: querystring, schema: { type: string } }",
+                "takes 'content', not 'schema'",
+            ),
+            (
+                "{ name: p, in: querystring, style: form, content: { application/json: {} } }",
+                "a querystring parameter takes none",
+            ),
+            (
+                "not-an-object",
+                "parameter #1 of GET /items must be an object",
+            ),
+        ];
+        for (param, expected) in cases {
+            let yaml = format!(
+                "openapi: \"3.2.0\"\ninfo: {{ title: T, version: \"1\" }}\npaths:\n  /items:\n    get:\n      parameters:\n        - {param}\n      x-barbacane-dispatch: {{ name: mock }}\n"
+            );
+            let err = parse_spec(&yaml).expect_err(param).to_string();
+            assert!(err.contains(expected), "{param}: {err}");
+        }
     }
 
     // ── $ref resolution tests ────────────────────────────────────────────
