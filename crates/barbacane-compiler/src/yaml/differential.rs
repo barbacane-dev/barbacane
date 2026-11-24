@@ -338,8 +338,10 @@ pub static KNOWN: &[KnownDivergence] = &[
                  can take in what libyaml reads after the `?`: a quoted scalar or a tag, so that \
                  the quotes no longer pair and the module refuses the document (`{?\"[\"}`), or \
                  a key libyaml reads as empty, whose value then replaces another empty key's \
-                 (`{\"\": 1, ?:a}`). With a space after each such `?`, the module reads the \
-                 document as libyaml does",
+                 (`{\"\": 1, ?:a}`). A comma inside the quoted scalar ends the plain scalar, so \
+                 `{?\"name, .ext\": 1}` has the keys `?\"name` and `.ext\"` where libyaml reads \
+                 `name, .ext`. With a space after each such `?`, the module reads the document \
+                 as libyaml does",
         example: "{?a: 1}\n",
         matches: |input, d| {
             input.contains(['{', '['])
@@ -562,7 +564,9 @@ fn with_spaced_indicators(input: &str) -> Option<String> {
 /// whitespace after them:
 ///
 /// - two values: with those indicators spaced, the module reads libyaml's value
-///   at the pointer; or libyaml's value is under an empty key and the module's
+///   at the pointer, or no longer has a key there that only its reading had
+///   (libyaml's side is then `Null`, as `first_difference` reports a key one
+///   reading lacks); or libyaml's value is under an empty key and the module's
 ///   mapping there has a key `:` or `?:` followed by text that reads as it,
 ///   which covers a `:` libyaml reads as part of a multi-line plain scalar;
 /// - a refusal: with those indicators spaced, the module reads the document, or
@@ -575,11 +579,18 @@ fn explained_by_unspaced_indicators(input: &str, difference: &Difference) -> boo
         Difference::Value {
             pointer, reference, ..
         } => {
-            crate::yaml::from_str::<Value>(&spaced)
-                .is_ok_and(|value| value.pointer(pointer) == Some(reference))
-                || pointer
-                    .strip_suffix('/')
-                    .is_some_and(|parent| has_indicator_key_reading_as(input, parent, reference))
+            crate::yaml::from_str::<Value>(&spaced).is_ok_and(|value| {
+                match value.pointer(pointer) {
+                    Some(value) => value == reference,
+                    None => {
+                        reference.is_null()
+                            && crate::yaml::from_str::<Value>(input)
+                                .is_ok_and(|ours| ours.pointer(pointer).is_some())
+                    }
+                }
+            }) || pointer
+                .strip_suffix('/')
+                .is_some_and(|parent| has_indicator_key_reading_as(input, parent, reference))
         }
         Difference::OnlyOursFailed { .. } => match crate::yaml::from_str::<Value>(&spaced) {
             Ok(_) => true,
