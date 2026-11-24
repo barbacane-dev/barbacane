@@ -217,7 +217,8 @@ jobs:
           cache-from: type=gha,scope=barbacane-standalone-${{ matrix.suffix }}
           cache-to: type=gha,mode=max,scope=barbacane-standalone-${{ matrix.suffix }}
 
-  # Create multi-arch manifests combining platform-specific images
+  # Create multi-arch manifests combining platform-specific images. A 0.12
+  # release moves `0.12` and `0` only: `latest` belongs to 1.x.
   create-manifests:
     name: Create Multi-arch Manifests
     needs: [validate-version, build-containers]
@@ -255,8 +256,7 @@ jobs:
       - name: Create GHCR data plane manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane:latest \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION \
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION \
             -t ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.minor }} \
             -t ghcr.io/${{ github.repository_owner }}/barbacane:${{ steps.version.outputs.major }} \
             ghcr.io/${{ github.repository_owner }}/barbacane:$VERSION-amd64 \
@@ -265,8 +265,7 @@ jobs:
       - name: Create GHCR control plane manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-control:latest \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION \
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION \
             -t ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.minor }} \
             -t ghcr.io/${{ github.repository_owner }}/barbacane-control:${{ steps.version.outputs.major }} \
             ghcr.io/${{ github.repository_owner }}/barbacane-control:$VERSION-amd64 \
@@ -275,8 +274,7 @@ jobs:
       - name: Create Docker Hub data plane manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t docker.io/barbacane/barbacane:latest \
-            -t docker.io/barbacane/barbacane:$VERSION \
+          docker buildx imagetools create -t docker.io/barbacane/barbacane:$VERSION \
             -t docker.io/barbacane/barbacane:${{ steps.version.outputs.minor }} \
             -t docker.io/barbacane/barbacane:${{ steps.version.outputs.major }} \
             docker.io/barbacane/barbacane:$VERSION-amd64 \
@@ -285,8 +283,7 @@ jobs:
       - name: Create Docker Hub control plane manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t docker.io/barbacane/barbacane-control:latest \
-            -t docker.io/barbacane/barbacane-control:$VERSION \
+          docker buildx imagetools create -t docker.io/barbacane/barbacane-control:$VERSION \
             -t docker.io/barbacane/barbacane-control:${{ steps.version.outputs.minor }} \
             -t docker.io/barbacane/barbacane-control:${{ steps.version.outputs.major }} \
             docker.io/barbacane/barbacane-control:$VERSION-amd64 \
@@ -295,8 +292,7 @@ jobs:
       - name: Create GHCR standalone manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:latest \
-            -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION \
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION \
             -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.version.outputs.minor }} \
             -t ghcr.io/${{ github.repository_owner }}/barbacane-standalone:${{ steps.version.outputs.major }} \
             ghcr.io/${{ github.repository_owner }}/barbacane-standalone:$VERSION-amd64 \
@@ -305,8 +301,7 @@ jobs:
       - name: Create Docker Hub standalone manifest
         run: |
           VERSION=${{ steps.tag.outputs.version }}
-          docker buildx imagetools create -t docker.io/barbacane/barbacane-standalone:latest \
-            -t docker.io/barbacane/barbacane-standalone:$VERSION \
+          docker buildx imagetools create -t docker.io/barbacane/barbacane-standalone:$VERSION \
             -t docker.io/barbacane/barbacane-standalone:${{ steps.version.outputs.minor }} \
             -t docker.io/barbacane/barbacane-standalone:${{ steps.version.outputs.major }} \
             docker.io/barbacane/barbacane-standalone:$VERSION-amd64 \
@@ -626,3 +621,5 @@ jobs:
             artifacts/release/*
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
+          # 1.x holds `latest`: a 0.12 release never becomes the latest one.
+          make_latest: false
