@@ -19,11 +19,11 @@
 
 ---
 
-Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it enforces it: routing, request and response validation, authentication, rate limiting, a native WAF, and observability, all declared in the spec you already write. No proprietary config language, no drift between your spec and your infrastructure.
+Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or AsyncAPI spec and it enforces it: routing, request validation, authentication, rate limiting, a native WAF, and observability, all declared in the spec you already write. No proprietary config language, no drift between your spec and your infrastructure.
 
 - **Spec as config** — Your OpenAPI 3.x or AsyncAPI 3.x specification is the single source of truth. The compiler turns it into a sealed `.bca` artifact; no separate gateway DSL to maintain.
-- **A full API gateway** — Routing, schema-based request and response validation, authentication and authorization, rate limiting, caching, and request/response transformation, all driven by the operation definitions and `x-barbacane-*` extensions in your spec.
-- **Native WAF** — A built-in ModSecurity/CRS-compatible web application firewall inspects requests and responses inline, in scoring or blocking mode, with per-operation tuning and audit logging. Configured with one `x-barbacane-waf` block, no sidecar.
+- **A full API gateway** — Routing, schema-based request validation, authentication and authorization, rate limiting, caching, and request/response transformation, all driven by the operation definitions and `x-barbacane-*` extensions in your spec.
+- **Native WAF** — A built-in ModSecurity/CRS-compatible web application firewall inspects requests and responses inline, in scoring or blocking mode, with audit logging. Configured with one `x-barbacane-waf` block for the whole API, no sidecar.
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
@@ -61,10 +61,10 @@ The gateway serves only artifacts signed by the key it pins; see [artifact signi
 
 ### What configuration looks like
 
-The WAF is declared once at the spec root; routing, auth, and rate limits are declared inline on each operation. Request and response bodies are validated against the schemas already in your spec.
+The WAF is declared once at the spec root; routing, auth, and rate limits are declared inline on each operation. Requests are validated against the schemas already in your spec.
 
 ```yaml
-# Native WAF for the whole API, tuned per operation as needed.
+# Native WAF for the whole API.
 x-barbacane-waf:
   ruleset: ./waf-rules
   paranoia_level: 1

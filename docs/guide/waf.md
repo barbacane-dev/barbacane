@@ -35,7 +35,11 @@ phase 3 and 4 rules. `max_response_body` bounds phase-4 body inspection: a
 buffered response body at or under it is inspected, a larger or streamed one is
 not (see [Response-phase inspection](#response-phase-inspection)). `audit`
 controls per-transaction audit logging (see [Audit logging](#audit-logging)).
-All of these are covered by `artifact_hash`.
+All of these are covered by `artifact_hash`. Each is checked: an unknown key
+(`paranoia: 2`), or a value of the wrong type or out of range
+(`paranoia_level: "3"`, `paranoia_level: 9`), fails compilation with `E1080`.
+The block applies to the whole spec; on a path item or an operation it fails
+compilation with `E1017`.
 
 `ruleset` is resolved relative to the spec. Point it at a directory containing
 the `.conf` files and, for CRS, the setup file:

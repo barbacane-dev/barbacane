@@ -255,6 +255,8 @@ plugins and builds an artifact.
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
 | E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
 | E1016 | Plugin | A plugin imports a deprecated host function; it still loads until the release named in the [plugin guide](../contributing/plugins.md#deprecated-host-functions) (warning) |
+| E1017 | Extension | A known extension is set where it has no effect: `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, `x-barbacane-waf` outside the document root |
+| E1018 | Extension | An operation's `x-sunset` is not an HTTP-date, an RFC 3339 date-time or a date |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 | E1031 | Extension | Plaintext `http://` or `ws://` upstream URL not allowed (use `--allow-plaintext` to override) |
 | E1032 | Security | An operation runs an authentication middleware that reads none of the schemes its `security` requirement names |
@@ -313,6 +315,8 @@ no artifact, so it reports only the codes that need neither.
 | E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
+| E1017 | Extension | A known extension is set where it has no effect: `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, `x-barbacane-waf` outside the document root |
+| E1018 | Extension | An operation's `x-sunset` is not an HTTP-date, an RFC 3339 date-time or a date |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 
 Every other code is reported by `barbacane compile`, whose table lists them all.

@@ -24,6 +24,14 @@ pub enum ParseError {
     #[error("E1011: invalid middleware entry: {0}")]
     InvalidMiddleware(String),
 
+    /// E1017: A known `x-barbacane-*` extension is set where it has no effect.
+    #[error("E1017: {0}")]
+    MisplacedExtension(String),
+
+    /// E1018: An operation's `x-sunset` is not a date.
+    #[error("E1018: {0}")]
+    InvalidSunset(String),
+
     /// I/O error reading the spec file.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
