@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ci**: a change to any file under `crates/` runs the code jobs (migrations, the control plane's `openapi.yaml` and test fixtures were skipped), a change to the workspace, its lockfile or a plugin builds and scans the images, and the WASM plugin cache and the plugin jobs follow `barbacane-plugin-macros` and `barbacane-sigv4` too.
 - **release**: a release needs one approval. The Approve Release job runs in the `release-approval` environment, which has the required reviewer, and every job that pushes images, signs them or publishes crates waits for it.
 
 ### Fixed
