@@ -75,19 +75,30 @@ jobs:
           VERSION="${VERSION#v}"   # tolerate a leading v
 
           for ref in "ghcr.io/${OWNER}/${IMAGE}" "docker.io/barbacane/${IMAGE}"; do
-            # Sign the multi-arch index by DIGEST (never by a mutable tag).
-            digest="$(docker buildx imagetools inspect "${ref}:${VERSION}" --format '{{.Manifest.Digest}}')"
-            target="${ref}@${digest}"
-            echo "::group::${target}"
+            # By DIGEST (never by a mutable tag): the multi-arch index and,
+            # with --recursive, the image of each platform in it, which is
+            # what a runtime pulls and an admission policy verifies.
+            index="$(docker buildx imagetools inspect "${ref}:${VERSION}" --format '{{.Manifest.Digest}}')"
+            echo "::group::${ref}@${index}"
+            echo "cosign sign --recursive ${ref}@${index}"
+            cosign sign --recursive "${ref}@${index}"
 
-            echo "cosign sign ${target}"
-            cosign sign "${target}"
-
-            echo "syft SBOM (CycloneDX) for ${target}"
-            syft "${target}" -o cyclonedx-json > "sbom-${IMAGE}.cdx.json"
-
-            echo "cosign attest CycloneDX SBOM to ${target}"
-            cosign attest --predicate "sbom-${IMAGE}.cdx.json" --type cyclonedx "${target}"
+            # One SBOM per architecture, attested to that platform's image and
+            # to the index, where `cosign verify-attestation` on the tag finds it.
+            raw="$(docker buildx imagetools inspect "${ref}:${VERSION}" --raw)"
+            for arch in amd64 arm64; do
+              platform="$(jq -r --arg arch "$arch" \
+                '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)][0].digest // empty' <<<"$raw")"
+              if [ -z "$platform" ]; then
+                echo "::error::${ref}:${VERSION} has no linux/${arch} image"
+                exit 1
+              fi
+              sbom="sbom-${IMAGE}-${arch}.cdx.json"
+              echo "syft SBOM (CycloneDX) for ${ref}@${platform} (linux/${arch})"
+              syft "${ref}@${platform}" -o cyclonedx-json > "$sbom"
+              cosign attest --predicate "$sbom" --type cyclonedx "${ref}@${platform}"
+              cosign attest --predicate "$sbom" --type cyclonedx "${ref}@${index}"
+            done
             echo "::endgroup::"
           done
 
@@ -95,5 +106,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: sbom-${{ matrix.image }}
-          path: sbom-${{ matrix.image }}.cdx.json
+          path: sbom-${{ matrix.image }}-*.cdx.json
           retention-days: 30
