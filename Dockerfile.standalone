@@ -19,9 +19,10 @@
 #     serve --artifact /config/api.bca --listen 0.0.0.0:8080
 
 # ---------------------------------------------------------------------------
-# Stage 1: Build the barbacane binary
+# Stage 1: Build the barbacane binary, with Rust 1.100.0, the toolchain CI
+# builds and tests with
 # ---------------------------------------------------------------------------
-FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS binary-builder
+FROM rust:1.100.0-slim-bookworm@sha256:ac965c2299127add362cdcf165f19516a0ca90d893bf7bd04cf1a44de39cfca7 AS binary-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
@@ -29,19 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+# `cargo auditable` records the binary's crates in it, where image scanners
+# read them.
+RUN cargo install --locked cargo-auditable@0.7.7
+
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
 ENV CARGO_BUILD_JOBS=2
 
-RUN cargo build --locked --release --package barbacane && \
+RUN cargo auditable build --locked --release --package barbacane && \
     cp target/release/barbacane /usr/local/bin/barbacane
 
 # ---------------------------------------------------------------------------
 # Stage 2: Build all WASM plugins
 # ---------------------------------------------------------------------------
-FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS plugin-builder
+FROM rust:1.100.0-slim-bookworm@sha256:ac965c2299127add362cdcf165f19516a0ca90d893bf7bd04cf1a44de39cfca7 AS plugin-builder
 
 RUN rustup target add wasm32-unknown-unknown
 
@@ -54,22 +59,27 @@ COPY crates/ crates/
 # Copy all plugins
 COPY plugins/ plugins/
 
-# Build each plugin and collect WASMs to /plugins/<name>/<name>.wasm
-RUN mkdir -p /plugins && \
+# Build each plugin and collect WASMs to /plugins/<name>/<name>.wasm. A plugin
+# that fails to build, or builds no WASM, fails the image.
+RUN set -eu; \
+    mkdir -p /plugins; \
     for p in plugins/*/; do \
-        if [ -f "$p/Cargo.toml" ]; then \
-            name=$(basename "$p"); \
-            echo "Building plugin: $name"; \
-            (cd "$p" && cargo build --locked --release --target wasm32-unknown-unknown) && \
-            wasm_file=$(find "$p/target/wasm32-unknown-unknown/release" -maxdepth 1 -name "*.wasm" ! -name "*.d" 2>/dev/null | grep -v deps | head -1) && \
-            if [ -n "$wasm_file" ]; then \
-                mkdir -p "/plugins/$name" && \
-                cp "$wasm_file" "/plugins/$name/$name.wasm"; \
-                echo "  -> /plugins/$name/$name.wasm"; \
-            else \
-                echo "  WARNING: no WASM output for $name"; \
-            fi; \
-        fi; \
+        [ -f "$p/Cargo.toml" ] || continue; \
+        name=$(basename "$p"); \
+        echo "Building plugin: $name"; \
+        (cd "$p" && cargo build --locked --release --target wasm32-unknown-unknown); \
+        wasm_file=$(find "$p/target/wasm32-unknown-unknown/release" -maxdepth 1 -name "*.wasm" | head -1); \
+        if [ -z "$wasm_file" ]; then echo "no WASM output for $name" >&2; exit 1; fi; \
+        mkdir -p "/plugins/$name"; \
+        cp "$wasm_file" "/plugins/$name/$name.wasm"; \
+        echo "  -> /plugins/$name/$name.wasm"; \
+    done
+
+# Every plugin the default manifest names is in the image.
+COPY docker/plugins.yaml /tmp/plugins.yaml
+RUN set -eu; \
+    for path in $(sed -n 's/^ *path: *//p' /tmp/plugins.yaml); do \
+        [ -f "$path" ] || { echo "docker/plugins.yaml names $path, which was not built" >&2; exit 1; }; \
     done
 
 # ---------------------------------------------------------------------------
