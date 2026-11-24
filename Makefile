@@ -46,9 +46,10 @@ compile: plugins
 		--output $(ARTIFACT)
 	@echo "Compiled $(ARTIFACT)"
 
+# A plugin that fails to build fails the target.
 plugins:
 	@echo "Building plugins..."
-	@for plugin in plugins/*/; do \
+	@set -e; for plugin in plugins/*/; do \
 		if [ -f "$$plugin/Cargo.toml" ]; then \
 			plugin_name=$$(basename "$$plugin"); \
 			echo "Building $$plugin_name..."; \

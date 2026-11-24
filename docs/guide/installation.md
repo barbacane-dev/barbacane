@@ -77,8 +77,8 @@ docker run --rm -p 8080:8080 -v ./api.bca:/config/api.bca \
 With a Rust toolchain (the minimum supported version is 1.95):
 
 ```bash
-cargo install barbacane
-cargo install barbacane-control   # the control plane, if you run one
+cargo install --locked barbacane
+cargo install --locked barbacane-control   # the control plane, if you run one
 ```
 
 ## From source

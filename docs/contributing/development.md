@@ -6,7 +6,7 @@ This guide helps you set up a development environment for contributing to Barbac
 
 - **Rust 1.95+** - Install via [rustup](https://rustup.rs/). This is the project MSRV (enforced by CI); the dependency floor (wasmtime/cranelift) requires it.
 
-CI builds with a pinned toolchain, so a new Rust release cannot change a build without a commit: Rust 1.100.0 (`dtolnay/rust-toolchain@1.100.0`) for every job but the MSRV check (1.95) and the fuzz workflows (`nightly-2026-11-13`). To move to a new release, replace the version in every file under `.github/workflows/` in one pull request; the coverage cache is keyed on the toolchain, so it starts clean.
+CI builds with a pinned toolchain, so a new Rust release cannot change a build without a commit: Rust 1.100.0 (`dtolnay/rust-toolchain@1.100.0`) for every job but the MSRV check (1.95) and the fuzz workflows (`nightly-2026-11-13`), and for the images, whose Dockerfiles pin `rust:1.100.0-slim-bookworm` by digest. To move to a new release, replace the version in every file under `.github/workflows/` and in the three Dockerfiles, with the new image's digest, in one pull request; the coverage cache is keyed on the toolchain, so it starts clean.
 - **Git** - For version control
 - **PostgreSQL 14+** - For the control plane (or use Docker)
 - **Docker** - For running PostgreSQL locally (optional)

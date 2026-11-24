@@ -18,9 +18,9 @@ RUN apko build --arch "$TARGETARCH" --lockfile runtime.apko.lock.json --sbom=fal
     mkdir /rootfs && \
     tar -xOf runtime.tar "$layer" | tar -xzp --same-owner -C /rootfs
 
-# Build stage - Rust 1.95+ required (MSRV; wasmtime 48 floor). Debian 12, so
-# the binary needs no newer glibc than the runtime base holds.
-FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS builder
+# Build stage - Rust 1.100.0, the toolchain CI builds and tests with. Debian 12,
+# so the binary needs no newer glibc than the runtime base holds.
+FROM rust:1.100.0-slim-bookworm@sha256:ac965c2299127add362cdcf165f19516a0ca90d893bf7bd04cf1a44de39cfca7 AS builder
 
 # Install build dependencies for aws-lc-rs
 RUN apt-get update && apt-get install -y --no-install-recommends \
