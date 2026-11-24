@@ -396,11 +396,12 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
-  # Scans each multi-arch image with Grype. A vulnerability rated high or
-  # critical that has a fix fails the release; every finding goes to code
+  # Scans the image of each platform with Grype, by digest, so the scanner
+  # does not pick its own platform from the index. A vulnerability rated high
+  # or critical that has a fix fails the release; every finding goes to code
   # scanning.
   scan-containers:
-    name: Scan Containers (${{ matrix.image }})
+    name: Scan Containers (${{ matrix.image }}, ${{ matrix.arch }})
     needs: [validate-version, create-manifests]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -412,6 +413,7 @@ jobs:
       fail-fast: false
       matrix:
         image: [barbacane, barbacane-control, barbacane-standalone]
+        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -428,22 +430,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Scan ${{ matrix.image }}
+      - name: Find the linux/${{ matrix.arch }} image
+        id: platform
+        env:
+          REF: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tag.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "$REF" --raw \
+            | jq -r --arg arch "$ARCH" '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)][0].digest // empty')
+          if [ -z "$digest" ]; then
+            echo "::error::$REF has no linux/$ARCH image"
+            exit 1
+          fi
+          echo "image=${REF%:*}@$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Scan ${{ matrix.image }} (${{ matrix.arch }})
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.tag.outputs.version }}
+          image: ${{ steps.platform.outputs.image }}
           severity-cutoff: high
           only-fixed: true
           fail-build: true
           output-format: sarif
-          output-file: grype-${{ matrix.image }}.sarif
+          output-file: grype-${{ matrix.image }}-${{ matrix.arch }}.sarif
 
       - name: Upload scan results
-        if: ${{ !cancelled() && hashFiles(format('grype-{0}.sarif', matrix.image)) != '' }}
+        if: ${{ !cancelled() && hashFiles(format('grype-{0}-{1}.sarif', matrix.image, matrix.arch)) != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: grype-${{ matrix.image }}.sarif
-          category: grype-${{ matrix.image }}
+          sarif_file: grype-${{ matrix.image }}-${{ matrix.arch }}.sarif
+          category: grype-${{ matrix.image }}-${{ matrix.arch }}
 
   # A version on crates.io cannot be published again, so the crates go out
   # only once the binaries and plugins are built and the images are scanned

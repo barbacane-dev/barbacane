@@ -177,7 +177,10 @@ cosign verify-attestation --type cyclonedx \
 ```
 
 The same commands work against Docker Hub (`docker.io/barbacane/barbacane:$VERSION`)
-and the other images (`barbacane-control`, `barbacane-standalone`). The identity
+and the other images (`barbacane-control`, `barbacane-standalone`), and against the
+image of one platform by its digest (`ghcr.io/barbacane-dev/barbacane@sha256:…`, as a
+runtime pulls it): the multi-arch index and each platform's image are signed, and each
+platform's CycloneDX SBOM is attested to its image and to the index. The identity
 is exact: the one workflow that signs, `sign-and-sbom.yml`, run from the tag of
 the version you verify. A signature made by any other workflow, from a branch,
 or from another tag does not verify. A successful verification

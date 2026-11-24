@@ -153,8 +153,10 @@ jobs:
 
   # The scan release.yml runs, on the images of the latest release (pre-releases
   # included), for the vulnerabilities published since.
+  # The image of each platform, by digest, so the scanner does not pick its own
+  # platform from the index.
   scan-release:
-    name: Scan the release (${{ matrix.image }})
+    name: Scan the release (${{ matrix.image }}, ${{ matrix.arch }})
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -162,6 +164,7 @@ jobs:
       fail-fast: false
       matrix:
         image: [barbacane, barbacane-control, barbacane-standalone]
+        arch: [amd64, arm64]
     steps:
       - name: Find the latest release
         id: release
@@ -173,10 +176,25 @@ jobs:
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
           echo "Latest release: $tag"
 
-      - name: Scan ${{ matrix.image }}
+      - name: Find the linux/${{ matrix.arch }} image
+        id: platform
+        env:
+          REF: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.release.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "$REF" --raw \
+            | jq -r --arg arch "$ARCH" '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)][0].digest // empty')
+          if [ -z "$digest" ]; then
+            echo "::error::$REF has no linux/$ARCH image"
+            exit 1
+          fi
+          echo "image=${REF%:*}@$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Scan ${{ matrix.image }} (${{ matrix.arch }})
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.release.outputs.version }}
+          image: ${{ steps.platform.outputs.image }}
           severity-cutoff: high
           only-fixed: true
           fail-build: true
