@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Added
 
 - **ci**: a failed scheduled run, or a failed `CI`, `Coverage (full)` or docs deploy on `main`, opens an issue labelled `ci` (or comments on the one open for that workflow).
+
+### Changed
+
 - **release**: a release needs one approval. The Approve Release job runs in the `release-approval` environment, which has the required reviewer, and every job that pushes images, signs them or publishes crates waits for it.
 
 ### Fixed
