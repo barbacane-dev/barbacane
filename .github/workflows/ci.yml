@@ -1015,9 +1015,10 @@ jobs:
   # The plugin SDK's public API, compared with its latest stable release on
   # crates.io. A pre-release workspace version is compared with the previous
   # major, which allows any change (docs/reference/stability.md: pre-releases
-  # are outside the promise). From a stable version, a breaking change fails
-  # the job. cargo-semver-checks skips proc-macro crates, so it does not check
-  # barbacane-plugin-macros.
+  # are outside the promise), and so is a stable version whose major is newer
+  # than that release's (the 1.0.0 bump over 0.12). Within a major, a breaking
+  # change fails the job. cargo-semver-checks skips proc-macro crates, so it
+  # does not check barbacane-plugin-macros.
   semver:
     name: Semver
     runs-on: ubuntu-latest
@@ -1059,12 +1060,23 @@ jobs:
 
       - name: Check the plugin SDK against crates.io
         run: |
+          set -eo pipefail
           version="$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "barbacane-plugin-sdk") | .version')"
+          # The release cargo-semver-checks compares with: the newest stable
+          # version on crates.io that is not yanked.
+          baseline="$(curl -fsSL https://index.crates.io/ba/rb/barbacane-plugin-sdk \
+            | jq -r 'select(.yanked | not) | .vers | select(test("-") | not)' \
+            | sort -V | tail -1)"
           case "$version" in
             *-*) release_type=() ;;
-            *) release_type=(--release-type minor) ;;
+            *) if [ "${version%%.*}" != "${baseline%%.*}" ]; then
+                 release_type=()
+               else
+                 release_type=(--release-type minor)
+               fi ;;
           esac
+          echo "barbacane-plugin-sdk $version against $baseline: ${release_type[*]:-release type from the versions}"
           cargo semver-checks check-release "${release_type[@]}" \
             --package barbacane-plugin-sdk
 
