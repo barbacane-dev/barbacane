@@ -263,6 +263,8 @@ plugins and builds an artifact.
 | E1043 | Plugin | A plugin imports a function the gateway does not provide: anything outside the `barbacane` host functions and the supported WASI functions (see the [plugin guide](../contributing/plugins.md#wasi)) |
 | E1044 | Plugin | Limits for a plugin, in its `plugin.toml`, in `barbacane.yaml` or on the control plane, name an unknown key, or a value below 1 or above the gateway's ceiling (see the [plugin guide](../contributing/plugins.md#resource-limits)) |
 | E1045 | Plugin | A plugin is not built for this gateway's plugin ABI: it carries no ABI version, names another one, or lacks an export the gateway calls (see the [plugin guide](../contributing/plugins.md#abi-version)), or it has more than one linear memory or table; rebuild it with `barbacane-plugin-sdk` 1.x |
+| E1046 | Plugin | A plugin reference pins a version (`name@1.2.0`) other than the version of the plugin bundled under that name |
+| E1047 | Plugin | A plugin is used in a role its type does not have: a middleware in `x-barbacane-dispatch`, or a dispatcher in `x-barbacane-middlewares` |
 | E1051 | Schema | A request schema nests more than 32 levels deep, within it or within a definition it references |
 | E1052 | Schema | A request schema holds more than 1024 properties, counting the definitions it references |
 | E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |

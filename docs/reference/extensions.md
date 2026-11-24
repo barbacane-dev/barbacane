@@ -34,8 +34,10 @@ x-barbacane-dispatch:
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `name` | string | Yes | Name of the dispatcher (e.g., `mock`, `http`) |
+| `name` | string | Yes | Name of a dispatcher plugin declared in `barbacane.yaml` (e.g., `mock`, `http-upstream`), optionally pinned to its version: `mock@0.1.0` |
 | `config` | object | No | Configuration passed to the dispatcher |
+
+A pinned version must be the version of the plugin bundled under that name (`E1046`), and the plugin must be a dispatcher (`E1047`).
 
 ### Dispatcher: `mock`
 
@@ -233,7 +235,7 @@ x-barbacane-middlewares:
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `name` | string | Yes | Name of the middleware plugin |
+| `name` | string | Yes | Name of a middleware plugin declared in `barbacane.yaml`, optionally pinned to its version: `cors@0.1.0` (`E1046` if the bundled plugin is another version, `E1047` if it is not a middleware) |
 | `config` | object | No | Configuration passed to the middleware |
 | `enabled` | boolean | No | `false` on an operation entry removes the global entries of this plugin from the operation's chain and adds nothing. Default `true`. |
 

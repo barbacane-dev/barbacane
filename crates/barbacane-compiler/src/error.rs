@@ -111,6 +111,29 @@ pub enum CompileError {
     )]
     IncompatibleAbi { plugin: String, reason: String },
 
+    /// E1046: A spec pins a plugin version (`name@1.2.0`) other than the
+    /// version of the plugin bundled under that name.
+    #[error(
+        "E1046: {location} names '{reference}', but the bundled '{plugin}' is version {version}"
+    )]
+    PluginVersionMismatch {
+        location: String,
+        reference: String,
+        plugin: String,
+        version: String,
+    },
+
+    /// E1047: A plugin is named in a role its type does not have: a
+    /// middleware in `x-barbacane-dispatch`, or a dispatcher in
+    /// `x-barbacane-middlewares`.
+    #[error("E1047: {location} uses '{plugin}' as a {role}, but it is a {plugin_type}")]
+    PluginRoleMismatch {
+        location: String,
+        plugin: String,
+        role: String,
+        plugin_type: String,
+    },
+
     /// E1043: A plugin imports a function the gateway does not provide.
     #[error(
         "E1043: plugin '{plugin}' imports {module}::{name}, which the gateway does not provide; \
