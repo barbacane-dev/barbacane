@@ -106,7 +106,7 @@ jobs:
           fetch k8s-rbac.json  "$k8s/apis__rbac.authorization.k8s.io__v1_openapi.json"
           ls -1
 
-      # Four corpus tests compile specs against these plugins, and under CI
+      # Five corpus tests compile specs against these plugins, and under CI
       # fail when one is missing.
       - name: Build the plugins the corpus tests use
         run: |

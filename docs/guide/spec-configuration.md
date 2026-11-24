@@ -552,6 +552,9 @@ Errors you might see:
 - Path parameter values are percent-decoded and keep `+` as `+`; in a query, `+` is a space.
 - A parameter the gateway cannot read fails compilation (`E1004`): one without `name` or `in`, an `in` other than `path`, `query`, `header`, `cookie` and `querystring`, a `style` its location does not take, both `schema` and `content`, a `content` that names more or fewer than one media type, or a `querystring` parameter with `schema`.
 - A request body is checked when its content type is JSON (`application/json`, or a `+json` type), `application/x-www-form-urlencoded` or `multipart/form-data`. A form body is checked as the object its fields make, each field read as the type its property names; a field sent twice is an array, which only an `array` property accepts. A schema for another content type (XML, plain text) is not applied, and compilation warns with `E1073`.
+- In an OpenAPI 3.0 spec, `nullable: true` admits `null` in a schema that names a `type`, as OpenAPI 3.0.3 defines it: a schema without `type` is unchanged, and an `enum` that does not list `null` still refuses it. OpenAPI 3.1 and later spell it `type: [string, "null"]`.
+- A property marked `readOnly: true` is not required of a request, even when its schema lists it in `required`: OpenAPI applies that requirement to responses. A request that sends the property is checked against its schema.
+- A request schema may nest 32 levels deep (`E1051`) and hold 1024 properties (`E1052`), counting the definitions it references.
 
 ### References
 
