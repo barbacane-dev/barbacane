@@ -113,3 +113,13 @@ jobs:
           name: coverage-lcov
           path: lcov.info
           if-no-files-found: ignore
+
+  # A failed run that no pull request shows opens or updates an issue.
+  report-failure:
+    name: Report failure
+    needs: [coverage-full]
+    if: ${{ failure() && (github.event_name == 'schedule' || github.event_name == 'push') }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml

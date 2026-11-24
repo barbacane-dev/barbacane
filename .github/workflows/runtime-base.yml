@@ -181,3 +181,13 @@ jobs:
           only-fixed: true
           fail-build: true
           output-format: table
+
+  # A failed run that no pull request shows opens or updates an issue.
+  report-failure:
+    name: Report failure
+    needs: [lock, push-lock, scan-base, scan-release]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
