@@ -1,21 +1,14 @@
-//! Fuzz request validation and the percent-decoder.
+//! Fuzz request validation, parameter styles and the percent-decoders.
 //!
 //! Target: `barbacane_lib::validator::OperationValidator::validate_request`
-//! (`crates/barbacane/src/validator.rs`). `validate_request` walks path/query/
-//! header/body validation; the query path runs the private `urlencoding_decode`
-//! percent-decoder, so feeding arbitrary query strings fuzzes the decoder
-//! indirectly.
+//! (`crates/barbacane/src/validator.rs`), with one declared parameter whose
+//! location, `style`, `explode` and schema shape the input chooses, so the
+//! style readers in `crates/barbacane/src/params.rs` and the query decoder see
+//! arbitrary text.
 //!
 //! Invariant: validation of arbitrary inputs never panics (notably the
-//! percent-decoder must handle truncated `%`, non-hex digits, and overlong
-//! sequences without panicking or slicing on a non-char-boundary).
-//!
-//! NOTE for the maintainer: the percent-decoder `urlencoding_decode` is
-//! `fn` (private) in `validator.rs`. To fuzz it *directly* (tighter, faster),
-//! expose a thin wrapper, e.g.:
-//!   `pub fn fuzz_urldecode(s: &str) -> String { urlencoding_decode(s) }`
-//! Until then this target reaches it through `validate_request`, which is fine
-//! but also exercises the surrounding validation machinery.
+//! decoders must handle truncated `%`, non-hex digits, and overlong sequences
+//! without panicking or slicing on a non-char-boundary).
 //!
 //! Run: `cargo +nightly fuzz run validator`
 
@@ -25,35 +18,67 @@ use std::collections::HashMap;
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
+use serde_json::json;
 
 use barbacane_compiler::{Parameter, RequestBody};
 use barbacane_lib::validator::OperationValidator;
+
+const LOCATIONS: &[&str] = &["query", "path", "header", "cookie"];
+const STYLES: &[&str] = &[
+    "form",
+    "simple",
+    "label",
+    "matrix",
+    "spaceDelimited",
+    "pipeDelimited",
+    "deepObject",
+    "cookie",
+];
 
 /// Structured fuzz input so libFuzzer can explore each field independently.
 #[derive(Debug, Arbitrary)]
 struct Input {
     query_string: String,
+    path_value: String,
     body: Vec<u8>,
     content_type: Option<String>,
     // A few (name, value) header pairs.
     headers: Vec<(String, String)>,
-    // Whether to attach a query parameter named after `param_name` so the
-    // query-decode path has a declared param to match.
-    declare_query_param: bool,
+    // Whether to declare a parameter named `param_name`.
+    declare_param: bool,
     param_name: String,
+    location: u8,
+    style: Option<u8>,
+    explode: Option<bool>,
+    // 0: no schema, 1: integer, 2: array of integers, 3: object, 4: JSON content.
+    shape: u8,
     require_body: bool,
 }
 
 fuzz_target!(|input: Input| {
-    // Build a validator with optional declared parameters / body so different
-    // validation branches (and the percent-decoder) are reachable.
     let mut params: Vec<Parameter> = Vec::new();
-    if input.declare_query_param && !input.param_name.is_empty() {
+    if input.declare_param && !input.param_name.is_empty() {
+        let object = json!({"type": "object", "properties": {"id": {"type": "integer"}}});
+        let (schema, media_type) = match input.shape % 5 {
+            0 => (None, None),
+            1 => (Some(json!({"type": "integer"})), None),
+            2 => (
+                Some(json!({"type": "array", "items": {"type": "integer"}})),
+                None,
+            ),
+            3 => (Some(object), None),
+            _ => (Some(object), Some("application/json".to_string())),
+        };
         params.push(Parameter {
             name: input.param_name.clone(),
-            location: "query".to_string(),
+            location: LOCATIONS[usize::from(input.location) % LOCATIONS.len()].to_string(),
             required: false,
-            schema: None,
+            schema,
+            style: input
+                .style
+                .map(|s| STYLES[usize::from(s) % STYLES.len()].to_string()),
+            explode: input.explode,
+            media_type,
         });
     }
 
@@ -67,14 +92,13 @@ fuzz_target!(|input: Input| {
     };
 
     let validator =
-        OperationValidator::new(&params, request_body.as_ref()).expect("no schema to compile");
+        OperationValidator::new(&params, request_body.as_ref()).expect("schemas compile");
 
     let headers: HashMap<String, String> = input.headers.into_iter().collect();
+    let path_params = [(input.param_name.clone(), input.path_value)];
 
-    // No path params; the interesting attacker-controlled surfaces are the query
-    // string (percent-decoder), headers, and body.
     let _ = validator.validate_request(
-        &[],
+        &path_params,
         Some(input.query_string.as_str()),
         &headers,
         input.content_type.as_deref(),
