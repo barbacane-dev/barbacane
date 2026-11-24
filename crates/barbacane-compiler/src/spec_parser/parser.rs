@@ -85,21 +85,35 @@ impl SchemaDefs {
     }
 }
 
-/// Rewrite the draft-4 exclusive bounds OpenAPI 3.0 uses.
+/// Rewrite the OpenAPI 3.0 schema keywords JSON Schema 2020-12 spells
+/// differently, for the validator, which compiles against 2020-12.
 ///
-/// 3.0 carries `exclusiveMinimum` and `exclusiveMaximum` as booleans that
-/// qualify `minimum` and `maximum`. JSON Schema 2020-12, which the validator
-/// compiles against, carries the bound itself as the value. An unconverted
-/// boolean makes the schema fail to build, and a schema that fails to build is
-/// simply not validated, so the constraint disappears without a word.
+/// - `exclusiveMinimum` and `exclusiveMaximum` are booleans that qualify
+///   `minimum` and `maximum` in 3.0; 2020-12 carries the bound itself.
+/// - `nullable: true` adds `"null"` to the `type` of the same schema, as
+///   OpenAPI 3.0.3 defines it. A schema without `type` is left as it is, and
+///   an `enum` that does not list `null` still refuses it.
 ///
 /// Only schema-valued positions are visited. `enum`, `const`, `default` and the
 /// example keywords hold instance data, which may happen to look like a schema,
 /// and rewriting it would change the value a request is compared against.
-fn convert_draft4_exclusive_bounds(value: &mut Value) {
+fn convert_openapi_30_schema(value: &mut Value) {
     let Value::Object(obj) = value else {
         return;
     };
+
+    if obj.get("nullable") == Some(&Value::Bool(true)) {
+        match obj.get_mut("type") {
+            Some(Value::String(t)) if t != "null" => {
+                let t = std::mem::take(t);
+                obj.insert("type".into(), serde_json::json!([t, "null"]));
+            }
+            Some(Value::Array(types)) if !types.iter().any(|t| t == "null") => {
+                types.push(Value::String("null".into()));
+            }
+            _ => {}
+        }
+    }
 
     for (exclusive, bound) in [
         ("exclusiveMinimum", "minimum"),
@@ -134,7 +148,7 @@ fn convert_draft4_exclusive_bounds(value: &mut Value) {
     ] {
         if let Some(Value::Object(map)) = obj.get_mut(keyword) {
             for schema in map.values_mut() {
-                convert_draft4_exclusive_bounds(schema);
+                convert_openapi_30_schema(schema);
             }
         }
     }
@@ -143,7 +157,7 @@ fn convert_draft4_exclusive_bounds(value: &mut Value) {
     for keyword in ["allOf", "anyOf", "oneOf", "prefixItems"] {
         if let Some(Value::Array(list)) = obj.get_mut(keyword) {
             for schema in list {
-                convert_draft4_exclusive_bounds(schema);
+                convert_openapi_30_schema(schema);
             }
         }
     }
@@ -165,10 +179,10 @@ fn convert_draft4_exclusive_bounds(value: &mut Value) {
         match obj.get_mut(keyword) {
             Some(Value::Array(list)) => {
                 for schema in list {
-                    convert_draft4_exclusive_bounds(schema);
+                    convert_openapi_30_schema(schema);
                 }
             }
-            Some(schema @ Value::Object(_)) => convert_draft4_exclusive_bounds(schema),
+            Some(schema @ Value::Object(_)) => convert_openapi_30_schema(schema),
             _ => {}
         }
     }
@@ -244,7 +258,7 @@ fn resolve_schema(value: &Value, root: &Value, defs: &mut SchemaDefs) -> Result<
     let siblings = ref_siblings_apply(root);
     let mut resolved = resolve_schema_refs(value, root, defs, &BTreeMap::new(), siblings)?;
     if is_openapi_30(root) {
-        convert_draft4_exclusive_bounds(&mut resolved);
+        convert_openapi_30_schema(&mut resolved);
     }
     Ok(resolved)
 }
@@ -262,7 +276,7 @@ fn finish_schema_defs(defs: SchemaDefs, root: &Value) -> Option<Value> {
     for (name, body) in defs.bodies {
         if let Some(mut body) = body {
             if openapi_30 {
-                convert_draft4_exclusive_bounds(&mut body);
+                convert_openapi_30_schema(&mut body);
             }
             map.insert(name, body);
         }
@@ -4716,6 +4730,65 @@ paths:
             validator.is_valid(&serde_json::json!({"discount": 100})),
             "100 is included"
         );
+    }
+
+    /// OpenAPI 3.0's `nullable: true` admits `null` where the schema names a
+    /// `type`, in operation schemas and in the definitions they reference. An
+    /// `enum` without `null` still refuses it, as OpenAPI 3.0.3 defines.
+    #[test]
+    fn openapi_30_nullable_admits_null() {
+        let spec_for = |version: &str| {
+            format!(
+                r##"
+openapi: "{version}"
+info: {{ title: T, version: "1" }}
+paths:
+  /pets:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: {{ type: string, nullable: true }}
+                tags: {{ type: array, items: {{ type: string }}, nullable: true }}
+                status: {{ type: string, enum: [a, b], nullable: true }}
+                owner: {{ $ref: "#/components/schemas/Owner" }}
+                notes: {{ nullable: true }}
+      x-barbacane-dispatch: {{ name: mock }}
+components:
+  schemas:
+    Owner: {{ type: object, nullable: true }}
+"##
+            )
+        };
+        let validator = |version: &str| {
+            let spec = parse_spec(&spec_for(version)).expect("parse");
+            let schema = spec.operations[0].request_body.as_ref().unwrap().content
+                ["application/json"]
+                .schema
+                .clone()
+                .expect("schema");
+            crate::request_validator(&schema, spec.schema_defs.as_ref()).expect("compiles")
+        };
+
+        let v30 = validator("3.0.3");
+        for valid in [
+            serde_json::json!({"name": null}),
+            serde_json::json!({"tags": null}),
+            serde_json::json!({"owner": null}),
+            serde_json::json!({"name": "Rex", "notes": null}),
+        ] {
+            assert!(v30.is_valid(&valid), "{valid}");
+        }
+        assert!(!v30.is_valid(&serde_json::json!({"status": null})));
+        assert!(!v30.is_valid(&serde_json::json!({"name": 3})));
+
+        // OpenAPI 3.1 has no `nullable`; `type: [string, "null"]` says it.
+        let v31 = validator("3.1.0");
+        assert!(!v31.is_valid(&serde_json::json!({"name": null})));
+        assert!(!v31.is_valid(&serde_json::json!({"owner": null})));
     }
 
     /// `enum`, `const`, `default` and the example keywords hold instance data,

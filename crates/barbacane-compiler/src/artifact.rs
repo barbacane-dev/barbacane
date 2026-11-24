@@ -101,7 +101,8 @@ pub struct CompileOptions {
     pub allow_plaintext: bool,
     /// Maximum JSON Schema nesting depth (default: 32).
     pub max_schema_depth: usize,
-    /// Maximum total properties in a schema (default: 256).
+    /// Maximum properties a request schema holds, the pool definitions it
+    /// reaches included (default: 1024).
     pub max_schema_properties: usize,
     /// Git commit SHA for build provenance tracking.
     pub provenance_commit: Option<String>,
@@ -119,7 +120,7 @@ impl Default for CompileOptions {
         Self {
             allow_plaintext: false,
             max_schema_depth: 32,
-            max_schema_properties: 256,
+            max_schema_properties: 1024,
             provenance_commit: None,
             provenance_source: None,
             no_cache: false,
@@ -1300,6 +1301,7 @@ fn compile_inner(
                     let param_location = format!("{} parameter '{}'", location, param.name);
                     validate_schema_complexity(
                         schema,
+                        spec.schema_defs.as_ref(),
                         options.max_schema_depth,
                         options.max_schema_properties,
                         &param_location,
@@ -1315,6 +1317,7 @@ fn compile_inner(
                         let body_location = format!("{} request body ({})", location, content_type);
                         validate_schema_complexity(
                             schema,
+                            spec.schema_defs.as_ref(),
                             options.max_schema_depth,
                             options.max_schema_properties,
                             &body_location,
@@ -2849,14 +2852,17 @@ fn check_enforceable(
         .map_err(|e| CompileError::UnenforceableSchema(format!("{location}: {e}")))
 }
 
-/// Validate schema complexity (E1051, E1052).
+/// Validate schema complexity (E1051, E1052), counting the definitions the
+/// schema reaches in the document's pool `defs`.
 fn validate_schema_complexity(
     schema: &serde_json::Value,
+    defs: Option<&serde_json::Value>,
     max_depth: usize,
     max_properties: usize,
     location: &str,
 ) -> Result<(), CompileError> {
-    let (depth, props) = measure_schema_complexity(schema, 0);
+    let schema = crate::spec_parser::attach_reachable_defs(schema, defs);
+    let (depth, props) = measure_schema_complexity(&schema, 0);
 
     if depth > max_depth {
         return Err(CompileError::SchemaTooDeep(format!(
@@ -4037,6 +4043,28 @@ mod tests {
     /// Definitions a schema carries still count towards its complexity. They
     /// hold the body that a `$ref` points at, so skipping them would measure an
     /// empty schema and let the E1051 and E1052 limits pass anything.
+    /// An operation's schema holds a `$ref` into the document's pool; the
+    /// definitions it reaches there count towards its limits.
+    #[test]
+    fn complexity_counts_the_pool_definitions_a_schema_reaches() {
+        let schema = serde_json::json!({"$ref": "#/$defs/User"});
+        let pool = serde_json::json!({
+            "User": {"type": "object", "properties": {
+                "id": {"type": "string"},
+                "address": {"$ref": "#/$defs/Address"}
+            }},
+            "Address": {"type": "object", "properties": {
+                "street": {"type": "string"},
+                "city": {"type": "object", "properties": {"name": {"type": "string"}}}
+            }},
+            "Unrelated": {"type": "object", "properties": {"a": {}, "b": {}, "c": {}}}
+        });
+        assert!(validate_schema_complexity(&schema, None, 10, 4, "test").is_ok());
+        assert!(validate_schema_complexity(&schema, Some(&pool), 10, 5, "test").is_ok());
+        assert!(validate_schema_complexity(&schema, Some(&pool), 10, 4, "test").is_err());
+        assert!(validate_schema_complexity(&schema, Some(&pool), 1, 10, "test").is_err());
+    }
+
     #[test]
     fn complexity_counts_carried_definitions() {
         let schema = serde_json::json!({
@@ -4060,8 +4088,8 @@ mod tests {
         assert!(depth >= 1, "nesting inside the definition is measured");
 
         // And the limits actually bite on what the definition holds.
-        assert!(validate_schema_complexity(&schema, 10, 2, "test").is_err());
-        assert!(validate_schema_complexity(&schema, 10, 10, "test").is_ok());
+        assert!(validate_schema_complexity(&schema, None, 10, 2, "test").is_err());
+        assert!(validate_schema_complexity(&schema, None, 10, 10, "test").is_ok());
     }
     use std::io::Write;
     use tempfile::TempDir;
@@ -5258,9 +5286,9 @@ paths:
     fn compile_detects_schema_too_complex() {
         let temp = TempDir::new().unwrap();
 
-        // Create a schema with 300 properties (default limit is 256)
+        // One property more than the default limit allows.
         let mut properties = String::new();
-        for i in 0..300 {
+        for i in 0..=CompileOptions::default().max_schema_properties {
             if i > 0 {
                 properties.push_str(", ");
             }

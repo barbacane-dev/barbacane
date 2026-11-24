@@ -537,6 +537,9 @@ Errors you might see:
 
 - Path, query, header and cookie parameters are checked against their `schema`, each value read as the type the schema names: under `type: integer`, `?limit=10` is the integer `10` and `?limit=ten` fails validation; under `type: boolean`, `true` and `false` are booleans. A declared query parameter or cookie sent twice is refused.
 - A request body is checked when its content type is JSON (`application/json`, or a `+json` type), `application/x-www-form-urlencoded` or `multipart/form-data`. A form body is checked as the object its fields make, each field read as the type its property names; a field sent twice is an array, which only an `array` property accepts. A schema for another content type (XML, plain text) is not applied, and compilation warns with `E1073`.
+- In an OpenAPI 3.0 spec, `nullable: true` admits `null` in a schema that names a `type`, as OpenAPI 3.0.3 defines it: a schema without `type` is unchanged, and an `enum` that does not list `null` still refuses it. OpenAPI 3.1 and later spell it `type: [string, "null"]`.
+- A property marked `readOnly: true` is not required of a request, even when its schema lists it in `required`: OpenAPI applies that requirement to responses. A request that sends the property is checked against its schema.
+- A request schema may nest 32 levels deep (`E1051`) and hold 1024 properties (`E1052`), counting the definitions it references.
 
 ### References
 

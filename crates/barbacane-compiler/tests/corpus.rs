@@ -395,6 +395,77 @@ fn configured_header_names_reach_the_allowlist() {
     );
 }
 
+/// Every published OpenAPI document the scheduled job fetches compiles at the
+/// default limits once each operation names a dispatcher. These are the specs
+/// users compile, so a limit or a check that refuses one shows here first.
+#[test]
+fn published_specs_compile_at_the_default_limits() {
+    use barbacane_compiler::{compile_with_manifest, CompileOptions, ProjectManifest};
+
+    let Ok(published) = std::env::var("BARBACANE_CORPUS_DIR") else {
+        return;
+    };
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repository root");
+    let mock = repo_root.join("plugins/mock/mock.wasm");
+    if !plugin_built(&mock) {
+        return;
+    }
+
+    let work =
+        std::env::temp_dir().join(format!("barbacane-corpus-compile-{}", std::process::id()));
+    std::fs::create_dir_all(&work).expect("work directory");
+    let manifest_path = work.join("barbacane.yaml");
+    let manifest_text = format!("plugins:\n  mock:\n    path: {}\n", mock.display());
+    std::fs::write(&manifest_path, &manifest_text).expect("write the manifest");
+    let manifest =
+        ProjectManifest::parse(&manifest_text, &manifest_path).expect("the manifest parses");
+
+    let mut specs = Vec::new();
+    collect_specs(Path::new(&published), &mut specs);
+    specs.sort();
+    let mut failures = Vec::new();
+    for path in specs {
+        let text = std::fs::read_to_string(&path).expect("read spec");
+        let mut doc = parse_document(&text).expect("spec is YAML or JSON");
+        if doc.get("openapi").is_none() {
+            continue;
+        }
+        for item in doc
+            .get_mut("paths")
+            .and_then(Value::as_object_mut)
+            .into_iter()
+            .flat_map(|paths| paths.values_mut())
+        {
+            for method in HTTP_METHODS {
+                if let Some(Value::Object(op)) = item.get_mut(*method) {
+                    op.insert(
+                        "x-barbacane-dispatch".into(),
+                        serde_json::json!({"name": "mock"}),
+                    );
+                }
+            }
+        }
+        let name = path.file_stem().and_then(|n| n.to_str()).unwrap_or("spec");
+        let spec = work.join(format!("{name}.json"));
+        std::fs::write(&spec, serde_json::to_vec(&doc).expect("serialize")).expect("write spec");
+        let result = compile_with_manifest(
+            &[spec.as_path()],
+            &manifest,
+            &work,
+            &work.join(format!("{name}.bca")),
+            &CompileOptions::default(),
+        );
+        if let Err(e) = result {
+            failures.push(format!("{name}: {e}"));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// A definition many operations reach is held once, not once per operation.
 ///
 /// Parsing a published Stripe document used 5.67 GB before this was true: its
