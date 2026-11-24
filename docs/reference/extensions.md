@@ -512,5 +512,5 @@ Per-operation observability middleware for SLO monitoring, detailed logging, and
 
 | Code | Message | Cause |
 |------|---------|-------|
-| E1010 | Routing conflict | Same path+method in multiple specs |
+| E1010 | Routing conflict | Two operations the router files as one route: the same method and path segments (`/users/` is `/users`), with AsyncAPI `send` as `POST` and `receive` as `GET` |
 | E1020 | Missing dispatch | Operation has no `x-barbacane-dispatch`. Compilation fails; `barbacane validate` reports it as a warning |

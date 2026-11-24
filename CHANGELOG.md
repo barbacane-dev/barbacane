@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **compiler**: the schema limits `E1051` (depth 32) and `E1052` (properties) count the definitions a request schema references, which they skipped. The property limit is 1024 instead of 256, so the published APIs the nightly corpus compiles (Stripe, GitHub, Box, Asana, Kubernetes) stay within it; Stripe's request bodies exceeded 256 (#431).
 
   > **Upgrade note (breaking):** a request schema that reaches more than 1024 properties through `$ref` fails compilation with `E1052`.
+- **routing**: a path parameter may share its segment with literal text (`/reports/{id}.pdf`, `/files/{id}/thumbnail.{ext}`); such a segment was matched as literal text and never answered. A segment with more than one parameter, and an `in: path` parameter the template does not name, which made every request answer 400, fail compilation with `E1054`. `E1010` compares routes as the router files them: an AsyncAPI `send` and an OpenAPI `post` on one address, or `/users` and `/users/`, compiled and the router kept one of them (#431).
 
 ## [1.0.0-rc.3] - 2026-11-23
 

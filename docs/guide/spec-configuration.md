@@ -32,6 +32,20 @@ paths:
             type: string
 ```
 
+Every `in: path` parameter must be named in the path template; one the template does not name would never be captured, and fails compilation with `E1054`.
+
+### A Parameter Within a Segment
+
+A parameter may share its segment with literal text, before or after it:
+
+```yaml
+paths:
+  /reports/{id}.pdf:          # GET /reports/42.pdf captures id=42
+  /files/{id}/thumbnail.{ext}:  # GET /files/7/thumbnail.png captures id=7, ext=png
+```
+
+A segment holds at most one parameter (`{name}.{ext}` fails with `E1054`). The literal text is matched as the client sends it, and the value between must not be empty. At each segment, a static segment matches first, then the segments with literal text around a parameter (the longest literal text first), then a plain parameter, then a wildcard.
+
 ### Wildcard Parameters
 
 Use `{paramName+}` to capture all remaining path segments as a single value, including any `/` characters:
@@ -528,10 +542,10 @@ Errors you might see:
 
 | Error Code | Meaning |
 |------------|---------|
-| E1010 | Routing conflict (same path+method in multiple specs) |
+| E1010 | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
 | E1020 | Missing `x-barbacane-dispatch` on operation |
 | E1031 | Plaintext `http://` or `ws://` upstream URL (use HTTPS or WSS, or `--allow-plaintext` at compile time) |
-| E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards) |
+| E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |
 
 ### Request values
 
