@@ -204,6 +204,15 @@ fn read_scalar(scalar: Scalar, raw: &str) -> Option<Value> {
     }
 }
 
+/// Whether `schema` describes an object: it names `object` among its types,
+/// and neither `string` nor `array`.
+pub fn names_object(schema: &Value, pool: Option<&Value>) -> bool {
+    let defs = Defs::of(schema, pool);
+    let mut types = Vec::new();
+    defs.types(schema, 0, &mut types);
+    types.contains(&"object") && !types.contains(&"string") && !types.contains(&"array")
+}
+
 /// The coercion of each property of an object schema, for form fields.
 pub fn form_fields(schema: &Value, pool: Option<&Value>) -> HashMap<String, Coercion> {
     let defs = Defs::of(schema, pool);

@@ -20,6 +20,7 @@ fn create_parameters() -> Vec<Parameter> {
                 "type": "string",
                 "format": "uuid"
             })),
+            ..Default::default()
         },
         Parameter {
             name: "page".to_string(),
@@ -29,6 +30,7 @@ fn create_parameters() -> Vec<Parameter> {
                 "type": "integer",
                 "minimum": 1
             })),
+            ..Default::default()
         },
         Parameter {
             name: "limit".to_string(),
@@ -39,6 +41,7 @@ fn create_parameters() -> Vec<Parameter> {
                 "minimum": 1,
                 "maximum": 100
             })),
+            ..Default::default()
         },
         Parameter {
             name: "x-api-key".to_string(),
@@ -48,6 +51,7 @@ fn create_parameters() -> Vec<Parameter> {
                 "type": "string",
                 "minLength": 32
             })),
+            ..Default::default()
         },
     ]
 }

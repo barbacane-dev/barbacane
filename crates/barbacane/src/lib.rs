@@ -23,6 +23,8 @@ pub mod lifecycle;
 #[doc(hidden)]
 pub mod metered_body;
 #[doc(hidden)]
+pub mod params;
+#[doc(hidden)]
 pub mod router;
 #[doc(hidden)]
 pub mod tls;

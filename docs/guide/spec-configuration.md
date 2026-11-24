@@ -535,7 +535,22 @@ Errors you might see:
 
 ### Request values
 
-- Path, query, header and cookie parameters are checked against their `schema`, each value read as the type the schema names: under `type: integer`, `?limit=10` is the integer `10` and `?limit=ten` fails validation; under `type: boolean`, `true` and `false` are booleans. A declared query parameter or cookie sent twice is refused.
+- Path, query, header and cookie parameters are checked against their `schema`, each value read as the type the schema names: under `type: integer`, `?limit=10` is the integer `10` and `?limit=ten` fails validation; under `type: boolean`, `true` and `false` are booleans.
+- Arrays and objects are read the way the parameter's `style` and `explode` write them. Query and cookie parameters default to `form` with `explode: true`, path and header parameters to `simple`:
+
+  | Style | Array | Object |
+  |-------|-------|--------|
+  | `form` (query, cookie) | `?id=1&id=2`; with `explode: false`, `?id=1,2` | `?role=admin&age=3` (one parameter per property); with `explode: false`, `?p=role,admin,age,3` |
+  | `spaceDelimited`, `pipeDelimited` (query) | `?id=1%202`, `?id=1\|2` | `?p=role\|admin` |
+  | `deepObject` (query) | | `?p[role]=admin&p[age]=3` |
+  | `simple` (path, header) | `1,2` | `role,admin,age,3`; with `explode: true`, `role=admin,age=3` |
+  | `label` (path) | `.1,2`; with `explode: true`, `.1.2` | `.role,admin`; with `explode: true`, `.role=admin` |
+  | `matrix` (path) | `;id=1,2`; with `explode: true`, `;id=1;id=2` | `;p=role,admin`; with `explode: true`, `;role=admin` |
+
+- A declared query parameter or cookie sent twice is refused, unless it is an array in exploded style, which sends one pair per item.
+- A parameter described by `content` instead of `schema` is read as its media type: under a JSON media type the value is parsed as a JSON document. An OpenAPI 3.2 `querystring` parameter with `application/x-www-form-urlencoded` and an object schema is checked as the object the query string's fields make.
+- Path parameter values are percent-decoded and keep `+` as `+`; in a query, `+` is a space.
+- A parameter the gateway cannot read fails compilation (`E1004`): one without `name` or `in`, an `in` other than `path`, `query`, `header`, `cookie` and `querystring`, a `style` its location does not take, both `schema` and `content`, a `content` that names more or fewer than one media type, or a `querystring` parameter with `schema`.
 - A request body is checked when its content type is JSON (`application/json`, or a `+json` type), `application/x-www-form-urlencoded` or `multipart/form-data`. A form body is checked as the object its fields make, each field read as the type its property names; a field sent twice is an array, which only an `array` property accepts. A schema for another content type (XML, plain text) is not applied, and compilation warns with `E1073`.
 
 ### References

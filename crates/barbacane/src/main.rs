@@ -1602,12 +1602,12 @@ impl Gateway {
         // Route lookup
         match self.router.lookup(&path, &method_str) {
             RouteMatch::Found { entry, mut params } => {
-                // Canonically percent-decode captured path-parameter values once,
-                // so routing, validation, and the dispatcher all see the same
-                // decoded value (segments were matched raw; `%2F` stays a literal
-                // slash within its segment rather than acting as a separator).
+                // Path-parameter values are percent-decoded once, so validation
+                // and the dispatcher see the same value (segments were matched
+                // raw; `%2F` stays a literal slash within its segment, and `+`
+                // stays `+`).
                 for (_, value) in params.iter_mut() {
-                    *value = barbacane_lib::validator::percent_decode(value);
+                    *value = barbacane_lib::validator::percent_decode_path(value);
                 }
                 let operation = &self.operations[entry.operation_index];
                 let validator = &self.validators[entry.operation_index];
