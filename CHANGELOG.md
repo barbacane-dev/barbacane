@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **release**: a release needs one approval. The Approve Release job runs in the `release-approval` environment, which has the required reviewer, and every job that pushes images, signs them or publishes crates waits for it.
 
+### Fixed
+
+- **data plane**: `X-Forwarded-Proto` and `X-Forwarded-Host` hold the scheme and host the client used: `https` on a TLS listener and `http` otherwise, and the request's `Host` or HTTP/2 authority, or behind `--trusted-proxies` the values the proxy reported. Plugins see them so, and every dispatcher that passes the request's headers on sends them: `http-upstream` sent its upstream's scheme, and `ws-upstream`, `lambda` and `fire-and-forget` the client's own values (#446).
+
 ## [1.0.0-rc.3] - 2026-11-23
 
 Fixes for the vulnerabilities the pre-release review found, published as security advisories with this release, and plugin instances from Wasmtime's pooling allocator. Eight changes are breaking; each has an **Upgrade note (breaking)** below, and the [migration guide](docs/guide/migrating-to-1.0.md) gathers them. Upgrade data planes before the control plane. Artifacts move to format 9; the format 8 artifacts of rc.1 and rc.2 still load.

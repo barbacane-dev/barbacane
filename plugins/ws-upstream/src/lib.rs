@@ -93,10 +93,7 @@ impl WsUpstreamDispatcher {
             _ => full_url,
         };
 
-        let mut headers = forwarding::upstream_headers(&req);
-        if let Some(host) = req.headers.get("host") {
-            headers.insert("x-forwarded-host".to_string(), host.clone());
-        }
+        let headers = forwarding::upstream_headers(&req);
 
         // Build and serialize upgrade request
         let ws_request = WsUpgradeRequest {
