@@ -106,68 +106,70 @@ jobs:
     steps:
       - run: echo "Release $GITHUB_REF_NAME approved"
 
-  # Build binaries for all supported platforms
-  # The tagged commit passes the unit tests and the lint gate before anything
-  # is built or published from it.
-  verify:
-    name: Verify
+  # The tagged commit passed CI on main, which runs every test and lint gate,
+  # and its dependencies still pass the supply-chain policy (an advisory may
+  # have been published since CI ran). Waits for a CI run still in progress.
+  preflight:
+    name: Preflight
     needs: [validate-version, validate-changelog]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    # barbacane-control's tests run against PostgreSQL, and fail without it
-    # under CI.
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: barbacane
-          POSTGRES_PASSWORD: barbacane
-          POSTGRES_DB: barbacane
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-    env:
-      DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
+      - name: The tagged commit passed CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3600))
+          while :; do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main" \
+              --jq '[.workflow_runs[] | {status, conclusion, url: .html_url}]')
+            if jq -e 'any(.[]; .conclusion == "success")' <<<"$runs" >/dev/null; then
+              echo "CI passed on $GITHUB_SHA"
+              exit 0
+            fi
+            if jq -e 'length > 0 and all(.[]; .status == "completed")' <<<"$runs" >/dev/null; then
+              echo "::error::CI did not pass on $GITHUB_SHA:"
+              jq -r '.[] | "  \(.conclusion) \(.url)"' <<<"$runs"
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::no finished CI run on main for $GITHUB_SHA after an hour"
+              exit 1
+            fi
+            sleep 60
+          done
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: "1.100.0"
-          components: clippy
-          targets: wasm32-unknown-unknown
 
-      - name: Clippy
-        run: cargo clippy --locked --workspace --lib --bins -- -D warnings
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-deny@0.20.2
 
-      # The compiler's corpus tests compile specs against these plugins, and
-      # under CI fail when one is missing.
-      - name: Build the plugins the corpus tests use
+      - name: Supply-chain policy (advisories, licenses, bans, sources)
         run: |
           set -euo pipefail
-          for name in mock http-upstream ws-upstream rate-limit basic-auth; do
-            (cd "plugins/$name" && cargo build --locked --release --target wasm32-unknown-unknown)
-            cp "$(ls "plugins/$name/target/wasm32-unknown-unknown/release/"*.wasm | head -1)" \
-              "plugins/$name/$name.wasm"
+          cargo deny check
+          for manifest in plugins/*/Cargo.toml; do
+            echo "::group::$manifest"
+            cargo deny --manifest-path "$manifest" --config deny.toml check
+            echo "::endgroup::"
           done
-
-      # The control plane's `sslmode` tests need a PostgreSQL that serves TLS.
-      - name: Start PostgreSQL with TLS
-        run: ./scripts/postgres-tls.sh >> "$GITHUB_ENV"
-
-      - name: Unit tests
-        run: cargo test --locked --workspace --exclude barbacane-test --lib --bins --tests
 
   build-binaries:
     name: Build ${{ matrix.target }}
-    needs: [validate-version, validate-changelog, verify]
+    needs: [validate-version, validate-changelog, preflight]
     strategy:
       fail-fast: false
       matrix:
@@ -247,7 +249,7 @@ jobs:
   # workflow can write to.
   build-containers:
     name: Build Containers (${{ matrix.platform }})
-    needs: [validate-version, validate-changelog, verify, approve]
+    needs: [validate-version, validate-changelog, preflight, approve]
     strategy:
       fail-fast: false
       matrix:
@@ -351,27 +353,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # A pre-release (a version with a `-`, such as 1.0.0-rc.1) is published
-      # under its own tag only, so latest, x.y and x stay on the last stable
-      # release.
+      # The version's tag only: `latest`, `X.Y` and `X` move in Move Aliases,
+      # once everything else has passed.
       - name: Create multi-arch manifests
         env:
           VERSION: ${{ steps.tag.outputs.version }}
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          case "$VERSION" in
-            *-*) aliases="" ;;
-            *) aliases="latest ${VERSION%.*} ${VERSION%%.*}" ;;
-          esac
           for registry in "ghcr.io/$OWNER" docker.io/barbacane; do
             for image in barbacane barbacane-control barbacane-standalone; do
-              tags=(-t "$registry/$image:$VERSION")
-              for alias in $aliases; do
-                tags+=(-t "$registry/$image:$alias")
-              done
-              echo "$registry/$image: $VERSION $aliases"
-              docker buildx imagetools create "${tags[@]}" \
+              echo "$registry/$image:$VERSION"
+              docker buildx imagetools create -t "$registry/$image:$VERSION" \
                 "$registry/$image:$VERSION-amd64" \
                 "$registry/$image:$VERSION-arm64"
             done
@@ -450,7 +443,7 @@ jobs:
   # and signed.
   publish-crates:
     name: Publish Crates
-    needs: [validate-version, validate-changelog, verify, build-binaries, build-plugins, scan-containers, sign-and-sbom, approve]
+    needs: [validate-version, validate-changelog, preflight, build-binaries, build-plugins, scan-containers, sign-and-sbom, approve]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: release
@@ -543,7 +536,7 @@ jobs:
   # Build WASM plugins and collect artifacts for release
   build-plugins:
     name: Build Plugins
-    needs: [validate-version, validate-changelog, verify]
+    needs: [validate-version, validate-changelog, preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -701,3 +694,63 @@ jobs:
             artifacts/release/*
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
+
+  # `latest`, `X.Y` and `X` move to a stable version last, once its images are
+  # scanned and signed, its binaries, plugins and crates published and its
+  # GitHub release created. A pre-release (a version with a `-`, such as
+  # 1.0.0-rc.1) moves none. Each alias names the version's index by digest, so
+  # its signatures and attestations apply to the alias.
+  move-aliases:
+    name: Move Aliases
+    needs: [validate-version, approve, create-release]
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Extract version from tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Point latest, X.Y and X at the version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          aliases=(latest "${VERSION%.*}" "${VERSION%%.*}")
+          for registry in "ghcr.io/$OWNER" docker.io/barbacane; do
+            for image in barbacane barbacane-control barbacane-standalone; do
+              source="$registry/$image:$VERSION"
+              digest=$(docker buildx imagetools inspect "$source" --format '{{.Manifest.Digest}}')
+              tags=()
+              for alias in "${aliases[@]}"; do
+                tags+=(-t "$registry/$image:$alias")
+              done
+              echo "$registry/$image: ${aliases[*]} -> $VERSION ($digest)"
+              docker buildx imagetools create "${tags[@]}" "$registry/$image@$digest"
+              for alias in "${aliases[@]}"; do
+                moved=$(docker buildx imagetools inspect "$registry/$image:$alias" --format '{{.Manifest.Digest}}')
+                if [ "$moved" != "$digest" ]; then
+                  echo "::error::$registry/$image:$alias is $moved, not $VERSION's $digest"
+                  exit 1
+                fi
+              done
+            done
+          done

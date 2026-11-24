@@ -56,7 +56,7 @@ Each release publishes three images, to the GitHub Container Registry and to Doc
 Tags:
 
 - `1.2.3`: that release;
-- `latest`, `1.2` and `1`: the last stable release, of all, of that minor version, and of that major version;
+- `latest`, `1.2` and `1`: the last stable release, of all, of that minor version, and of that major version. They move once the release has passed its scans and is signed and published, and name the same image as `1.2.3`, so its signatures apply to them;
 - a release candidate such as `1.0.0-rc.1` has its own tag only, so `latest`, `1.2` and `1` never move to a pre-release.
 
 ```bash
