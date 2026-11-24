@@ -1068,6 +1068,8 @@ fn compile_inner(
 ) -> Result<CompileResult, CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     let mut operations: Vec<CompiledOperation> = Vec::new();
+    let bundles: HashMap<&str, &PluginBundle> =
+        plugins.iter().map(|p| (p.name.as_str(), p)).collect();
     // The artifact's shared definition pool, merged from each spec's own.
     let mut schema_defs = serde_json::Map::new();
 
@@ -1234,7 +1236,7 @@ fn compile_inner(
             seen_structural.insert(structural_key, (op.path.clone(), spec_file.to_string()));
 
             // Check for missing dispatcher (E1020)
-            let dispatch = op.dispatch.clone().ok_or_else(|| {
+            let mut dispatch = op.dispatch.clone().ok_or_else(|| {
                 CompileError::MissingDispatch(format!(
                     "{} {} in '{}'",
                     op.method, op.path, spec_file
@@ -1252,7 +1254,7 @@ fn compile_inner(
                 }
             }
 
-            let middlewares = resolve_middlewares(&spec.global_middlewares, &op.middlewares);
+            let mut middlewares = resolve_middlewares(&spec.global_middlewares, &op.middlewares);
 
             // Validate middleware names (E1011)
             for (idx, mw) in middlewares.iter().enumerate() {
@@ -1263,6 +1265,15 @@ fn compile_inner(
                         location
                     )));
                 }
+            }
+
+            // The compiled route names each plugin without its `@version` pin,
+            // which is the name the data plane finds it by (E1046, E1047).
+            dispatch.name =
+                check_plugin_reference(&dispatch.name, "dispatcher", &bundles, &location)?;
+            for middleware in &mut middlewares {
+                middleware.name =
+                    check_plugin_reference(&middleware.name, "middleware", &bundles, &location)?;
             }
 
             // Warn on plaintext secrets in config (E1070): a field the plugin's
@@ -2850,6 +2861,45 @@ fn check_enforceable(
     crate::request_schema::request_validator(schema, defs)
         .map(|_| ())
         .map_err(|e| CompileError::UnenforceableSchema(format!("{location}: {e}")))
+}
+
+/// The plugin a spec's reference names, without its `@version` pin.
+///
+/// A pin must be the version of the plugin bundled under that name (E1046),
+/// and the plugin's type must be `role` (E1047). A bundle whose type is
+/// neither `middleware` nor `dispatcher` came without a manifest, so its
+/// version and type are unknown and are not compared.
+fn check_plugin_reference(
+    reference: &str,
+    role: &str,
+    bundles: &HashMap<&str, &PluginBundle>,
+    location: &str,
+) -> Result<String, CompileError> {
+    let (name, pin) = match reference.split_once('@') {
+        Some((name, pin)) => (name, Some(pin)),
+        None => (reference, None),
+    };
+    if let Some(bundle) = bundles.get(name) {
+        if matches!(bundle.plugin_type.as_str(), "middleware" | "dispatcher") {
+            if pin.is_some_and(|pin| pin != bundle.version) {
+                return Err(CompileError::PluginVersionMismatch {
+                    location: location.to_string(),
+                    reference: reference.to_string(),
+                    plugin: name.to_string(),
+                    version: bundle.version.clone(),
+                });
+            }
+            if bundle.plugin_type != role {
+                return Err(CompileError::PluginRoleMismatch {
+                    location: location.to_string(),
+                    plugin: name.to_string(),
+                    role: role.to_string(),
+                    plugin_type: bundle.plugin_type.clone(),
+                });
+            }
+        }
+    }
+    Ok(name.to_string())
 }
 
 /// Validate schema complexity (E1051, E1052), counting the definitions the
@@ -4675,6 +4725,72 @@ paths:
             &CompileOptions::default(),
         );
         assert!(result.is_ok());
+    }
+
+    /// A plugin reference may pin the bundled version (`mock@1.0.0`); the
+    /// compiled route names the plugin without it, and a pin, or a role, the
+    /// bundled plugin does not match fails compilation.
+    #[test]
+    fn plugin_references_are_checked_against_the_bundles() {
+        let bundle = |name: &str, plugin_type: &str| PluginBundle {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            plugin_type: plugin_type.to_string(),
+            category: None,
+            implements: vec![],
+            wasm_bytes: crate::abi::test_module(plugin_type),
+            body_access: false,
+            host_functions: vec![],
+            limits: DeclaredLimits::default(),
+            secret_fields: vec![],
+            config_schema: None,
+        };
+        let compile_with = |dispatch: &str, middleware: Option<&str>, plugins: &[PluginBundle]| {
+            let temp = TempDir::new().unwrap();
+            let middlewares = middleware
+                .map(|m| format!("      x-barbacane-middlewares:\n        - name: {m}\n"))
+                .unwrap_or_default();
+            let spec = format!(
+                "openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\npaths:\n  /x:\n    get:\n      x-barbacane-dispatch:\n        name: {dispatch}\n{middlewares}"
+            );
+            let spec_path = create_test_spec(temp.path(), "test.yaml", &spec);
+            let output = temp.path().join("artifact.bca");
+            compile(
+                &[spec_path.as_path()],
+                plugins,
+                &output,
+                &CompileOptions::default(),
+            )
+            .map(|_| load_routes(&output).unwrap())
+        };
+        let plugins = [bundle("mock", "dispatcher"), bundle("cors", "middleware")];
+
+        let routes = compile_with("mock@1.0.0", Some("cors@1.0.0"), &plugins).unwrap();
+        let op = &routes.operations[0];
+        assert_eq!(op.dispatch.name, "mock");
+        assert_eq!(op.middlewares[0].name, "cors");
+
+        let err = compile_with("mock@2.0.0", None, &plugins).unwrap_err();
+        assert!(
+            matches!(err, CompileError::PluginVersionMismatch { .. }),
+            "{err}"
+        );
+        assert!(err.to_string().contains("'mock@2.0.0'") && err.to_string().contains("1.0.0"));
+
+        let err = compile_with("cors", None, &plugins).unwrap_err();
+        assert!(
+            matches!(err, CompileError::PluginRoleMismatch { .. }),
+            "{err}"
+        );
+        let err = compile_with("mock", Some("mock"), &plugins).unwrap_err();
+        assert!(
+            matches!(err, CompileError::PluginRoleMismatch { .. }),
+            "{err}"
+        );
+
+        // A bundle without a manifest has no known version or type.
+        let unknown = [bundle("mock", "plugin")];
+        assert!(compile_with("mock@2.0.0", None, &unknown).is_ok());
     }
 
     #[test]
