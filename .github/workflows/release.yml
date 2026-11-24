@@ -167,81 +167,14 @@ jobs:
             echo "::endgroup::"
           done
 
+  # Every target, natively and with `cargo auditable`; release-binaries.yml
+  # checks each binary and uploads it as `binaries-<target>`.
   build-binaries:
-    name: Build ${{ matrix.target }}
+    name: Build Binaries
     needs: [validate-version, validate-changelog, preflight]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux GNU targets
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: false
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: true
-          # Linux musl targets (static linking, requires cross for aws-lc-rs)
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
-          # macOS targets
-          - target: x86_64-apple-darwin
-            os: macos-15
-            cross: false
-          - target: aarch64-apple-darwin
-            os: macos-15
-            cross: false
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
-        with:
-          toolchain: "1.100.0"
-          targets: ${{ matrix.target }}
-
-      - name: Install cross
-        if: matrix.cross
-        # A development build, pinned by full commit; Cross.toml pins the
-        # images cross-rs built from the same commit.
-        run: cargo install cross --locked --git https://github.com/cross-rs/cross --rev a9301e91f72bba3850460512685f6b16062015ff
-
-      - name: Build data plane with cargo
-        if: ${{ !matrix.cross }}
-        run: cargo build --locked --release --target ${{ matrix.target }} --package barbacane
-
-      - name: Build control plane with cargo
-        if: ${{ !matrix.cross }}
-        run: cargo build --locked --release --target ${{ matrix.target }} --package barbacane-control
-
-      - name: Build data plane with cross
-        if: matrix.cross
-        run: cross build --locked --release --target ${{ matrix.target }} --package barbacane
-
-      - name: Build control plane with cross
-        if: matrix.cross
-        run: cross build --locked --release --target ${{ matrix.target }} --package barbacane-control
-
-      - name: Prepare artifacts
-        run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/barbacane dist/barbacane-${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/barbacane-control dist/barbacane-control-${{ matrix.target }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: binaries-${{ matrix.target }}
-          path: dist/
-          retention-days: 1
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-binaries.yml
 
   # Build container images per architecture using native runners. No build
   # cache: the images are signed and published, so their only inputs are the

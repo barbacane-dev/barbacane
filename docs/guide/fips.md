@@ -122,7 +122,7 @@ When FIPS mode is active, rustls restricts the available cipher suites to FIPS-a
 | Platform | FIPS Build | Notes |
 |----------|-----------|-------|
 | Linux (glibc) | Supported | Primary target |
-| Linux (musl) | Supported | Requires `cross-rs` (same as non-FIPS) |
+| Linux (musl) | Supported | Needs a musl C toolchain, such as `musl-gcc` from `musl-tools` |
 | macOS | Supported | Development only — not FIPS-certified |
 | Windows | Supported | Static build used automatically |
 
