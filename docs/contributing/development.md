@@ -520,9 +520,9 @@ The `Runtime base` workflow scans the base every night and locks the packages ag
 2. Update CHANGELOG.md
 3. Create git tag: `git tag v1.0.0`
 4. Push: `git push origin main --tags`
-5. CI builds and publishes
+5. Approve the run's Approve Release job; CI then builds and publishes
 
-The `Release` workflow publishes only a tag on a commit that is on `main`. The jobs that push images, sign them and publish crates run in the `release` environment, which holds `CARGO_REGISTRY_TOKEN`, `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; its protection rules decide which tags may deploy to it and who approves. Images are signed by `sign-and-sbom.yml`, which only `release.yml` calls; to sign a release again, re-run its Sign & SBOM job.
+The `Release` workflow publishes only a tag on a commit that is on `main`. The jobs that push images, sign them and publish crates wait for the Approve Release job, which runs in the `release-approval` environment: its required reviewer approves each release once. They then run in the `release` environment, the place for `CARGO_REGISTRY_TOKEN`, `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`. Both environments accept only `v*` tags. Images are signed by `sign-and-sbom.yml`, which only `release.yml` calls; to sign a release again, re-run its Sign & SBOM job.
 
 Release images are built without a build cache, and release plugins without a dependency cache. The musl and `aarch64-unknown-linux-gnu` binaries are built with `cross` at a pinned commit, in the images `Cross.toml` pins by digest; update both together, to the images cross-rs built from that commit (their `org.opencontainers.image.revision` label).
 
