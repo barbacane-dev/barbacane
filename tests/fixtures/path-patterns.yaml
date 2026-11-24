@@ -1,0 +1,42 @@
+openapi: "3.1.0"
+info:
+  title: Path patterns
+  version: "1.0.0"
+paths:
+  # A parameter with literal text after it in its segment
+  /reports/{id}.pdf:
+    get:
+      operationId: getReportPdf
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"pdf","id":"{{path_params.id}}"}'
+      responses:
+        "200":
+          description: OK
+
+  # The same segment as a plain parameter, for what no pattern matches
+  /reports/{id}:
+    get:
+      operationId: getReport
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"report","id":"{{path_params.id}}"}'
+      responses:
+        "200":
+          description: OK

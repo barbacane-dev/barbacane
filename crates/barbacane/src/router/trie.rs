@@ -11,6 +11,9 @@ pub struct Router {
 struct Node {
     /// Static children keyed by segment name.
     static_children: HashMap<String, Node>,
+    /// Children for a parameter with literal text around it in its segment
+    /// (`{id}.pdf`), the longest literal text first.
+    pattern_children: Vec<PatternNode>,
     /// Parameter child (at most one per node).
     param_child: Option<Box<ParamNode>>,
     /// Wildcard child — matches all remaining path segments joined by `/`.
@@ -34,6 +37,26 @@ struct Route {
 struct ParamNode {
     /// The subtree below this parameter.
     node: Node,
+}
+
+/// A segment holding one parameter between literal text: `thumbnail.{ext}`
+/// is prefix `thumbnail.` and suffix empty.
+#[derive(Debug)]
+struct PatternNode {
+    prefix: String,
+    suffix: String,
+    node: Node,
+}
+
+impl PatternNode {
+    /// The parameter's value in `segment`, which must hold the prefix, the
+    /// suffix, and at least one character between them.
+    fn capture<'s>(&self, segment: &'s str) -> Option<&'s str> {
+        segment
+            .strip_prefix(self.prefix.as_str())?
+            .strip_suffix(self.suffix.as_str())
+            .filter(|value| !value.is_empty())
+    }
 }
 
 /// A wildcard segment node (e.g. `{path+}`).
@@ -72,6 +95,12 @@ pub enum RouteMatch {
 enum Segment {
     Static(String),
     Param(String),
+    /// One parameter with literal text before or after it in the segment.
+    Pattern {
+        prefix: String,
+        name: String,
+        suffix: String,
+    },
     /// Matches all remaining segments joined by `/`. Must be the last segment.
     Wildcard(String),
 }
@@ -91,7 +120,9 @@ impl Router {
         let param_names = segments
             .iter()
             .filter_map(|segment| match segment {
-                Segment::Param(name) | Segment::Wildcard(name) => Some(name.clone()),
+                Segment::Param(name) | Segment::Wildcard(name) | Segment::Pattern { name, .. } => {
+                    Some(name.clone())
+                }
                 Segment::Static(_) => None,
             })
             .collect();
@@ -141,6 +172,31 @@ impl Router {
         for segment in segments {
             current = match segment {
                 Segment::Static(name) => current.static_children.entry(name.clone()).or_default(),
+                Segment::Pattern { prefix, suffix, .. } => {
+                    let position = match current
+                        .pattern_children
+                        .iter()
+                        .position(|c| &c.prefix == prefix && &c.suffix == suffix)
+                    {
+                        Some(position) => position,
+                        None => {
+                            current.pattern_children.push(PatternNode {
+                                prefix: prefix.clone(),
+                                suffix: suffix.clone(),
+                                node: Node::default(),
+                            });
+                            current.pattern_children.sort_by_key(|c| {
+                                std::cmp::Reverse(c.prefix.len() + c.suffix.len())
+                            });
+                            current
+                                .pattern_children
+                                .iter()
+                                .position(|c| &c.prefix == prefix && &c.suffix == suffix)
+                                .expect("just inserted")
+                        }
+                    };
+                    &mut current.pattern_children[position].node
+                }
                 Segment::Param(_) => {
                     if current.param_child.is_none() {
                         current.param_child = Some(Box::new(ParamNode {
@@ -169,8 +225,9 @@ impl Router {
 
     /// Traverse the trie matching actual path segments, capturing parameter
     /// values in path order. Returns the node holding a route for the whole
-    /// path, trying static children, then a parameter, then a wildcard, and
-    /// backtracking from a branch that ends on a node without a route.
+    /// path, trying static children, then parameters with literal text around
+    /// them, then a parameter, then a wildcard, and backtracking from a branch
+    /// that ends on a node without a route.
     fn traverse_and_match<'a>(
         &'a self,
         node: &'a Node,
@@ -189,6 +246,18 @@ impl Router {
             if let Some(result) = self.traverse_and_match(child, remaining, params) {
                 return Some(result);
             }
+        }
+
+        for pattern in &node.pattern_children {
+            let Some(value) = pattern.capture(segment) else {
+                continue;
+            };
+            let param_len = params.len();
+            params.push(value.to_string());
+            if let Some(result) = self.traverse_and_match(&pattern.node, remaining, params) {
+                return Some(result);
+            }
+            params.truncate(param_len);
         }
 
         // Try single-segment parameter child.
@@ -224,20 +293,30 @@ impl Router {
     }
 }
 
-/// Parse a path template into segments.
+/// Parse a path template into segments. A segment holding more than one
+/// parameter is static; the compiler refuses one (E1054).
 fn parse_path_template(path: &str) -> Vec<Segment> {
     path.split('/')
         .filter(|s| !s.is_empty())
         .map(|s| {
-            if s.starts_with('{') && s.ends_with('}') {
-                let inner = &s[1..s.len() - 1];
-                if let Some(base) = inner.strip_suffix('+') {
-                    Segment::Wildcard(base.to_string())
-                } else {
-                    Segment::Param(inner.to_string())
-                }
-            } else {
-                Segment::Static(s.to_string())
+            let template = s
+                .split_once('{')
+                .and_then(|(prefix, rest)| {
+                    let (name, suffix) = rest.split_once('}')?;
+                    Some((prefix, name, suffix))
+                })
+                .filter(|(_, _, suffix)| !suffix.contains(['{', '}']));
+            match template {
+                Some(("", name, "")) => match name.strip_suffix('+') {
+                    Some(base) => Segment::Wildcard(base.to_string()),
+                    None => Segment::Param(name.to_string()),
+                },
+                Some((prefix, name, suffix)) => Segment::Pattern {
+                    prefix: prefix.to_string(),
+                    name: name.to_string(),
+                    suffix: suffix.to_string(),
+                },
+                None => Segment::Static(s.to_string()),
             }
         })
         .collect()
@@ -350,6 +429,43 @@ mod tests {
             RouteMatch::Found { entry, .. } => assert_eq!(entry.operation_index, 1),
             other => panic!("expected /a/b/c, got {other:?}"),
         }
+    }
+
+    /// A parameter may share its segment with literal text (`{id}.pdf`).
+    /// Static segments still come first, and a plain parameter catches what
+    /// no pattern matches.
+    #[test]
+    fn a_parameter_may_have_literal_text_around_it() {
+        let mut router = Router::new();
+        let route = |i| RouteEntry { operation_index: i };
+        router.insert("/reports/{id}.pdf", "GET", route(0));
+        router.insert("/reports/{id}.tar.gz", "GET", route(1));
+        router.insert("/reports/{id}", "GET", route(2));
+        router.insert("/reports/latest.pdf", "GET", route(3));
+        router.insert("/files/{file}/thumbnail.{ext}", "GET", route(4));
+
+        let found = |path: &str| match router.lookup(path, "GET") {
+            RouteMatch::Found { entry, params } => Some((entry.operation_index, params)),
+            _ => None,
+        };
+        let param = |name: &str, value: &str| vec![(name.to_string(), value.to_string())];
+        assert_eq!(found("/reports/42.pdf"), Some((0, param("id", "42"))));
+        assert_eq!(found("/reports/42.tar.gz"), Some((1, param("id", "42"))));
+        assert_eq!(found("/reports/a.b.pdf"), Some((0, param("id", "a.b"))));
+        assert_eq!(found("/reports/42"), Some((2, param("id", "42"))));
+        assert_eq!(found("/reports/.pdf"), Some((2, param("id", ".pdf"))));
+        assert_eq!(found("/reports/latest.pdf"), Some((3, vec![])));
+        assert_eq!(
+            found("/files/7/thumbnail.png"),
+            Some((
+                4,
+                vec![
+                    ("file".to_string(), "7".to_string()),
+                    ("ext".to_string(), "png".to_string())
+                ]
+            ))
+        );
+        assert_eq!(found("/files/7/thumbnail."), None);
     }
 
     #[test]

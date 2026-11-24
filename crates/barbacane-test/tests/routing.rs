@@ -168,3 +168,27 @@ async fn head_is_answered_by_the_get_route_without_a_body() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.bytes().await.unwrap().len(), 0);
 }
+
+/// A parameter may share its segment with literal text: `/reports/{id}.pdf`
+/// matches `/reports/42.pdf` with `id` 42, and its value is validated.
+#[tokio::test]
+async fn test_parameter_with_literal_text_in_its_segment() {
+    let gateway = TestGateway::from_spec(&fixture("path-patterns.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/reports/42.pdf").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().await.unwrap(), r#"{"route":"pdf","id":"42"}"#);
+
+    let resp = gateway.get("/reports/42").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.text().await.unwrap(),
+        r#"{"route":"report","id":"42"}"#
+    );
+
+    // `id` is an integer in the pdf route; `x` is not.
+    let resp = gateway.get("/reports/x.pdf").await.unwrap();
+    assert_eq!(resp.status(), 400);
+}

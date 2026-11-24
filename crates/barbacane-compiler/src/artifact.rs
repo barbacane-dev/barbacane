@@ -1144,7 +1144,7 @@ fn compile_inner(
         }
     }
 
-    let mut seen_routes: HashMap<(String, String), String> = HashMap::new();
+    let mut seen_routes: HashMap<(String, String), (String, String, String)> = HashMap::new();
     let mut seen_structural: HashMap<(String, String), (String, String)> = HashMap::new();
     let mut seen_operation_ids: HashMap<String, String> = HashMap::new();
 
@@ -1212,28 +1212,51 @@ fn compile_inner(
                 seen_operation_ids.insert(op_id.clone(), location.clone());
             }
 
-            // Check for routing conflicts (E1010)
-            let key = (op.path.clone(), op.method.clone());
-            if let Some(other_spec) = seen_routes.get(&key) {
+            // Routing conflicts (E1010): two operations the router files as
+            // one route, which it would answer with only one of them.
+            let route_path = routed_path(&op.path);
+            let route_method = routed_method(&op.method);
+            let key = (route_path.clone(), route_method.to_string());
+            if let Some((other_method, other_path, other_spec)) = seen_routes.get(&key) {
                 return Err(CompileError::RoutingConflict(format!(
-                    "{} {} declared in both '{}' and '{}'",
-                    op.method, op.path, other_spec, spec_file
+                    "{other_method} {other_path} in '{other_spec}' and {} {} in '{spec_file}' \
+                     are both the route {route_method} {route_path}",
+                    op.method, op.path
                 )));
             }
-            seen_routes.insert(key, spec_file.to_string());
+            seen_routes.insert(
+                key,
+                (op.method.clone(), op.path.clone(), spec_file.to_string()),
+            );
 
             // Check for ambiguous routes (E1050) - same structure, different param names
-            let normalized = normalize_path_template(&op.path);
-            let structural_key = (normalized, op.method.clone());
+            let structural_key = (
+                normalize_path_template(&route_path),
+                route_method.to_string(),
+            );
             if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
-                if other_path != &op.path {
+                if other_path != &route_path {
                     return Err(CompileError::AmbiguousRoute(format!(
                         "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
                         op.path, other_path, op.method, spec_file, other_spec
                     )));
                 }
             }
-            seen_structural.insert(structural_key, (op.path.clone(), spec_file.to_string()));
+            seen_structural.insert(structural_key, (route_path, spec_file.to_string()));
+
+            // A path parameter the template does not name is never captured,
+            // so every request would be refused for lacking it (E1054).
+            let template = template_parameter_names(&op.path);
+            if let Some(param) = op
+                .parameters
+                .iter()
+                .find(|p| p.location == "path" && !template.contains(&p.name.as_str()))
+            {
+                return Err(CompileError::InvalidPathTemplate(format!(
+                    "{location} - path parameter '{}' is not in the path template",
+                    param.name
+                )));
+            }
 
             // Check for missing dispatcher (E1020)
             let mut dispatch = op.dispatch.clone().ok_or_else(|| {
@@ -2184,6 +2207,13 @@ fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let last_segment = segments.last().copied().unwrap_or("");
 
+    // The router reads one parameter per segment, with literal text around it.
+    if let Some(segment) = segments.iter().find(|s| s.matches('{').count() > 1) {
+        return Err(CompileError::InvalidPathTemplate(format!(
+            "{location} - segment '{segment}' holds more than one parameter"
+        )));
+    }
+
     for ch in path.chars() {
         match ch {
             '{' => {
@@ -2280,6 +2310,32 @@ fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError
     }
 
     Ok(())
+}
+
+/// The path the router files a template under: its non-empty segments, so
+/// `/users/`, `users` and `//users` are all `/users`.
+fn routed_path(path: &str) -> String {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    format!("/{}", segments.join("/"))
+}
+
+/// The HTTP method the router serves an operation under: AsyncAPI `send` as
+/// POST and `receive` as GET.
+fn routed_method(method: &str) -> &str {
+    match method {
+        "SEND" => "POST",
+        "RECEIVE" => "GET",
+        other => other,
+    }
+}
+
+/// The parameter names a path template holds, without a wildcard's `+`.
+fn template_parameter_names(path: &str) -> Vec<&str> {
+    path.split('{')
+        .skip(1)
+        .filter_map(|rest| rest.split_once('}'))
+        .map(|(name, _)| name.strip_suffix('+').unwrap_or(name))
+        .collect()
 }
 
 /// Normalize a path template for structural comparison (E1050).
@@ -4459,6 +4515,84 @@ paths:
         assert!(matches!(result, Err(CompileError::MissingDispatch(_))));
     }
 
+    /// Operations the router files as one route conflict (E1010), and a
+    /// declared path parameter the template does not name is refused (E1054).
+    #[test]
+    fn routes_are_compared_as_the_router_files_them() {
+        let compile_specs = |specs: &[(&str, &str)]| {
+            let temp = TempDir::new().unwrap();
+            let paths: Vec<PathBuf> = specs
+                .iter()
+                .map(|(name, body)| create_test_spec(temp.path(), name, body))
+                .collect();
+            let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+            compile(
+                &refs,
+                &[],
+                &temp.path().join("artifact.bca"),
+                &CompileOptions::default(),
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        };
+        let openapi = |paths: &str| {
+            format!("openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\npaths:\n{paths}")
+        };
+        let op =
+            |method: &str| format!("    {method}:\n      x-barbacane-dispatch: {{ name: mock }}\n");
+
+        let asyncapi = r##"asyncapi: "3.0.0"
+info: { title: Events, version: "1" }
+channels:
+  events:
+    address: /events
+    messages:
+      created: { payload: { type: object } }
+operations:
+  publish:
+    action: send
+    channel: { $ref: "#/channels/events" }
+    x-barbacane-dispatch: { name: mock }
+"##;
+        let err = compile_specs(&[
+            ("api.yaml", &openapi(&format!("  /events:\n{}", op("post")))),
+            ("events.yaml", asyncapi),
+        ])
+        .unwrap_err();
+        assert!(
+            err.starts_with("E1010") && err.contains("POST /events"),
+            "{err}"
+        );
+        assert!(compile_specs(&[
+            ("api.yaml", &openapi(&format!("  /events:\n{}", op("get")))),
+            ("events.yaml", asyncapi),
+        ])
+        .is_ok());
+
+        let err = compile_specs(&[(
+            "api.yaml",
+            &openapi(&format!(
+                "  /users:\n{}  /users/:\n{}",
+                op("get"),
+                op("get")
+            )),
+        )])
+        .unwrap_err();
+        assert!(err.starts_with("E1010") && err.contains("/users/"), "{err}");
+
+        let err = compile_specs(&[(
+            "api.yaml",
+            &openapi(
+                "  /users/{id}:\n    get:\n      parameters:\n        - { name: userId, in: path, required: true, schema: { type: string } }\n      x-barbacane-dispatch: { name: mock }\n",
+            ),
+        )])
+        .unwrap_err();
+        assert!(
+            err.starts_with("E1054") && err.contains("'userId' is not in the path template"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn compile_detects_routing_conflict() {
         let temp = TempDir::new().unwrap();
@@ -5596,6 +5730,9 @@ paths:
         assert!(validate_path_template("/files/{bucket}/{key+}", "test").is_ok());
         // Wildcard after two regular params
         assert!(validate_path_template("/api/{version}/files/{rest+}", "test").is_ok());
+        // A parameter with literal text around it
+        assert!(validate_path_template("/reports/{id}.pdf", "test").is_ok());
+        assert!(validate_path_template("/files/{id}/thumbnail.{ext}", "test").is_ok());
     }
 
     #[test]
@@ -5616,6 +5753,9 @@ paths:
         assert!(validate_path_template("/a/{x+}/{y+}", "test").is_err());
         // `+` in the middle of the name (not a suffix)
         assert!(validate_path_template("/users/{na+me}", "test").is_err());
+        // Two parameters in one segment
+        assert!(validate_path_template("/files/{name}.{ext}", "test").is_err());
+        assert!(validate_path_template("/range/{from}-{to}", "test").is_err());
         // Empty base name with wildcard only
         assert!(validate_path_template("/users/{+}", "test").is_err());
     }
