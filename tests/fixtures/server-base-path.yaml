@@ -1,0 +1,34 @@
+openapi: "3.1.0"
+info:
+  title: Server base path
+  version: "1.0.0"
+servers:
+  - url: https://api.example.com/v1
+paths:
+  # Served at /v1/users, under the document's server.
+  /users:
+    get:
+      operationId: listUsers
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"users"}'
+      responses:
+        "200":
+          description: OK
+
+  # Its own server is at the root, so it is served at /status.
+  /status:
+    get:
+      operationId: status
+      servers:
+        - url: https://api.example.com
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"route":"status"}'
+      responses:
+        "200":
+          description: OK

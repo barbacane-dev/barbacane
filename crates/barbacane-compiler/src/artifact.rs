@@ -507,6 +507,10 @@ pub struct CompiledOperation {
     pub index: usize,
     /// Path template (OpenAPI: "/users/{id}", AsyncAPI: channel address).
     pub path: String,
+    /// The prefixes the router serves `path` under, from the operation's
+    /// OpenAPI `servers`. Empty when every server is at the root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub base_paths: Vec<String>,
     /// HTTP method (OpenAPI: "GET", AsyncAPI: "SEND"/"RECEIVE").
     pub method: String,
     pub operation_id: Option<String>,
@@ -1213,36 +1217,36 @@ fn compile_inner(
             }
 
             // Routing conflicts (E1010): two operations the router files as
-            // one route, which it would answer with only one of them.
-            let route_path = routed_path(&op.path);
+            // one route, which it would answer with only one of them. An
+            // operation is served under each of its servers' base paths.
             let route_method = routed_method(&op.method);
-            let key = (route_path.clone(), route_method.to_string());
-            if let Some((other_method, other_path, other_spec)) = seen_routes.get(&key) {
-                return Err(CompileError::RoutingConflict(format!(
-                    "{other_method} {other_path} in '{other_spec}' and {} {} in '{spec_file}' \
-                     are both the route {route_method} {route_path}",
-                    op.method, op.path
-                )));
-            }
-            seen_routes.insert(
-                key,
-                (op.method.clone(), op.path.clone(), spec_file.to_string()),
-            );
-
-            // Check for ambiguous routes (E1050) - same structure, different param names
-            let structural_key = (
-                normalize_path_template(&route_path),
-                route_method.to_string(),
-            );
-            if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
-                if other_path != &route_path {
-                    return Err(CompileError::AmbiguousRoute(format!(
-                        "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
-                        op.path, other_path, op.method, spec_file, other_spec
+            for served in served_paths(&op.base_paths, &op.path) {
+                let route_path = routed_path(&served);
+                let key = (route_path.clone(), route_method.to_string());
+                if let Some((other_method, other_path, other_spec)) = seen_routes.get(&key) {
+                    return Err(CompileError::RoutingConflict(format!(
+                        "{other_method} {other_path} in '{other_spec}' and {} {served} in \
+                         '{spec_file}' are both the route {route_method} {route_path}",
+                        op.method
                     )));
                 }
+                seen_routes.insert(key, (op.method.clone(), served, spec_file.to_string()));
+
+                // Check for ambiguous routes (E1050) - same structure, different param names
+                let structural_key = (
+                    normalize_path_template(&route_path),
+                    route_method.to_string(),
+                );
+                if let Some((other_path, other_spec)) = seen_structural.get(&structural_key) {
+                    if other_path != &route_path {
+                        return Err(CompileError::AmbiguousRoute(format!(
+                            "'{}' and '{}' have same structure but different param names ({} in '{}' vs '{}')",
+                            route_path, other_path, op.method, spec_file, other_spec
+                        )));
+                    }
+                }
+                seen_structural.insert(structural_key, (route_path, spec_file.to_string()));
             }
-            seen_structural.insert(structural_key, (route_path, spec_file.to_string()));
 
             // A path parameter the template does not name is never captured,
             // so every request would be refused for lacking it (E1054).
@@ -1522,6 +1526,7 @@ fn compile_inner(
             operations.push(CompiledOperation {
                 index: operations.len(),
                 path: op.path.clone(),
+                base_paths: op.base_paths.clone(),
                 method: op.method.clone(),
                 operation_id: op.operation_id.clone(),
                 summary: op.summary.clone(),
@@ -2317,6 +2322,25 @@ fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError
 fn routed_path(path: &str) -> String {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     format!("/{}", segments.join("/"))
+}
+
+/// The route the router files a served path and method under, as `(method,
+/// path)`. Two operations with one key conflict (E1010).
+pub fn route_key(served_path: &str, method: &str) -> (String, String) {
+    (routed_method(method).to_string(), routed_path(served_path))
+}
+
+/// The paths an operation is served at: `path` under each of `base_paths`,
+/// or `path` alone when there are none. The data plane's router builds the
+/// same list.
+pub fn served_paths(base_paths: &[String], path: &str) -> Vec<String> {
+    if base_paths.is_empty() {
+        return vec![path.to_string()];
+    }
+    base_paths
+        .iter()
+        .map(|base| format!("{base}{path}"))
+        .collect()
 }
 
 /// The HTTP method the router serves an operation under: AsyncAPI `send` as
@@ -3649,6 +3673,7 @@ mod tests {
         fn op(params: &[(&str, &str)]) -> Operation {
             Operation {
                 path: "/x".into(),
+                base_paths: vec![],
                 method: "GET".into(),
                 operation_id: None,
                 summary: None,
@@ -4579,6 +4604,36 @@ operations:
         )])
         .unwrap_err();
         assert!(err.starts_with("E1010") && err.contains("/users/"), "{err}");
+
+        // A server's base path is part of the route.
+        let with_server = |base: &str, paths: &str| {
+            format!(
+                "openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\nservers: [{{ url: \"https://api.example.com{base}\" }}]\npaths:\n{paths}"
+            )
+        };
+        let err = compile_specs(&[
+            (
+                "a.yaml",
+                &with_server("/v1", &format!("  /users:\n{}", op("get"))),
+            ),
+            ("b.yaml", &openapi(&format!("  /v1/users:\n{}", op("get")))),
+        ])
+        .unwrap_err();
+        assert!(
+            err.starts_with("E1010") && err.contains("GET /v1/users"),
+            "{err}"
+        );
+        assert!(compile_specs(&[
+            (
+                "a.yaml",
+                &with_server("/v1", &format!("  /users:\n{}", op("get")))
+            ),
+            (
+                "b.yaml",
+                &with_server("/v2", &format!("  /users:\n{}", op("get")))
+            ),
+        ])
+        .is_ok());
 
         let err = compile_specs(&[(
             "api.yaml",

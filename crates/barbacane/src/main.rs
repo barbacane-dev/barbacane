@@ -1245,13 +1245,15 @@ impl Gateway {
                 "RECEIVE" => "GET",
                 other => other,
             };
-            router.insert(
-                &op.path,
-                http_method,
-                RouteEntry {
-                    operation_index: op.index,
-                },
-            );
+            for path in barbacane_compiler::artifact::served_paths(&op.base_paths, &op.path) {
+                router.insert(
+                    &path,
+                    http_method,
+                    RouteEntry {
+                        operation_index: op.index,
+                    },
+                );
+            }
 
             // Pre-compile validator for this operation. Schemas point into the
             // artifact's shared definition pool rather than carrying their own.
@@ -3701,27 +3703,27 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
         }
     }
 
-    // Phase 2: Check for routing conflicts across specs (E1010)
-    if parsed_specs.len() > 1 {
-        for (spec_path, spec) in &parsed_specs {
-            for op in &spec.operations {
-                let key = (op.path.clone(), op.method.clone());
-                if let Some(other_spec) = seen_routes.get(&key) {
-                    // Find the result for this spec and add the conflict error
-                    if let Some(result) = results.iter_mut().find(|r| &r.file == spec_path) {
-                        result.errors.push(ValidationIssue {
-                            code: "E1010".to_string(),
-                            message: format!(
-                                "routing conflict: {} {} is also declared in '{}'",
-                                op.method, op.path, other_spec
-                            ),
-                            location: Some(format!("{}:{} {}", spec_path, op.path, op.method)),
-                        });
-                        result.valid = false;
-                        has_errors = true;
-                    }
-                } else {
-                    seen_routes.insert(key, spec_path.clone());
+    // Phase 2: Check for routing conflicts (E1010): operations the router
+    // would file as one route, in one spec or across specs.
+    for (spec_path, spec) in &parsed_specs {
+        for op in &spec.operations {
+            for served in barbacane_compiler::artifact::served_paths(&op.base_paths, &op.path) {
+                let key = barbacane_compiler::artifact::route_key(&served, &op.method);
+                let Some(other) = seen_routes.get(&key) else {
+                    seen_routes.insert(key, format!("{} {served} in '{spec_path}'", op.method));
+                    continue;
+                };
+                if let Some(result) = results.iter_mut().find(|r| &r.file == spec_path) {
+                    result.errors.push(ValidationIssue {
+                        code: "E1010".to_string(),
+                        message: format!(
+                            "routing conflict: {} {served} and {other} are both the route {} {}",
+                            op.method, key.0, key.1
+                        ),
+                        location: Some(format!("{}:{} {}", spec_path, op.path, op.method)),
+                    });
+                    result.valid = false;
+                    has_errors = true;
                 }
             }
         }

@@ -9,6 +9,26 @@ Barbacane extends OpenAPI and AsyncAPI specs with custom `x-barbacane-*` extensi
 | `x-barbacane-dispatch` | Operation | Route request to a dispatcher (required) |
 | `x-barbacane-middlewares` | Root or Operation | Apply middleware chain |
 
+## Server Base Path
+
+An OpenAPI operation is served at the path of its server's URL followed by its own path, as OpenAPI defines it:
+
+```yaml
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /users:        # served at /v1/users
+    get: ...
+```
+
+- The servers an operation uses are its own `servers`, or else its path item's, or else the document's. An empty list, or none, inherits; a document without servers is served at the root.
+- The base path is the URL's path: `https://api.example.com/v1`, `//api.example.com/v1` and `/v1` all give `/v1`, and `https://api.example.com` gives none. A trailing `/` is ignored. Server variables take their `default`.
+- With several servers whose paths differ, the operation is served under each one.
+- A server URL whose path holds a variable without a default, or `..`, fails compilation with `E1004`.
+- Routing conflicts (`E1010`) are checked on the served paths, so `/users` under a `/v1` server conflicts with `/v1/users` declared elsewhere.
+- `http-upstream` without `path` forwards the path the client sent, base path included. Metrics and logs name the operation by its path as the spec writes it, without the base path.
+- AsyncAPI servers are brokers; their paths do not affect the HTTP routes of AsyncAPI operations.
+
 ## Path Parameters
 
 ### Regular Parameters
@@ -542,7 +562,7 @@ Errors you might see:
 
 | Error Code | Meaning |
 |------------|---------|
-| E1010 | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
+| E1010 | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments, under their servers' base paths (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
 | E1020 | Missing `x-barbacane-dispatch` on operation |
 | E1031 | Plaintext `http://` or `ws://` upstream URL (use HTTPS or WSS, or `--allow-plaintext` at compile time) |
 | E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |

@@ -1262,6 +1262,7 @@ plugins:
             operations: vec![
                 Operation {
                     path: "/health".to_string(),
+                    base_paths: vec![],
                     method: "GET".to_string(),
                     operation_id: None,
                     summary: None,
@@ -1283,6 +1284,7 @@ plugins:
                 },
                 Operation {
                     path: "/api".to_string(),
+                    base_paths: vec![],
                     method: "GET".to_string(),
                     operation_id: None,
                     summary: None,
@@ -1338,6 +1340,7 @@ plugins:
             extensions: BTreeMap::new(),
             operations: vec![Operation {
                 path: "/health".to_string(),
+                base_paths: vec![],
                 method: "GET".to_string(),
                 operation_id: None,
                 summary: None,
@@ -1388,6 +1391,7 @@ plugins:
             extensions: BTreeMap::new(),
             operations: vec![Operation {
                 path: "/proxy".to_string(),
+                base_paths: vec![],
                 method: "GET".to_string(),
                 operation_id: None,
                 summary: None,
@@ -1441,6 +1445,7 @@ plugins:
             extensions: BTreeMap::new(),
             operations: vec![Operation {
                 path: "/health".to_string(),
+                base_paths: vec![],
                 method: "GET".to_string(),
                 operation_id: None,
                 summary: None,
