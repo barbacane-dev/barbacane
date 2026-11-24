@@ -37,10 +37,13 @@ jobs:
         id: filter
         with:
           filters: |
+            # Every file under crates/ is code: migrations, the control plane's
+            # openapi.yaml (compiled in) and test fixtures included.
             code:
               - '**/*.rs'
               - '**/Cargo.toml'
               - '**/Cargo.lock'
+              - 'crates/**'
               - 'plugins/**'
               - 'tests/**'
               - 'scripts/**'
@@ -55,11 +58,16 @@ jobs:
               - 'plugins/**'
               - 'crates/barbacane-plugin-sdk/**'
               - 'crates/barbacane-plugin-macros/**'
+              - 'crates/barbacane-sigv4/**'
+            # What the Dockerfiles build from: the workspace and every plugin.
             images:
               - 'Dockerfile*'
               - 'docker/**'
               - '.dockerignore'
               - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/**'
+              - 'plugins/**'
               - '.github/workflows/ci.yml'
 
   # Fast checks first (format, clippy) for quick feedback
@@ -336,7 +344,7 @@ jobs:
           # plugin.toml and config-schema.json are embedded into the .wasm at
           # build time and the compiler reads them from there, so a change to
           # either must miss this cache or the binary keeps the old copy.
-          key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'plugins/**/plugin.toml', 'plugins/**/config-schema.json', 'crates/barbacane-plugin-sdk/**') }}
+          key: ${{ runner.os }}-plugins-${{ hashFiles('plugins/**/Cargo.toml', 'plugins/**/Cargo.lock', 'plugins/**/*.rs', 'plugins/**/plugin.toml', 'plugins/**/config-schema.json', 'crates/barbacane-plugin-sdk/**', 'crates/barbacane-plugin-macros/**', 'crates/barbacane-sigv4/**') }}
 
       - name: Build workspace
         run: cargo build --locked --workspace --all-targets
