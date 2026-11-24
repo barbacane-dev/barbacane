@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **release**: every GitHub release binary is built with `cargo auditable`, so `cargo audit bin` and scanners read the crates it was built from. The six targets build natively, the Linux arm64 ones on an arm64 runner and the musl ones with `musl-gcc`, instead of with `cross`; each binary is checked before it is published.
 - **release**: a tag is released only when its commit passed CI on `main`: the Preflight job waits for that run, and runs `cargo deny` on the workspace and every plugin. Images are pushed under the version's tag first, and `latest`, `X.Y` and `X` move in a last job, once the images are scanned and signed, the crates published and the GitHub release created.
 - **release**: a release needs one approval. The Approve Release job runs in the `release-approval` environment, which has the required reviewer, and every job that pushes images, signs them or publishes crates waits for it.
 - **ci**: a change to any file under `crates/` runs the code jobs (migrations, the control plane's `openapi.yaml` and test fixtures were skipped), a change to the workspace, its lockfile or a plugin builds and scans the images, and the WASM plugin cache and the plugin jobs follow `barbacane-plugin-macros` and `barbacane-sigv4` too.
