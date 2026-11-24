@@ -84,6 +84,10 @@ No schema makes the compiler, the data plane or the control plane fetch a URL or
 
 A parameter without `name` or `in`, with an `in` other than `path`, `query`, `header`, `cookie` and `querystring`, with a `style` its location does not take, with both `schema` and `content`, or with a `content` that names more or fewer than one media type fails compilation with `E1004`. Such a parameter was skipped, or checked as a plain string.
 
+### Extensions are checked where they are set
+
+`x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, and `x-barbacane-waf` anywhere but the document root fail compilation with `E1017`; they had no effect. Every `x-barbacane-waf` key is checked (`E1080`): an unknown key or a value of the wrong type or out of range is refused, where it fell back to a default. An `x-sunset` that is not a date fails with `E1018`; a valid one is sent as a `Sunset` header even on an operation that is not deprecated.
+
 ### YAML is read by a different parser
 
 Specs are read by serde-saphyr, configured to read documents as libyaml did. The constructs a spec can meet that read differently, and what to do:

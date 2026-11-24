@@ -88,12 +88,29 @@ async fn test_deprecation_and_sunset_headers_present() {
         sunset.is_some(),
         "Endpoint with x-sunset should have Sunset header"
     );
-    let sunset_val = sunset.unwrap().to_str().unwrap();
-    assert!(
-        sunset_val.contains("2025"),
-        "Sunset header should contain the configured date: {}",
-        sunset_val
+    // The fixture writes "Sat, 31 Dec 2025 23:59:59 GMT"; that day is a
+    // Wednesday, and the header names it.
+    assert_eq!(
+        sunset.unwrap().to_str().unwrap(),
+        "Wed, 31 Dec 2025 23:59:59 GMT"
     );
+}
+
+/// `x-sunset` without `deprecated: true` still announces the date; an RFC 3339
+/// date is sent as an HTTP-date.
+#[tokio::test]
+async fn test_sunset_without_deprecation() {
+    let gateway = TestGateway::from_spec(&fixture("deprecated.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/v2/reports").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("sunset").map(|v| v.to_str().unwrap()),
+        Some("Wed, 30 Jun 2027 00:00:00 GMT")
+    );
+    assert!(!resp.headers().contains_key("deprecation"));
 }
 
 #[tokio::test]

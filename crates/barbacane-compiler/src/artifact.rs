@@ -1643,7 +1643,7 @@ fn compile_inner(
     // Validate and seal the WAF rule set. Done before the hash so the rule
     // set is bound by it, and therefore by the signature: an operator can
     // prove which rules a running gateway carries.
-    let mut waf = extract_root_waf_config(specs);
+    let mut waf = extract_root_waf_config(specs)?;
     let mut sealed_waf: Option<Vec<u8>> = None;
     let mut sealed_waf_data: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     if waf.enabled {
@@ -3032,60 +3032,138 @@ fn spec_relative_path(spec_dir: Option<&Path>, declared: &str) -> Result<PathBuf
     }
 }
 
-/// Extract root-level `x-barbacane-waf` config from the first spec that
-/// defines it.
-fn extract_root_waf_config(specs: &[(ApiSpec, String, String)]) -> WafConfig {
-    for (spec, _, _) in specs {
-        let Some(value) = spec.extensions.get("x-barbacane-waf") else {
-            continue;
-        };
-        let num = |key: &str, default: i64| -> i64 {
-            value.get(key).and_then(|v| v.as_i64()).unwrap_or(default)
-        };
-        let thresholds = value.get("thresholds");
-        let threshold = |key: &str, default: i64| -> i64 {
-            thresholds
-                .and_then(|t| t.get(key))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(default)
-        };
-        return WafConfig {
-            enabled: value
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-            ruleset: value
-                .get("ruleset")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            // CRS's own default.
-            paranoia_level: num("paranoia_level", 1).clamp(1, 4) as u8,
-            mode: match value.get("mode").and_then(|v| v.as_str()) {
-                Some("detection-only") | Some("detection_only") | Some("detectiononly") => {
-                    WafMode::DetectionOnly
-                }
-                _ => WafMode::Blocking,
-            },
-            inbound_threshold: threshold("inbound", 5),
-            outbound_threshold: threshold("outbound", 4),
-            max_response_body: value
-                .get("max_response_body")
-                .and_then(|v| v.as_u64())
-                .unwrap_or_else(default_max_response_body),
-            audit: match value.get("audit").and_then(|v| v.as_str()) {
-                Some("off") => AuditEngine::Off,
-                Some("on") => AuditEngine::On,
-                _ => AuditEngine::RelevantOnly,
-            },
-            unsupported_rules: match value.get("unsupported_rules").and_then(|v| v.as_str()) {
-                Some("skip") => UnsupportedRules::Skip,
-                _ => UnsupportedRules::Fail,
-            },
-            rules_path: None,
-            skipped_rules: Vec::new(),
-        };
+/// The root-level `x-barbacane-waf` of the first spec that sets one. An
+/// unknown key, or a value of the wrong type or out of range, is E1080.
+fn extract_root_waf_config(specs: &[(ApiSpec, String, String)]) -> Result<WafConfig, CompileError> {
+    const KEYS: &[&str] = &[
+        "enabled",
+        "ruleset",
+        "paranoia_level",
+        "mode",
+        "thresholds",
+        "max_response_body",
+        "audit",
+        "unsupported_rules",
+    ];
+    let Some(value) = specs
+        .iter()
+        .find_map(|(spec, _, _)| spec.extensions.get("x-barbacane-waf"))
+    else {
+        return Ok(WafConfig::default());
+    };
+    let invalid = |reason: String| CompileError::WafRuleset(reason);
+    let config = value
+        .as_object()
+        .ok_or_else(|| invalid("must be an object".into()))?;
+    if let Some(key) = config.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        return Err(invalid(format!(
+            "unknown key `{key}`; the keys are {}",
+            KEYS.join(", ")
+        )));
     }
-    WafConfig::default()
+
+    let integer = |map: &serde_json::Map<String, serde_json::Value>,
+                   key: &str,
+                   min: i64,
+                   max: i64,
+                   default: i64| {
+        match map.get(key) {
+            None => Ok(default),
+            Some(v) => v
+                .as_i64()
+                .filter(|n| (min..=max).contains(n))
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "`{key}` must be an integer from {min} to {max}, not {v}"
+                    ))
+                }),
+        }
+    };
+    let word = |key: &str, allowed: &[&'static str]| match config.get(key) {
+        None => Ok(None),
+        Some(v) => v
+            .as_str()
+            .and_then(|s| allowed.iter().find(|a| **a == s).copied())
+            .map(Some)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "`{key}` must be one of {}, not {v}",
+                    allowed.join(", ")
+                ))
+            }),
+    };
+
+    let enabled = match config.get("enabled") {
+        None => true,
+        Some(serde_json::Value::Bool(enabled)) => *enabled,
+        Some(v) => return Err(invalid(format!("`enabled` must be a boolean, not {v}"))),
+    };
+    let ruleset = match config.get("ruleset") {
+        None => None,
+        Some(serde_json::Value::String(ruleset)) => Some(ruleset.clone()),
+        Some(v) => return Err(invalid(format!("`ruleset` must be a path, not {v}"))),
+    };
+    let empty = serde_json::Map::new();
+    let thresholds = match config.get("thresholds") {
+        None => &empty,
+        Some(serde_json::Value::Object(thresholds)) => {
+            if let Some(key) = thresholds
+                .keys()
+                .find(|k| !matches!(k.as_str(), "inbound" | "outbound"))
+            {
+                return Err(invalid(format!(
+                    "unknown key `thresholds.{key}`; the keys are inbound, outbound"
+                )));
+            }
+            thresholds
+        }
+        Some(v) => {
+            return Err(invalid(format!(
+                "`thresholds` must be an object of inbound and outbound, not {v}"
+            )))
+        }
+    };
+    let max_response_body = match config.get("max_response_body") {
+        None => default_max_response_body(),
+        Some(v) => v.as_u64().ok_or_else(|| {
+            invalid(format!(
+                "`max_response_body` must be a number of bytes, not {v}"
+            ))
+        })?,
+    };
+
+    Ok(WafConfig {
+        enabled,
+        ruleset,
+        // CRS's own default.
+        paranoia_level: integer(config, "paranoia_level", 1, 4, 1)? as u8,
+        mode: match word(
+            "mode",
+            &[
+                "blocking",
+                "detection-only",
+                "detection_only",
+                "detectiononly",
+            ],
+        )? {
+            None | Some("blocking") => WafMode::Blocking,
+            Some(_) => WafMode::DetectionOnly,
+        },
+        inbound_threshold: integer(thresholds, "inbound", 1, i64::MAX, 5)?,
+        outbound_threshold: integer(thresholds, "outbound", 1, i64::MAX, 4)?,
+        max_response_body,
+        audit: match word("audit", &["off", "relevant-only", "on"])? {
+            Some("off") => AuditEngine::Off,
+            Some("on") => AuditEngine::On,
+            _ => AuditEngine::RelevantOnly,
+        },
+        unsupported_rules: match word("unsupported_rules", &["fail", "skip"])? {
+            Some("skip") => UnsupportedRules::Skip,
+            _ => UnsupportedRules::Fail,
+        },
+        rules_path: None,
+        skipped_rules: Vec::new(),
+    })
 }
 
 /// The outcome of validating and sealing a WAF rule set.
@@ -6831,7 +6909,8 @@ mod waf_tests {
     fn config_defaults_match_crs_conventions() {
         let cfg = extract_root_waf_config(&[spec_with_waf(
             serde_json::json!({ "ruleset": "./crs/rules" }),
-        )]);
+        )])
+        .unwrap();
         assert!(cfg.enabled, "declaring the extension should enable it");
         assert_eq!(cfg.paranoia_level, 1);
         assert_eq!(cfg.mode, WafMode::Blocking);
@@ -6842,14 +6921,87 @@ mod waf_tests {
         assert_eq!(cfg.unsupported_rules, UnsupportedRules::Fail);
     }
 
+    /// A key the WAF does not read, or a value it cannot use, fails
+    /// compilation rather than falling back to a default.
     #[test]
-    fn paranoia_level_is_clamped_to_the_valid_range() {
-        for (given, expected) in [(0, 1), (1, 1), (4, 4), (9, 4)] {
-            let cfg = extract_root_waf_config(&[spec_with_waf(
-                serde_json::json!({ "ruleset": "r", "paranoia_level": given }),
-            )]);
-            assert_eq!(cfg.paranoia_level, expected, "paranoia_level {given}");
+    fn a_config_the_waf_cannot_read_is_refused() {
+        let read = |config: serde_json::Value| {
+            extract_root_waf_config(&[spec_with_waf(config)]).map_err(|e| e.to_string())
+        };
+        for (config, expected) in [
+            (
+                serde_json::json!({"ruleset": "r", "paranoia": 2}),
+                "unknown key `paranoia`",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "paranoia_level": "3"}),
+                "`paranoia_level` must be an integer from 1 to 4",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "paranoia_level": 0}),
+                "from 1 to 4",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "paranoia_level": 9}),
+                "from 1 to 4",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "mode": "block"}),
+                "`mode` must be one of",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "audit": true}),
+                "`audit` must be one of",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "unsupported_rules": "ignore"}),
+                "`unsupported_rules` must be one of",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "thresholds": {"inbound": "5"}}),
+                "`inbound` must be an integer",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "thresholds": {"in": 5}}),
+                "unknown key `thresholds.in`",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "thresholds": 5}),
+                "`thresholds` must be an object",
+            ),
+            (
+                serde_json::json!({"ruleset": "r", "max_response_body": -1}),
+                "`max_response_body` must be a number of bytes",
+            ),
+            (
+                serde_json::json!({"ruleset": 3}),
+                "`ruleset` must be a path",
+            ),
+            (
+                serde_json::json!({"enabled": "yes"}),
+                "`enabled` must be a boolean",
+            ),
+            (serde_json::json!(["r"]), "must be an object"),
+        ] {
+            let err = read(config.clone()).expect_err(&config.to_string());
+            assert!(
+                err.starts_with("E1080") && err.contains(expected),
+                "{config}: {err}"
+            );
         }
+
+        let cfg = read(serde_json::json!({
+            "ruleset": "r", "paranoia_level": 4, "mode": "detection-only", "audit": "on",
+            "unsupported_rules": "skip", "thresholds": {"inbound": 10, "outbound": 8},
+            "max_response_body": 0, "enabled": true
+        }))
+        .unwrap();
+        assert_eq!(cfg.paranoia_level, 4);
+        assert_eq!(cfg.mode, WafMode::DetectionOnly);
+        assert_eq!((cfg.inbound_threshold, cfg.outbound_threshold), (10, 8));
+        assert_eq!(cfg.audit, AuditEngine::On);
+        assert_eq!(cfg.unsupported_rules, UnsupportedRules::Skip);
+        assert_eq!(cfg.max_response_body, 0);
     }
 }
 

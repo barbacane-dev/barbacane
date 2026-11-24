@@ -1357,24 +1357,19 @@ impl Gateway {
         response
     }
 
-    /// Add deprecation headers to a response if the operation is deprecated.
-    /// Implements RFC 8594 (Sunset header) and draft-ietf-httpapi-deprecation-header.
+    /// Add the lifecycle headers of the operation: `Deprecation: true` when it
+    /// is deprecated (draft-ietf-httpapi-deprecation-header), and `Sunset`
+    /// when it has an `x-sunset` date (RFC 8594), deprecated or not.
     fn add_deprecation_headers<B>(
         mut response: Response<B>,
         operation: &CompiledOperation,
     ) -> Response<B> {
+        let headers = response.headers_mut();
         if operation.deprecated {
-            let headers = response.headers_mut();
-            // Deprecation header per draft-ietf-httpapi-deprecation-header
-            // Value "true" indicates the endpoint is deprecated
             headers.insert("deprecation", HeaderValue::from_static("true"));
-
-            // Sunset header per RFC 8594 if a sunset date is specified
-            if let Some(sunset_date) = &operation.sunset {
-                if let Ok(val) = sunset_date.parse() {
-                    headers.insert("sunset", val);
-                }
-            }
+        }
+        if let Some(sunset) = operation.sunset.as_deref().and_then(|s| s.parse().ok()) {
+            headers.insert("sunset", sunset);
         }
         response
     }
@@ -3679,6 +3674,12 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     }
                     barbacane_compiler::ParseError::InvalidMiddleware(_) => {
                         ("E1011".to_string(), e.to_string())
+                    }
+                    barbacane_compiler::ParseError::MisplacedExtension(_) => {
+                        ("E1017".to_string(), e.to_string())
+                    }
+                    barbacane_compiler::ParseError::InvalidSunset(_) => {
+                        ("E1018".to_string(), e.to_string())
                     }
                     barbacane_compiler::ParseError::Io(io_err) => {
                         ("E1000".to_string(), format!("I/O error: {}", io_err))

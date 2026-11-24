@@ -717,6 +717,15 @@ pub fn parse_spec(input: &str) -> Result<ApiSpec, ParseError> {
         }
     };
 
+    check_extension_placement(&extensions, Place::Root, "the document root")?;
+    for op in &operations {
+        check_extension_placement(
+            &op.extensions,
+            Place::Operation,
+            &format!("{} {}", op.method, op.path),
+        )?;
+    }
+
     let schema_defs = finish_schema_defs(defs, &root);
 
     Ok(ApiSpec {
@@ -767,6 +776,80 @@ fn detect_format(
         Ok((SpecFormat::AsyncApi, version.to_string()))
     } else {
         Err(ParseError::UnknownFormat)
+    }
+}
+
+/// The objects a known `x-barbacane-*` extension can be set on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Root,
+    PathItem,
+    Operation,
+}
+
+/// Refuse (E1017) a known extension set where it has no effect: it would
+/// compile and do nothing. An unknown `x-barbacane-*` key is the compiler's
+/// E1015 warning.
+fn check_extension_placement(
+    extensions: &BTreeMap<String, Value>,
+    place: Place,
+    location: &str,
+) -> Result<(), ParseError> {
+    for key in extensions.keys() {
+        let (allowed, remedy) = match key.as_str() {
+            "x-barbacane-dispatch" => (place == Place::Operation, "set it on each operation"),
+            "x-barbacane-middlewares" => (
+                place != Place::PathItem,
+                "set it on each operation, or at the document root for every operation",
+            ),
+            "x-barbacane-waf" => (place == Place::Root, "set it at the document root"),
+            _ => continue,
+        };
+        if !allowed {
+            return Err(ParseError::MisplacedExtension(format!(
+                "{key} on {location} has no effect; {remedy}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// An operation's `x-sunset`, as the IMF-fixdate the `Sunset` header carries
+/// (RFC 8594, RFC 9110). An HTTP-date is read without its day name, which is
+/// written from the date; an RFC 3339 date-time, or a full date read as
+/// midnight UTC, is accepted too. Anything else is E1018.
+fn parse_sunset(
+    op_obj: &serde_json::Map<String, Value>,
+    location: &str,
+) -> Result<Option<String>, ParseError> {
+    let Some(value) = op_obj.get("x-sunset") else {
+        return Ok(None);
+    };
+    let date = value.as_str().map(str::trim).and_then(|text| {
+        let http_date = text
+            .split_once(", ")
+            .filter(|(day, _)| ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].contains(day))
+            .and_then(|(_, rest)| {
+                chrono::NaiveDateTime::parse_from_str(rest, "%d %b %Y %H:%M:%S GMT").ok()
+            });
+        http_date
+            .or_else(|| {
+                chrono::DateTime::parse_from_rfc3339(text)
+                    .ok()
+                    .map(|d| d.naive_utc())
+            })
+            .or_else(|| {
+                chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+            })
+    });
+    match date {
+        Some(date) => Ok(Some(date.format("%a, %d %b %Y %H:%M:%S GMT").to_string())),
+        None => Err(ParseError::InvalidSunset(format!(
+            "x-sunset {value} on {location} is not a date: write an HTTP-date such as \
+             \"Thu, 31 Dec 2026 23:59:59 GMT\", or an RFC 3339 date such as \"2026-12-31\""
+        ))),
     }
 }
 
@@ -860,6 +943,12 @@ fn parse_openapi_paths(
             ParseError::SchemaError(format!("path item for '{}' must be an object", path))
         })?;
 
+        check_extension_placement(
+            &extract_extensions(path_obj),
+            Place::PathItem,
+            &format!("path {path}"),
+        )?;
+
         // Path-level parameters (inherited by all operations)
         let path_params = parse_parameters(path_obj, spec_root, defs, &format!("path {path}"))?;
 
@@ -912,11 +1001,7 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                // Extract sunset date from x-sunset extension (RFC 8594)
-                let sunset = op_obj
-                    .get("x-sunset")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                let sunset = parse_sunset(op_obj, &format!("{} {}", method.to_uppercase(), path))?;
 
                 let extensions = extract_extensions(op_obj);
 
@@ -993,10 +1078,8 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                let sunset = op_obj
-                    .get("x-sunset")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                let sunset =
+                    parse_sunset(op_obj, &format!("{} {}", method_name.to_uppercase(), path))?;
 
                 let extensions = extract_extensions(op_obj);
 
@@ -1319,10 +1402,7 @@ fn parse_asyncapi_channels(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let sunset = op_obj
-            .get("x-sunset")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let sunset = parse_sunset(op_obj, &format!("operation '{op_id}'"))?;
 
         let extensions = extract_extensions(op_obj);
 
@@ -2235,7 +2315,7 @@ paths:
   /old-endpoint:
     get:
       deprecated: true
-      x-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      x-sunset: "Wed, 31 Dec 2025 23:59:59 GMT"
       x-barbacane-dispatch:
         name: mock
   /new-endpoint:
@@ -2255,7 +2335,7 @@ paths:
         assert!(old_op.deprecated);
         assert_eq!(
             old_op.sunset,
-            Some("Sat, 31 Dec 2025 23:59:59 GMT".to_string())
+            Some("Wed, 31 Dec 2025 23:59:59 GMT".to_string())
         );
 
         // Check non-deprecated operation
@@ -3000,6 +3080,70 @@ paths:
             );
             let err = parse_spec(&yaml).expect_err(param).to_string();
             assert!(err.contains(expected), "{param}: {err}");
+        }
+    }
+
+    /// A known extension where it has no effect fails to parse (E1017).
+    #[test]
+    fn a_misplaced_extension_is_refused() {
+        let op = "      x-barbacane-dispatch: { name: mock }";
+        let cases = [
+            (format!("x-barbacane-dispatch: {{ name: mock }}\npaths:\n  /x:\n    get:\n{op}\n"), "x-barbacane-dispatch on the document root"),
+            (format!("paths:\n  /x:\n    x-barbacane-middlewares: [{{ name: cors }}]\n    get:\n{op}\n"), "x-barbacane-middlewares on path /x"),
+            (format!("paths:\n  /x:\n    x-barbacane-waf: {{ ruleset: r }}\n    get:\n{op}\n"), "x-barbacane-waf on path /x"),
+            (format!("paths:\n  /x:\n    get:\n{op}\n      x-barbacane-waf: {{ ruleset: r }}\n"), "x-barbacane-waf on GET /x has no effect; set it at the document root"),
+        ];
+        for (body, expected) in cases {
+            let yaml = format!("openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\n{body}");
+            let err = parse_spec(&yaml).expect_err(&body).to_string();
+            assert!(
+                err.starts_with("E1017") && err.contains(expected),
+                "{body}: {err}"
+            );
+        }
+
+        let allowed = format!(
+            "openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\nx-barbacane-waf: {{ ruleset: r }}\nx-barbacane-middlewares: []\nx-barbacane-unknown: 1\npaths:\n  /x:\n    x-barbacane-other: 1\n    get:\n{op}\n      x-barbacane-middlewares: []\n"
+        );
+        assert!(parse_spec(&allowed).is_ok());
+    }
+
+    /// `x-sunset` is sent as an IMF-fixdate whose day name matches the date.
+    #[test]
+    fn x_sunset_is_read_as_a_date() {
+        let sunset = |value: &str| {
+            let yaml = format!(
+                "openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\npaths:\n  /x:\n    get:\n      x-sunset: {value}\n      x-barbacane-dispatch: {{ name: mock }}\n"
+            );
+            parse_spec(&yaml).map(|spec| spec.operations[0].sunset.clone())
+        };
+        for (value, expected) in [
+            (
+                "\"Thu, 31 Dec 2026 23:59:59 GMT\"",
+                "Thu, 31 Dec 2026 23:59:59 GMT",
+            ),
+            (
+                "\"Sat, 31 Dec 2025 23:59:59 GMT\"",
+                "Wed, 31 Dec 2025 23:59:59 GMT",
+            ),
+            ("\"2026-12-31\"", "Thu, 31 Dec 2026 00:00:00 GMT"),
+            (
+                "\"2026-12-31T22:00:00-02:00\"",
+                "Fri, 01 Jan 2027 00:00:00 GMT",
+            ),
+        ] {
+            assert_eq!(sunset(value).unwrap().as_deref(), Some(expected), "{value}");
+        }
+        for value in [
+            "\"next year\"",
+            "\"31 Dec 2026\"",
+            "\"Thu, 31 Dec 2026 23:59:59 CET\"",
+            "\"Xyz, 31 Dec 2026 23:59:59 GMT\"",
+            "20261231",
+            "true",
+        ] {
+            let err = sunset(value).expect_err(value).to_string();
+            assert!(err.starts_with("E1018"), "{value}: {err}");
         }
     }
 

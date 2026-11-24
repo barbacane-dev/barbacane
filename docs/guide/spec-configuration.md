@@ -489,21 +489,21 @@ paths:
   /v1/users:
     get:
       deprecated: true
-      x-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
+      x-sunset: "Thu, 31 Dec 2026 23:59:59 GMT"
       x-barbacane-dispatch:
         name: http-upstream
         config:
           url: "https://api.example.com"
 ```
 
-The sunset date must be in HTTP-date format (RFC 9110). When set, the response includes a `Sunset` header per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594).
+The response includes a `Sunset` header per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594), whether or not the operation is deprecated. `x-sunset` is an HTTP-date (RFC 9110), an RFC 3339 date-time, or a date (`2026-12-31`, midnight UTC); the header carries it as an HTTP-date, with the day name of its date. Any other value fails compilation with `E1018`.
 
 ### Example Response Headers
 
 ```
 HTTP/1.1 200 OK
 Deprecation: true
-Sunset: Sat, 31 Dec 2025 23:59:59 GMT
+Sunset: Thu, 31 Dec 2026 23:59:59 GMT
 Content-Type: application/json
 ```
 

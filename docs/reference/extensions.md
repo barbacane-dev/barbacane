@@ -20,7 +20,7 @@ Specifies how to handle a request for an operation.
 
 ### Location
 
-Operation object (`get`, `post`, `put`, `delete`, `patch`, `options`, `head`).
+Operation object (`get`, `post`, `put`, `delete`, `patch`, `options`, `head`), or AsyncAPI operation. At the document root or on a path item it has no effect, and compilation fails with `E1017`.
 
 ### Schema
 
@@ -222,6 +222,8 @@ Defines a middleware chain.
 - **Root level**: Applies to all operations (global)
 - **Operation level**: Applies to specific operation (after global)
 
+On a path item it has no effect, and compilation fails with `E1017`.
+
 ### Schema
 
 ```yaml
@@ -338,7 +340,7 @@ x-barbacane-waf:
   unsupported_rules: string    # Optional. fail (default) | skip
 ```
 
-See the [WAF guide](../guide/waf.md) for the full reference.
+Every key is checked: an unknown key, or a value of the wrong type or out of range, fails compilation with `E1080`. On a path item or an operation the block has no effect, and compilation fails with `E1017`. See the [WAF guide](../guide/waf.md) for the full reference.
 
 ---
 
