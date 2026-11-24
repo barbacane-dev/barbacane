@@ -3,7 +3,12 @@
 //! The TCP peer, unless it is a trusted proxy (`--trusted-proxies`): then the
 //! address the proxy chain reports in `X-Forwarded-For` or `Forwarded`
 //! (`--client-ip-header`), read right to left past the trusted hops.
+//!
+//! The scheme and host the client used ([`resolve_forwarded`]) follow the same
+//! trust: the listener's and the request's own, unless the peer is a trusted
+//! proxy that reports them.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
@@ -84,7 +89,8 @@ impl TrustedProxies {
         self.networks.is_empty()
     }
 
-    fn trusts(&self, ip: IpAddr) -> bool {
+    /// Whether a connection from `ip` may report the client.
+    pub fn trusts(&self, ip: IpAddr) -> bool {
         let ip = ip.to_canonical();
         self.networks.iter().any(|net| net.contains(&ip))
     }
@@ -115,6 +121,53 @@ impl TrustedProxies {
         }
         client
     }
+}
+
+/// How a request reached the gateway.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Arrival {
+    /// The listener terminates TLS.
+    pub tls: bool,
+    /// The TCP peer is a trusted proxy, so the scheme and host it reports are
+    /// kept.
+    pub via_trusted_proxy: bool,
+}
+
+/// Sets `x-forwarded-proto` and `x-forwarded-host` in `headers` to the scheme
+/// and host the client used, which is what plugins and upstreams see.
+///
+/// Behind a trusted proxy, the values it sent are kept: the left-most of a
+/// comma-separated list, and a scheme only when it is `http` or `https`.
+/// Otherwise, and where the proxy sent none, the scheme is the listener's and
+/// the host is the request's `Host`, or its `authority` on HTTP/2. Without a
+/// host, `x-forwarded-host` is removed.
+pub fn resolve_forwarded(
+    headers: &mut HashMap<String, String>,
+    arrival: Arrival,
+    authority: Option<&str>,
+) {
+    let reported = |name: &str| {
+        headers
+            .get(name)
+            .filter(|_| arrival.via_trusted_proxy)
+            .and_then(|value| value.split(',').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let scheme = reported("x-forwarded-proto")
+        .map(|scheme| scheme.to_ascii_lowercase())
+        .filter(|scheme| scheme == "http" || scheme == "https")
+        .unwrap_or_else(|| if arrival.tls { "https" } else { "http" }.to_string());
+    let host = reported("x-forwarded-host")
+        .or_else(|| headers.get("host").cloned())
+        .or_else(|| authority.map(str::to_string));
+
+    headers.insert("x-forwarded-proto".to_string(), scheme);
+    match host {
+        Some(host) => headers.insert("x-forwarded-host".to_string(), host),
+        None => headers.remove("x-forwarded-host"),
+    };
 }
 
 /// Comma-separated addresses or CIDR ranges, reporting the client in
@@ -385,5 +438,111 @@ mod tests {
             Ok(ClientIpHeader::Forwarded)
         );
         assert!("x-real-ip".parse::<ClientIpHeader>().is_err());
+    }
+
+    const DIRECT: Arrival = Arrival {
+        tls: false,
+        via_trusted_proxy: false,
+    };
+
+    /// The scheme and host `resolve_forwarded` leaves in a request with
+    /// `headers`.
+    fn forwarded(
+        headers: &[(&str, &str)],
+        arrival: Arrival,
+        authority: Option<&str>,
+    ) -> (Option<String>, Option<String>) {
+        let mut map: HashMap<String, String> = headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        resolve_forwarded(&mut map, arrival, authority);
+        (
+            map.get("x-forwarded-proto").cloned(),
+            map.get("x-forwarded-host").cloned(),
+        )
+    }
+
+    fn some(scheme: &str, host: &str) -> (Option<String>, Option<String>) {
+        (Some(scheme.to_string()), Some(host.to_string()))
+    }
+
+    #[test]
+    fn a_direct_client_cannot_choose_its_scheme_or_host() {
+        let sent = [
+            ("host", "api.example"),
+            ("x-forwarded-proto", "https"),
+            ("x-forwarded-host", "public.example"),
+        ];
+        assert_eq!(forwarded(&sent, DIRECT, None), some("http", "api.example"));
+        let tls = Arrival {
+            tls: true,
+            ..DIRECT
+        };
+        assert_eq!(forwarded(&sent, tls, None), some("https", "api.example"));
+    }
+
+    #[test]
+    fn without_a_host_header_the_authority_is_the_host() {
+        assert_eq!(
+            forwarded(&[], DIRECT, Some("api.example:8443")),
+            some("http", "api.example:8443")
+        );
+        assert_eq!(
+            forwarded(&[("x-forwarded-host", "public.example")], DIRECT, None),
+            (Some("http".to_string()), None),
+            "with no host at all, the client's x-forwarded-host is removed"
+        );
+    }
+
+    #[test]
+    fn a_trusted_proxy_reports_the_scheme_and_host() {
+        let proxied = Arrival {
+            tls: false,
+            via_trusted_proxy: true,
+        };
+        let host = ("host", "internal.lb");
+        assert_eq!(
+            forwarded(
+                &[
+                    host,
+                    ("x-forwarded-proto", "HTTPS"),
+                    ("x-forwarded-host", "public.example")
+                ],
+                proxied,
+                None
+            ),
+            some("https", "public.example")
+        );
+        assert_eq!(
+            forwarded(
+                &[
+                    host,
+                    ("x-forwarded-proto", "https, http"),
+                    ("x-forwarded-host", " public.example , internal.lb")
+                ],
+                proxied,
+                None
+            ),
+            some("https", "public.example"),
+            "the left-most value of a list"
+        );
+        assert_eq!(
+            forwarded(
+                &[
+                    host,
+                    ("x-forwarded-proto", "gopher"),
+                    ("x-forwarded-host", "")
+                ],
+                proxied,
+                None
+            ),
+            some("http", "internal.lb"),
+            "an unknown scheme or an empty host falls back to the request's own"
+        );
+        assert_eq!(
+            forwarded(&[host], proxied, None),
+            some("http", "internal.lb")
+        );
     }
 }

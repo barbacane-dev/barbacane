@@ -431,6 +431,176 @@ async fn test_the_upstream_learns_the_client_from_the_gateway() {
     );
 }
 
+/// A spec whose `http-upstream` route (`GET /proxy/headers`) and
+/// `fire-and-forget` route (`GET /notify`) both call `upstream_url`.
+fn forwarding_spec(upstream_url: &str) -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::TempDir::new().expect("temp dir");
+    let spec = format!(
+        r#"openapi: "3.1.0"
+info:
+  title: Forwarding Test API
+  version: "1.0.0"
+paths:
+  /proxy/headers:
+    get:
+      operationId: proxyHeaders
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "{url}"
+          path: "/headers"
+          timeout: 10.0
+      responses:
+        "200":
+          description: OK
+  /notify:
+    get:
+      operationId: notify
+      x-barbacane-dispatch:
+        name: fire-and-forget
+        config:
+          url: "{url}/notify"
+      responses:
+        "202":
+          description: Accepted
+"#,
+        url = upstream_url
+    );
+    std::fs::write(temp.path().join("forwarding.yaml"), spec).expect("write spec");
+    std::fs::write(
+        temp.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  http-upstream:\n    path: {}\n  fire-and-forget:\n    path: {}\n",
+            plugin_wasm("http-upstream").display(),
+            plugin_wasm("fire-and-forget").display()
+        ),
+    )
+    .expect("write manifest");
+    let path = temp.path().join("forwarding.yaml");
+    (temp, path)
+}
+
+/// `X-Forwarded-Proto` and `X-Forwarded-Host` name the scheme and host the
+/// client used: the listener's and the request's, or behind a trusted proxy
+/// the ones it reported. What the client wrote in them never reaches the
+/// upstream.
+#[tokio::test]
+async fn the_upstream_learns_the_scheme_and_host_from_the_gateway() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    struct EchoOrigin;
+    impl Respond for EchoOrigin {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let get = |name: &str| {
+                req.headers
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "proto": get("x-forwarded-proto"),
+                "host": get("x-forwarded-host"),
+            }))
+        }
+    }
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/headers"))
+        .respond_with(EchoOrigin)
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = forwarding_spec(&upstream.uri());
+
+    async fn received(gateway: &TestGateway) -> serde_json::Value {
+        let resp = gateway
+            .request_builder(reqwest::Method::GET, "/proxy/headers")
+            .header("X-Forwarded-Proto", "https")
+            .header("X-Forwarded-Host", "public.example")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        resp.json().await.unwrap()
+    }
+
+    let direct = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+    assert_eq!(
+        received(&direct).await,
+        serde_json::json!({"proto": "http", "host": format!("127.0.0.1:{}", direct.port())})
+    );
+
+    let tls = TestGateway::from_spec_with_tls(spec.to_str().unwrap())
+        .await
+        .expect("failed to start TLS gateway");
+    assert_eq!(
+        received(&tls).await,
+        serde_json::json!({"proto": "https", "host": format!("127.0.0.1:{}", tls.port())})
+    );
+
+    let proxied = TestGateway::from_spec_with_args(
+        spec.to_str().unwrap(),
+        &["--trusted-proxies", "127.0.0.1"],
+    )
+    .await
+    .expect("failed to start gateway");
+    assert_eq!(
+        received(&proxied).await,
+        serde_json::json!({"proto": "https", "host": "public.example"})
+    );
+}
+
+/// A dispatcher that passes the request's headers on sends the scheme and host
+/// the gateway resolved, not the client's own `X-Forwarded-Proto` and
+/// `X-Forwarded-Host`.
+#[tokio::test]
+async fn a_passthrough_dispatcher_does_not_forward_the_clients_scheme() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/notify"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&upstream)
+        .await;
+    let (_tmp, spec) = forwarding_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/notify")
+        .header("X-Forwarded-Proto", "https")
+        .header("X-Forwarded-Host", "public.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 202);
+
+    let sent = upstream.received_requests().await.expect("recording");
+    let notify = sent
+        .iter()
+        .find(|r| r.url.path() == "/notify")
+        .expect("fire-and-forget called the upstream before answering");
+    let get = |name: &str| {
+        notify
+            .headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    assert_eq!(get("x-forwarded-proto").as_deref(), Some("http"));
+    assert_eq!(
+        get("x-forwarded-host"),
+        Some(format!("127.0.0.1:{}", gateway.port()))
+    );
+}
+
 /// An upstream that accepts each connection, reads the request and closes the
 /// connection without answering. Returns its base URL.
 async fn start_hang_up_upstream() -> String {

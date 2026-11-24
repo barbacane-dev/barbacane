@@ -53,12 +53,11 @@ fn default_timeout() -> f64 {
 impl HttpUpstreamDispatcher {
     /// Proxy the request to the upstream and return the response.
     pub fn dispatch(&mut self, req: Request) -> Response {
-        let mut headers = forwarding::upstream_headers(&req);
+        let headers = forwarding::upstream_headers(&req);
         let Request {
             method,
             path,
             query,
-            headers: req_headers,
             body,
             path_params,
             ..
@@ -87,18 +86,15 @@ impl HttpUpstreamDispatcher {
 
         // A single upstream gets the full URL; a pool gets the path and query,
         // and the host puts the endpoint it selects in front of it.
-        let (url, scheme_source) = match (&self.url, &self.endpoints) {
+        let url = match (&self.url, &self.endpoints) {
             (Some(base), _) => {
-                let full = if base.ends_with('/') || path_and_query.starts_with('/') {
+                if base.ends_with('/') || path_and_query.starts_with('/') {
                     format!("{}{}", base.trim_end_matches('/'), path_and_query)
                 } else {
                     format!("{}{}", base, path_and_query)
-                };
-                (full, base.as_str())
+                }
             }
-            (None, Some(endpoints)) if !endpoints.is_empty() => {
-                (path_and_query, endpoints[0].url.as_str())
-            }
+            (None, Some(endpoints)) if !endpoints.is_empty() => path_and_query,
             _ => {
                 return self.error_response(
                     500,
@@ -108,16 +104,6 @@ impl HttpUpstreamDispatcher {
                 );
             }
         };
-
-        if let Some(host) = req_headers.get("host") {
-            headers.insert("x-forwarded-host".to_string(), host.clone());
-        }
-        let proto = if scheme_source.starts_with("https://") {
-            "https"
-        } else {
-            "http"
-        };
-        headers.insert("x-forwarded-proto".to_string(), proto.to_string());
 
         let timeout_ms = (self.timeout * 1000.0) as u64;
 

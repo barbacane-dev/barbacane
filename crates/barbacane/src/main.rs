@@ -4,7 +4,7 @@
 
 mod waf;
 
-use barbacane_lib::client_ip::{ClientIpHeader, TrustedProxies};
+use barbacane_lib::client_ip::{resolve_forwarded, Arrival, ClientIpHeader, TrustedProxies};
 use barbacane_lib::lifecycle::background;
 use barbacane_lib::metered_body::MeteredBody;
 use barbacane_lib::tls::{self, TlsSettings};
@@ -1387,8 +1387,13 @@ impl Gateway {
         req: Request<Incoming>,
         client_addr: Option<SocketAddr>,
         trusted_proxies: &TrustedProxies,
+        tls: bool,
     ) -> Result<Response<AnyBody>, Infallible> {
         let start_time = Instant::now();
+        let arrival = Arrival {
+            tls,
+            via_trusted_proxy: client_addr.is_some_and(|peer| trusted_proxies.trusts(peer.ip())),
+        };
         // A value that is not text is an unreadable hop, which ends the walk.
         let client_ip = client_addr.map(|peer| {
             trusted_proxies.client_ip(
@@ -1424,7 +1429,7 @@ impl Gateway {
             trace_id = %trace_id,
             upstream_endpoint = tracing::field::Empty
         );
-        self.handle_request_in_span(req, client_ip, start_time, request_id, trace_id)
+        self.handle_request_in_span(req, client_ip, arrival, start_time, request_id, trace_id)
             .instrument(span)
             .await
     }
@@ -1433,6 +1438,7 @@ impl Gateway {
         &self,
         req: Request<Incoming>,
         client_ip: Option<IpAddr>,
+        arrival: Arrival,
         start_time: Instant,
         request_id: String,
         trace_id: String,
@@ -1511,7 +1517,14 @@ impl Gateway {
         // Extract headers for downstream validation and plugin forwarding. This
         // collapses duplicate names (last value wins, `cookie` joined), which is
         // fine now that the limit checks above ran against the raw map.
-        let headers = request_header_map(req.headers());
+        // `x-forwarded-proto` and `x-forwarded-host` hold the scheme and host the
+        // client used, not what it sent in them.
+        let mut headers = request_header_map(req.headers());
+        resolve_forwarded(
+            &mut headers,
+            arrival,
+            req.uri().authority().map(|authority| authority.as_str()),
+        );
 
         // The map above is what routing and validation use, and it is lossy in
         // two ways the WAF cannot afford: duplicate header names collapse, and
@@ -4794,7 +4807,7 @@ async fn run_dev(
                         let client_addr = client_addr;
                         async move {
                             gateway
-                                .handle_request(req, client_addr, &TrustedProxies::none())
+                                .handle_request(req, client_addr, &TrustedProxies::none(), false)
                                 .await
                         }
                     });
@@ -5419,6 +5432,7 @@ async fn run_serve(
                 let tls_acceptor = tls_server_config
                     .as_ref()
                     .map(|config| TlsAcceptor::from(config.load_full()));
+                let conn_tls = tls_acceptor.is_some();
                 let conn_metrics = metrics.clone();
                 let conn_counter = active_connections.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
@@ -5439,7 +5453,7 @@ async fn run_serve(
                         let trusted_proxies = Arc::clone(&conn_trusted_proxies);
                         async move {
                             gateway
-                                .handle_request(req, client_addr, &trusted_proxies)
+                                .handle_request(req, client_addr, &trusted_proxies, conn_tls)
                                 .await
                         }
                     });
@@ -6662,8 +6676,9 @@ const BASELINE_REQUEST_HEADERS: &[&str] = &[
     "sec-websocket-version",
     "sec-websocket-protocol",
     "sec-websocket-extensions",
-    // Proxy chain, as received. Whether it can be trusted is a separate
-    // question, settled by trusted-proxy configuration, not by this list.
+    // Proxy chain: `x-forwarded-for`, `x-real-ip` and `forwarded` as received,
+    // their trust settled by `--trusted-proxies`, not by this list;
+    // `x-forwarded-proto` and `x-forwarded-host` as `resolve_forwarded` sets them.
     "x-forwarded-for",
     "x-forwarded-proto",
     "x-forwarded-host",

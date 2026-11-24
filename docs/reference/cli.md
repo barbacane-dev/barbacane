@@ -780,6 +780,8 @@ barbacane serve --artifact api.bca \
 
 List only the proxies that overwrite or append to the header: a proxy that passes a client-written header through unchanged lets the client choose its address. At start, the gateway logs the networks and the header it reads.
 
+The scheme and host the client used follow the same rule. Plugins and upstreams receive them as `X-Forwarded-Proto` and `X-Forwarded-Host`: `https` on a TLS listener and `http` otherwise, and the request's `Host` (its authority on HTTP/2). Behind a trusted proxy, the proxy's own `X-Forwarded-Proto` and `X-Forwarded-Host` are kept, the left-most value of each, and a scheme only when it is `http` or `https`. A client outside the list cannot set either.
+
 ### HTTP/2 Support
 
 The gateway supports both HTTP/1.1 and HTTP/2 with automatic protocol detection:

@@ -1652,6 +1652,72 @@ async fn test_ws_relay_stays_alive_and_echoes_frames() {
     ws.close(None).await.expect("close failed");
 }
 
+/// The upstream handshake carries the scheme and host the gateway resolved:
+/// behind a trusted proxy, the ones the proxy reported.
+#[tokio::test]
+// The handshake callback's signature is tungstenite's `Callback`.
+#[allow(clippy::result_large_err)]
+async fn test_ws_relay_forwards_the_resolved_scheme_and_host() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream = format!("ws://{}", listener.local_addr().unwrap());
+    let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let seen_tx = seen_tx.clone();
+            tokio::spawn(async move {
+                let record =
+                    move |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+                        let get = |name: &str| {
+                            req.headers()
+                                .get(name)
+                                .and_then(|v| v.to_str().ok())
+                                .map(str::to_string)
+                        };
+                        let _ = seen_tx.send((get("x-forwarded-proto"), get("x-forwarded-host")));
+                        Ok(resp)
+                    };
+                let _ = tokio_tungstenite::accept_hdr_async(stream, record).await;
+            });
+        }
+    });
+
+    let (_temp_dir, spec_path) = create_ws_spec(&upstream);
+    let gateway = TestGateway::from_spec_with_args(
+        spec_path.to_str().unwrap(),
+        &["--trusted-proxies", "127.0.0.1"],
+    )
+    .await
+    .expect("failed to start gateway");
+
+    let mut request = format!("ws://127.0.0.1:{}/ws/echo", gateway.port())
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("x-forwarded-proto", "https".parse().unwrap());
+    request
+        .headers_mut()
+        .insert("x-forwarded-host", "public.example".parse().unwrap());
+    let (_ws, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("WebSocket handshake through the gateway failed");
+
+    let seen = tokio::time::timeout(std::time::Duration::from_secs(5), seen_rx.recv())
+        .await
+        .expect("the upstream saw no handshake")
+        .expect("channel closed");
+    assert_eq!(
+        seen,
+        (
+            Some("https".to_string()),
+            Some("public.example".to_string())
+        )
+    );
+}
+
 /// Whether a new connection to `port` is answered: an HTTP request on it
 /// gets a response before the gateway closes it.
 fn a_new_connection_is_answered(port: u16) -> bool {

@@ -4,6 +4,8 @@
 //! client's `X-Forwarded-For`, `X-Real-IP` and `Forwarded` are dropped, and
 //! `X-Forwarded-For` and `X-Real-IP` are set to [`Request::client_ip`], the
 //! client the data plane resolved through its trusted proxies.
+//! `X-Forwarded-Proto` and `X-Forwarded-Host` are sent as the data plane set
+//! them: the scheme and host the client used.
 //!
 //! ```
 //! use barbacane_plugin_sdk::{forwarding, prelude::*};
