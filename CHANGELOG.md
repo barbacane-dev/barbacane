@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **images**: the images are built with Rust 1.100.0, the toolchain CI tests with, instead of 1.95. `barbacane-standalone`'s gateway is built with `cargo auditable`, as the other images' binaries are, so scanners read its crates; a plugin that fails to build fails the standalone image (it was left out while `/etc/barbacane/plugins.yaml` named it), and so does `make plugins`. The installation guide's `cargo install` uses `--locked`.
 - **release**: a release needs one approval. The Approve Release job runs in the `release-approval` environment, which has the required reviewer, and every job that pushes images, signs them or publishes crates waits for it.
 
 ### Fixed
 
+- **images**: the images are built with Rust 1.100.0, the toolchain CI tests with, instead of 1.95. `barbacane-standalone`'s gateway is built with `cargo auditable`, as the other images' binaries are, so scanners read its crates; a plugin that fails to build fails the standalone image (it was left out while `/etc/barbacane/plugins.yaml` named it), and so does `make plugins`. The installation guide's `cargo install` uses `--locked`.
 - **data plane**: `X-Forwarded-Proto` and `X-Forwarded-Host` hold the scheme and host the client used: `https` on a TLS listener and `http` otherwise, and the request's `Host` or HTTP/2 authority, or behind `--trusted-proxies` the values the proxy reported. Plugins see them so, and every dispatcher that passes the request's headers on sends them: `http-upstream` sent its upstream's scheme, and `ws-upstream`, `lambda` and `fire-and-forget` the client's own values (#446).
 
 ## [1.0.0-rc.3] - 2026-11-23
