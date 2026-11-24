@@ -101,3 +101,13 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+  # A failed run that no pull request shows opens or updates an issue.
+  report-failure:
+    name: Report failure
+    needs: [build, deploy]
+    if: ${{ failure() && github.event_name == 'push' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml

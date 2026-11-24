@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ci**: a failed scheduled run, or a failed `CI`, `Coverage (full)` or docs deploy on `main`, opens an issue labelled `ci` (or comments on the one open for that workflow).
+
 ### Changed
 
 - **release**: a tag is released only when its commit passed CI on `main`: the Preflight job waits for that run, and runs `cargo deny` on the workspace and every plugin. Images are pushed under the version's tag first, and `latest`, `X.Y` and `X` move in a last job, once the images are scanned and signed, the crates published and the GitHub release created.

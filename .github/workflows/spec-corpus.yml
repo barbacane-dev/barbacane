@@ -121,3 +121,13 @@ jobs:
         env:
           BARBACANE_CORPUS_DIR: ${{ runner.temp }}/corpus
         run: cargo test -p barbacane-compiler --test corpus -- --nocapture
+
+  # A failed run that no pull request shows opens or updates an issue.
+  report-failure:
+    name: Report failure
+    needs: [corpus]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml

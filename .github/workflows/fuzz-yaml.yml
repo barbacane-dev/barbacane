@@ -98,3 +98,13 @@ jobs:
             }' | sort -rn
           echo "::error::${#findings[@]} input(s) kept, in $(cut -f3 findings.tsv | sed -E 's/[0-9]+/N/g' | sort -u | wc -l) distinct message(s); see the summary above and the uploaded artifact"
           exit 1
+
+  # A failed run that no pull request shows opens or updates an issue.
+  report-failure:
+    name: Report failure
+    needs: [fuzz]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml

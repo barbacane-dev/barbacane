@@ -106,3 +106,13 @@ jobs:
               END { for (m in count) printf "%6d  %s  %s\n", count[m], sample[m], m }' | sort -rn
           echo "::error::${#findings[@]} input(s) kept for $TARGET; see the summary above and the uploaded artifact"
           exit 1
+
+  # A failed run that no pull request shows opens or updates an issue.
+  report-failure:
+    name: Report failure
+    needs: [fuzz]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml

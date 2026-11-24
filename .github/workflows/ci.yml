@@ -1129,3 +1129,13 @@ jobs:
           exit 1
       - name: All gating jobs passed or were skipped
         run: echo "CI gate is green"
+
+  # A failed run that no pull request shows opens or updates an issue.
+  report-failure:
+    name: Report failure
+    needs: [ci-success, benchmarks]
+    if: ${{ failure() && github.event_name == 'push' }}
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml

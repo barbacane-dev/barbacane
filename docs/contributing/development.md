@@ -514,6 +514,8 @@ cargo doc --workspace --open
 
 The `Runtime base` workflow scans the base every night and locks the packages again. When Wolfi has newer ones, it pushes the new lock to the `deps/runtime-base` branch: open a pull request from it, and CI builds and scans both images on the new base. To lock by hand, install apko (`go install chainguard.dev/apko@v1.4.15`) and run `apko lock docker/runtime.apko.yaml`.
 
+A failed run that no pull request shows (a scheduled workflow, or `CI`, `Coverage (full)` or the docs deploy on `main`) opens an issue labelled `ci` titled after the workflow, or adds the run to the one already open; close it once the workflow passes again.
+
 ## Release Process
 
 1. Update version in workspace `Cargo.toml`

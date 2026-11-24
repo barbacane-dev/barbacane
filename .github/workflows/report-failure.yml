@@ -1,0 +1,42 @@
+name: Report failure
+
+# Opens an issue labelled `ci` when a run of the calling workflow fails, or
+# comments on the one already open for that workflow, so a failed scheduled or
+# main-branch run is seen without anyone watching the Actions tab. Called by
+# each such workflow's last job.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Open or update the issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="$WORKFLOW failed"
+          line="- [run $GITHUB_RUN_ID]($RUN_URL), $EVENT on \`${GITHUB_SHA:0:7}\`"
+          number=$(gh issue list --state open --label ci --limit 200 --json number,title \
+            | jq -r --arg title "$title" '[.[] | select(.title == $title)][0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$line"
+            echo "Commented on #$number"
+          else
+            gh issue create --title "$title" --label ci --body "The \`$WORKFLOW\` workflow failed. Each failed run until this issue is closed is listed here.
+
+          $line"
+          fi
