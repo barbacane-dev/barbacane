@@ -42,12 +42,10 @@ async fn make_app() -> Option<Router> {
     ))
 }
 
-/// The router and its pool, for tests that also query the database.
+/// The router and its pool, for tests that also query the database
+/// ([`crate::api::test_pool`]).
 async fn make_app_with_pool() -> Option<(Router, sqlx::PgPool)> {
-    let url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string());
-    let pool = crate::db::create_pool(&url).await.ok()?;
-    crate::db::run_migrations(&pool).await.ok()?;
+    let pool = crate::api::test_pool().await?;
     let conn_mgr = Arc::new(crate::api::ConnectionManager::new());
     let app = crate::api::create_router(
         pool.clone(),
@@ -1061,9 +1059,12 @@ fn make_app_with_token() -> Router {
         pool,
         None,
         conn_mgr,
-        crate::api::AdminAuth::from_tokens("an-admin-token-of-at-least-32-bytes!!", None),
+        crate::api::AdminAuth::from_tokens(ADMIN_TOKEN, None),
     )
 }
+
+/// The admin token of [`make_app_with_token`].
+const ADMIN_TOKEN: &str = "an-admin-token-of-at-least-32-bytes!!";
 
 /// A request through the router, outside the spec contract: for the routes
 /// that are not operations of the API.
@@ -1565,8 +1566,41 @@ async fn a_deploy_becomes_the_projects_deployment() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _) = send(app, empty_req(Method::GET, &deployment)).await;
+    let (status, _) = send(app.clone(), empty_req(Method::GET, &deployment)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The download takes the same credentials: the admin token or a key of
+    // the artifact's project.
+    let download = format!("/artifacts/{}/download", artifact.id);
+    for (who, token, expected) in [
+        ("the admin token", Some(TOKEN), StatusCode::OK),
+        (
+            "a key of the project",
+            Some(own_key.as_str()),
+            StatusCode::OK,
+        ),
+        (
+            "another project's key",
+            Some(other_key.as_str()),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "a key that is not one",
+            Some("bbk_unknown"),
+            StatusCode::UNAUTHORIZED,
+        ),
+        ("no token", None, StatusCode::UNAUTHORIZED),
+    ] {
+        let req = match token {
+            Some(token) => bearer_req(Method::GET, &download, token, None),
+            None => empty_req(Method::GET, &download),
+        };
+        let (status, body) = send(app.clone(), req).await;
+        assert_eq!(status, expected, "{who}");
+        if expected == StatusCode::OK {
+            assert_eq!(&body[..], b"artifact", "{who}");
+        }
+    }
 
     let stored = projects.get_by_id(project).await.unwrap().unwrap();
     assert_eq!(stored.deployed_artifact_id, Some(artifact.id));
@@ -1655,6 +1689,7 @@ async fn a_request_refused_before_its_operation_is_a_problem() {
 async fn the_router_asks_for_the_token_where_the_contract_does() {
     let methods = ["get", "post", "put", "patch", "delete"];
     let mut checked = 0;
+    let mut admin_only = Vec::new();
     for (template, item) in SPEC["paths"].as_object().expect("paths") {
         let path = template
             .split('/')
@@ -1673,7 +1708,8 @@ async fn the_router_asks_for_the_token_where_the_contract_does() {
             }
             let security = operation.get("security").unwrap_or(&SPEC["security"]);
             let public = security.as_array().is_some_and(Vec::is_empty);
-            let req = empty_req(method.to_uppercase().parse().expect("method"), &path);
+            let method: Method = method.to_uppercase().parse().expect("method");
+            let req = empty_req(method.clone(), &path);
             let (status, _) = raw(make_app_with_token(), req).await;
             if public {
                 assert_ne!(
@@ -1687,11 +1723,50 @@ async fn the_router_asks_for_the_token_where_the_contract_does() {
                     StatusCode::UNAUTHORIZED,
                     "{method} {template} takes a token in the contract"
                 );
+                if *security == json!([{ "adminToken": [] }]) {
+                    admin_only.push((method, path.clone()));
+                }
             }
             checked += 1;
         }
     }
     assert!(checked > 40, "checked {checked} operations");
+    assert!(
+        admin_only.len() > 40,
+        "{} admin-only operations",
+        admin_only.len()
+    );
+
+    // The admin token passes each operation that takes only it, and another
+    // token does not. Past the check, the handlers find no database. The two
+    // that also take a data-plane key look a token up in the database, and
+    // `a_deploy_becomes_the_projects_deployment` checks them.
+    let outcomes = futures_util::future::join_all(admin_only.iter().map(|(method, path)| {
+        let request = |token: &str| bearer_req(method.clone(), path, token, None);
+        async move {
+            let admin = raw(make_app_with_token(), request(ADMIN_TOKEN)).await.0;
+            let other = raw(
+                make_app_with_token(),
+                request("another-token-of-at-least-32-bytes!!!"),
+            )
+            .await
+            .0;
+            (method, path, admin, other)
+        }
+    }))
+    .await;
+    for (method, path, admin, other) in outcomes {
+        assert_ne!(
+            admin,
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} with the admin token"
+        );
+        assert_eq!(
+            other,
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} with another token"
+        );
+    }
 }
 
 #[tokio::test]

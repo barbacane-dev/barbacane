@@ -581,14 +581,10 @@ mod tests {
         drop(queue);
     }
 
-    /// The test database, migrated; `None` when `DATABASE_URL` is unreachable.
+    /// The test database ([`crate::api::test_pool`]: skipped locally without
+    /// one, failed under CI).
     async fn pool() -> Option<PgPool> {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string()
-        });
-        let pool = crate::db::create_pool(&url).await.ok()?;
-        crate::db::run_migrations(&pool).await.ok()?;
-        Some(pool)
+        crate::api::test_pool().await
     }
 
     const EMPTY_SPEC: &str = "openapi: 3.1.0\ninfo:\n  title: t\n  version: '1'\npaths: {}\n";

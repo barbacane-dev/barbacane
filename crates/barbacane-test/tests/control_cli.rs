@@ -350,8 +350,10 @@ async fn sigterm_ends_data_plane_sessions_and_exits_zero() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let Some(mut cp) = ControlPlane::boot().await else {
-        eprintln!("skip: no database or binaries");
+    let Some(mut cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
         return;
     };
     let project = cp
