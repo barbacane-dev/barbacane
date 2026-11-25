@@ -23,6 +23,7 @@ without it.
 | `BARBACANE_TRUSTED_PROXIES` | Data plane | _unset_ | Proxies whose connections report the client address, as `barbacane serve --trusted-proxies` sets it (the flag takes precedence): comma-separated addresses or CIDR ranges. An empty value trusts no proxy. See [Client address](cli.md#client-address). |
 | `BARBACANE_CLIENT_IP_HEADER` | Data plane | `x-forwarded-for` | The header trusted proxies report the client in, as `barbacane serve --client-ip-header` sets it: `x-forwarded-for` or `forwarded`. |
 | `BARBACANE_CONTROL_API_KEY` | Data plane | _unset_ | The API key a data plane presents to the control plane (`barbacane serve --api-key`), created with the project's data plane API keys. Required with `--control-plane`. |
+| `BARBACANE_CONTROL_PLANE_CA` | Data plane | _unset (public CAs)_ | PEM file of the CAs the control plane's certificate is checked against, for the WebSocket and the artifact downloads (`barbacane serve --control-plane-ca`). When set, only these CAs are trusted for the control plane. |
 | `BARBACANE_CONTROL_URL` | CLI | `http://localhost:9090` | Base URL of the control-plane API for `barbacane control` (`--url`). |
 
 ## Secure defaults

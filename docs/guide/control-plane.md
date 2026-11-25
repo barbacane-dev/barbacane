@@ -222,6 +222,10 @@ Started without `--artifact`, the data plane fetches the project's deployment (`
 
 The link carries the data plane's API key, so it uses `wss://`: the control plane serves plain HTTP, and TLS is terminated in front of it by a load balancer or reverse proxy. A `ws://` link is accepted to a loopback address only (`ws://localhost:9090/ws/data-plane` on a development machine), or with `--allow-plaintext-control-plane` on a network you trust.
 
+The certificate of the `wss://` link, and of the artifact downloads, is checked against the public CAs (Mozilla's list). A control plane whose certificate a private CA issued takes `--control-plane-ca <PEM file>` (`BARBACANE_CONTROL_PLANE_CA`): its CAs are trusted in place of the public ones.
+
+The data plane reaches the API beside the WebSocket: with `--control-plane wss://gw.example.com/barbacane/ws/data-plane`, it fetches the deployment and downloads artifacts under `https://gw.example.com/barbacane`. A WebSocket URL that does not end in `/ws/data-plane` puts the API at the root of its host.
+
 ### Create API Key for Data Plane
 
 ```bash
@@ -236,6 +240,16 @@ The response carries the key, prefixed `bbk_`, under `key`.
 The data plane presents its key as `Authorization: Bearer <key>` on the WebSocket upgrade, and the control plane checks it before upgrading: an unknown or expired key, or one without the `data-plane:connect` scope, is answered `401`, and the connection holds no session. The data plane then has 10 seconds to send its registration, which names the same key. A data plane that sends nothing, not even its heartbeat, for three heartbeat intervals (90 seconds) is taken as gone and its session ended.
 
 Revoking a key (`DELETE /projects/{id}/api-keys/{key_id}`) ends the data plane sessions registered with it: each receives a `disconnect` message and the socket closes. Every session also rechecks its key at the heartbeat interval (30 seconds), so an expired key, or one revoked through another control-plane instance, ends the session too.
+
+The `disconnect` message says why (`API key revoked`, `API key revoked or expired`, `no message from the data plane`, `data plane removed`, `control plane shutting down`) and whether the data plane registers again (`reconnect`). It does, with backoff, except after `data plane removed`.
+
+### Disconnect a Data Plane
+
+```bash
+barbacane control data-planes disconnect --project-id <PROJECT_ID> --data-plane-id <DATA_PLANE_ID>
+```
+
+This deletes the data plane's record and ends its session. The data plane keeps serving the artifact it runs, receives no deployment, and does not register again until it restarts. To keep it from registering again after a restart, revoke its API key.
 
 ### List Connected Data Planes
 

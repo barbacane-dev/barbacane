@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message, Connector};
 use uuid::Uuid;
 
 /// Messages sent from data plane to control plane.
@@ -64,10 +64,101 @@ pub enum ControlPlaneMessage {
     },
     /// Heartbeat acknowledgment with drift detection status.
     HeartbeatAck { drift_detected: bool },
-    /// Request disconnect.
-    Disconnect { reason: String },
+    /// The session ends. With `reconnect` false the data plane does not
+    /// register again until it restarts.
+    Disconnect {
+        reason: String,
+        #[serde(default = "reconnect_by_default")]
+        reconnect: bool,
+    },
     /// Error message.
     Error { message: String },
+}
+
+fn reconnect_by_default() -> bool {
+    true
+}
+
+/// The CAs the control plane's certificate is checked against, for the
+/// WebSocket and the artifact downloads: those of `--control-plane-ca` in place
+/// of the public roots, or the public roots.
+#[derive(Clone, Default)]
+pub struct ControlPlaneTrust {
+    /// The PEM bundle, for the download client.
+    pem: Option<Arc<Vec<u8>>>,
+    /// The WebSocket's TLS configuration.
+    tls: Option<Arc<rustls::ClientConfig>>,
+}
+
+impl ControlPlaneTrust {
+    /// Trust the CAs of the PEM file at `path`, and only them.
+    pub fn from_pem_file(path: &std::path::Path) -> Result<Self, String> {
+        let pem = std::fs::read(path)
+            .map_err(|e| format!("cannot read the control plane CA {}: {e}", path.display()))?;
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+            let cert = cert
+                .map_err(|e| format!("the control plane CA {} is not PEM: {e}", path.display()))?;
+            roots.add(cert).map_err(|e| {
+                format!(
+                    "the control plane CA {} holds an invalid certificate: {e}",
+                    path.display()
+                )
+            })?;
+        }
+        if roots.is_empty() {
+            return Err(format!(
+                "the control plane CA {} holds no certificate",
+                path.display()
+            ));
+        }
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let tls = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("cannot build the control plane TLS configuration: {e}"))?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        Ok(Self {
+            pem: Some(Arc::new(pem)),
+            tls: Some(Arc::new(tls)),
+        })
+    }
+
+    /// `builder` trusting these CAs.
+    pub fn apply(&self, builder: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder, String> {
+        let Some(pem) = &self.pem else {
+            return Ok(builder);
+        };
+        let certs = reqwest::Certificate::from_pem_bundle(pem)
+            .map_err(|e| format!("the control plane CA is not usable: {e}"))?;
+        Ok(certs
+            .into_iter()
+            .fold(builder.tls_built_in_root_certs(false), |b, cert| {
+                b.add_root_certificate(cert)
+            }))
+    }
+
+    /// The WebSocket connector: these CAs, or the public roots.
+    fn connector(&self) -> Option<Connector> {
+        self.tls.clone().map(Connector::Rustls)
+    }
+}
+
+/// Connect to the control plane's WebSocket at `url`, presenting `api_key`.
+pub(crate) async fn connect(
+    url: &str,
+    api_key: &str,
+    trust: &ControlPlaneTrust,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+> {
+    let request = upgrade_request(url, api_key)?;
+    let (stream, _response) =
+        connect_async_tls_with_config(request, None, false, trust.connector())
+            .await
+            .map_err(|e| format!("WebSocket connection failed: {e}"))?;
+    Ok(stream)
 }
 
 /// Requests the data plane has handled since it started, reported in each
@@ -114,6 +205,7 @@ pub struct ControlPlaneConfig {
     pub api_key: String,
     pub data_plane_name: Option<String>,
     pub initial_artifact_id: Option<Uuid>,
+    pub trust: ControlPlaneTrust,
 }
 
 /// Notification that a new artifact is available.
@@ -140,6 +232,9 @@ enum ConnectOutcome {
     ConnectionLost(String),
     /// Failed before completing registration — increase backoff.
     ConnectionFailed(String),
+    /// The control plane deleted this data plane's record: it does not
+    /// register again until it restarts.
+    Removed(String),
 }
 
 /// Control plane client that maintains connection and handles messages.
@@ -222,6 +317,16 @@ impl ControlPlaneClient {
                 ConnectOutcome::Shutdown => {
                     return;
                 }
+                ConnectOutcome::Removed(reason) => {
+                    tracing::error!(
+                        reason = %reason,
+                        "The control plane removed this data plane; it keeps serving its artifact and registers again when it restarts"
+                    );
+                    eprintln!(
+                        "barbacane: the control plane removed this data plane ({reason}); not reconnecting until restarted"
+                    );
+                    return;
+                }
                 ConnectOutcome::ConnectionLost(e) => {
                     // Was registered, connection dropped — reset backoff for fast reconnect
                     tracing::warn!(
@@ -266,18 +371,15 @@ impl ControlPlaneClient {
         drift_flag: &Arc<AtomicBool>,
     ) -> ConnectOutcome {
         // Connect to WebSocket, presenting the API key on the upgrade.
-        let request = match upgrade_request(&self.config.control_plane_url, &self.config.api_key) {
-            Ok(request) => request,
+        let ws_stream = match connect(
+            &self.config.control_plane_url,
+            &self.config.api_key,
+            &self.config.trust,
+        )
+        .await
+        {
+            Ok(stream) => stream,
             Err(e) => return ConnectOutcome::ConnectionFailed(e),
-        };
-        let (ws_stream, _response) = match connect_async(request).await {
-            Ok(conn) => conn,
-            Err(e) => {
-                return ConnectOutcome::ConnectionFailed(format!(
-                    "WebSocket connection failed: {}",
-                    e
-                ))
-            }
         };
 
         let (mut sender, mut receiver) = ws_stream.split();
@@ -446,6 +548,15 @@ impl ControlPlaneClient {
                     match result {
                         Some(Ok(Message::Text(text))) => {
                             match serde_json::from_str::<ControlPlaneMessage>(&text) {
+                                Ok(ControlPlaneMessage::Disconnect { reason, reconnect }) => {
+                                    tracing::info!(reason = %reason, reconnect, "Disconnected by the control plane");
+                                    let _ = sender.close().await;
+                                    return if reconnect {
+                                        ConnectOutcome::ConnectionLost(format!("Disconnected by the control plane: {reason}"))
+                                    } else {
+                                        ConnectOutcome::Removed(reason)
+                                    };
+                                }
                                 Ok(msg) => {
                                     if let Err(e) = self.handle_message(msg, artifact_tx, &mut sender, drift_flag).await {
                                         tracing::warn!(error = %e, "Error handling control plane message");
@@ -520,16 +631,14 @@ impl ControlPlaneClient {
                     tracing::warn!(error = %e, "Failed to send artifact notification");
                 }
             }
-            ControlPlaneMessage::Disconnect { reason } => {
-                tracing::info!(reason = %reason, "Disconnecting at control plane request");
-                return Err(format!("Disconnected by control plane: {}", reason));
-            }
             ControlPlaneMessage::Error { message } => {
                 tracing::warn!(message = %message, "Error from control plane");
             }
-            // These shouldn't happen after registration
+            // These shouldn't happen after registration; a disconnect is
+            // handled by the message loop.
             ControlPlaneMessage::Registered { .. }
-            | ControlPlaneMessage::RegistrationFailed { .. } => {
+            | ControlPlaneMessage::RegistrationFailed { .. }
+            | ControlPlaneMessage::Disconnect { .. } => {
                 tracing::warn!("Unexpected registration message after already registered");
             }
         }
@@ -548,6 +657,174 @@ fn heartbeat_period(interval_secs: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CA and a server configuration for `localhost` with a certificate it
+    /// issued; the CA as PEM.
+    fn private_ca() -> (String, Arc<rustls::ServerConfig>) {
+        let ca_key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = params.self_signed(&ca_key).unwrap();
+        let key = rcgen::KeyPair::generate().unwrap();
+        let leaf = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .signed_by(&key, &ca, &ca_key)
+            .unwrap();
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![leaf.der().clone()],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(key.serialize_der().into()),
+            )
+            .unwrap();
+        (ca.pem(), Arc::new(config))
+    }
+
+    /// Serve TLS with `config` on loopback: a WebSocket that holds each
+    /// session when `websocket`, else `200` to every request. The port.
+    async fn tls_server(config: Arc<rustls::ServerConfig>, websocket: bool) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let acceptor = tokio_rustls::TlsAcceptor::from(config);
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    if websocket {
+                        if let Ok(mut ws) = tokio_tungstenite::accept_async(tls).await {
+                            let _ = ws.next().await;
+                        }
+                        return;
+                    }
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match tls.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => request.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let _ = tls
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                        .await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_private_ca_is_trusted_for_the_socket_and_the_downloads() {
+        // As `barbacane` does at start, for the clients that use the public roots.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let (ca_pem, config) = private_ca();
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem).unwrap();
+        let trust = ControlPlaneTrust::from_pem_file(&ca_path).unwrap();
+        let public = ControlPlaneTrust::default();
+
+        let port = tls_server(Arc::clone(&config), true).await;
+        let url = format!("wss://localhost:{port}/ws/data-plane");
+        let connected = connect(&url, "key", &trust).await;
+        assert!(connected.is_ok(), "{:?}", connected.err());
+        assert!(
+            connect(&url, "key", &public).await.is_err(),
+            "the public roots do not know the private CA"
+        );
+
+        let port = tls_server(config, false).await;
+        let url = format!("https://localhost:{port}/artifacts");
+        let downloaded = crate::hot_reload::download_client(&trust)
+            .unwrap()
+            .get(&url)
+            .send()
+            .await;
+        assert!(
+            downloaded.as_ref().is_ok_and(|r| r.status() == 200),
+            "{downloaded:?}"
+        );
+        let refused = crate::hot_reload::download_client(&public)
+            .unwrap()
+            .get(&url)
+            .send()
+            .await;
+        assert!(refused.is_err(), "{refused:?}");
+
+        std::fs::write(&ca_path, "not a certificate").unwrap();
+        assert!(ControlPlaneTrust::from_pem_file(&ca_path).is_err());
+    }
+
+    /// Run a data plane against a control plane that registers it, then ends
+    /// the session with a `disconnect` saying `reconnect`. How many times it
+    /// connected after `wait`.
+    async fn connections_after_a_disconnect(reconnect: bool, wait: Duration) -> u64 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let connections = Arc::new(AtomicU64::new(0));
+        let counted = Arc::clone(&connections);
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else {
+                    continue;
+                };
+                let _register = ws.next().await;
+                let registered = serde_json::json!({
+                    "type": "registered",
+                    "data_plane_id": Uuid::new_v4(),
+                    "heartbeat_interval_secs": 30,
+                });
+                let disconnect = serde_json::json!({
+                    "type": "disconnect",
+                    "reason": "ended by the test",
+                    "reconnect": reconnect,
+                });
+                let _ = ws.send(Message::Text(registered.to_string().into())).await;
+                let _ = ws.send(Message::Text(disconnect.to_string().into())).await;
+                let _ = ws.close(None).await;
+            }
+        });
+
+        let client = ControlPlaneClient::new(ControlPlaneConfig {
+            control_plane_url: format!("ws://127.0.0.1:{port}/ws/data-plane"),
+            project_id: Uuid::new_v4(),
+            api_key: "key".to_string(),
+            data_plane_name: None,
+            initial_artifact_id: None,
+            trust: ControlPlaneTrust::default(),
+        });
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (_hash_tx, hash_rx) = watch::channel(None);
+        let (_id_tx, id_rx) = watch::channel(None);
+        let _channels = client.start(
+            shutdown_rx,
+            hash_rx,
+            id_rx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        tokio::time::sleep(wait).await;
+        connections.load(Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_removed_data_plane_does_not_register_again() {
+        let wait = Duration::from_millis(2500);
+        let (removed, ended) = tokio::join!(
+            connections_after_a_disconnect(false, wait),
+            connections_after_a_disconnect(true, wait),
+        );
+        assert_eq!(removed, 1, "removed: it stays disconnected");
+        assert!(ended >= 2, "any other end: it registers again ({ended})");
+    }
 
     #[test]
     fn the_upgrade_presents_the_api_key() {
@@ -709,11 +986,24 @@ mod tests {
 
         let msg: ControlPlaneMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ControlPlaneMessage::Disconnect { reason } => {
+            ControlPlaneMessage::Disconnect { reason, reconnect } => {
                 assert_eq!(reason, "server shutting down");
+                assert!(reconnect, "a notice without the field lets it reconnect");
             }
             _ => panic!("Expected Disconnect message"),
         }
+
+        let msg: ControlPlaneMessage = serde_json::from_str(
+            r#"{"type": "disconnect", "reason": "data plane removed", "reconnect": false}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            msg,
+            ControlPlaneMessage::Disconnect {
+                reconnect: false,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -757,6 +1047,7 @@ mod tests {
             api_key: "test-api-key".to_string(),
             data_plane_name: Some("test-plane".to_string()),
             initial_artifact_id: None,
+            trust: ControlPlaneTrust::default(),
         };
 
         assert!(config.control_plane_url.starts_with("ws://"));

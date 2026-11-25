@@ -57,8 +57,9 @@ pub enum ControlPlaneMessage {
     },
     /// Heartbeat acknowledgment with drift detection status.
     HeartbeatAck { drift_detected: bool },
-    /// Request disconnect.
-    Disconnect { reason: String },
+    /// The session ends. With `reconnect` false the data plane does not
+    /// register again until it restarts.
+    Disconnect { reason: String, reconnect: bool },
     /// Error message.
     Error { message: String },
 }

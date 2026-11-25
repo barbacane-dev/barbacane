@@ -661,6 +661,7 @@ The examples below assume the key is set.
 | `--api-key` | No | - | The data plane API key the control plane issued for the project. Also read from `BARBACANE_CONTROL_API_KEY` |
 | `--data-plane-name` | No | - | Name of this instance in the control plane, at most 128 characters |
 | `--allow-plaintext-control-plane` | No | `false` | Allow a `ws://` control plane link to a host other than loopback; the link carries the API key |
+| `--control-plane-ca` | No | - | PEM file of the CAs the control plane's certificate is checked against, for the WebSocket and the artifact downloads, in place of the public CAs. Also read from `BARBACANE_CONTROL_PLANE_CA` |
 
 ### Examples
 
