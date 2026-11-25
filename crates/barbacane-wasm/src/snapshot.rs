@@ -5,7 +5,7 @@
 //! later instance starts fresh with those chunks written back, so it begins
 //! where `init` left off and with nothing an earlier request wrote.
 
-use wasmparser::{Operator, Parser, Payload};
+use wasmparser::{KnownCustom, Name, NameSectionReader, Operator, Parser, Payload};
 
 use crate::error::WasmError;
 use crate::instance::PluginInstance;
@@ -72,12 +72,18 @@ impl MemorySnapshot {
 /// Whether a module's state after `init` is all in its linear memory, so a
 /// fresh instance with the snapshot written back is the instance `init` left.
 ///
-/// That holds when the module imports no global, defines at most one mutable
-/// global (the stack pointer, which a call leaves as it found it), and changes
-/// no table or passive data segment. A module that does any of these runs
-/// `init` for every instance.
+/// That holds when the module imports no global, defines no mutable global but
+/// the stack pointer (which a call leaves as it found it), and changes no table
+/// or passive data segment. The stack pointer is the global the `name` section
+/// calls `__stack_pointer`, as LLVM names it: another mutable global, such as
+/// an allocator's heap pointer, would restart at its initial value over the
+/// memory `init` allocated. A module that fails any of this runs `init` for
+/// every instance.
 pub(crate) fn replayable(wasm: &[u8]) -> bool {
-    let mut mutable_globals = 0;
+    // Imported globals are refused below, so defined globals are numbered from 0.
+    let mut mutable_globals = Vec::new();
+    let mut defined_globals = 0u32;
+    let mut stack_pointer = None;
     for payload in Parser::new(0).parse_all(wasm) {
         let Ok(payload) = payload else {
             return false;
@@ -96,10 +102,20 @@ pub(crate) fn replayable(wasm: &[u8]) -> bool {
             }
             Payload::GlobalSection(globals) => {
                 for global in globals {
-                    match global {
-                        Ok(global) if global.ty.mutable => mutable_globals += 1,
-                        Ok(_) => {}
-                        Err(_) => return false,
+                    let Ok(global) = global else {
+                        return false;
+                    };
+                    if global.ty.mutable {
+                        mutable_globals.push(defined_globals);
+                    }
+                    defined_globals += 1;
+                }
+            }
+            Payload::CustomSection(section) => {
+                if let KnownCustom::Name(names) = section.as_known() {
+                    match stack_pointer_index(names) {
+                        Some(index) => stack_pointer = index,
+                        None => return false,
                     }
                 }
             }
@@ -127,7 +143,26 @@ pub(crate) fn replayable(wasm: &[u8]) -> bool {
             _ => {}
         }
     }
-    mutable_globals <= 1
+    mutable_globals
+        .iter()
+        .all(|&index| stack_pointer == Some(index))
+}
+
+/// The index of the global a `name` section calls `__stack_pointer`:
+/// `Some(None)` when it names none, `None` when the section is malformed.
+fn stack_pointer_index(names: NameSectionReader<'_>) -> Option<Option<u32>> {
+    let mut found = None;
+    for name in names {
+        if let Name::Global(globals) = name.ok()? {
+            for naming in globals {
+                let naming = naming.ok()?;
+                if naming.name == "__stack_pointer" {
+                    found = Some(naming.index);
+                }
+            }
+        }
+    }
+    Some(found)
 }
 
 #[cfg(test)]
@@ -157,9 +192,11 @@ mod tests {
     #[test]
     fn a_module_whose_state_is_in_memory_is_replayable() {
         assert!(replayable(&module("")));
-        assert!(replayable(&module("(global (mut i32) (i32.const 0))")));
         assert!(replayable(&module(
-            "(global i32 (i32.const 0)) (global (mut i32) (i32.const 0))"
+            "(global $__stack_pointer (mut i32) (i32.const 0))"
+        )));
+        assert!(replayable(&module(
+            "(global i32 (i32.const 0)) (global $__stack_pointer (mut i32) (i32.const 0))"
         )));
         assert!(replayable(&module(
             "(func (memory.fill (i32.const 0) (i32.const 0) (i32.const 8)))"
@@ -169,7 +206,10 @@ mod tests {
     #[test]
     fn a_module_with_state_outside_memory_is_not() {
         for body in [
-            "(global (mut i32) (i32.const 0)) (global (mut i32) (i32.const 0))",
+            // A mutable global the name section does not call the stack pointer
+            "(global (mut i32) (i32.const 0))",
+            "(global $heap (mut i32) (i32.const 1024))",
+            "(global $__stack_pointer (mut i32) (i32.const 0)) (global $heap (mut i32) (i32.const 0))",
             r#"(import "env" "g" (global i32))"#,
             "(table 1 funcref) (func (table.set (i32.const 0) (ref.null func)))",
             "(table 1 funcref) (func (drop (table.grow (ref.null func) (i32.const 1))))",
