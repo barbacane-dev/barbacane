@@ -530,6 +530,8 @@ jobs:
       # Directory for the ldap-auth integration tests (tests/ldap.rs); the
       # tests skip when nothing listens here.
       BARBACANE_TEST_LDAP_URL: ldap://127.0.0.1:3893
+      # Broker for the kafka dispatcher tests (tests/kafka.rs).
+      BARBACANE_TEST_KAFKA_BROKERS: localhost:9092
     services:
       # glauth with its built-in default directory (dc=glauth,dc=com, plain
       # LDAP on 3893, johndoe/dogood in superheros, serviceuser/mysecret in
@@ -538,6 +540,12 @@ jobs:
         image: ghcr.io/glauth/glauth:v2.5.4
         ports:
           - 3893:3893
+      # A single-node Kafka (KRaft) with its default configuration, which
+      # advertises localhost:9092.
+      kafka:
+        image: apache/kafka-native:4.4.0
+        ports:
+          - 9092:9092
     steps:
       - uses: actions/checkout@v6
         with:
