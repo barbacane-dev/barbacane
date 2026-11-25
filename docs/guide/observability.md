@@ -15,8 +15,12 @@ barbacane serve --artifact api.bca --log-format json
 ```
 
 ```json
-{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","target":"barbacane","message":"request completed","trace_id":"abc123","request_id":"def456","method":"GET","path":"/users","status":200,"duration_ms":12}
+{"duration_ms":12,"level":"INFO","message":"request completed","method":"GET","path":"/users","request_id":"8a085784-a4de-4233-8f00-59641fcbdb30","status":200,"target":"barbacane::access","timestamp":"2026-01-15T10:30:00.123456Z","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}
 ```
+
+Each line is one JSON object with `timestamp`, `level`, `target`, `message` and the event's own fields at the top level. A line logged while a request is handled also carries the request's `request_id` and `trace_id` (the ids the response's `x-request-id` and `x-trace-id` give), and `upstream_endpoint` once a dispatch has used a pool endpoint.
+
+Each request ends with a `request completed` line at `info`, under the target `barbacane::access`: `method`, `path`, `status` and `duration_ms` (for a streamed response, until its headers are sent). `RUST_LOG=info,barbacane::access=off` leaves it out.
 
 ### Pretty Format (Development)
 
@@ -83,7 +87,7 @@ curl http://localhost:8081/metrics
 | `barbacane_upstream_endpoint_retries_total` | counter | Attempts sent to an endpoint after another one failed, by endpoint |
 | `barbacane_upstream_endpoint_circuit_state` | gauge | An endpoint's circuit breaker: 0 closed, 1 open, 2 half-open |
 
-An endpoint label is `scheme://host:port`, never the full URL, so it carries no user information or query; its values are the endpoints the artifact lists. The request span records the endpoint a dispatch used as `upstream_endpoint`, and breaker transitions are logged with it.
+An endpoint label is `scheme://host:port`, never the full URL, so it carries no user information or query; its values are the endpoints the artifact lists. The request records the endpoint a dispatch used as `upstream_endpoint`, a field of its log lines from then on, and breaker transitions are logged with it.
 
 Labels stay bounded whatever clients send. `path` is the route template, or one label for requests that match no route. `method` is `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `CONNECT`, `OPTIONS`, `TRACE`, `PATCH` or `QUERY`, and `OTHER` for any other method, including one declared under OpenAPI 3.2 `additionalOperations`.
 

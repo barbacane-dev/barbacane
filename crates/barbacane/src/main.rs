@@ -1442,12 +1442,24 @@ impl Gateway {
             }
         }
 
+        let (method, path) = (req.method().clone(), req.uri().path().to_string());
         let response = self
             .handle_request_in_span(req, client_ip, arrival, start_time, request_id, trace_id)
             .instrument(span.clone())
             .await;
         if let Ok(response) = &response {
             let status = response.status();
+            // The access log: one line per request, its request and trace ids
+            // from the span. For a streamed response, once its headers are sent.
+            tracing::info!(
+                target: "barbacane::access",
+                parent: &span,
+                method = %method,
+                path = %path,
+                status = status.as_u16(),
+                duration_ms = u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "request completed"
+            );
             barbacane_telemetry::tracing::set_attribute(
                 &span,
                 barbacane_telemetry::attributes::HTTP_RESPONSE_STATUS_CODE,

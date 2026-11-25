@@ -73,3 +73,41 @@ async fn a_malformed_traceparent_gives_a_new_trace_id() {
         "{trace_id}"
     );
 }
+
+/// Each request ends with a `request completed` line whose `request_id` and
+/// `trace_id`, at the top level, are those the response carries.
+#[tokio::test]
+async fn each_request_is_logged_with_its_ids() {
+    let gateway = TestGateway::from_spec(&fixture("minimal.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let resp = gateway.get("/health").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let request_id = resp.headers()["x-request-id"].to_str().unwrap().to_string();
+    let trace_id = resp.headers()["x-trace-id"].to_str().unwrap().to_string();
+
+    let log = gateway.log();
+    assert!(
+        log.wait_for(&request_id, std::time::Duration::from_secs(5)),
+        "{}",
+        log.text()
+    );
+    let line = log
+        .text()
+        .lines()
+        .filter_map(|line| {
+            let json = line.strip_prefix("[stdout] ").unwrap_or(line);
+            serde_json::from_str::<serde_json::Value>(json).ok()
+        })
+        .find(|line| {
+            line["message"] == "request completed" && line["request_id"] == request_id.as_str()
+        })
+        .unwrap_or_else(|| panic!("no access line for {request_id}: {}", log.text()));
+    assert_eq!(line["trace_id"], trace_id.as_str());
+    assert_eq!(line["method"], "GET");
+    assert_eq!(line["path"], "/health");
+    assert_eq!(line["status"], 200);
+    assert_eq!(line["target"], "barbacane::access");
+    assert!(line["duration_ms"].is_u64(), "{line}");
+    assert!(line.get("span").is_none(), "{line}");
+}
