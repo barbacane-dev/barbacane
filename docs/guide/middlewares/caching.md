@@ -31,7 +31,7 @@ x-barbacane-middlewares:
 | `ttl` | integer | `300` | Cache duration (seconds) |
 | `vary` | array | `[]` | Headers that vary cache key |
 | `methods` | array | `["GET", "HEAD"]` | HTTP methods to cache |
-| `cacheable_status` | array | `[200, 301]` | Status codes to cache |
+| `cacheable_status` | array | `[200, 301, 404]` | Status codes to cache |
 
 ### Cache key
 

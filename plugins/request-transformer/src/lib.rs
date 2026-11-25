@@ -160,7 +160,9 @@ impl RequestTransformer {
         }
 
         if let Some(body_config) = &self.body {
-            req.body = transform_body(&req.body, body_config, &original, self.skip_if_empty);
+            if is_json(original.headers.get("content-type").map(String::as_str)) {
+                req.body = transform_body(&req.body, body_config, &original, self.skip_if_empty);
+            }
         }
 
         Action::Continue(req)
@@ -499,6 +501,16 @@ fn transform_path(path: &str, config: &PathConfig) -> String {
 // ---------------------------------------------------------------------------
 // Body transformations (JSON Pointer — RFC 6901)
 // ---------------------------------------------------------------------------
+
+/// Whether a `content-type` names JSON: `application/json`, or a `+json`
+/// suffix such as `application/merge-patch+json`, parameters aside.
+fn is_json(content_type: Option<&str>) -> bool {
+    let Some(media_type) = content_type.and_then(|value| value.split(';').next()) else {
+        return false;
+    };
+    let media_type = media_type.trim().to_ascii_lowercase();
+    media_type == "application/json" || media_type.ends_with("+json")
+}
 
 /// Transform JSON body. Order: remove → rename → add.
 ///
@@ -1610,6 +1622,7 @@ mod tests {
 
         let req = Request::new("POST", "/query-to-body")
             .with_query("userId=42")
+            .with_header("content-type", "application/json")
             .with_body(br#"{"existing":"data"}"#.to_vec())
             .with_client_ip("127.0.0.1");
 
@@ -1652,6 +1665,28 @@ mod tests {
             Action::Continue(modified) => assert_eq!(modified.path, "/api/users"),
             Action::ShortCircuit(_) => panic!("Expected Action::Continue"),
         }
+    }
+
+    /// Body transforms apply to a JSON body only, as the content type says;
+    /// another body passes unchanged even when it parses as JSON.
+    #[test]
+    fn body_transforms_follow_the_content_type() {
+        let mut plugin: RequestTransformer =
+            serde_json::from_str(r#"{"body": {"add": {"/added": "yes"}}}"#).unwrap();
+        let send = |plugin: &mut RequestTransformer, content_type: &str| {
+            let mut headers = BTreeMap::new();
+            headers.insert("content-type".to_string(), content_type.to_string());
+            let req = Request::new("POST", "/x")
+                .with_headers(headers)
+                .with_body(br#"{"a":1}"#.to_vec());
+            match plugin.on_request(req) {
+                Action::Continue(modified) => modified.body_string().unwrap_or_default(),
+                Action::ShortCircuit(_) => panic!("Expected Action::Continue"),
+            }
+        };
+        assert!(send(&mut plugin, "application/json; charset=utf-8").contains("added"));
+        assert!(send(&mut plugin, "application/merge-patch+json").contains("added"));
+        assert_eq!(send(&mut plugin, "text/plain"), r#"{"a":1}"#);
     }
 
     #[test]

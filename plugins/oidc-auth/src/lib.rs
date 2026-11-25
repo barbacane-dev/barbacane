@@ -344,9 +344,12 @@ impl OidcError {
         }
     }
 
+    /// 403 for missing scopes, 503 when the provider's discovery document or
+    /// keys cannot be fetched (the token was not judged), 401 otherwise.
     fn status_code(&self) -> u16 {
         match self {
             OidcError::InsufficientScope => 403,
+            OidcError::DiscoveryFailed(_) | OidcError::JwksFetchFailed(_) => 503,
             _ => 401,
         }
     }
@@ -864,21 +867,34 @@ impl OidcAuth {
             vec!["application/json".to_string()],
         );
 
-        let www_auth = format!(
-            "Bearer realm=\"api\", error=\"{}\", error_description=\"{}\"",
-            error.as_str(),
-            error.description()
-        );
-        headers.insert("www-authenticate".to_string(), vec![www_auth]);
+        // RFC 6750: WWW-Authenticate header, on the answers that challenge the client.
+        if status != 503 {
+            let www_auth = format!(
+                "Bearer realm=\"api\", error=\"{}\", error_description=\"{}\"",
+                error.as_str(),
+                error.description()
+            );
+            headers.insert("www-authenticate".to_string(), vec![www_auth]);
+        }
 
-        let error_type = match status {
-            403 => "urn:barbacane:error:authorization-failed",
-            _ => "urn:barbacane:error:authentication-failed",
+        let (error_type, title) = match status {
+            403 => (
+                "urn:barbacane:error:authorization-failed",
+                "Authorization failed",
+            ),
+            503 => (
+                "urn:barbacane:error:oidc-unavailable",
+                "Service Unavailable",
+            ),
+            _ => (
+                "urn:barbacane:error:authentication-failed",
+                "Authentication failed",
+            ),
         };
 
         let body = serde_json::json!({
             "type": error_type,
-            "title": if status == 403 { "Authorization failed" } else { "Authentication failed" },
+            "title": title,
             "status": status,
             "detail": error.description()
         });
@@ -1422,6 +1438,27 @@ mod tests {
             assert!(config.validate_claims(&claims).is_ok());
         }
         assert_eq!(no_audience_warnings(), before + 1);
+    }
+
+    /// A provider whose discovery document or keys cannot be fetched is
+    /// unavailable (503, no challenge), as the other auth plugins answer.
+    #[test]
+    fn an_unreachable_provider_is_503() {
+        let config = create_test_config();
+        for error in [
+            OidcError::DiscoveryFailed("timeout".into()),
+            OidcError::JwksFetchFailed("502".into()),
+        ] {
+            let response = config.error_response(&error);
+            assert_eq!(response.status, 503);
+            assert!(response.header("www-authenticate").is_none());
+            let body: serde_json::Value =
+                serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
+            assert_eq!(body["type"], "urn:barbacane:error:oidc-unavailable");
+        }
+        let response = config.error_response(&OidcError::MissingToken);
+        assert_eq!(response.status, 401);
+        assert!(response.header("www-authenticate").is_some());
     }
 
     #[test]
