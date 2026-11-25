@@ -329,6 +329,19 @@ fn serve_without_artifact(
     (process, format!("http://{LISTEN_HOST}:{port}"))
 }
 
+/// The artifact the project's first data plane registered with. A data plane
+/// serves before its WebSocket registration lands, so this waits for it.
+async fn registered_artifact(cp: &ControlPlane, project: &str) -> Value {
+    for _ in 0..300 {
+        let planes = cp.cli(&["data-planes", "list", "--project-id", project], None);
+        if let Some(plane) = planes.as_array().and_then(|planes| planes.first()) {
+            return plane["artifact_id"].clone();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no data plane of {project} registered");
+}
+
 /// A data plane started with no artifact fetches the project's deployment
 /// from the control plane, serves it, and registers as running it; started
 /// again, it serves the copy it kept, and is sent nothing.
@@ -347,12 +360,7 @@ async fn a_data_plane_without_an_artifact_starts_from_the_deployment() {
     let (mut process, url) = serve_without_artifact(&cp, &project, &key, artifact_dir.path());
     let resp = reqwest::get(format!("{url}/v2/status")).await.unwrap();
     assert_eq!(resp.status(), 200, "{}", process.log().text());
-    let data_planes = cp.cli(&["data-planes", "list", "--project-id", &project], None);
-    assert_eq!(
-        data_planes[0]["artifact_id"],
-        deployed.as_str(),
-        "{data_planes}"
-    );
+    assert_eq!(registered_artifact(&cp, &project).await, deployed.as_str());
     process.kill_and_reap();
 
     let (mut again, url) = serve_without_artifact(&cp, &project, &key, artifact_dir.path());
