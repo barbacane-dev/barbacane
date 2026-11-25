@@ -20,6 +20,8 @@ use tokio::net::TcpListener;
 use barbacane_compiler::Manifest;
 use barbacane_telemetry::MetricsRegistry;
 
+use crate::validator::RequestLimits;
+
 /// Shared state for the admin server.
 pub struct AdminState {
     pub manifest: Arc<ArcSwap<Manifest>>,
@@ -39,25 +41,41 @@ const ADMIN_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(60);
 /// a few; the cap keeps a flood on the port from holding tasks.
 const ADMIN_MAX_CONNECTIONS: usize = 64;
 
+/// Room an HTTP/2 header list keeps for the other fields beside one of
+/// `max_header_size`.
+pub const HTTP2_HEADER_LIST_HEADROOM: usize = 16 * 1024;
+
 /// Apply ingress hardening to a connection builder: a header-read deadline
 /// (slowloris defense, doubling as the HTTP/1 idle keep-alive timeout), an
 /// HTTP/2 keep-alive probe + timeout, and a per-connection stream cap.
+///
+/// The header limits are the request's: hyper parses at most
+/// `limits.max_headers` HTTP/1 header lines, and an HTTP/2 header list
+/// (RFC 9113 counts each field's name, value and 32 bytes) holds at most
+/// `limits.max_header_size` plus `HTTP2_HEADER_LIST_HEADROOM`. Both answer
+/// 431 beyond.
 pub fn configure_conn_builder(
     builder: &mut auto::Builder<TokioExecutor>,
     keepalive: std::time::Duration,
+    limits: &RequestLimits,
 ) {
+    let header_list_size = limits
+        .max_header_size
+        .saturating_add(HTTP2_HEADER_LIST_HEADROOM);
     builder
         .http1()
         // A timer is required for `header_read_timeout` to function.
         .timer(TokioTimer::new())
         .keep_alive(true)
-        .header_read_timeout(keepalive);
+        .header_read_timeout(keepalive)
+        .max_headers(limits.max_headers);
     builder
         .http2()
         .timer(TokioTimer::new())
         .keep_alive_interval(Some(std::time::Duration::from_secs(20)))
         .keep_alive_timeout(keepalive)
-        .max_concurrent_streams(HTTP2_MAX_CONCURRENT_STREAMS);
+        .max_concurrent_streams(HTTP2_MAX_CONCURRENT_STREAMS)
+        .max_header_list_size(u32::try_from(header_list_size).unwrap_or(u32::MAX));
 }
 
 /// Set once the gateway received its shutdown signal: it finishes the
@@ -119,7 +137,7 @@ pub async fn start_admin_server(
                 async move { handle_request(req, &state) }
             });
             let mut builder = auto::Builder::new(TokioExecutor::new());
-            configure_conn_builder(&mut builder, ADMIN_KEEPALIVE);
+            configure_conn_builder(&mut builder, ADMIN_KEEPALIVE, &RequestLimits::default());
             let _ = builder
                 .serve_connection(TokioIo::new(stream), service)
                 .await;
