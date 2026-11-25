@@ -446,3 +446,122 @@ async fn a_client_leaving_a_quiet_stream_gives_its_instances_back() {
         "every instance came from the pool"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A streamed response's on_response runs off the async workers
+// ---------------------------------------------------------------------------
+
+/// A streamed response's `on_response` runs on a blocking thread: with one
+/// async worker, an `http-log` middleware waiting on a slow log endpoint does
+/// not hold up the next request.
+#[tokio::test]
+async fn streamed_on_response_does_not_hold_an_async_worker() {
+    use std::time::{Duration, Instant};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let http_log_wasm =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/http-log/http-log.wasm");
+    assert!(
+        streaming_echo_wasm().exists() && http_log_wasm.exists(),
+        "build fixture-plugins/streaming-echo and plugins/http-log first"
+    );
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/stream"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("data: hi\n\n", "text/event-stream"))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/log"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(3)))
+        .mount(&upstream)
+        .await;
+
+    let temp_dir = tempfile::TempDir::new().expect("failed to create temp dir");
+    std::fs::write(
+        temp_dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  streaming-echo:\n    path: {}\n  mock:\n    path: {}\n  http-log:\n    path: {}\n",
+            streaming_echo_wasm().display(),
+            mock_wasm().display(),
+            http_log_wasm.display(),
+        ),
+    )
+    .expect("write manifest");
+    let spec_path = temp_dir.path().join("logged-stream.yaml");
+    std::fs::write(
+        &spec_path,
+        format!(
+            r#"openapi: "3.0.3"
+info:
+  title: Logged stream
+  version: "1.0.0"
+paths:
+  /stream:
+    get:
+      x-barbacane-middlewares:
+        - name: http-log
+          config:
+            endpoint: "{upstream}/log"
+            timeout_ms: 10000
+      x-barbacane-dispatch:
+        name: streaming-echo
+        config:
+          url: "{upstream}/stream"
+      responses:
+        "200":
+          description: SSE stream
+  /ping:
+    get:
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: pong
+      responses:
+        "200":
+          description: OK
+"#,
+            upstream = upstream.uri(),
+        ),
+    )
+    .expect("write spec");
+
+    let gateway = TestGateway::from_spec_with_env(
+        spec_path.to_str().unwrap(),
+        &[("TOKIO_WORKER_THREADS", "1")],
+    )
+    .await
+    .expect("failed to start gateway");
+
+    let resp = gateway.get("/stream").await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    resp.text().await.unwrap();
+
+    // Wait until http-log's call reaches the log endpoint, which answers in 3 s.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !upstream
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .any(|r| r.url.path() == "/log")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "http-log never called the log endpoint"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let started = Instant::now();
+    let resp = gateway.get("/ping").await.unwrap();
+    let waited = started.elapsed();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert!(
+        waited < Duration::from_millis(1500),
+        "/ping waited {waited:?} behind the streamed response's on_response"
+    );
+}
