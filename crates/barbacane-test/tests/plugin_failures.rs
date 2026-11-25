@@ -419,3 +419,39 @@ async fn a_plugin_importing_an_unsupported_wasi_function_does_not_compile() {
         "lists what is provided: {error}"
     );
 }
+
+/// Without `--dev`, a failure inside the gateway is answered without its
+/// cause, which only the log carries; with it, the cause is the `detail`.
+#[tokio::test]
+async fn a_production_gateway_answers_a_failure_without_its_cause() {
+    let (_dir, spec) = spec_with_trapping_plugin();
+    let spec = spec.to_str().expect("utf-8");
+
+    let dev = TestGateway::from_spec(spec).await.expect("starts");
+    let response = dev.get("/fails").await.expect("request");
+    assert_eq!(response.status(), 500);
+    let body: serde_json::Value = response.json().await.expect("json");
+    assert!(
+        body["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("trapper")),
+        "dev mode says why: {body}"
+    );
+
+    let production = TestGateway::from_spec_production(spec)
+        .await
+        .expect("starts");
+    let response = production.get("/fails").await.expect("request");
+    assert_eq!(response.status(), 500);
+    let body: serde_json::Value = response.json().await.expect("json");
+    assert_eq!(body["type"], "urn:barbacane:error:internal-error");
+    assert!(body.get("detail").is_none(), "{body}");
+    assert!(!body.to_string().contains("trapper"), "{body}");
+    assert!(
+        production
+            .log()
+            .wait_for("plugin 'trapper' dispatch failed", Duration::from_secs(5)),
+        "the log keeps the cause: {}",
+        production.log().text()
+    );
+}

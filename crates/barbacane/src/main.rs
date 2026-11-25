@@ -1558,7 +1558,7 @@ impl Gateway {
 
         // Check header limits
         if let Some(e) = header_limit_error {
-            let response = self.validation_error_response(&[e]);
+            let response = self.header_fields_too_large_response(&e);
             self.record_request_metrics(
                 &method_str,
                 UNMATCHED_ROUTE_LABEL,
@@ -3309,6 +3309,24 @@ impl Gateway {
             .expect("valid response")
     }
 
+    /// Build a 431 Request Header Fields Too Large response (RFC 6585, RFC
+    /// 9457): the request has more header lines than `--max-headers`, or one
+    /// larger than `--max-header-size`.
+    fn header_fields_too_large_response(&self, error: &ValidationError2) -> Response<Full<Bytes>> {
+        let body = serde_json::json!({
+            "type": "urn:barbacane:error:header-fields-too-large",
+            "title": "Request Header Fields Too Large",
+            "status": 431,
+            "detail": error.to_string(),
+        });
+
+        Response::builder()
+            .status(StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE)
+            .header("content-type", "application/problem+json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .expect("valid response")
+    }
+
     /// Build a 408 Request Timeout response (RFC 9457): the body did not
     /// arrive within `deadline`. The connection is closed, since the rest of
     /// the body is not read.
@@ -4803,6 +4821,7 @@ async fn run_dev(
                 let conn_metrics = metrics.clone();
                 let mut conn_shutdown_rx = shutdown_rx.clone();
                 let client_addr = Some(canonical_peer(peer_addr));
+                let conn_limits = limits.clone();
 
                 tokio::spawn(async move {
                     let service = service_fn(move |req| {
@@ -4817,7 +4836,7 @@ async fn run_dev(
 
                     let io = TokioIo::new(stream);
                     let mut builder = auto::Builder::new(TokioExecutor::new());
-                    admin::configure_conn_builder(&mut builder, DEFAULT_KEEPALIVE);
+                    admin::configure_conn_builder(&mut builder, DEFAULT_KEEPALIVE, &conn_limits);
                     let conn = builder.serve_connection_with_upgrades(io, service);
 
                     tokio::pin!(conn);
@@ -5442,6 +5461,7 @@ async fn run_serve(
                 let client_addr = Some(canonical_peer(peer_addr));
                 let conn_trusted_proxies = Arc::clone(&trusted_proxies);
                 let conn_keepalive = keepalive_duration;
+                let conn_limits = limits.clone();
 
                 tokio::spawn(async move {
                     // Held for the connection's lifetime, and by a WebSocket
@@ -5481,7 +5501,7 @@ async fn run_serve(
                         if let Some(tls_stream) = accepted {
                                 let io = TokioIo::new(tls_stream);
                                 let mut builder = auto::Builder::new(TokioExecutor::new());
-                                admin::configure_conn_builder(&mut builder, conn_keepalive);
+                                admin::configure_conn_builder(&mut builder, conn_keepalive, &conn_limits);
                                 let conn = builder.serve_connection_with_upgrades(io, service);
 
                                 // Pin the connection for graceful shutdown
@@ -5511,7 +5531,7 @@ async fn run_serve(
                         // Supports both HTTP/1.1 and HTTP/2 prior knowledge (h2c)
                         let io = TokioIo::new(stream);
                         let mut builder = auto::Builder::new(TokioExecutor::new());
-                        admin::configure_conn_builder(&mut builder, conn_keepalive);
+                        admin::configure_conn_builder(&mut builder, conn_keepalive, &conn_limits);
                         let conn = builder.serve_connection_with_upgrades(io, service);
 
                         // Pin the connection for graceful shutdown
