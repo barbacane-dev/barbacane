@@ -47,9 +47,15 @@ jobs:
         image: ghcr.io/glauth/glauth:v2.5.4
         ports:
           - 3893:3893
+      # A single-node Kafka with its default configuration, for tests/kafka.rs.
+      kafka:
+        image: apache/kafka-native:4.4.0
+        ports:
+          - 9092:9092
     env:
       DATABASE_URL: postgres://barbacane:barbacane@localhost:5432/barbacane
       BARBACANE_TEST_LDAP_URL: ldap://127.0.0.1:3893
+      BARBACANE_TEST_KAFKA_BROKERS: localhost:9092
     steps:
       - uses: actions/checkout@v6
         with:
