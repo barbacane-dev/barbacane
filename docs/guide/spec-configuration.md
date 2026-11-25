@@ -240,7 +240,7 @@ x-barbacane-middlewares:
       window: 60
   - name: cors
     config:
-      allow_origin: "*"
+      allowed_origins: ["*"]
 
 paths:
   /public/stats:
@@ -571,18 +571,19 @@ Content-Type: application/json
 
 ## Validation
 
-The compiler validates your spec:
+`barbacane validate` checks a spec without plugins or an artifact; `barbacane compile` runs every check:
 
 ```bash
 barbacane validate --spec api.yaml
+barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 ```
 
-Errors you might see:
+Errors you might see (the [CLI reference](../reference/cli.md#error-codes) lists every code and which command reports it):
 
 | Error Code | Meaning |
 |------------|---------|
 | E1010 | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments, under their servers' base paths (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
-| E1020 | Missing `x-barbacane-dispatch` on operation |
+| E1020 | Missing `x-barbacane-dispatch` on operation (`validate` warns, `compile` refuses) |
 | E1031 | Plaintext `http://` or `ws://` upstream URL (use HTTPS or WSS, or `--allow-plaintext` at compile time) |
 | E1054 | Invalid path template (unbalanced braces, empty param name, `/` in a param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |
 

@@ -32,7 +32,7 @@ Released on 2026-11-19.
 
 ### 1.0.0-rc.3
 
-- [x] **Plugin instances from Wasmtime's pooling allocator**: about 1.7x the requests on a plugin route under load, with a soak run watching memory and tests that a cancelled request gives its slot back ([#422](https://github.com/barbacane-dev/barbacane/issues/422)).
+- [x] **Plugin instances from Wasmtime's pooling allocator**: 2.0x the requests on a mock route and 1.5x on a proxied one under load (1.7x and 1.4x on kernels before Linux 6.7), with a soak run watching memory and tests that a cancelled request gives its slot back ([#422](https://github.com/barbacane-dev/barbacane/issues/422)).
 - [x] **Security fixes from the pre-release review**: the whole repository read crate by crate; the vulnerabilities it found are fixed in this release and published as security advisories.
 
 ### 1.0.0

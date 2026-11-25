@@ -116,6 +116,9 @@ The full list of twenty-five classes is in `barbacane_compiler::yaml::differenti
 Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 
 - **Imports.** A plugin may import the `barbacane` host functions and seven WASI functions (`random_get`, `clock_time_get`, `fd_write`, `sched_yield`, `environ_get`, `environ_sizes_get`, `proc_exit`). Anything else fails compilation with `E1043`, which names the import. A plugin built with `wasm32-wasip1` and a standard library that imports more needs the `wasm32-unknown-unknown` target.
+- **SDK types are `#[non_exhaustive]`**: `Request`, `Response`, `HttpRequest`, `HttpResponse`, `Endpoint`, `TlsSettings`, `ldap::Connection`, `ldap::SearchRequest` and `ldap::Entry`, and the error enums `HttpError`, `LdapError` and `JwtDecodeError`. Build them with their constructors (`Request::new(method, path)`, `Response::new(status)`, `Endpoint::new(url)`) and the `with_*` methods, not as struct literals, and give a `match` on an error enum a `_` arm.
+- **`log::log`** takes a `log::Level` (`log::log(log::Level::Warn, "...")`), not a number; `log::warn`, `log::info` and the others are unchanged.
+- **`alloc`** must be exported: the gateway writes the configuration and each request through it and no longer grows a plugin's memory on its own. The SDK macros export it; a plugin written without them exports `alloc(len) -> ptr`.
 - **`HttpRequest`** has `tls`, `endpoints` and `retries` fields and implements `Default`: a struct literal adds `..Default::default()`.
 - **`init` runs once** per plugin and configuration, and each request runs in a fresh instance started from the memory `init` left. Nothing one request writes is seen by the next. State that must carry across requests goes through the host (`context`, `cache`, `rate_limit`). The [plugin guide](../contributing/plugins.md#instances-and-state) states the contract.
 - **`body_access`** must be declared by a middleware that reads the request or response body; without it the host hands it no body.
@@ -129,6 +132,8 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 
 ### Official plugins
 
+- `cors` lets a request from an origin outside `allowed_origins` through, without CORS headers, where it answered `403`; the browser then withholds the response from the page. A same-origin `POST` from an application served next to the API no longer needs the API's own origin listed. A preflight from such an origin is still refused with `403`.
+- `oauth2-auth` answers `503` (`urn:barbacane:error:introspection-unavailable`) when the introspection endpoint cannot be reached or answers something it cannot read, where it answered `401`. A token the endpoint rejects is still `401`. A client that retried only on `5xx` now retries these.
 - `ws-upstream` follows the plaintext rules of `http-upstream`: a `ws://` URL needs `--allow-plaintext` to compile and `--allow-plaintext-upstream` to connect. The handshake sends the upstream URL's host as `Host`, not the client's.
 - A plugin's outbound HTTP call waits at most 60 seconds. A `timeout` above 60 in `http-upstream`, `lambda`, `s3`, `oidc-auth`, `oauth2-auth` or `opa-authz`, a `fire-and-forget` `timeout_ms` above 60000, or a `ws-upstream` `connect_timeout` above 30 fails compilation with `E1023`.
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).

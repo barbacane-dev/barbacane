@@ -3999,7 +3999,7 @@ async fn run_init(name: &str, template: &str, fetch_plugins: bool) -> ExitCode {
     // Create barbacane.yaml with downloaded plugins or empty template
     let manifest_content = if downloaded_plugins.is_empty() {
         r#"# Barbacane project manifest
-# See https://barbacane.dev/docs/guide/spec-configuration for details
+# See https://docs.barbacane.dev/guide/spec-configuration.html for details
 
 specs: ./specs/
 
@@ -4012,7 +4012,7 @@ plugins: {}
     } else {
         let mut content = String::from(
             "# Barbacane project manifest\n\
-             # See https://barbacane.dev/docs/guide/spec-configuration for details\n\n\
+             # See https://docs.barbacane.dev/guide/spec-configuration.html for details\n\n\
              specs: ./specs/\n\n\
              plugins:\n",
         );
