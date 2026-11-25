@@ -202,12 +202,11 @@ impl Cors {
     }
 
     /// Check if all requested headers are allowed.
+    /// Whether every header a preflight names may be sent: a CORS-safelisted
+    /// name always (a browser names one whose value is not safelisted, such as
+    /// `content-type: application/json`), any other one when
+    /// `allowed_headers` lists it or `*`.
     fn are_headers_allowed(&self, requested_headers: &str) -> bool {
-        if self.allowed_headers.is_empty() {
-            // Only simple headers allowed by default
-            return requested_headers.is_empty();
-        }
-
         // Check each requested header
         for header in requested_headers.split(',') {
             let header = header.trim().to_lowercase();
@@ -273,8 +272,19 @@ impl Cors {
             vec![self.allowed_methods.join(", ")],
         );
 
-        // Allow headers
-        if !self.allowed_headers.is_empty() {
+        // Allow headers: the ones the preflight names, all admitted above, so
+        // the browser finds each of them; without any, the configured list.
+        let requested: Vec<&str> = requested_headers
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect();
+        if !requested.is_empty() {
+            headers.insert(
+                "access-control-allow-headers".to_string(),
+                vec![requested.join(", ")],
+            );
+        } else if !self.allowed_headers.is_empty() {
             headers.insert(
                 "access-control-allow-headers".to_string(),
                 vec![self.allowed_headers.join(", ")],
@@ -487,6 +497,65 @@ mod tests {
         assert!(cors.are_headers_allowed("content-type"));
         assert!(cors.are_headers_allowed("accept-language"));
         assert!(cors.are_headers_allowed("content-language"));
+    }
+
+    /// Without `allowed_headers`, a preflight naming a safelisted header is
+    /// admitted and the header echoed; any other is refused.
+    #[test]
+    fn a_default_preflight_admits_safelisted_names_and_echoes_them() {
+        mock_host::reset();
+        let preflight = |requested: &str| {
+            let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+            let mut req = create_request("OPTIONS", Some("https://example.com"));
+            req.headers.insert(
+                "access-control-request-method".to_string(),
+                "POST".to_string(),
+            );
+            req.headers.insert(
+                "access-control-request-headers".to_string(),
+                requested.to_string(),
+            );
+            match cors.on_request(req) {
+                Action::ShortCircuit(response) => response,
+                Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+            }
+        };
+
+        let response = preflight("content-type");
+        assert_eq!(response.status, 204);
+        assert_eq!(
+            response.header("access-control-allow-headers"),
+            Some("content-type")
+        );
+        assert_eq!(preflight("x-custom").status, 403);
+    }
+
+    /// With a list, a safelisted header the preflight names is echoed beside
+    /// the listed ones.
+    #[test]
+    fn a_preflight_echoes_every_header_it_names() {
+        mock_host::reset();
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        cors.allowed_headers = vec!["Authorization".to_string()];
+        let mut req = create_request("OPTIONS", Some("https://example.com"));
+        req.headers.insert(
+            "access-control-request-method".to_string(),
+            "POST".to_string(),
+        );
+        req.headers.insert(
+            "access-control-request-headers".to_string(),
+            "authorization,content-type".to_string(),
+        );
+        match cors.on_request(req) {
+            Action::ShortCircuit(response) => {
+                assert_eq!(response.status, 204);
+                assert_eq!(
+                    response.header("access-control-allow-headers"),
+                    Some("authorization, content-type")
+                );
+            }
+            Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+        }
     }
 
     #[test]

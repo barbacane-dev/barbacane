@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **plugins**: a `cors` preflight that names a CORS-safelisted header (`content-type` for a JSON body, which browsers name) is admitted without `allowed_headers` listing it, and `Access-Control-Allow-Headers` repeats every header the preflight named. With the default `allowed_headers: []` any named header answered 403, and with a list `content-type` passed the check but was not repeated, so the browser failed the preflight (#435).
 - **validation**: array and object parameters are read in their `style` and `explode`: `form` (`?tag=a&tag=b`, or `?ids=1,2` with `explode: false`), `spaceDelimited`, `pipeDelimited` and `deepObject` in the query, `simple`, `label` and `matrix` in the path, and `simple` in headers. A parameter described by `content` is validated against its media type's schema, parsed as JSON under a JSON media type; an OpenAPI 3.2 `querystring` with `application/x-www-form-urlencoded` and an object schema is checked as the object its fields make. A path parameter keeps `+` as `+` (#431).
 
   > **Upgrade note (breaking):** a parameter without `name` or `in`, with an unknown `in`, a `style` its location does not take, both `schema` and `content`, or a `content` that names more or fewer than one media type fails compilation with `E1004`; it was skipped or checked as a string.
