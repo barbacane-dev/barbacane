@@ -52,7 +52,7 @@ paths:
             type: string
 ```
 
-Every `in: path` parameter must be named in the path template; one the template does not name would never be captured, and fails compilation with `E1054`.
+Every `in: path` parameter must be named in the path template; one the template does not name would never be captured, and fails compilation with `E1054`. A parameter name is any text without `{`, `}` or `/`: `{user-id}` and `{item.id}` are names.
 
 ### A Parameter Within a Segment
 
@@ -93,7 +93,7 @@ A `GET /files/my-bucket/docs/2024/report.pdf` request captures `bucket=my-bucket
 **Rules:**
 - The wildcard parameter must be the **last segment** of the path
 - At most one wildcard parameter per path
-- Parameter names use the same characters as regular params (alphanumeric and `_`)
+- `+` ends the name: `{path+}` captures `path`, and a `+` elsewhere in the name fails with `E1054`
 
 **`allowReserved` note:** This is advisory metadata for client generators and documentation tools — it signals that the value may contain unencoded `/` characters. Barbacane does not parse or enforce it, but including it produces correct client SDKs.
 
@@ -565,7 +565,7 @@ Errors you might see:
 | E1010 | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments, under their servers' base paths (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
 | E1020 | Missing `x-barbacane-dispatch` on operation |
 | E1031 | Plaintext `http://` or `ws://` upstream URL (use HTTPS or WSS, or `--allow-plaintext` at compile time) |
-| E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |
+| E1054 | Invalid path template (unbalanced braces, empty param name, `/` in a param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |
 
 ### Request values
 

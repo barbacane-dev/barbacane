@@ -193,6 +193,23 @@ async fn test_parameter_with_literal_text_in_its_segment() {
     assert_eq!(resp.status(), 400);
 }
 
+/// A path parameter name may hold `-` and `.`; the router captures it and the
+/// validator checks it under that name.
+#[tokio::test]
+async fn test_parameter_names_with_hyphen_and_dot() {
+    let gateway = TestGateway::from_spec(&fixture("path-patterns.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/members/7/items/a1").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().await.unwrap(), r#"{"member":"7","item":"a1"}"#);
+
+    // `member-id` is an integer.
+    let resp = gateway.get("/members/x/items/a1").await.unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
 /// An operation is served under the path of its servers' URLs: the document's
 /// `https://api.example.com/v1` puts `/users` at `/v1/users`, and an
 /// operation's own root server keeps `/status` at `/status`.
