@@ -3,25 +3,50 @@
 //! Implements 12-factor app logging: structured JSON to stdout.
 
 use crate::{LogFormat, TelemetryConfig, TelemetryError};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_sdk::trace::SdkTracerProvider;
+use tracing_subscriber::{
+    filter::filter_fn, fmt, layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt,
+    EnvFilter, Layer,
+};
 
 /// Initialize the logging subsystem.
 ///
-/// Sets up tracing-subscriber with either JSON or pretty format,
-/// respecting the configured log level.
-pub fn init_logging(config: &TelemetryConfig) -> Result<(), TelemetryError> {
+/// Sets up tracing-subscriber with either JSON or pretty format, respecting
+/// the configured log level, and the layer that turns the gateway's spans
+/// into OpenTelemetry spans of `provider`.
+pub fn init_logging(
+    config: &TelemetryConfig,
+    provider: &SdkTracerProvider,
+) -> Result<(), TelemetryError> {
     // Build the env filter from config or RUST_LOG
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
     match config.log_format {
-        LogFormat::Json => init_json_logging(filter),
-        LogFormat::Pretty => init_pretty_logging(filter),
+        LogFormat::Json => init_json_logging(filter, provider),
+        LogFormat::Pretty => init_pretty_logging(filter, provider),
     }
 }
 
+/// The OpenTelemetry layer: the gateway's own spans, whatever the log level,
+/// and none of its dependencies'.
+fn otel_layer<S>(provider: &SdkTracerProvider) -> impl Layer<S>
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+{
+    tracing_opentelemetry::layer()
+        .with_tracer(provider.tracer("barbacane"))
+        .with_filter(filter_fn(|metadata| {
+            metadata.is_span() && metadata.target().starts_with("barbacane")
+        }))
+}
+
 /// Initialize JSON logging for production.
-fn init_json_logging(filter: EnvFilter) -> Result<(), TelemetryError> {
+fn init_json_logging(
+    filter: EnvFilter,
+    provider: &SdkTracerProvider,
+) -> Result<(), TelemetryError> {
     let json_layer = fmt::layer()
         .json()
         .with_target(true)
@@ -34,6 +59,7 @@ fn init_json_logging(filter: EnvFilter) -> Result<(), TelemetryError> {
 
     tracing_subscriber::registry()
         .with(json_layer)
+        .with(otel_layer(provider))
         .try_init()
         .map_err(|e: tracing_subscriber::util::TryInitError| {
             TelemetryError::LoggingInit(e.to_string())
@@ -41,7 +67,10 @@ fn init_json_logging(filter: EnvFilter) -> Result<(), TelemetryError> {
 }
 
 /// Initialize pretty logging for development.
-fn init_pretty_logging(filter: EnvFilter) -> Result<(), TelemetryError> {
+fn init_pretty_logging(
+    filter: EnvFilter,
+    provider: &SdkTracerProvider,
+) -> Result<(), TelemetryError> {
     let pretty_layer = fmt::layer()
         .pretty()
         .with_target(true)
@@ -51,6 +80,7 @@ fn init_pretty_logging(filter: EnvFilter) -> Result<(), TelemetryError> {
 
     tracing_subscriber::registry()
         .with(pretty_layer)
+        .with(otel_layer(provider))
         .try_init()
         .map_err(|e: tracing_subscriber::util::TryInitError| {
             TelemetryError::LoggingInit(e.to_string())
