@@ -192,3 +192,27 @@ async fn test_parameter_with_literal_text_in_its_segment() {
     let resp = gateway.get("/reports/x.pdf").await.unwrap();
     assert_eq!(resp.status(), 400);
 }
+
+/// An operation is served under the path of its servers' URLs: the document's
+/// `https://api.example.com/v1` puts `/users` at `/v1/users`, and an
+/// operation's own root server keeps `/status` at `/status`.
+#[tokio::test]
+async fn test_routes_are_served_under_the_server_base_path() {
+    let gateway = TestGateway::from_spec(&fixture("server-base-path.yaml"))
+        .await
+        .expect("failed to start gateway");
+
+    let mut wrong = Vec::new();
+    for (path, expected) in [
+        ("/v1/users", 200),
+        ("/users", 404),
+        ("/status", 200),
+        ("/v1/status", 404),
+    ] {
+        let status = gateway.get(path).await.unwrap().status().as_u16();
+        if status != expected {
+            wrong.push(format!("{path}: {status}, expected {expected}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

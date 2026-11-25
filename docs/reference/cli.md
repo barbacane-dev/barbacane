@@ -248,7 +248,7 @@ plugins and builds an artifact.
 | E1002 | Spec validity | YAML/JSON parse error |
 | E1003 | Spec validity | Unresolved `$ref` reference |
 | E1004 | Spec validity | Schema validation error (missing info, etc.) |
-| E1010 | Extension | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
+| E1010 | Extension | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments, under their servers' base paths (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
 | E1011 | Extension | `x-barbacane-middlewares` is not a list, or an entry is not an object of `name` (string, required), `config` and `enabled` (boolean) |
 | E1012 | Extension | Middleware entry sets `enabled: false` and a `config` |
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |

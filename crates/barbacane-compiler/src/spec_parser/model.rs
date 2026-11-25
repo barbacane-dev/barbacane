@@ -173,6 +173,11 @@ pub enum SpecFormat {
 pub struct Operation {
     /// The path template (OpenAPI: "/users/{id}", AsyncAPI: channel address).
     pub path: String,
+    /// The path prefixes the operation's OpenAPI `servers` put before `path`
+    /// (`/v1` for `https://api.example.com/v1`), each served. Empty when every
+    /// server is at the root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub base_paths: Vec<String>,
     /// The HTTP method (OpenAPI: "GET", AsyncAPI: "SEND"/"RECEIVE").
     pub method: String,
     /// The operationId, if present.

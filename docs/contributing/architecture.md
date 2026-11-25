@@ -99,7 +99,7 @@ Compiles parsed specs into deployable artifacts.
 
 **Responsibilities:**
 - Validate dispatcher requirements (every operation needs dispatch)
-- Detect routing conflicts (same path+method in multiple specs)
+- Detect routing conflicts: operations the router would serve at the same method and path, servers' base paths included
 - Build routing trie
 - Package into `.bca` archive
 

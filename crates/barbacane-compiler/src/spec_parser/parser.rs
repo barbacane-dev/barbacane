@@ -924,6 +924,8 @@ fn parse_openapi_paths(
     defs: &mut SchemaDefs,
 ) -> Result<Vec<Operation>, ParseError> {
     let mut operations = Vec::new();
+    let root_bases =
+        server_base_paths(root, "the document root")?.unwrap_or_else(|| vec![String::new()]);
 
     let paths = match root.get("paths").and_then(|v| v.as_object()) {
         Some(p) => p,
@@ -948,6 +950,9 @@ fn parse_openapi_paths(
             Place::PathItem,
             &format!("path {path}"),
         )?;
+
+        let item_bases = server_base_paths(path_obj, &format!("path {path}"))?
+            .unwrap_or_else(|| root_bases.clone());
 
         // Path-level parameters (inherited by all operations)
         let path_params = parse_parameters(path_obj, spec_root, defs, &format!("path {path}"))?;
@@ -1005,8 +1010,15 @@ fn parse_openapi_paths(
 
                 let extensions = extract_extensions(op_obj);
 
+                let base_paths = operation_base_paths(
+                    op_obj,
+                    &item_bases,
+                    &format!("{} {}", method.to_uppercase(), path),
+                )?;
+
                 operations.push(Operation {
                     path: path.clone(),
+                    base_paths,
                     method: method.to_uppercase(),
                     operation_id,
                     summary,
@@ -1083,8 +1095,15 @@ fn parse_openapi_paths(
 
                 let extensions = extract_extensions(op_obj);
 
+                let base_paths = operation_base_paths(
+                    op_obj,
+                    &item_bases,
+                    &format!("{} {}", method_name.to_uppercase(), path),
+                )?;
+
                 operations.push(Operation {
                     path: path.clone(),
+                    base_paths,
                     method: method_name.to_uppercase(),
                     operation_id,
                     summary,
@@ -1106,6 +1125,113 @@ fn parse_openapi_paths(
     }
 
     Ok(operations)
+}
+
+/// The base paths of an operation: those of its own `servers`, or else of
+/// `inherited`, its path item's or the document's. Empty when the only one is
+/// the root.
+fn operation_base_paths(
+    op_obj: &serde_json::Map<String, Value>,
+    inherited: &[String],
+    location: &str,
+) -> Result<Vec<String>, ParseError> {
+    let bases = server_base_paths(op_obj, location)?.unwrap_or_else(|| inherited.to_vec());
+    Ok(if bases.iter().all(String::is_empty) {
+        Vec::new()
+    } else {
+        bases
+    })
+}
+
+/// The path prefixes an object's `servers` put before its paths, in order and
+/// without repeats: the path of each server URL, its variables at their
+/// defaults, without a trailing slash, so a server at the root gives `""`.
+/// `None` when the object declares no servers (or an empty list), which
+/// OpenAPI reads as one server at `/` on the document and as no override on a
+/// path item or operation.
+fn server_base_paths(
+    obj: &serde_json::Map<String, Value>,
+    location: &str,
+) -> Result<Option<Vec<String>>, ParseError> {
+    let Some(servers) = obj.get("servers") else {
+        return Ok(None);
+    };
+    let invalid =
+        |reason: String| ParseError::SchemaError(format!("servers of {location}: {reason}"));
+    let servers = servers
+        .as_array()
+        .ok_or_else(|| invalid("must be a list".into()))?;
+    if servers.is_empty() {
+        return Ok(None);
+    }
+    let mut bases: Vec<String> = Vec::new();
+    for server in servers {
+        let url = server
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("a server has no 'url'".into()))?;
+        let base = server_base_path(url, server.get("variables"))
+            .map_err(|reason| invalid(format!("'{url}' {reason}")))?;
+        if !bases.contains(&base) {
+            bases.push(base);
+        }
+    }
+    Ok(Some(bases))
+}
+
+/// The path of a server URL, its variables replaced by their defaults: what
+/// follows the authority in an absolute URL (`https://host/v1`, `//host/v1`),
+/// or the URL itself when it is a path (`/v1`). Empty for the root.
+fn server_base_path(url: &str, variables: Option<&Value>) -> Result<String, String> {
+    let mut resolved = String::with_capacity(url.len());
+    let mut rest = url;
+    while let Some(open) = rest.find('{') {
+        resolved.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let close = after
+            .find('}')
+            .ok_or_else(|| "has an unclosed '{'".to_string())?;
+        let name = &after[..close];
+        match variables
+            .and_then(|v| v.get(name))
+            .and_then(|v| v.get("default"))
+            .and_then(Value::as_str)
+        {
+            Some(default) => resolved.push_str(default),
+            // Left in place: only a variable in the path matters here.
+            None => resolved.push_str(&rest[open..open + close + 2]),
+        }
+        rest = &after[close + 1..];
+    }
+    resolved.push_str(rest);
+
+    let after_authority = resolved
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .or_else(|| resolved.strip_prefix("//"));
+    let path = match after_authority {
+        Some(rest) => rest.find('/').map_or("", |slash| &rest[slash..]),
+        None => resolved.as_str(),
+    };
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let segments: Vec<&str> = path
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect();
+    if let Some(segment) = segments
+        .iter()
+        .find(|s| s.contains(['{', '}']) || **s == "..")
+    {
+        return Err(format!(
+            "has '{segment}' in its path, which is not a path the gateway can serve \
+             (a variable without a default, or '..')"
+        ));
+    }
+    Ok(if segments.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", segments.join("/"))
+    })
 }
 
 /// Parse parameters from a path item or operation object. `context` names
@@ -1418,6 +1544,7 @@ fn parse_asyncapi_channels(
 
         operations.push(Operation {
             path: address,
+            base_paths: Vec::new(),
             method,
             operation_id: Some(op_id.clone()),
             summary,
@@ -3145,6 +3272,95 @@ paths:
             let err = sunset(value).expect_err(value).to_string();
             assert!(err.starts_with("E1018"), "{value}: {err}");
         }
+    }
+
+    /// A server URL's path is the prefix its operations are served under.
+    #[test]
+    fn a_server_url_gives_its_path() {
+        let vars = serde_json::json!({
+            "env": {"default": "eu"},
+            "version": {"default": "v2", "enum": ["v1", "v2"]}
+        });
+        for (url, expected) in [
+            ("https://api.example.com/v1", "/v1"),
+            ("https://api.example.com/v1/", "/v1"),
+            ("https://api.example.com", ""),
+            ("https://api.example.com/", ""),
+            ("http://localhost:8080", ""),
+            ("/api/v3", "/api/v3"),
+            ("/", ""),
+            ("", ""),
+            ("v1", "/v1"),
+            ("./v1", "/v1"),
+            ("//api.example.com/v1", "/v1"),
+            ("https://api.example.com/v1?x=1#y", "/v1"),
+            ("https://{env}.example.com/{version}/api", "/v2/api"),
+            ("https://{region}.example.com/v1", "/v1"),
+        ] {
+            assert_eq!(
+                server_base_path(url, Some(&vars)).as_deref(),
+                Ok(expected),
+                "{url}"
+            );
+        }
+        assert!(server_base_path("https://api.example.com/{undeclared}", Some(&vars)).is_err());
+        assert!(server_base_path("../v1", None).is_err());
+        assert!(server_base_path("https://api.example.com/{open", None).is_err());
+    }
+
+    /// An operation's `servers`, or else its path item's, or else the
+    /// document's, give the prefixes it is served under.
+    #[test]
+    fn operations_take_the_base_paths_of_their_servers() {
+        let yaml = r#"
+openapi: "3.1.0"
+info: { title: T, version: "1" }
+servers:
+  - url: https://api.example.com/v1
+  - url: https://staging.example.com/v1/
+  - url: /v2
+paths:
+  /users:
+    get: { x-barbacane-dispatch: { name: mock } }
+    post:
+      servers: [{ url: https://api.example.com }]
+      x-barbacane-dispatch: { name: mock }
+  /admin:
+    servers: [{ url: /internal }]
+    get: { x-barbacane-dispatch: { name: mock } }
+    delete:
+      servers: []
+      x-barbacane-dispatch: { name: mock }
+"#;
+        let spec = parse_spec(yaml).unwrap();
+        let bases = |method: &str, path: &str| {
+            spec.operations
+                .iter()
+                .find(|o| o.method == method && o.path == path)
+                .map(|o| o.base_paths.clone())
+                .unwrap()
+        };
+        assert_eq!(bases("GET", "/users"), vec!["/v1", "/v2"]);
+        assert!(bases("POST", "/users").is_empty());
+        assert_eq!(bases("GET", "/admin"), vec!["/internal"]);
+        // An empty list overrides nothing.
+        assert_eq!(bases("DELETE", "/admin"), vec!["/internal"]);
+
+        let no_servers = parse_spec(
+            "openapi: \"3.1.0\"\ninfo: { title: T, version: \"1\" }\npaths:\n  /x:\n    get: { x-barbacane-dispatch: { name: mock } }\n",
+        )
+        .unwrap();
+        assert!(no_servers.operations[0].base_paths.is_empty());
+
+        let err = parse_spec(
+            "openapi: \"3.1.0\"\ninfo: { title: T, version: \"1\" }\nservers: [{ url: \"https://x/{v}\" }]\npaths: {}\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.starts_with("E1004") && err.contains("servers of the document root"),
+            "{err}"
+        );
     }
 
     // ── $ref resolution tests ────────────────────────────────────────────

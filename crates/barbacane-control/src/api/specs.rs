@@ -516,6 +516,7 @@ mod tests {
     fn test_operation(method: &str, path: &str) -> Operation {
         Operation {
             path: path.to_string(),
+            base_paths: vec![],
             method: method.to_string(),
             operation_id: None,
             summary: None,
