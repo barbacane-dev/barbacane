@@ -144,6 +144,15 @@ pub async fn deploy_to_data_planes(
     // Build download URL
     let download_url = format!("/artifacts/{}/download", artifact.id);
 
+    // The deployment is the project's: every data plane that registers later
+    // is sent it too.
+    ProjectsRepository::new(state.pool.clone())
+        .set_deployment(project_id, artifact.id)
+        .await?;
+    DataPlanesRepository::new(state.pool.clone())
+        .mark_deploying(project_id)
+        .await?;
+
     // Get count of connected data planes before notification
     let data_planes_notified = state
         .connection_manager

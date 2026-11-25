@@ -14,6 +14,11 @@ pub struct Project {
     pub production_mode: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The artifact the last deploy named, which every data plane of the
+    /// project is sent when it registers.
+    pub deployed_artifact_id: Option<Uuid>,
+    /// When it was deployed.
+    pub deployed_at: Option<DateTime<Utc>>,
 }
 
 /// Input for creating a new project.
@@ -219,6 +224,9 @@ pub struct DataPlane {
     pub created_at: DateTime<Utc>,
     pub artifact_hash: Option<String>,
     pub drift_detected: bool,
+    /// Why the data plane did not load the last artifact it was sent; `None`
+    /// once it loads one.
+    pub deploy_error: Option<String>,
 }
 
 /// Input for registering a data plane.

@@ -303,3 +303,162 @@ async fn a_silent_session_is_ended() {
         "{frame:?}"
     );
 }
+
+/// A data plane that registers without the project's deployment is sent it
+/// after its confirmation, and is `deploying` until it reports the outcome:
+/// a failure is kept as its `deploy_error`, a success clears it.
+#[tokio::test]
+async fn a_registration_without_the_deployment_is_sent_it() {
+    let Some((pool, url)) = serve().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let project_id = project(&pool).await;
+    let deployed = artifact(&pool, project_id).await;
+    ProjectsRepository::new(pool.clone())
+        .set_deployment(project_id, deployed)
+        .await
+        .unwrap();
+    let api_key = key(&pool, project_id, &["data-plane:connect"]).await;
+    let data_planes = DataPlanesRepository::new(pool.clone());
+
+    let mut ws = connect(&url, &api_key).await;
+    send(
+        &mut ws,
+        serde_json::json!({"type": "register", "project_id": project_id, "api_key": api_key}),
+    )
+    .await;
+    let registered = reply(&mut ws).await;
+    assert_eq!(registered["type"], "registered", "{registered}");
+    let data_plane_id: Uuid = registered["data_plane_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let available = reply(&mut ws).await;
+    assert_eq!(available["type"], "artifact_available", "{available}");
+    assert_eq!(available["artifact_id"], deployed.to_string());
+    assert_eq!(
+        available["download_url"],
+        format!("/artifacts/{deployed}/download")
+    );
+    assert_eq!(available["sha256"], "sha");
+    assert_eq!(
+        data_planes
+            .get(data_plane_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "deploying"
+    );
+
+    send(
+        &mut ws,
+        serde_json::json!({"type": "artifact_downloaded", "artifact_id": deployed, "success": false, "error": "load failed: E1045"}),
+    )
+    .await;
+    send(
+        &mut ws,
+        serde_json::json!({"type": "heartbeat", "uptime_secs": 1, "requests_total": 0}),
+    )
+    .await;
+    assert_eq!(reply(&mut ws).await["type"], "heartbeat_ack");
+    let record = data_planes.get(data_plane_id).await.unwrap().unwrap();
+    assert_eq!(record.status, "online");
+    assert_eq!(record.deploy_error.as_deref(), Some("load failed: E1045"));
+    assert_eq!(record.artifact_id, None);
+
+    send(
+        &mut ws,
+        serde_json::json!({"type": "artifact_downloaded", "artifact_id": deployed, "success": true}),
+    )
+    .await;
+    send(
+        &mut ws,
+        serde_json::json!({"type": "heartbeat", "uptime_secs": 2, "requests_total": 0}),
+    )
+    .await;
+    assert_eq!(reply(&mut ws).await["type"], "heartbeat_ack");
+    let record = data_planes.get(data_plane_id).await.unwrap().unwrap();
+    assert_eq!(record.deploy_error, None);
+    assert_eq!(record.artifact_id, Some(deployed));
+}
+
+/// A data plane that registers with the deployment it runs is sent nothing.
+#[tokio::test]
+async fn a_registration_with_the_deployment_is_sent_nothing() {
+    let Some((pool, url)) = serve().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let project_id = project(&pool).await;
+    let deployed = artifact(&pool, project_id).await;
+    ProjectsRepository::new(pool.clone())
+        .set_deployment(project_id, deployed)
+        .await
+        .unwrap();
+    let api_key = key(&pool, project_id, &["data-plane:connect"]).await;
+
+    let mut ws = connect(&url, &api_key).await;
+    send(
+        &mut ws,
+        serde_json::json!({"type": "register", "project_id": project_id, "api_key": api_key, "artifact_id": deployed}),
+    )
+    .await;
+    assert_eq!(reply(&mut ws).await["type"], "registered");
+    send(
+        &mut ws,
+        serde_json::json!({"type": "heartbeat", "artifact_id": deployed, "uptime_secs": 1, "requests_total": 0}),
+    )
+    .await;
+    assert_eq!(reply(&mut ws).await["type"], "heartbeat_ack");
+}
+
+/// Drift is a data plane reporting another artifact than the project's
+/// deployment.
+#[tokio::test]
+async fn drift_is_measured_against_the_deployment() {
+    let Some((pool, url)) = serve().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let project_id = project(&pool).await;
+    let deployed = ArtifactsRepository::new(pool.clone())
+        .create(
+            Some(project_id),
+            serde_json::json!({"artifact_hash": "sha256:deployed"}),
+            vec![0x1f, 0x8b],
+            "sha",
+            "test",
+        )
+        .await
+        .unwrap()
+        .id;
+    ProjectsRepository::new(pool.clone())
+        .set_deployment(project_id, deployed)
+        .await
+        .unwrap();
+    let api_key = key(&pool, project_id, &["data-plane:connect"]).await;
+
+    let mut ws = connect(&url, &api_key).await;
+    // A data plane started from the artifact baked into its image: it
+    // claims no artifact, and is sent the deployment, which it has not
+    // loaded yet.
+    send(
+        &mut ws,
+        serde_json::json!({"type": "register", "project_id": project_id, "api_key": api_key}),
+    )
+    .await;
+    assert_eq!(reply(&mut ws).await["type"], "registered");
+    assert_eq!(reply(&mut ws).await["type"], "artifact_available");
+    for (hash, drifted) in [("sha256:baked-in", true), ("sha256:deployed", false)] {
+        send(
+            &mut ws,
+            serde_json::json!({"type": "heartbeat", "artifact_hash": hash, "uptime_secs": 1, "requests_total": 0}),
+        )
+        .await;
+        let ack = reply(&mut ws).await;
+        assert_eq!(ack["drift_detected"], drifted, "{hash}: {ack}");
+    }
+}

@@ -969,8 +969,10 @@ paths:
       tags: [DataPlanes]
       summary: Deploy to data planes
       description: |
-        Notify all connected data planes that a new artifact is available.
-        Data planes will pull and load the artifact.
+        Make the artifact the project's deployment and send it to the
+        connected data planes, which download and load it; they are
+        `deploying` until each reports the outcome. A data plane that
+        registers later without it is sent it on registration.
       operationId: deployToProjectDataPlanes
       x-cli: { name: deploy }
       parameters:
@@ -992,6 +994,39 @@ paths:
                 $ref: '#/components/schemas/DeployResponse'
         '404':
           description: Project or artifact not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /projects/{projectId}/deployment:
+    get:
+      tags: [DataPlanes]
+      summary: Get the project's deployment
+      description: |
+        The artifact the last deploy named, which the project's data planes
+        run. Takes the admin bearer token, or a data-plane API key of the
+        project: a data plane started without an artifact fetches it with
+        its own key.
+      operationId: getProjectDeployment
+      x-cli: { name: deployment }
+      parameters:
+        - $ref: '#/components/parameters/projectId'
+      responses:
+        '200':
+          description: The deployment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deployment'
+        '401':
+          description: No admin token and no valid data-plane API key
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: No deployment, the project does not exist, or it is not the key's project
           content:
             application/problem+json:
               schema:
@@ -1861,6 +1896,32 @@ components:
         updated_at:
           type: string
           format: date-time
+        deployed_artifact_id:
+          type: [string, 'null']
+          format: uuid
+          description: The artifact the last deploy named; every data plane of the project is sent it
+        deployed_at:
+          type: [string, 'null']
+          format: date-time
+          description: When it was deployed
+
+    Deployment:
+      description: "A project's deployment: the artifact its data planes run"
+      type: object
+      required: [artifact_id, sha256, deployed_at, download_url]
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        sha256:
+          type: string
+          description: SHA-256 of the artifact file, in hex
+        deployed_at:
+          type: string
+          format: date-time
+        download_url:
+          type: string
+          description: Where to download it, relative to the control plane
 
     CreateProjectRequest:
       description: A project to create
@@ -1926,7 +1987,10 @@ components:
           description: Hash of the artifact the data plane last reported running
         drift_detected:
           type: boolean
-          description: Whether the reported artifact differs from the one deployed to it
+          description: Whether the artifact the data plane reports differs from the project's deployment
+        deploy_error:
+          type: [string, 'null']
+          description: Why the data plane did not load the last artifact it was sent; null once it loads one
 
     ApiKey:
       description: A data-plane API key, shown by prefix only

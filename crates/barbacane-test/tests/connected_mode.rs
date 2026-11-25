@@ -214,3 +214,190 @@ async fn a_deployed_artifact_reaches_a_connected_data_plane() {
         "v2"
     );
 }
+
+/// A project with the mock plugin and a data-plane key: its id and the key.
+fn project_with_key(cp: &ControlPlane) -> (String, String) {
+    let version = format!("1.0.{}", uuid::Uuid::new_v4().as_u128() % 1_000_000);
+    let mock = fixture("../../plugins/mock/mock.wasm");
+    cp.cli(
+        &[
+            "plugins",
+            "register",
+            "--name",
+            "mock",
+            "--version",
+            &version,
+            "--type",
+            "dispatcher",
+            "--file",
+            &mock,
+        ],
+        None,
+    );
+    let project = cp.cli(
+        &["projects", "create", "--file", "-"],
+        Some(&format!(
+            r#"{{"name": "connected-{}"}}"#,
+            uuid::Uuid::new_v4().simple()
+        )),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    cp.cli(
+        &[
+            "project-plugins",
+            "add",
+            "--project-id",
+            &project,
+            "--file",
+            "-",
+        ],
+        Some(&format!(
+            r#"{{"plugin_name": "mock", "plugin_version": "{version}"}}"#
+        )),
+    );
+    let key = cp.cli(
+        &[
+            "api-keys",
+            "create",
+            "--project-id",
+            &project,
+            "--file",
+            "-",
+        ],
+        Some(r#"{"name": "data-plane"}"#),
+    )["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (project, key)
+}
+
+/// Compile `connected-mode-v2.yaml` in the project and deploy it; returns
+/// the deployed artifact's id.
+fn deploy_v2(cp: &ControlPlane, project: &str) -> String {
+    let compilation = cp.cli(
+        &[
+            "push",
+            "--project",
+            project,
+            &fixture("connected-mode-v2.yaml"),
+        ],
+        None,
+    );
+    assert_eq!(compilation["status"], "succeeded", "{compilation}");
+    cp.cli(&["deploy", "--project", project], None)["artifact_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// `barbacane serve` in connected mode with no `--artifact`, keeping
+/// deployments in `artifact_dir`; returns the process and its base URL.
+fn serve_without_artifact(
+    cp: &ControlPlane,
+    project: &str,
+    key: &str,
+    artifact_dir: &std::path::Path,
+) -> (LoggedChild, String) {
+    let ws_url = format!("ws://{LISTEN_HOST}:{}/ws/data-plane", cp.port);
+    let mut cmd =
+        Command::new(barbacane_test::gateway::find_barbacane_binary().expect("barbacane is built"));
+    cmd.args([
+        "serve",
+        "--listen",
+        LISTEN_ANY_PORT,
+        "--admin-bind",
+        "off",
+        "--dev",
+    ])
+    .args([
+        "--control-plane",
+        &ws_url,
+        "--project-id",
+        project,
+        "--api-key",
+        key,
+    ])
+    .arg("--artifact-dir")
+    .arg(artifact_dir);
+    let mut process = LoggedChild::spawn(&mut cmd).expect("spawn the data plane");
+    let port = process
+        .announced_port("listening on", STARTUP_TIMEOUT)
+        .unwrap_or_else(|| panic!("the data plane did not start:\n{}", process.log().text()));
+    (process, format!("http://{LISTEN_HOST}:{port}"))
+}
+
+/// A data plane started with no artifact fetches the project's deployment
+/// from the control plane, serves it, and registers as running it; started
+/// again, it serves the copy it kept, and is sent nothing.
+#[tokio::test]
+async fn a_data_plane_without_an_artifact_starts_from_the_deployment() {
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
+        return;
+    };
+    let (project, key) = project_with_key(&cp);
+    let deployed = deploy_v2(&cp, &project);
+    let artifact_dir = tempfile::TempDir::new().unwrap();
+
+    let (mut process, url) = serve_without_artifact(&cp, &project, &key, artifact_dir.path());
+    let resp = reqwest::get(format!("{url}/v2/status")).await.unwrap();
+    assert_eq!(resp.status(), 200, "{}", process.log().text());
+    let data_planes = cp.cli(&["data-planes", "list", "--project-id", &project], None);
+    assert_eq!(
+        data_planes[0]["artifact_id"],
+        deployed.as_str(),
+        "{data_planes}"
+    );
+    process.kill_and_reap();
+
+    let (mut again, url) = serve_without_artifact(&cp, &project, &key, artifact_dir.path());
+    let resp = reqwest::get(format!("{url}/v2/status")).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        !again.log().contains("new artifact available"),
+        "{}",
+        again.log().text()
+    );
+    again.kill_and_reap();
+}
+
+/// A data plane started on another artifact after a deploy, a new replica or
+/// one restarted from its image, is sent the deployment and loads it.
+#[tokio::test]
+async fn a_data_plane_registering_after_a_deploy_is_sent_it() {
+    let Some(cp) = barbacane_test::required(
+        ControlPlane::boot().await,
+        "a control plane on PostgreSQL (`DATABASE_URL`) with both binaries built",
+    ) else {
+        return;
+    };
+    let (project, key) = project_with_key(&cp);
+    deploy_v2(&cp, &project);
+
+    let ws_url = format!("ws://{LISTEN_HOST}:{}/ws/data-plane", cp.port);
+    let gateway = TestGateway::from_spec_with_args(
+        &fixture("minimal.yaml"),
+        &[
+            "--control-plane",
+            &ws_url,
+            "--project-id",
+            &project,
+            "--api-key",
+            &key,
+        ],
+    )
+    .await
+    .expect("data plane starts");
+    let outcome = gateway
+        .log()
+        .wait_for_line("barbacane: hot-reload ", Duration::from_secs(60))
+        .unwrap_or_else(|| panic!("no hot-reload outcome:\n{}", gateway.log().text()));
+    assert!(outcome.contains("hot-reload successful"), "{outcome}");
+    assert_eq!(gateway.get("/v2/status").await.unwrap().status(), 200);
+}

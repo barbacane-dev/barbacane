@@ -166,9 +166,9 @@ pub fn create_router(
     // Public routes: liveness and readiness, the API's description and docs
     // page, and the data-plane WebSocket (which performs its own API-key
     // authentication inside the handler). The artifact download
-    // authenticates in its handler too: the admin token, or the data-plane key
-    // of the artifact's project, since a data plane fetches what `deploy`
-    // publishes with its own key.
+    // and the project's deployment authenticate in their handlers too: the
+    // admin token, or the data-plane key of the project, since a data plane
+    // fetches what `deploy` publishes with its own key.
     let public = Router::new()
         .route("/health", get(health::health_check))
         .route("/ready", get(health::readiness_check))
@@ -181,6 +181,7 @@ pub fn create_router(
             "/artifacts/{id}/download",
             get(artifacts::download_artifact),
         )
+        .route("/projects/{id}/deployment", get(artifacts::get_deployment))
         .route_layer(axum::middleware::from_fn(count_requests));
 
     // Protected routes: everything else requires the admin bearer token.

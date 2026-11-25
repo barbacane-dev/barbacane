@@ -26,7 +26,9 @@ fn to_ws_message(msg: &ControlPlaneMessage) -> Message {
     )
 }
 use crate::api::router::AppState;
-use crate::db::{ApiKeysRepository, ArtifactsRepository, DataPlanesRepository, NewDataPlane};
+use crate::db::{
+    ApiKeysRepository, ArtifactsRepository, DataPlanesRepository, NewDataPlane, ProjectsRepository,
+};
 use sqlx::PgPool;
 
 /// How long a data plane has, once upgraded, to send its registration.
@@ -176,6 +178,23 @@ async fn handle_socket(
         tracing::error!(error = %e, "Failed to send registration confirmation");
         let _ = data_planes_repo.delete(data_plane_id).await;
         return;
+    }
+
+    // A data plane that registers without the project's deployment is sent
+    // it: a restarted instance, a new replica, one that was offline.
+    match deployment_to_send(&state.pool, project_id, claimed_artifact).await {
+        Ok(Some(available)) => {
+            // `deploying` before the data plane can act on the message, so
+            // its report never lands before the status it settles.
+            let _ = data_planes_repo.mark_one_deploying(data_plane_id).await;
+            if let Err(e) = sender.send(to_ws_message(&available)).await {
+                tracing::error!(error = %e, "Failed to send the project's deployment");
+                let _ = data_planes_repo.mark_offline(data_plane_id).await;
+                return;
+            }
+        }
+        Ok(None) => {}
+        Err(e) => tracing::error!(error = %e, "Failed to read the project's deployment"),
     }
 
     // Create channel for sending messages to this data plane
@@ -490,9 +509,16 @@ async fn handle_message(
                 "Artifact download reported"
             );
             if success {
-                if let Some(aid) = owned_artifact(pool, project_id, Some(artifact_id)).await? {
-                    data_planes_repo.update_artifact(data_plane_id, aid).await?;
-                }
+                let loaded = owned_artifact(pool, project_id, Some(artifact_id)).await?;
+                data_planes_repo
+                    .record_deploy_result(data_plane_id, loaded, None)
+                    .await?;
+            } else {
+                let error = error.unwrap_or_else(|| "the data plane gave no reason".to_string());
+                let error: String = error.chars().take(MAX_DEPLOY_ERROR_CHARS).collect();
+                data_planes_repo
+                    .record_deploy_result(data_plane_id, None, Some(&error))
+                    .await?;
             }
         }
         DataPlaneMessage::Register { .. } => {
@@ -502,4 +528,36 @@ async fn handle_message(
     }
 
     Ok(())
+}
+
+/// The longest deploy error a data plane's report is kept with.
+const MAX_DEPLOY_ERROR_CHARS: usize = 2048;
+
+/// The `ArtifactAvailable` message for the project's deployment, unless the
+/// project has none or the data plane already runs it.
+async fn deployment_to_send(
+    pool: &PgPool,
+    project_id: Uuid,
+    running: Option<Uuid>,
+) -> Result<Option<ControlPlaneMessage>, sqlx::Error> {
+    let Some(project) = ProjectsRepository::new(pool.clone())
+        .get_by_id(project_id)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let Some(deployed) = project
+        .deployed_artifact_id
+        .filter(|id| Some(*id) != running)
+    else {
+        return Ok(None);
+    };
+    let Some(artifact) = ArtifactsRepository::new(pool.clone()).get(deployed).await? else {
+        return Ok(None);
+    };
+    Ok(Some(ControlPlaneMessage::ArtifactAvailable {
+        artifact_id: artifact.id,
+        download_url: format!("/artifacts/{}/download", artifact.id),
+        sha256: artifact.sha256,
+    }))
 }
