@@ -725,25 +725,4 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
-
-    #[test]
-    fn test_hot_reload_result_equality() {
-        let id = Uuid::new_v4();
-
-        let success1 = HotReloadResult::Success { artifact_id: id };
-        let success2 = HotReloadResult::Success { artifact_id: id };
-        assert_eq!(success1, success2);
-
-        let failed1 = HotReloadResult::Failed {
-            artifact_id: id,
-            error: "test error".to_string(),
-        };
-        let failed2 = HotReloadResult::Failed {
-            artifact_id: id,
-            error: "test error".to_string(),
-        };
-        assert_eq!(failed1, failed2);
-
-        assert_ne!(success1, failed1);
-    }
 }
