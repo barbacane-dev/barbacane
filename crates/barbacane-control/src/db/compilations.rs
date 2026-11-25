@@ -207,7 +207,6 @@ mod tests {
             .create(NewProject {
                 name: format!("requeue-{}", Uuid::new_v4().simple()),
                 description: None,
-                production_mode: false,
             })
             .await
             .expect("project");

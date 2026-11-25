@@ -48,12 +48,12 @@ export BARBACANE_CONTROL_ADMIN_TOKEN=<the token the server runs with>
 
 ```bash
 barbacane control specs upload --file api.yaml
-barbacane control compilations start --id <SPEC_ID> --file - <<< '{"production": true}'
+barbacane control compilations start --id <SPEC_ID>
 barbacane control compilations get --id <COMPILATION_ID>
 barbacane control artifacts download --id <ARTIFACT_ID> --out api.bca
 ```
 
-A compilation runs in the background: `compilations get` shows `pending` or `compiling` until it is `succeeded`, with an `artifact_id`, or `failed`, with its `errors`. For a project, `push` does the upload, the compilation and the wait in one command:
+`compilations start` takes its options as JSON from `--file`, such as `{"production": false}` to allow plaintext upstreams; without `--file`, it compiles with the defaults. A compilation runs in the background: `compilations get` shows `pending` or `compiling` until it is `succeeded`, with an `artifact_id`, or `failed`, with its `errors`. For a project, `push` does the upload, the compilation and the wait in one command:
 
 ```bash
 barbacane control push --project <PROJECT_ID> api.yaml
@@ -310,10 +310,13 @@ All errors follow RFC 9457 Problem Details format:
 
 | URN | Status | Description |
 |-----|--------|-------------|
-| `urn:barbacane:error:not-found` | 404 | Resource not found |
-| `urn:barbacane:error:bad-request` | 400 | Invalid request |
+| `urn:barbacane:error:bad-request` | 400 | Invalid request: a parameter, a spec, or a JSON body that does not parse or does not fit the operation |
+| `urn:barbacane:error:unauthorized` | 401 | No token, or one the operation does not accept |
+| `urn:barbacane:error:not-found` | 404 | Resource or path not found |
+| `urn:barbacane:error:method-not-allowed` | 405 | The path has no such method; `Allow` lists those it has |
 | `urn:barbacane:error:conflict` | 409 | Resource already exists or is in use |
-| `urn:barbacane:error:spec-invalid` | 422 | Spec validation failed |
+| `urn:barbacane:error:content-too-large` | 413 | The request body is over the limit |
+| `urn:barbacane:error:unsupported-media-type` | 415 | The body is not `application/json` where JSON is expected |
 | `urn:barbacane:error:internal-error` | 500 | Server error |
 
 ## Database Schema
@@ -331,7 +334,7 @@ The control plane uses PostgreSQL with the following tables:
 - `data_planes` - Connected gateway instances
 - `api_keys` - Authentication keys for data planes
 
-Migrations run automatically on startup with `--migrate` (enabled by default).
+Migrations run on startup; `--migrate=false` skips them.
 
 ## Configuration
 
@@ -339,8 +342,8 @@ Migrations run automatically on startup with `--migrate` (enabled by default).
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `BARBACANE_CONTROL_ADMIN_TOKEN` | **Required**, at least 32 bytes. Bearer token every API request carries, except `GET /health`, `GET /ready`, `GET /openapi`, `GET /docs` and the data-plane WebSocket. The server refuses to start without it |
+| `DATABASE_URL` | PostgreSQL connection string, as `--database-url` takes it |
+| `BARBACANE_CONTROL_ADMIN_TOKEN` | **Required**, at least 32 bytes. Bearer token every API request carries, except `GET /health`, `GET /ready`, `GET /openapi`, `GET /docs` and the data-plane WebSocket, which take none; `GET /artifacts/{id}/download` and `GET /projects/{id}/deployment` take it or a data-plane API key of the project. The server refuses to start without it |
 | `BARBACANE_CONTROL_ADMIN_TOKEN_PREVIOUS` | The token being replaced, accepted during a rotation |
 | `BARBACANE_SIGNING_KEY` | Path to the Ed25519 key that signs every artifact the control plane compiles; unset, artifacts are built unsigned |
 | `BARBACANE_CONTROL_ALLOWED_ORIGINS` | Comma-separated allowlist of browser origins for CORS; unset means no cross-origin access |
@@ -378,7 +381,7 @@ barbacane-control serve [OPTIONS]
 Options:
   --listen <ADDR>        Listen address [default: 127.0.0.1:9090]
   --database-url <URL>   PostgreSQL URL [env: DATABASE_URL]
-  --migrate              Run migrations on startup [default: true]
+  --migrate[=<BOOL>]     Run migrations on startup [default: true]
 ```
 
 ## Deployment

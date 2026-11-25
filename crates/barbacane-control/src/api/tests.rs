@@ -318,7 +318,7 @@ async fn project_update_returns_200() {
     let id = json_body(&create_body)["id"].as_str().unwrap().to_string();
 
     let (status, body) = send(
-        app,
+        app.clone(),
         json_req(
             Method::PUT,
             &format!("/projects/{}", id),
@@ -334,6 +334,35 @@ async fn project_update_returns_200() {
     );
     let j = json_body(&body);
     assert_eq!(j["description"], "updated description");
+
+    let uri = format!("/projects/{id}");
+    let (status, body) = send(
+        app.clone(),
+        json_req(
+            Method::PUT,
+            &uri,
+            json!({"name": format!("{name}-renamed")}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&body)["description"],
+        "updated description",
+        "a field left out keeps its value"
+    );
+
+    let (status, body) = send(
+        app,
+        json_req(Method::PUT, &uri, json!({"description": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json_body(&body)["description"],
+        Value::Null,
+        "null clears it"
+    );
 }
 
 #[tokio::test]
@@ -811,6 +840,27 @@ async fn a_project_spec_is_listed_with_its_operations_which_can_be_patched() {
     .await;
     assert_eq!(status, StatusCode::OK, "{}", json_body(&body));
     assert_eq!(json_body(&body)["global_middlewares"], json!([]));
+    assert_eq!(json_body(&body)["operations"][0]["middlewares"], json!([]));
+
+    let (status, body) = send(
+        app.clone(),
+        json_req(
+            Method::PATCH,
+            &format!("/specs/{spec_id}/operations"),
+            json!({
+                "operations": [{ "path": "/items", "method": "GET", "middlewares": null, "dispatch": null }]
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", json_body(&body));
+    let operation = &json_body(&body)["operations"][0];
+    assert_eq!(
+        operation["middlewares"],
+        Value::Null,
+        "null restores the global chain"
+    );
+    assert!(operation.get("dispatch").is_none(), "null removes it");
 
     let (status, body) = send(
         app.clone(),
@@ -1315,15 +1365,12 @@ async fn the_api_keys_of_an_unknown_project_are_404() {
         eprintln!("skip: database not available");
         return;
     };
-    let (status, _) = send(
-        app,
-        empty_req(
-            Method::GET,
-            &format!("/projects/{}/api-keys", Uuid::new_v4()),
-        ),
-    )
-    .await;
+    let uri = format!("/projects/{}/api-keys", Uuid::new_v4());
+    let (status, _) = send(app.clone(), empty_req(Method::GET, &uri)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = send(app, json_req(Method::POST, &uri, json!({"name": "dp"}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{}", json_body(&body));
 }
 
 #[tokio::test]
@@ -1419,7 +1466,6 @@ async fn a_deploy_becomes_the_projects_deployment() {
     let new_project = |name: String| crate::db::NewProject {
         name,
         description: None,
-        production_mode: false,
     };
     let project = projects
         .create(new_project(unique_project_name()))
@@ -1512,4 +1558,153 @@ async fn a_deploy_becomes_the_projects_deployment() {
 
     let stored = projects.get_by_id(project).await.unwrap().unwrap();
     assert_eq!(stored.deployed_artifact_id, Some(artifact.id));
+}
+
+// ---------------------------------------------------------------------------
+// Contract: errors, security, optional bodies
+// ---------------------------------------------------------------------------
+
+/// The status, content type and body of a request through the router.
+async fn raw_with_type(app: Router, req: Request<Body>) -> (StatusCode, String, Value) {
+    let resp: Response = app.oneshot(req).await.expect("router returned error");
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let body = resp.into_body().collect().await.expect("body").to_bytes();
+    let json = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    (status, content_type, json)
+}
+
+#[tokio::test]
+async fn a_request_refused_before_its_operation_is_a_problem() {
+    let post = |content_type: Option<&str>, body: Vec<u8>| {
+        let mut req = Request::builder().method(Method::POST).uri("/projects");
+        if let Some(content_type) = content_type {
+            req = req.header("content-type", content_type);
+        }
+        req.body(Body::from(body)).unwrap()
+    };
+    let cases = [
+        ("no content type", post(None, b"{}".to_vec()), 415),
+        (
+            "not JSON",
+            post(Some("application/json"), b"{".to_vec()),
+            400,
+        ),
+        (
+            "not a project",
+            post(Some("application/json"), br#"{"name": 1}"#.to_vec()),
+            400,
+        ),
+        (
+            "over the limit",
+            post(Some("application/json"), vec![b' '; 2 * 1024 * 1024]),
+            413,
+        ),
+        (
+            "not a uuid",
+            empty_req(Method::GET, "/projects/not-a-uuid"),
+            400,
+        ),
+        ("unknown path", empty_req(Method::GET, "/nowhere"), 404),
+        ("unknown method", empty_req(Method::PATCH, "/health"), 405),
+    ];
+    for (case, req, expected) in cases {
+        let (status, content_type, problem) = raw_with_type(make_app_without_db(), req).await;
+        assert_eq!(status.as_u16(), expected, "{case}: {problem}");
+        assert_eq!(content_type, "application/problem+json", "{case}");
+        assert_eq!(problem["status"], expected, "{case}: {problem}");
+        assert!(
+            problem["type"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("urn:barbacane:error:")),
+            "{case}: {problem}"
+        );
+    }
+
+    let (_, _, problem) = raw_with_type(
+        make_app_without_db(),
+        post(Some("application/json"), br#"{"name": 1}"#.to_vec()),
+    )
+    .await;
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("invalid type")),
+        "the rejection's text is the detail: {problem}"
+    );
+}
+
+#[tokio::test]
+async fn the_router_asks_for_the_token_where_the_contract_does() {
+    let methods = ["get", "post", "put", "patch", "delete"];
+    let mut checked = 0;
+    for (template, item) in SPEC["paths"].as_object().expect("paths") {
+        let path = template
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with('{') {
+                    Uuid::nil().to_string()
+                } else {
+                    segment.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        for (method, operation) in item.as_object().expect("path item") {
+            if !methods.contains(&method.as_str()) {
+                continue;
+            }
+            let security = operation.get("security").unwrap_or(&SPEC["security"]);
+            let public = security.as_array().is_some_and(Vec::is_empty);
+            let req = empty_req(method.to_uppercase().parse().expect("method"), &path);
+            let (status, _) = raw(make_app_with_token(), req).await;
+            if public {
+                assert_ne!(
+                    status,
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {template} is public in the contract"
+                );
+            } else {
+                assert_eq!(
+                    status,
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {template} takes a token in the contract"
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 40, "checked {checked} operations");
+}
+
+#[tokio::test]
+async fn compile_and_deploy_take_no_body() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let (status, body) = send(
+        app.clone(),
+        empty_req(Method::POST, &format!("/specs/{}/compile", Uuid::new_v4())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{}", json_body(&body));
+
+    let project = create_project(app.clone(), &unique_project_name()).await;
+    let (status, body) = send(
+        app,
+        empty_req(Method::POST, &format!("/projects/{project}/deploy")),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the latest artifact, of which there is none: {}",
+        json_body(&body)
+    );
 }

@@ -90,11 +90,11 @@ pub struct OperationPatch {
     pub path: String,
     pub method: String,
     /// `None` (missing) = no change, `Some(None)` (null) = remove, `Some(Some(..))` = set.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::db::present")]
     pub dispatch: Option<Option<DispatchBinding>>,
     /// `None` (missing) = no change, `Some(None)` (null) = revert to global,
     /// `Some(Some([]))` = opt-out, `Some(Some([..]))` = override.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::db::present")]
     pub middlewares: Option<Option<Vec<MiddlewareBinding>>>,
 }
 
@@ -419,5 +419,20 @@ mod tests {
             reparsed["x-barbacane-middlewares"],
             serde_json::json!([{"name": "auth", "enabled": false}, {"name": "cors"}])
         );
+    }
+
+    #[test]
+    fn a_null_binding_is_a_change_and_a_missing_one_is_not() {
+        let patch: OperationPatch = serde_json::from_value(serde_json::json!({
+            "path": "/a", "method": "GET", "dispatch": null, "middlewares": null
+        }))
+        .unwrap();
+        assert!(matches!(patch.dispatch, Some(None)));
+        assert!(matches!(patch.middlewares, Some(None)));
+
+        let patch: OperationPatch =
+            serde_json::from_value(serde_json::json!({"path": "/a", "method": "GET"})).unwrap();
+        assert!(patch.dispatch.is_none());
+        assert!(patch.middlewares.is_none());
     }
 }

@@ -53,8 +53,15 @@ enum Command {
         #[arg(long, env = "DATABASE_URL", hide_env_values = true)]
         database_url: String,
 
-        /// Run database migrations on startup.
-        #[arg(long, default_value_t = true)]
+        /// Run database migrations on startup; `--migrate=false` skips them.
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "true"
+        )]
         migrate: bool,
     },
 
@@ -221,7 +228,15 @@ async fn run_server(listen: SocketAddr, database_url: &str, migrate: bool) -> an
 #[derive(Debug, serde::Deserialize)]
 struct PluginManifest {
     plugin: PluginInfo,
-    capabilities: Option<toml::Value>,
+    #[serde(default)]
+    capabilities: ManifestCapabilities,
+}
+
+/// The `[capabilities]` section; the registry keeps its `host_functions`.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ManifestCapabilities {
+    #[serde(default)]
+    host_functions: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -333,12 +348,7 @@ async fn seed_plugins(
             serde_json::json!({})
         };
 
-        // Convert capabilities to JSON
-        let capabilities = manifest
-            .capabilities
-            .map(|c| serde_json::to_value(&c))
-            .transpose()?
-            .unwrap_or(serde_json::json!([]));
+        let capabilities = serde_json::json!(manifest.capabilities.host_functions);
 
         // Get description from manifest or Cargo.toml
         let description = manifest.plugin.description.or_else(|| {
@@ -430,6 +440,30 @@ mod help_tests {
 mod tests {
     use super::*;
 
+    /// The `migrate` value `serve` parses from these arguments.
+    fn migrate(args: &[&str]) -> Result<bool, clap::Error> {
+        let argv = [
+            "barbacane-control",
+            "serve",
+            "--database-url",
+            "postgres://x",
+        ];
+        let cli = Cli::try_parse_from(argv.iter().chain(args))?;
+        match cli.command {
+            Command::Serve { migrate, .. } => Ok(migrate),
+            other => panic!("parsed {other:?}"),
+        }
+    }
+
+    #[test]
+    fn migrate_defaults_to_true_and_takes_a_value() {
+        assert!(migrate(&[]).unwrap());
+        assert!(migrate(&["--migrate"]).unwrap());
+        assert!(migrate(&["--migrate=true"]).unwrap());
+        assert!(!migrate(&["--migrate=false"]).unwrap());
+        assert!(migrate(&["--migrate=maybe"]).is_err());
+    }
+
     #[test]
     fn test_parse_plugin_manifest_full() {
         let toml_content = r#"
@@ -454,7 +488,10 @@ host_functions = ["host_http_call", "host_log"]
             Some("HTTP upstream reverse proxy dispatcher".to_string())
         );
         assert_eq!(manifest.plugin.wasm, Some("http-upstream.wasm".to_string()));
-        assert!(manifest.capabilities.is_some());
+        assert_eq!(
+            manifest.capabilities.host_functions,
+            vec!["host_http_call", "host_log"]
+        );
     }
 
     #[test]
@@ -473,7 +510,7 @@ type = "dispatcher"
         assert_eq!(manifest.plugin.plugin_type, "dispatcher");
         assert!(manifest.plugin.description.is_none());
         assert!(manifest.plugin.wasm.is_none());
-        assert!(manifest.capabilities.is_none());
+        assert!(manifest.capabilities.host_functions.is_empty());
     }
 
     #[test]
@@ -487,26 +524,18 @@ description = "Rate limiting middleware"
 wasm = "rate-limit.wasm"
 
 [capabilities]
-rate_limit = true
-log = true
+host_functions = ["rate_limit", "log"]
+body_access = true
 "#;
 
         let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
 
         assert_eq!(manifest.plugin.name, "rate-limit");
         assert_eq!(manifest.plugin.plugin_type, "middleware");
-
-        // Verify capabilities can be converted to JSON
-        let capabilities = manifest
-            .capabilities
-            .map(|c| serde_json::to_value(&c))
-            .transpose()
-            .unwrap()
-            .unwrap_or(serde_json::json!([]));
-
-        assert!(capabilities.is_object());
-        assert_eq!(capabilities["rate_limit"], true);
-        assert_eq!(capabilities["log"], true);
+        assert_eq!(
+            manifest.capabilities.host_functions,
+            vec!["rate_limit", "log"]
+        );
     }
 
     #[test]
@@ -523,15 +552,10 @@ host_functions = ["host_verify_signature"]
 
         let manifest: PluginManifest = toml::from_str(toml_content).unwrap();
 
-        let capabilities = manifest
-            .capabilities
-            .map(|c| serde_json::to_value(&c))
-            .transpose()
-            .unwrap()
-            .unwrap_or(serde_json::json!([]));
-
-        assert!(capabilities["host_functions"].is_array());
-        assert_eq!(capabilities["host_functions"][0], "host_verify_signature");
+        assert_eq!(
+            manifest.capabilities.host_functions,
+            vec!["host_verify_signature"]
+        );
     }
 
     #[test]

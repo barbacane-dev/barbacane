@@ -22,14 +22,13 @@ impl ProjectsRepository {
     pub async fn create(&self, project: NewProject) -> Result<Project, sqlx::Error> {
         sqlx::query_as::<_, Project>(
             r#"
-            INSERT INTO projects (name, description, production_mode)
-            VALUES ($1, $2, $3)
+            INSERT INTO projects (name, description)
+            VALUES ($1, $2)
             RETURNING *
             "#,
         )
         .bind(&project.name)
         .bind(&project.description)
-        .bind(project.production_mode)
         .fetch_one(&self.pool)
         .await
     }
@@ -75,10 +74,6 @@ impl ProjectsRepository {
         }
         if update.description.is_some() {
             set_clauses.push(format!("description = ${}", param_idx));
-            param_idx += 1;
-        }
-        if update.production_mode.is_some() {
-            set_clauses.push(format!("production_mode = ${}", param_idx));
         }
 
         let query = format!(
@@ -93,9 +88,6 @@ impl ProjectsRepository {
         }
         if let Some(description) = &update.description {
             q = q.bind(description);
-        }
-        if let Some(production_mode) = update.production_mode {
-            q = q.bind(production_mode);
         }
 
         q.fetch_optional(&self.pool).await

@@ -34,6 +34,15 @@ pub async fn create_api_key(
             "expires_at is in the past; a key must expire after its creation",
         ));
     }
+    if ProjectsRepository::new(state.pool.clone())
+        .get_by_id(project_id)
+        .await?
+        .is_none()
+    {
+        return Err(ProblemDetails::not_found(format!(
+            "Project {project_id} not found"
+        )));
+    }
     let repo = ApiKeysRepository::new(state.pool.clone());
 
     // DB errors route through the generic `From<sqlx::Error>` mapper, which logs

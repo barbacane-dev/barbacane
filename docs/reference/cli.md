@@ -1120,7 +1120,8 @@ The server reads these environment variables:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `BARBACANE_CONTROL_ADMIN_TOKEN` | Yes | Bearer token every API request carries, except `GET /health` and the data-plane WebSocket. The server refuses to start without it |
+| `DATABASE_URL` | Yes, or `--database-url` | PostgreSQL connection URL |
+| `BARBACANE_CONTROL_ADMIN_TOKEN` | Yes | Bearer token every API request carries, except the [public endpoints](#api-endpoints). The server refuses to start without it |
 | `BARBACANE_SIGNING_KEY` | No | Path to the Ed25519 key that signs every artifact the control plane compiles (see [artifact signing](configuration.md#artifact-signing-quickstart)) |
 | `BARBACANE_CONTROL_ALLOWED_ORIGINS` | No | Comma-separated allowlist of browser origins for CORS; unset means no cross-origin access |
 | `RUST_LOG` | No | Log filter (`error`, `warn`, `info`, `debug`, `trace`) |
@@ -1235,7 +1236,7 @@ barbacane-control serve [OPTIONS]
 |--------|----------|---------|-------------|
 | `--listen` | No | `127.0.0.1:9090` | Listen address (ip:port) |
 | `--database-url` | Yes | - | PostgreSQL connection URL |
-| `--migrate` | No | `true` | Run database migrations on startup |
+| `--migrate[=<BOOL>]` | No | `true` | Run database migrations on startup; `--migrate=false` skips them |
 
 The `--database-url` can also be set via the `DATABASE_URL` environment variable. It takes libpq's TLS parameters (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`): see [PostgreSQL over TLS](../guide/control-plane.md#postgresql-over-tls).
 
@@ -1271,12 +1272,19 @@ barbacane-control serve --database-url postgres://localhost/barbacane
 
 ### API Endpoints
 
-The server exposes a REST API for managing specs, plugins, artifacts, and projects:
+The server exposes a REST API for managing specs, plugins, artifacts, and projects. Every endpoint takes the admin token (`BARBACANE_CONTROL_ADMIN_TOKEN`) as a bearer token, except:
+
+- `GET /health`, `GET /ready`, `GET /openapi`, `GET /docs` and `GET /ws/data-plane`, which take none (the WebSocket authenticates the data plane's API key inside the connection)
+- `GET /artifacts/{id}/download` and `GET /projects/{id}/deployment`, which take the admin token or a data-plane API key of the project
+
+Errors are RFC 9457 problems (`application/problem+json`), including a body that is not JSON (`415`), too large (`413`) or that does not fit the operation (`400`).
 
 | Endpoint | Description |
 |----------|-------------|
 | **System** | |
-| `GET /health` | Health check |
+| `GET /health` | Liveness probe |
+| `GET /ready` | Readiness probe: the database answers |
+| `GET /metrics` | Prometheus metrics |
 | `GET /openapi` | OpenAPI specification (YAML) |
 | `GET /docs` | Interactive API documentation (Scalar) |
 | `POST /init` | Initialize a new project |
@@ -1321,7 +1329,9 @@ The server exposes a REST API for managing specs, plugins, artifacts, and projec
 | `GET /projects/{id}/compilations` | List compilations for a project |
 | `GET /projects/{id}/artifacts` | List artifacts for a project |
 | `POST /projects/{id}/deploy` | Deploy artifact to connected data planes |
+| `GET /projects/{id}/deployment` | The artifact the project's data planes run |
 | **Data Planes** | |
+| `GET /ws/data-plane` | Data plane WebSocket |
 | `GET /projects/{id}/data-planes` | List connected data planes |
 | `GET /projects/{id}/data-planes/{dp_id}` | Get data plane status |
 | `DELETE /projects/{id}/data-planes/{dp_id}` | Disconnect a data plane |

@@ -40,7 +40,6 @@ async fn project(pool: &PgPool) -> Uuid {
         .create(NewProject {
             name: format!("ws-{}", Uuid::new_v4().simple()),
             description: None,
-            production_mode: false,
         })
         .await
         .expect("project")
