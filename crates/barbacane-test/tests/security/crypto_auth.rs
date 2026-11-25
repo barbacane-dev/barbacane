@@ -145,54 +145,50 @@ async fn jwt_alg_none_is_rejected() {
     assert_eq!(resp.status(), 401, "alg:none must be rejected");
 }
 
-/// An expired token must be rejected. (Regression lock.)
-#[tokio::test]
-async fn jwt_expired_is_rejected() {
-    let gw = TestGateway::from_spec(&fixture("jwt-auth.yaml"))
-        .await
-        .expect("failed to start gateway");
-
-    let header = serde_json::json!({"alg": "RS256", "typ": "JWT"});
-    let claims = serde_json::json!({
-        "sub": "user",
-        "iss": "test-issuer",
-        "aud": "test-audience",
-        "exp": now_timestamp() - 120, // 2 min ago, beyond 60s skew
-    });
-    let token = encode_jwt(&header, &claims, b"sig");
-
+/// Send `claims`, validly signed under [`jwt_verify_spec`]'s key; the status
+/// and the problem's `detail`.
+async fn send_signed(gw: &TestGateway, claims: &serde_json::Value) -> (u16, String) {
+    let token = sign_es256(&serde_json::json!({"alg": "ES256", "typ": "JWT"}), claims);
     let resp = gw
         .request_builder(reqwest::Method::GET, "/protected")
-        .header("Authorization", format!("Bearer {}", token))
+        .header("Authorization", format!("Bearer {token}"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401, "expired exp must be rejected");
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    (
+        status,
+        body["detail"].as_str().unwrap_or_default().to_string(),
+    )
 }
 
-/// A token with the wrong audience must be rejected. (Regression lock.)
+/// A validly signed token past its `exp` is rejected for that reason.
 #[tokio::test]
-async fn jwt_wrong_audience_is_rejected() {
-    let gw = TestGateway::from_spec(&fixture("jwt-auth.yaml"))
+async fn jwt_expired_is_rejected() {
+    let (_tmp, spec) = jwt_verify_spec();
+    let gw = TestGateway::from_spec(spec.to_str().unwrap())
         .await
         .expect("failed to start gateway");
+    let mut claims = verify_claims();
+    claims["exp"] = serde_json::json!(now_timestamp() - 120); // beyond the 60 s skew
+    let (status, detail) = send_signed(&gw, &claims).await;
+    assert_eq!(status, 401, "expired exp must be rejected");
+    assert_eq!(detail, "Token has expired");
+}
 
-    let header = serde_json::json!({"alg": "RS256", "typ": "JWT"});
-    let claims = serde_json::json!({
-        "sub": "user",
-        "iss": "test-issuer",
-        "aud": "WRONG-audience",
-        "exp": now_timestamp() + 3600,
-    });
-    let token = encode_jwt(&header, &claims, b"sig");
-
-    let resp = gw
-        .request_builder(reqwest::Method::GET, "/protected")
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
+/// A validly signed token for another audience is rejected for that reason.
+#[tokio::test]
+async fn jwt_wrong_audience_is_rejected() {
+    let (_tmp, spec) = jwt_verify_spec();
+    let gw = TestGateway::from_spec(spec.to_str().unwrap())
         .await
-        .unwrap();
-    assert_eq!(resp.status(), 401, "wrong aud must be rejected");
+        .expect("failed to start gateway");
+    let mut claims = verify_claims();
+    claims["aud"] = serde_json::json!("WRONG-audience");
+    let (status, detail) = send_signed(&gw, &claims).await;
+    assert_eq!(status, 401, "wrong aud must be rejected");
+    assert_eq!(detail, "Token audience mismatch");
 }
 
 /// A token whose signature does not verify under the configured key is

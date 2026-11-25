@@ -1,0 +1,38 @@
+asyncapi: "3.0.0"
+info:
+  title: Kafka Publish Test API
+  version: "1.0.0"
+  description: Publishes to the broker and topic the test names in the environment
+
+channels:
+  orderEvents:
+    address: /events/orders
+    messages:
+      OrderPlaced:
+        contentType: application/json
+        payload:
+          type: object
+          required:
+            - orderId
+            - total
+          properties:
+            orderId:
+              type: string
+              format: uuid
+            total:
+              type: number
+
+operations:
+  publishOrderPlaced:
+    action: send
+    channel:
+      $ref: '#/channels/orderEvents'
+    x-barbacane-dispatch:
+      name: kafka
+      config:
+        brokers: "env://BARBACANE_TEST_KAFKA_BROKERS"
+        topic: "env://BARBACANE_TEST_KAFKA_TOPIC"
+        key: "$request.header.x-order-key"
+        headers_from_request:
+          - x-tenant
+        include_metadata: true

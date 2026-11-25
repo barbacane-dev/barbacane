@@ -409,3 +409,30 @@ async fn test_parameters_are_read_in_their_style() {
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
+
+/// Without `--dev`, a validation failure names no field or reason; with it,
+/// `errors` lists them.
+#[tokio::test]
+async fn a_production_gateway_answers_a_validation_failure_without_its_errors() {
+    let invalid = r#"{"name": 42}"#;
+
+    let dev = TestGateway::from_spec(&fixture("validation.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let response = dev.post("/users", invalid).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(
+        body["errors"].as_array().is_some_and(|e| !e.is_empty()),
+        "dev mode lists the errors: {body}"
+    );
+
+    let production = TestGateway::from_spec_production(&fixture("validation.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let response = production.post("/users", invalid).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["type"], "urn:barbacane:error:validation-failed");
+    assert!(body.get("errors").is_none(), "{body}");
+}

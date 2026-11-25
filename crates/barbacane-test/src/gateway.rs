@@ -360,7 +360,7 @@ impl TestGateway {
         spec_path: &str,
         extra_args: &[&str],
     ) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(&[spec_path], false, extra_args, true, &[]).await
+        Self::create_gateway_with_args(&[spec_path], false, extra_args, true, &[], true).await
     }
 
     /// Create a TestGateway with extra environment variables set on the data-plane
@@ -369,24 +369,32 @@ impl TestGateway {
         spec_path: &str,
         env: &[(&str, &str)],
     ) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(&[spec_path], false, &[], true, env).await
+        Self::create_gateway_with_args(&[spec_path], false, &[], true, env, true).await
     }
 
     /// Create a TestGateway with the plugin SSRF guard ACTIVE (internal egress
     /// blocked). Use this for SSRF tests; the default constructors allow internal
     /// egress so tests can reach loopback mock upstreams.
     pub async fn from_spec_blocked_egress(spec_path: &str) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(&[spec_path], false, &[], false, &[]).await
+        Self::create_gateway_with_args(&[spec_path], false, &[], false, &[], true).await
+    }
+
+    /// A gateway as production runs it: without `--dev`, so error responses
+    /// carry no internal detail. The test artifact is unsigned, so it runs
+    /// with `--allow-unsigned`.
+    pub async fn from_spec_production(spec_path: &str) -> Result<Self, TestError> {
+        Self::create_gateway_with_args(&[spec_path], false, &["--allow-unsigned"], true, &[], false)
+            .await
     }
 
     /// Create a TestGateway from multiple spec files.
     pub async fn from_specs(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(spec_paths, false, &[], true, &[]).await
+        Self::create_gateway_with_args(spec_paths, false, &[], true, &[], true).await
     }
 
     /// Create a TLS-enabled TestGateway from multiple spec files.
     pub async fn from_specs_with_tls(spec_paths: &[&str]) -> Result<Self, TestError> {
-        Self::create_gateway_with_args(spec_paths, true, &[], true, &[]).await
+        Self::create_gateway_with_args(spec_paths, true, &[], true, &[], true).await
     }
 
     /// Internal method to create a gateway with optional TLS and extra CLI args.
@@ -400,6 +408,7 @@ impl TestGateway {
         extra_args: &[&str],
         allow_internal_egress: bool,
         env: &[(&str, &str)],
+        dev: bool,
     ) -> Result<Self, TestError> {
         // Create temp directory for the artifact
         let temp_dir = TempDir::new()?;
@@ -457,7 +466,6 @@ impl TestGateway {
             .arg(LISTEN_ANY_PORT)
             .arg("--admin-bind")
             .arg(LISTEN_ANY_PORT)
-            .arg("--dev")
             .arg("--allow-plaintext-upstream") // Allow HTTP calls to test mock servers
             // Set egress policy explicitly so tests don't depend on the ambient
             // environment: most tests reach loopback mocks (allow), SSRF tests
@@ -466,6 +474,10 @@ impl TestGateway {
                 "BARBACANE_ALLOW_INTERNAL_EGRESS",
                 if allow_internal_egress { "1" } else { "0" },
             );
+
+        if dev {
+            cmd.arg("--dev");
+        }
 
         // Add TLS arguments if enabled
         if let Some(ref certs) = tls_certs {
@@ -577,6 +589,11 @@ impl TestGateway {
         Err(TestError::StartupFailed(
             "gateway did not become ready in time".to_string(),
         ))
+    }
+
+    /// The artifact the gateway serves.
+    pub fn artifact_path(&self) -> std::path::PathBuf {
+        self._temp_dir.path().join("test.bca")
     }
 
     /// Get the port the gateway is listening on.
