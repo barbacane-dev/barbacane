@@ -372,7 +372,7 @@ Lambda response format:
 
 ### kafka
 
-Publishes messages to Apache Kafka topics. Designed for AsyncAPI specs using the sync-to-async bridge pattern: HTTP POST requests publish messages and return 202 Accepted. Uses a pure-Rust Kafka client with connection caching and a dedicated runtime.
+Publishes messages to Apache Kafka topics. Designed for AsyncAPI specs using the sync-to-async bridge pattern: HTTP POST requests publish messages and return 202 Accepted. Uses a pure-Rust Kafka client with connection caching and a dedicated runtime. The request body is the message value as the client sent it, text or bytes.
 
 ```yaml
 x-barbacane-dispatch:
@@ -391,7 +391,7 @@ x-barbacane-dispatch:
 | `key` | string | No | - | Message key expression (see below) |
 | `ack_response` | object | No | - | Custom acknowledgment response |
 | `include_metadata` | boolean | No | false | Include partition/offset in response |
-| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
+| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers, matched in any case and sent under the name written here |
 
 Broker connections pass the plugin egress guard ([`BARBACANE_ALLOW_INTERNAL_EGRESS`](../reference/configuration.md#security-environment-variables)): those to the brokers in `brokers` and those to every broker the cluster advertises. While the guard is on, the gateway relays each Kafka connection through a SOCKS5 relay it runs on a loopback port, and a broker in `brokers` is named by a host name or an IPv4 address, not an IPv6 address.
 
@@ -401,7 +401,7 @@ The `key` property supports dynamic expressions:
 
 | Expression | Description |
 |------------|-------------|
-| `$request.header.X-Key` | Extract key from request header |
+| `$request.header.X-Key` | Extract key from request header (the name matches in any case) |
 | `$request.path.userId` | Extract key from path parameter |
 | `literal-value` | Use a literal string value |
 
@@ -504,9 +504,11 @@ x-barbacane-dispatch:
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `url` | string | Yes | - | NATS server URL (e.g. `"nats://localhost:4222"`) |
-| `subject` | string | Yes | - | NATS subject to publish to (supports wildcards) |
+| `subject` | string | Yes | - | NATS subject to publish to: dot-separated tokens, without wildcards (`*`, `>`), empty tokens or whitespace, since a message is published to one subject. Any other value fails the plugin's `init` |
 | `ack_response` | object | No | - | Custom acknowledgment response |
-| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
+| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers, matched in any case and sent under the name written here |
+
+The request body is the message payload as the client sent it, text or bytes.
 
 #### Examples
 

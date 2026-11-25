@@ -15,7 +15,8 @@ pub struct NatsDispatcher {
     /// NATS server URL (e.g., nats://localhost:4222).
     url: String,
 
-    /// NATS subject to publish messages to.
+    /// NATS subject to publish messages to: one subject, without wildcards.
+    #[serde(deserialize_with = "subject")]
     subject: String,
 
     /// Custom acknowledgment response configuration.
@@ -40,6 +41,12 @@ struct BrokerMessage {
     url: String,
     topic: String, // "topic" field is used for subject in NATS
     payload: String,
+    /// The body when it is not UTF-8; the host publishes these bytes.
+    #[serde(
+        with = "barbacane_plugin_sdk::types::base64_body",
+        skip_serializing_if = "Option::is_none"
+    )]
+    payload_base64: Option<Vec<u8>>,
     headers: BTreeMap<String, String>,
 }
 
@@ -52,32 +59,28 @@ struct PublishResult {
     topic: String,
 }
 
+/// A NATS subject a message can be published to: dot-separated tokens, none
+/// empty, none a wildcard (`*`, `>`), no whitespace.
+fn subject<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let subject = String::deserialize(deserializer)?;
+    let valid = !subject.chars().any(char::is_whitespace)
+        && subject
+            .split('.')
+            .all(|token| !token.is_empty() && token != "*" && token != ">");
+    if valid {
+        Ok(subject)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "subject {subject:?} is not one NATS subject: write dot-separated tokens, \
+             without wildcards (`*`, `>`), empty tokens or whitespace"
+        )))
+    }
+}
+
 impl NatsDispatcher {
     /// Dispatch a request by publishing to NATS and returning 202 Accepted.
     pub fn dispatch(&mut self, req: Request) -> Response {
-        // Build message headers from request headers
-        let mut msg_headers = BTreeMap::new();
-        for header_name in &self.headers_from_request {
-            if let Some(value) = req.headers.get(header_name) {
-                msg_headers.insert(header_name.clone(), value.clone());
-            }
-        }
-
-        // Add standard metadata headers
-        if let Some(request_id) = req.headers.get("x-request-id") {
-            msg_headers.insert("x-request-id".to_string(), request_id.clone());
-        }
-        if let Some(trace_id) = req.headers.get("x-trace-id") {
-            msg_headers.insert("x-trace-id".to_string(), trace_id.clone());
-        }
-
-        // Build the broker message
-        let message = BrokerMessage {
-            url: self.url.clone(),
-            topic: self.subject.clone(),
-            payload: req.body_string().unwrap_or_default(),
-            headers: msg_headers,
-        };
+        let message = self.message(&req);
 
         // Serialize and publish
         let message_json = match serde_json::to_vec(&message) {
@@ -208,6 +211,43 @@ unsafe fn host_broker_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
     0
 }
 
+impl NatsDispatcher {
+    /// The message for `req`: its body and the request headers it carries.
+    /// Request header names are lower-case, so configured names are matched in
+    /// any case.
+    fn message(&self, req: &Request) -> BrokerMessage {
+        let mut msg_headers = BTreeMap::new();
+        for header_name in &self.headers_from_request {
+            if let Some(value) = req.headers.get(&header_name.to_ascii_lowercase()) {
+                msg_headers.insert(header_name.clone(), value.clone());
+            }
+        }
+        for name in ["x-request-id", "x-trace-id"] {
+            if let Some(value) = req.headers.get(name) {
+                msg_headers.insert(name.to_string(), value.clone());
+            }
+        }
+        let (payload, payload_base64) = payload(req.body.clone());
+        BrokerMessage {
+            url: self.url.clone(),
+            topic: self.subject.clone(),
+            payload,
+            payload_base64,
+            headers: msg_headers,
+        }
+    }
+}
+
+/// The request body as a message payload: text when it is UTF-8, otherwise
+/// the bytes, which the host receives as base64.
+fn payload(body: Option<Vec<u8>>) -> (String, Option<Vec<u8>>) {
+    match body.map(String::from_utf8) {
+        None => (String::new(), None),
+        Some(Ok(text)) => (text, None),
+        Some(Err(not_text)) => (String::new(), Some(not_text.into_bytes())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +265,49 @@ mod tests {
         Request::new("POST", "/test")
             .with_body(b"test body".to_vec())
             .with_client_ip("127.0.0.1")
+    }
+
+    /// A subject with a wildcard, an empty token or whitespace is refused
+    /// when the configuration is read: NATS publishes to one subject.
+    #[test]
+    fn a_subject_with_wildcards_is_refused() {
+        for subject in [
+            "events.>",
+            "events.*.created",
+            "events..user",
+            "",
+            "events user",
+        ] {
+            let config = json!({"url": "nats://localhost:4222", "subject": subject});
+            let error = serde_json::from_value::<NatsDispatcher>(config)
+                .err()
+                .unwrap_or_else(|| panic!("{subject:?} accepted"));
+            assert!(
+                error.to_string().contains("not one NATS subject"),
+                "{error}"
+            );
+        }
+        let config = json!({"url": "nats://localhost:4222", "subject": "events.user.signup"});
+        assert!(serde_json::from_value::<NatsDispatcher>(config).is_ok());
+    }
+
+    /// A configured header name matches the lower-case request header, and a
+    /// body that is not UTF-8 goes to the host as its bytes.
+    #[test]
+    fn headers_match_in_any_case_and_bodies_keep_their_bytes() {
+        let dispatcher: NatsDispatcher = serde_json::from_value(json!({
+            "url": "nats://localhost:4222",
+            "subject": "events",
+            "headers_from_request": ["X-User-Id"]
+        }))
+        .unwrap();
+        let mut req = create_test_request().with_body(vec![0xff, 0x00]);
+        req.headers
+            .insert("x-user-id".to_string(), "u1".to_string());
+        let json = serde_json::to_value(dispatcher.message(&req)).unwrap();
+        assert_eq!(json["headers"]["X-User-Id"], "u1");
+        assert_eq!(json["payload"], "");
+        assert_eq!(json["payload_base64"], "/wA=");
     }
 
     #[test]
