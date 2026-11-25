@@ -1359,16 +1359,19 @@ impl Gateway {
         response
     }
 
-    /// Add the lifecycle headers of the operation: `Deprecation: true` when it
-    /// is deprecated (draft-ietf-httpapi-deprecation-header), and `Sunset`
-    /// when it has an `x-sunset` date (RFC 8594), deprecated or not.
+    /// Add the lifecycle headers of the operation: `Deprecation: @<seconds>`
+    /// when it has an `x-deprecation` date (RFC 9745), and `Sunset` when it
+    /// has an `x-sunset` date (RFC 8594).
     fn add_deprecation_headers<B>(
         mut response: Response<B>,
         operation: &CompiledOperation,
     ) -> Response<B> {
         let headers = response.headers_mut();
-        if operation.deprecated {
-            headers.insert("deprecation", HeaderValue::from_static("true"));
+        if let Some(value) = operation
+            .deprecation
+            .and_then(|seconds| HeaderValue::try_from(format!("@{seconds}")).ok())
+        {
+            headers.insert("deprecation", value);
         }
         if let Some(sunset) = operation.sunset.as_deref().and_then(|s| s.parse().ok()) {
             headers.insert("sunset", sunset);
@@ -1864,7 +1867,7 @@ impl Gateway {
                     )
                     .await?;
 
-                // Add deprecation headers if the operation is deprecated
+                // The operation's lifecycle headers (Deprecation, Sunset).
                 let response = Self::add_deprecation_headers(response, operation);
 
                 // Response-phase WAF inspection (phases 3, 4 and 5).
@@ -3680,7 +3683,7 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     barbacane_compiler::ParseError::MisplacedExtension(_) => {
                         ("E1017".to_string(), e.to_string())
                     }
-                    barbacane_compiler::ParseError::InvalidSunset(_) => {
+                    barbacane_compiler::ParseError::InvalidLifecycleDate(_) => {
                         ("E1018".to_string(), e.to_string())
                     }
                     barbacane_compiler::ParseError::Io(io_err) => {

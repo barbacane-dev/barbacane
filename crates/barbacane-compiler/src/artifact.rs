@@ -536,6 +536,10 @@ pub struct CompiledOperation {
     /// Sunset date for deprecated operations (HTTP-date format per RFC 9110).
     #[serde(default)]
     pub sunset: Option<String>,
+    /// Deprecation date, in Unix seconds, sent as `Deprecation: @<seconds>`
+    /// (RFC 9745).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecation: Option<i64>,
     /// AsyncAPI messages (for async operations only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
@@ -1537,6 +1541,7 @@ fn compile_inner(
                 middlewares,
                 deprecated: op.deprecated,
                 sunset: op.sunset.clone(),
+                deprecation: op.deprecation,
                 messages: op.messages.clone(),
                 bindings: op.bindings.clone(),
                 responses: op.responses.clone(),
@@ -3691,6 +3696,7 @@ mod tests {
                 middlewares: None,
                 deprecated: false,
                 sunset: None,
+                deprecation: None,
                 extensions: BTreeMap::new(),
                 messages: vec![],
                 bindings: BTreeMap::new(),

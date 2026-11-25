@@ -256,7 +256,7 @@ plugins and builds an artifact.
 | E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
 | E1016 | Plugin | A plugin imports a deprecated host function; it still loads until the release named in the [plugin guide](../contributing/plugins.md#deprecated-host-functions) (warning) |
 | E1017 | Extension | A known extension is set where it has no effect: `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, `x-barbacane-waf` outside the document root |
-| E1018 | Extension | An operation's `x-sunset` is not an HTTP-date, an RFC 3339 date-time or a date |
+| E1018 | Extension | An operation's `x-sunset` or `x-deprecation` is not an HTTP-date, an RFC 3339 date-time or a date, or its sunset is earlier than its deprecation |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 | E1031 | Extension | Plaintext `http://` or `ws://` upstream URL not allowed (use `--allow-plaintext` to override) |
 | E1032 | Security | An operation runs an authentication middleware that reads none of the schemes its `security` requirement names |
@@ -318,7 +318,7 @@ no artifact, so it reports only the codes that need neither.
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
 | E1017 | Extension | A known extension is set where it has no effect: `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, `x-barbacane-waf` outside the document root |
-| E1018 | Extension | An operation's `x-sunset` is not an HTTP-date, an RFC 3339 date-time or a date |
+| E1018 | Extension | An operation's `x-sunset` or `x-deprecation` is not an HTTP-date, an RFC 3339 date-time or a date, or its sunset is earlier than its deprecation |
 | E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
 
 Every other code is reported by `barbacane compile`, whose table lists them all.
@@ -889,20 +889,20 @@ Content-Type: application/json
 
 ### API Lifecycle Headers
 
-For deprecated operations, additional headers are included:
+An operation with an `x-deprecation` or `x-sunset` date answers with these headers:
 
 | Header | Description |
 |--------|-------------|
-| `Deprecation` | `true` - indicates the endpoint is deprecated (per draft-ietf-httpapi-deprecation-header) |
-| `Sunset` | HTTP-date when the endpoint will be removed (per RFC 8594) |
+| `Deprecation` | `@` and the Unix time the endpoint was or will be deprecated, from `x-deprecation` (per RFC 9745) |
+| `Sunset` | HTTP-date when the endpoint will be removed, from `x-sunset` (per RFC 8594) |
 
 Example for deprecated endpoint:
 
 ```
 HTTP/1.1 200 OK
 Server: barbacane
-Deprecation: true
-Sunset: Sat, 31 Dec 2025 23:59:59 GMT
+Deprecation: @1751241600
+Sunset: Wed, 31 Dec 2025 23:59:59 GMT
 Content-Type: application/json
 ```
 

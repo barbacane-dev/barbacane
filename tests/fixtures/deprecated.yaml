@@ -2,7 +2,7 @@ openapi: "3.1.0"
 info:
   title: API with Deprecated Endpoints
   version: "2.0.0"
-  description: Demonstrates API lifecycle features (deprecated + sunset headers)
+  description: Demonstrates API lifecycle features (deprecation and sunset headers)
 
 paths:
   /v2/users:
@@ -35,8 +35,9 @@ paths:
   /v1/users/{id}:
     get:
       operationId: getUserV1
-      summary: Get user by ID (deprecated with sunset date)
+      summary: Get user by ID (deprecated on a date, with a sunset date)
       deprecated: true
+      x-deprecation: "2025-06-30"
       x-sunset: "Sat, 31 Dec 2025 23:59:59 GMT"
       parameters:
         - name: id
@@ -58,6 +59,7 @@ paths:
       operationId: legacyStatus
       summary: Legacy status endpoint (deprecated with far future sunset)
       deprecated: true
+      x-deprecation: "2029-01-01T12:00:00+02:00"
       x-sunset: "Wed, 01 Jan 2030 00:00:00 GMT"
       x-barbacane-dispatch:
         name: mock

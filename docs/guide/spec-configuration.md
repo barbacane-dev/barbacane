@@ -494,7 +494,7 @@ operations:
 
 ## API Lifecycle
 
-Barbacane supports API lifecycle management through standard OpenAPI deprecation and the `x-sunset` extension.
+Barbacane supports API lifecycle management through standard OpenAPI deprecation and the `x-deprecation` and `x-sunset` extensions.
 
 ### Marking Operations as Deprecated
 
@@ -512,7 +512,25 @@ paths:
           url: "https://api.example.com"
 ```
 
-When a client calls a deprecated endpoint, the response includes a `Deprecation: true` header per [draft-ietf-httpapi-deprecation-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-deprecation-header/).
+`deprecated: true` marks the operation in the spec. It carries no date, so on its own it adds no header.
+
+### Setting a Deprecation Date
+
+Use `x-deprecation` to give the date the endpoint was or will be deprecated (per [RFC 9745](https://www.rfc-editor.org/rfc/rfc9745.html)):
+
+```yaml
+paths:
+  /v1/users:
+    get:
+      deprecated: true
+      x-deprecation: "2026-06-30"
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.example.com"
+```
+
+The response includes a `Deprecation` header holding that date as a Structured Field Date, the Unix time prefixed with `@` (`Deprecation: @1782777600`). The date may be in the future, to announce a deprecation. `x-deprecation` takes the same formats as `x-sunset` below; any other value fails compilation with `E1018`.
 
 ### Setting a Sunset Date
 
@@ -523,6 +541,7 @@ paths:
   /v1/users:
     get:
       deprecated: true
+      x-deprecation: "2026-06-30"
       x-sunset: "Thu, 31 Dec 2026 23:59:59 GMT"
       x-barbacane-dispatch:
         name: http-upstream
@@ -530,20 +549,20 @@ paths:
           url: "https://api.example.com"
 ```
 
-The response includes a `Sunset` header per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594), whether or not the operation is deprecated. `x-sunset` is an HTTP-date (RFC 9110), an RFC 3339 date-time, or a date (`2026-12-31`, midnight UTC); the header carries it as an HTTP-date, with the day name of its date. Any other value fails compilation with `E1018`.
+The response includes a `Sunset` header per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594), whether or not the operation is deprecated. `x-sunset` is an HTTP-date (RFC 9110), an RFC 3339 date-time, or a date (`2026-12-31`, midnight UTC); the header carries it as an HTTP-date, with the day name of its date. Any other value fails compilation with `E1018`, and so does a sunset earlier than the operation's `x-deprecation` (RFC 9745, section 4).
 
 ### Example Response Headers
 
 ```
 HTTP/1.1 200 OK
-Deprecation: true
+Deprecation: @1782777600
 Sunset: Thu, 31 Dec 2026 23:59:59 GMT
 Content-Type: application/json
 ```
 
 ### Best Practices
 
-1. **Mark deprecated first**: Set `deprecated: true` before setting a sunset date
+1. **Announce the deprecation first**: Set `deprecated: true` and `x-deprecation` before setting a sunset date
 2. **Give advance notice**: Set the sunset date at least 6 months in advance
 3. **Update API docs**: Include migration instructions in the operation summary or description
 4. **Monitor usage**: Track calls to deprecated endpoints via metrics

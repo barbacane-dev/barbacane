@@ -28,9 +28,10 @@ pub enum ParseError {
     #[error("E1017: {0}")]
     MisplacedExtension(String),
 
-    /// E1018: An operation's `x-sunset` is not a date.
+    /// E1018: An operation's `x-sunset` or `x-deprecation` is not a date, or its
+    /// sunset is earlier than its deprecation.
     #[error("E1018: {0}")]
-    InvalidSunset(String),
+    InvalidLifecycleDate(String),
 
     /// I/O error reading the spec file.
     #[error("I/O error: {0}")]
