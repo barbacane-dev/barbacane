@@ -185,19 +185,14 @@ barbacane control projects create --file - \
 
 ### Configure Plugins for a Project
 
-Add plugins from the registry to your project with custom configuration:
+A project's specs may use the plugins added to it, at the registry version each names:
 
 ```bash
-barbacane control project-plugins add --project-id <PROJECT_ID> --file - <<'EOF'
-{
-  "plugin_name": "rate-limit",
-  "plugin_version": "0.1.0",
-  "config": { "quota": 1000, "window": 60 }
-}
-EOF
+barbacane control project-plugins add --project-id <PROJECT_ID> --file - \
+  <<< '{"plugin_name": "rate-limit", "plugin_version": "0.1.0"}'
 ```
 
-Each plugin's configuration is validated against its JSON Schema (if one is defined).
+A compilation refuses a spec that uses a plugin the project does not have, or has with `"enabled": false` (`E1040`). The specs configure each plugin where they use it (`x-barbacane-middlewares`, `x-barbacane-dispatch`), and the compilation validates that configuration against the plugin's JSON Schema.
 
 `limits` sets the plugin's resource limits for the project, replacing its own key by key, as `limits` does in `barbacane.yaml`; a value above the gateway's ceiling is refused with `E1044`. Updating with `"limits": {}` removes them:
 

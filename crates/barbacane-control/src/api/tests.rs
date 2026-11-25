@@ -925,8 +925,17 @@ async fn a_plugin_is_added_to_updated_in_and_removed_from_a_project() {
         .expect("register plugin");
     let project_id = create_project(app.clone(), &unique_project_name()).await;
     let plugins = format!("/projects/{project_id}/plugins");
-    let added =
+    let added = json!({ "plugin_name": plugin_name, "plugin_version": "1.0.0" });
+
+    let configured =
         json!({ "plugin_name": plugin_name, "plugin_version": "1.0.0", "config": { "a": 1 } });
+    let (status, body) = send(app.clone(), json_req(Method::POST, &plugins, configured)).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the specs configure a plugin, not the project: {}",
+        json_body(&body)
+    );
 
     let (status, body) = send(app.clone(), json_req(Method::POST, &plugins, added.clone())).await;
     assert_eq!(status, StatusCode::CREATED, "{}", json_body(&body));
@@ -942,16 +951,19 @@ async fn a_plugin_is_added_to_updated_in_and_removed_from_a_project() {
     let one = format!("{plugins}/{plugin_name}");
     let (status, body) = send(
         app.clone(),
-        json_req(
-            Method::PUT,
-            &one,
-            json!({ "enabled": false, "priority": 3 }),
-        ),
+        json_req(Method::PUT, &one, json!({ "enabled": false })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json_body(&body)["enabled"], false);
-    assert_eq!(json_body(&body)["config"], json!({ "a": 1 }));
+    assert!(json_body(&body).get("config").is_none());
+
+    let (status, _) = send(
+        app.clone(),
+        json_req(Method::PUT, &one, json!({ "priority": 3 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 
     let (status, _) = send(app.clone(), empty_req(Method::DELETE, &one)).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -1707,4 +1719,60 @@ async fn compile_and_deploy_take_no_body() {
         "the latest artifact, of which there is none: {}",
         json_body(&body)
     );
+}
+
+/// Upload `PROJECT_SPEC` to a new project; the project and spec ids.
+async fn project_with_spec(app: Router) -> (String, String) {
+    let project = create_project(app.clone(), &unique_project_name()).await;
+    let (status, body) = send(
+        app,
+        multipart_req(
+            &format!("/projects/{project}/specs"),
+            "api.yaml",
+            PROJECT_SPEC,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{}", json_body(&body));
+    let spec = json_body(&body)["id"]
+        .as_str()
+        .expect("spec id")
+        .to_string();
+    (project, spec)
+}
+
+#[tokio::test]
+async fn the_specs_to_bundle_are_other_specs_of_the_project() {
+    let Some(app) = make_app().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let (_, spec) = project_with_spec(app.clone()).await;
+    let (_, elsewhere) = project_with_spec(app.clone()).await;
+    let compile = |additional: Value| {
+        json_req(
+            Method::POST,
+            &format!("/specs/{spec}/compile"),
+            json!({ "additional_specs": additional }),
+        )
+    };
+
+    for (case, additional, expected) in [
+        (
+            "another project's spec",
+            json!([elsewhere]),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "an unknown spec",
+            json!([Uuid::new_v4()]),
+            StatusCode::NOT_FOUND,
+        ),
+        ("the spec compiled", json!([spec]), StatusCode::BAD_REQUEST),
+    ] {
+        let (status, body) = send(app.clone(), compile(additional)).await;
+        assert_eq!(status, expected, "{case}: {}", json_body(&body));
+    }
+    let (status, body) = send(app, compile(json!([]))).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{}", json_body(&body));
 }

@@ -26,8 +26,8 @@ impl ProjectPluginConfigsRepository {
         sqlx::query_as::<_, ProjectPluginConfig>(
             r#"
             INSERT INTO project_plugin_configs
-                (project_id, plugin_name, plugin_version, enabled, priority, config, limits)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (project_id, plugin_name, plugin_version, enabled, limits)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING *
             "#,
         )
@@ -35,8 +35,6 @@ impl ProjectPluginConfigsRepository {
         .bind(&config.plugin_name)
         .bind(&config.plugin_version)
         .bind(config.enabled)
-        .bind(config.priority)
-        .bind(&config.config)
         .bind(stored_limits(&config.limits))
         .fetch_one(&self.pool)
         .await
@@ -51,7 +49,7 @@ impl ProjectPluginConfigsRepository {
             r#"
             SELECT * FROM project_plugin_configs
             WHERE project_id = $1
-            ORDER BY priority, plugin_name
+            ORDER BY plugin_name
             "#,
         )
         .bind(project_id)
@@ -96,14 +94,6 @@ impl ProjectPluginConfigsRepository {
             set_clauses.push(format!("enabled = ${}", param_idx));
             param_idx += 1;
         }
-        if update.priority.is_some() {
-            set_clauses.push(format!("priority = ${}", param_idx));
-            param_idx += 1;
-        }
-        if update.config.is_some() {
-            set_clauses.push(format!("config = ${}", param_idx));
-            param_idx += 1;
-        }
         if update.limits.is_some() {
             set_clauses.push(format!("limits = ${}", param_idx));
         }
@@ -122,12 +112,6 @@ impl ProjectPluginConfigsRepository {
         }
         if let Some(enabled) = update.enabled {
             q = q.bind(enabled);
-        }
-        if let Some(priority) = update.priority {
-            q = q.bind(priority);
-        }
-        if let Some(config) = &update.config {
-            q = q.bind(config);
         }
         if update.limits.is_some() {
             q = q.bind(stored_limits(&update.limits));

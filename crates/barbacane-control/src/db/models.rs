@@ -55,8 +55,6 @@ pub struct ProjectPluginConfig {
     pub plugin_name: String,
     pub plugin_version: String,
     pub enabled: bool,
-    pub priority: i32,
-    pub config: serde_json::Value,
     /// Limits replacing the plugin's own, key by key; `None` sets none.
     pub limits: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
@@ -65,15 +63,12 @@ pub struct ProjectPluginConfig {
 
 /// Input for adding a plugin to a project.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NewProjectPluginConfig {
     pub plugin_name: String,
     pub plugin_version: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default = "default_config")]
-    pub config: serde_json::Value,
     /// Limits replacing the plugin's own, key by key.
     #[serde(default)]
     pub limits: Option<serde_json::Value>,
@@ -83,17 +78,12 @@ fn default_enabled() -> bool {
     true
 }
 
-fn default_config() -> serde_json::Value {
-    serde_json::json!({})
-}
-
 /// Input for updating a project plugin configuration.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateProjectPluginConfig {
     pub plugin_version: Option<String>,
     pub enabled: Option<bool>,
-    pub priority: Option<i32>,
-    pub config: Option<serde_json::Value>,
     /// New limits; an empty object removes them.
     pub limits: Option<serde_json::Value>,
 }

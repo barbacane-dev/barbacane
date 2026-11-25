@@ -172,6 +172,32 @@ impl CompilationsRepository {
         .inspect(|_| crate::metrics::metrics().compilation(false))
     }
 
+    /// Mark a compilation failed if it is still `compiling`; one that ended
+    /// keeps its outcome. Returns whether it was marked.
+    pub async fn fail_if_compiling(
+        &self,
+        id: Uuid,
+        errors: serde_json::Value,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            UPDATE compilations
+            SET status = 'failed', errors = $2, completed_at = $3
+            WHERE id = $1 AND status = 'compiling'
+            "#,
+        )
+        .bind(id)
+        .bind(&errors)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        let failed = result.rows_affected() > 0;
+        if failed {
+            crate::metrics::metrics().compilation(false);
+        }
+        Ok(failed)
+    }
+
     /// Delete a compilation.
     pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM compilations WHERE id = $1")

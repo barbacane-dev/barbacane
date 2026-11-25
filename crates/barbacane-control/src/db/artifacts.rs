@@ -6,6 +6,10 @@ use uuid::Uuid;
 
 use super::models::Artifact;
 
+/// The columns of [`Artifact`]: every one but `data`, which only a download
+/// reads.
+const COLUMNS: &str = "id, project_id, manifest, sha256, size_bytes, compiler_version, compiled_at";
+
 /// Repository for artifact operations.
 #[derive(Clone)]
 pub struct ArtifactsRepository {
@@ -28,13 +32,11 @@ impl ArtifactsRepository {
         compiler_version: &str,
     ) -> Result<Artifact, sqlx::Error> {
         let size_bytes = data.len() as i64;
-        sqlx::query_as::<_, Artifact>(
-            r#"
-            INSERT INTO artifacts (project_id, manifest, data, sha256, size_bytes, compiler_version)
+        sqlx::query_as::<_, Artifact>(&format!(
+            "INSERT INTO artifacts (project_id, manifest, data, sha256, size_bytes, compiler_version)
             VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
-            "#,
-        )
+            RETURNING {COLUMNS}"
+        ))
         .bind(project_id)
         .bind(&manifest)
         .bind(&data)
@@ -47,9 +49,9 @@ impl ArtifactsRepository {
 
     /// List all artifacts.
     pub async fn list(&self, page: Page) -> Result<Vec<Artifact>, sqlx::Error> {
-        sqlx::query_as::<_, Artifact>(
-            "SELECT * FROM artifacts ORDER BY compiled_at DESC, id LIMIT $1 OFFSET $2",
-        )
+        sqlx::query_as::<_, Artifact>(&format!(
+            "SELECT {COLUMNS} FROM artifacts ORDER BY compiled_at DESC, id LIMIT $1 OFFSET $2"
+        ))
         .bind(page.limit)
         .bind(page.offset)
         .fetch_all(&self.pool)
@@ -63,7 +65,9 @@ impl ArtifactsRepository {
         page: Page,
     ) -> Result<Vec<Artifact>, sqlx::Error> {
         sqlx::query_as::<_, Artifact>(
-            "SELECT * FROM artifacts WHERE project_id = $1 ORDER BY compiled_at DESC, id LIMIT $2 OFFSET $3",
+            &format!(
+                "SELECT {COLUMNS} FROM artifacts WHERE project_id = $1 ORDER BY compiled_at DESC, id LIMIT $2 OFFSET $3"
+            ),
         )
         .bind(project_id)
         .bind(page.limit)
@@ -74,7 +78,7 @@ impl ArtifactsRepository {
 
     /// Get an artifact by ID (metadata only).
     pub async fn get(&self, id: Uuid) -> Result<Option<Artifact>, sqlx::Error> {
-        sqlx::query_as::<_, Artifact>("SELECT * FROM artifacts WHERE id = $1")
+        sqlx::query_as::<_, Artifact>(&format!("SELECT {COLUMNS} FROM artifacts WHERE id = $1"))
             .bind(id)
             .fetch_optional(&self.pool)
             .await
