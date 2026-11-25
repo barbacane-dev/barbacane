@@ -1215,8 +1215,8 @@ mod tests {
 
         assert_eq!(resp.status, 403);
         assert_eq!(
-            resp.headers.get("content-type").expect("content-type"),
-            "application/problem+json"
+            resp.header("content-type"),
+            Some("application/problem+json")
         );
 
         let body: serde_json::Value =

@@ -181,11 +181,13 @@ impl HttpLog {
             },
             response: ResponseLog {
                 status: resp.status,
-                headers: if self.include_headers {
-                    Some(resp.headers.clone())
-                } else {
-                    None
-                },
+                headers: self.include_headers.then(|| {
+                    // A repeated field's values, combined as RFC 9110 5.3 allows.
+                    resp.headers
+                        .iter()
+                        .map(|(name, values)| (name.clone(), values.join(", ")))
+                        .collect()
+                }),
                 body_size: if self.include_body {
                     resp.body.as_ref().map(|b| b.len())
                 } else {
@@ -363,10 +365,8 @@ mod tests {
     }
 
     fn test_response() -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
         Response::new(201)
-            .with_headers(headers)
+            .with_header("content-type", "application/json")
             .with_body(br#"{"id":42}"#.to_vec())
     }
 

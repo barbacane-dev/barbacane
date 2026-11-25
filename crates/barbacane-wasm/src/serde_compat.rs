@@ -78,14 +78,16 @@ mod tests {
 
         let host_resp = HttpResponse {
             status: 200,
-            headers: {
-                let mut h = std::collections::HashMap::new();
-                h.insert(
+            headers: BTreeMap::from([
+                (
                     "content-type".to_string(),
-                    "application/octet-stream".to_string(),
-                );
-                h
-            },
+                    vec!["application/octet-stream".to_string()],
+                ),
+                (
+                    "set-cookie".to_string(),
+                    vec!["a=1".to_string(), "b=2".to_string()],
+                ),
+            ]),
             body: Some(binary_body.clone()),
         };
 
@@ -95,7 +97,7 @@ mod tests {
         #[derive(serde::Deserialize)]
         struct PluginHttpResponse {
             status: u16,
-            headers: BTreeMap<String, String>,
+            headers: BTreeMap<String, Vec<String>>,
             #[serde(default, with = "base64_body")]
             body: Option<Vec<u8>>,
         }
@@ -106,11 +108,12 @@ mod tests {
         assert_eq!(plugin_parsed.status, 200);
         assert_eq!(plugin_parsed.body, Some(binary_body));
         assert_eq!(
-            plugin_parsed
-                .headers
-                .get("content-type")
-                .map(|s| s.as_str()),
-            Some("application/octet-stream")
+            plugin_parsed.headers.get("content-type"),
+            Some(&vec!["application/octet-stream".to_string()])
+        );
+        assert_eq!(
+            plugin_parsed.headers.get("set-cookie"),
+            Some(&vec!["a=1".to_string(), "b=2".to_string()])
         );
     }
 
@@ -155,7 +158,7 @@ mod tests {
         let resp = Response::new(200)
             .with_headers({
                 let mut h = BTreeMap::new();
-                h.insert("content-type".into(), "image/png".into());
+                h.insert("content-type".into(), vec!["image/png".into()]);
                 h
             })
             .with_body(vec![0x89, 0x50, 0x4E, 0x47]);
@@ -208,7 +211,7 @@ mod tests {
     fn middleware_shortcircuit_metadata_survives_value_extraction() {
         let resp = Response::new(403).with_headers({
             let mut h = BTreeMap::new();
-            h.insert("content-type".into(), "application/json".into());
+            h.insert("content-type".into(), vec!["application/json".into()]);
             h
         });
 

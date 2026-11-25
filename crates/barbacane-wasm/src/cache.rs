@@ -30,8 +30,8 @@ const MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
 pub struct CacheEntry {
     /// The cached response status code.
     pub status: u16,
-    /// The cached response headers.
-    pub headers: HashMap<String, String>,
+    /// The cached response header fields, each with its values.
+    pub headers: barbacane_plugin_sdk::types::ResponseHeaders,
     /// The cached response body (binary-safe via base64 in JSON).
     #[serde(with = "barbacane_plugin_sdk::types::base64_body")]
     pub body: Option<Vec<u8>>,
@@ -63,7 +63,11 @@ struct InternalEntry {
 
 /// The bytes an entry holds: its key, header names and values, and body.
 fn entry_size(key: &str, entry: &CacheEntry) -> usize {
-    let headers: usize = entry.headers.iter().map(|(k, v)| k.len() + v.len()).sum();
+    let headers: usize = entry
+        .headers
+        .iter()
+        .map(|(k, values)| k.len() + values.iter().map(String::len).sum::<usize>())
+        .sum();
     key.len() + headers + entry.body.as_ref().map_or(0, Vec::len)
 }
 
@@ -300,7 +304,7 @@ mod tests {
     fn body(bytes: usize) -> CacheEntry {
         CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: Some(vec![b'x'; bytes]),
             metadata: None,
         }
@@ -354,7 +358,7 @@ mod tests {
 
         let entry = CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: Some(b"test body".to_vec()),
             metadata: None,
         };
@@ -374,7 +378,7 @@ mod tests {
         let cache = ResponseCache::new();
         let entry = CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: None,
             metadata: None,
         };
@@ -395,7 +399,7 @@ mod tests {
 
         let entry = CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: None,
             metadata: None,
         };
@@ -413,7 +417,7 @@ mod tests {
 
         let entry = CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: None,
             metadata: None,
         };
@@ -434,11 +438,10 @@ mod tests {
         let binary_body = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
         let entry = CacheEntry {
             status: 200,
-            headers: {
-                let mut h = HashMap::new();
-                h.insert("content-type".to_string(), "image/png".to_string());
-                h
-            },
+            headers: std::collections::BTreeMap::from([(
+                "content-type".to_string(),
+                vec!["image/png".to_string()],
+            )]),
             body: Some(binary_body.clone()),
             metadata: None,
         };
@@ -453,7 +456,7 @@ mod tests {
         // CacheEntry uses base64_body for JSON — verify roundtrip
         let entry = CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: Some(vec![0x00, 0xFF, 0x80]),
             metadata: None,
         };
@@ -466,7 +469,7 @@ mod tests {
     fn test_cache_entry_json_none_body() {
         let entry = CacheEntry {
             status: 204,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: None,
             metadata: None,
         };

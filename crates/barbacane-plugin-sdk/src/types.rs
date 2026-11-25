@@ -137,17 +137,23 @@ impl Request {
     }
 }
 
+/// Response header fields: each lower-case name with its values, in the order
+/// they are sent. A field the response repeats (`set-cookie`, `link`,
+/// `www-authenticate`) has one value per field.
+///
+/// A BTreeMap, not a HashMap, to keep the WASI random source out of plugins.
+pub type ResponseHeaders = BTreeMap<String, Vec<String>>;
+
 /// An HTTP response as produced by plugins.
 ///
 /// Build one with [`Response::new`] and the `with_*` methods; the fields are
 /// public to read and assign. A minor release may add fields.
-///
-/// Uses BTreeMap instead of HashMap to avoid WASI random dependency in WASM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Response {
     pub status: u16,
-    pub headers: BTreeMap<String, String>,
+    /// The header fields, by lower-case name, each with its values.
+    pub headers: ResponseHeaders,
     /// Body travels via side-channel host functions (host_body_read/host_body_set),
     /// not embedded in JSON. Skipped during serde.
     #[serde(skip)]
@@ -164,16 +170,46 @@ impl Response {
         }
     }
 
-    /// Add a header. Header names are lower-case on the wire.
+    /// Set a header to one value, replacing any it had. Header names are
+    /// lower-case on the wire.
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.insert(name.into(), value.into());
+        self.set_header(name, value);
         self
     }
 
     /// Replace the headers.
-    pub fn with_headers(mut self, headers: BTreeMap<String, String>) -> Self {
+    pub fn with_headers(mut self, headers: ResponseHeaders) -> Self {
         self.headers = headers;
         self
+    }
+
+    /// The first value of a header.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name)?.first().map(String::as_str)
+    }
+
+    /// Every value of a header, in order; empty when it has none.
+    pub fn header_values(&self, name: &str) -> &[String] {
+        self.headers.get(name).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Set a header to one value, replacing any it had.
+    pub fn set_header(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        self.headers.insert(name.into(), vec![value.into()]);
+    }
+
+    /// Add a value to a header after the ones it has: one more field of that
+    /// name, such as another `set-cookie`.
+    pub fn append_header(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        self.headers
+            .entry(name.into())
+            .or_default()
+            .push(value.into());
+    }
+
+    /// Remove a header, returning its values.
+    pub fn remove_header(&mut self, name: &str) -> Option<Vec<String>> {
+        self.headers.remove(name)
     }
 
     /// Set the body.
@@ -196,7 +232,7 @@ impl Response {
     }
 
     /// Create a response with a text body.
-    pub fn text(status: u16, headers: BTreeMap<String, String>, text: &str) -> Self {
+    pub fn text(status: u16, headers: ResponseHeaders, text: &str) -> Self {
         Self {
             status,
             headers,
@@ -439,6 +475,35 @@ mod tests {
         assert_eq!(dispatch_req.body, None);
     }
 
+    /// A repeated header keeps one value per field, in order, on the wire
+    /// and through the accessors.
+    #[test]
+    fn a_repeated_response_header_keeps_each_value() {
+        let mut resp = Response::new(200).with_header("content-type", "text/plain");
+        resp.append_header("set-cookie", "a=1");
+        resp.append_header("set-cookie", "b=2");
+
+        assert_eq!(resp.header("set-cookie"), Some("a=1"));
+        assert_eq!(resp.header_values("set-cookie"), ["a=1", "b=2"]);
+        assert!(resp.header_values("link").is_empty());
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(
+            json["headers"],
+            serde_json::json!({"content-type": ["text/plain"], "set-cookie": ["a=1", "b=2"]})
+        );
+        let back: Response = serde_json::from_value(json).unwrap();
+        assert_eq!(back.header_values("set-cookie"), ["a=1", "b=2"]);
+
+        resp.set_header("set-cookie", "c=3");
+        assert_eq!(resp.header_values("set-cookie"), ["c=3"]);
+        assert_eq!(
+            resp.remove_header("set-cookie"),
+            Some(vec!["c=3".to_string()])
+        );
+        assert_eq!(resp.header("set-cookie"), None);
+    }
+
     /// Short-circuit response metadata roundtrips correctly.
     #[test]
     fn short_circuit_response_metadata_roundtrip() {
@@ -446,7 +511,7 @@ mod tests {
             status: 401,
             headers: {
                 let mut h = BTreeMap::new();
-                h.insert("content-type".into(), "application/json".into());
+                h.insert("content-type".into(), vec!["application/json".into()]);
                 h
             },
             body: Some(b"{\"error\":\"unauthorized\"}".to_vec()),
@@ -459,10 +524,7 @@ mod tests {
         let sc_resp: Response = serde_json::from_slice(&data_json).unwrap();
 
         assert_eq!(sc_resp.status, 401);
-        assert_eq!(
-            sc_resp.headers.get("content-type").map(|s| s.as_str()),
-            Some("application/json")
-        );
+        assert_eq!(sc_resp.header("content-type"), Some("application/json"));
         // body is None in JSON (travels via side-channel)
         assert_eq!(sc_resp.body, None);
     }

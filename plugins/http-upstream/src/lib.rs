@@ -157,14 +157,14 @@ impl HttpUpstreamDispatcher {
         };
 
         // Build the response, filtering hop-by-hop headers
-        let mut response_headers: BTreeMap<String, String> = BTreeMap::new();
-        for (key, value) in http_response.headers {
+        let mut response_headers = ResponseHeaders::new();
+        for (key, values) in http_response.headers {
             let key_lower = key.to_lowercase();
             if !matches!(
                 key_lower.as_str(),
                 "connection" | "keep-alive" | "transfer-encoding" | "te" | "trailer" | "upgrade"
             ) {
-                response_headers.insert(key, value);
+                response_headers.insert(key, values);
             }
         }
 
@@ -343,8 +343,8 @@ mod tests {
             dispatcher.error_response(502, "Bad Gateway", "connection failed", "tcp error");
         assert_eq!(response.status, 502);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/problem+json"
+            response.header("content-type"),
+            Some("application/problem+json")
         );
 
         let body: serde_json::Value =

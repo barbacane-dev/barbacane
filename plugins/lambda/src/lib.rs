@@ -101,7 +101,10 @@ impl LambdaDispatcher {
 
         // Ensure content-type is set
         if !response_headers.contains_key("content-type") {
-            response_headers.insert("content-type".to_string(), "application/json".to_string());
+            response_headers.insert(
+                "content-type".to_string(),
+                vec!["application/json".to_string()],
+            );
         }
 
         {
@@ -146,7 +149,7 @@ mod tests {
 
         assert_eq!(response.status, 502);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
 
@@ -170,7 +173,7 @@ mod tests {
 
         assert_eq!(response.status, 503);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
 
@@ -193,7 +196,7 @@ mod tests {
 
         assert_eq!(response.status, 504);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
 
@@ -257,7 +260,7 @@ mod tests {
         // Native stub returns -1, so dispatch should return 502 error
         assert_eq!(response.status, 502);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
 
