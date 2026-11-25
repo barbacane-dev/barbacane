@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **data plane**: `--max-headers` and `--max-header-size` are the limits a request meets on both protocols. The HTTP/1.1 parser stopped at 100 header lines whatever `--max-headers` said, and HTTP/2 refused a header list over 16 KB whatever `--max-header-size` said; the HTTP/2 list now holds `--max-header-size` plus 16 KB. A request over either limit answers `431 Request Header Fields Too Large` (`urn:barbacane:error:header-fields-too-large`) on both protocols; the gateway's own check answered 400 `validation-failed`, and HTTP/1.1 requests over 100 headers got hyper's 431. The CLI reference gives the body limit's actual answer, 413 `payload-too-large`, and what `--keepalive-timeout` does on HTTP/2 (#434).
+
+  > **Upgrade note (breaking):** a request with too many or too large headers answers 431 instead of 400.
 - **validation**: array and object parameters are read in their `style` and `explode`: `form` (`?tag=a&tag=b`, or `?ids=1,2` with `explode: false`), `spaceDelimited`, `pipeDelimited` and `deepObject` in the query, `simple`, `label` and `matrix` in the path, and `simple` in headers. A parameter described by `content` is validated against its media type's schema, parsed as JSON under a JSON media type; an OpenAPI 3.2 `querystring` with `application/x-www-form-urlencoded` and an object schema is checked as the object its fields make. A path parameter keeps `+` as `+` (#431).
 
   > **Upgrade note (breaking):** a parameter without `name` or `in`, with an unknown `in`, a `style` its location does not take, both `schema` and `content`, or a `content` that names more or fewer than one media type fails compilation with `E1004`; it was skipped or checked as a string.

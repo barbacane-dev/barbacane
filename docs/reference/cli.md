@@ -133,8 +133,8 @@ barbacane dev [OPTIONS]
 | `--debounce-ms` | No | `300` | Debounce delay in milliseconds before recompiling after a file change |
 | `--log-format` | No | `pretty` | Log format (`json` or `pretty`) |
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes |
-| `--max-headers` | No | `100` | Maximum number of request headers |
-| `--max-header-size` | No | `8192` | Maximum size of a single header in bytes |
+| `--max-headers` | No | `100` | Maximum number of request headers. See [Request Limits](#request-limits) |
+| `--max-header-size` | No | `8192` | Maximum size of a single header (name and value) in bytes |
 | `--max-uri-length` | No | `8192` | Maximum URI length in bytes |
 
 Dev mode is always enabled (verbose errors, plaintext HTTP upstreams allowed).
@@ -631,8 +631,8 @@ The examples below assume the key is set.
 | `--otlp-endpoint` | No | - | OpenTelemetry endpoint for trace export (e.g., `http://localhost:4317`) |
 | `--trace-sampling` | No | `1.0` | Trace sampling rate (0.0 to 1.0). 1.0 = 100%, 0.1 = 10%, 0.0 = disabled |
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes (1MB) |
-| `--max-headers` | No | `100` | Maximum number of request headers |
-| `--max-header-size` | No | `8192` | Maximum size of a single header in bytes (8KB) |
+| `--max-headers` | No | `100` | Maximum number of request headers. See [Request Limits](#request-limits) |
+| `--max-header-size` | No | `8192` | Maximum size of a single header (name and value) in bytes (8KB) |
 | `--max-uri-length` | No | `8192` | Maximum URI length in bytes (8KB) |
 | `--allow-plaintext-upstream` | No | `false` | Allow `http://` and `ws://` upstream URLs (dev only) |
 | `--allow-unsigned` | No | `false` | Load artifacts no trusted key has signed, when `BARBACANE_TRUSTED_PUBKEY` is unset (development and testing only; every load logs a warning) |
@@ -641,7 +641,7 @@ The examples below assume the key is set.
 | `--tls-min-version` | No | `1.2` | Minimum TLS version (`1.2` or `1.3`) |
 | `--tls-client-ca` | No | - | CA certificates (PEM) that client certificates must chain to; every client then presents one (mutual TLS). Requires `--tls-cert`. See [Client certificates](#client-certificates) |
 | `--tls-reload-interval` | No | `60` | Seconds between checks of the certificate, key and client CA files; changed files are loaded without a restart. `0` turns the check off; `SIGHUP` reloads at any time. See [Reloading certificates](#reloading-certificates) |
-| `--keepalive-timeout` | No | `60` | HTTP keep-alive idle timeout in seconds; also the deadline for a request's headers and for its body, answered 408 when missed |
+| `--keepalive-timeout` | No | `60` | HTTP/1.1 keep-alive idle timeout in seconds; also the deadline for a request's headers (HTTP/1.1) and for its body (both protocols), answered 408 when missed. On HTTP/2 the gateway pings the client every 20 seconds and closes the connection when a ping goes unanswered for this long; an idle HTTP/2 connection whose client answers stays open |
 | `--shutdown-timeout` | No | `30` | Graceful shutdown timeout in seconds |
 | `--max-connections` | No | `10000` | Maximum number of concurrently served connections, from 1; a connection past it is closed at once. Also set by `BARBACANE_MAX_CONNECTIONS`, the flag taking precedence. See [Connection cap](#connection-cap) |
 | `--plugin-instance-pool` | No | `1000` | Plugin instances alive at once that the gateway keeps memory set up for; `0` turns the pool off. Also set by `BARBACANE_PLUGIN_INSTANCE_POOL`, the flag taking precedence. See [Plugin instance pool](#plugin-instance-pool) |
@@ -825,23 +825,28 @@ The `--dev` flag enables:
 
 The gateway enforces request limits to protect against abuse:
 
-| Limit | Default | Description |
-|-------|---------|-------------|
-| Body size | 1 MB | Requests with larger bodies are rejected with 400 |
-| Header count | 100 | Requests with more headers are rejected with 400 |
-| Header size | 8 KB | Individual headers larger than this are rejected |
-| URI length | 8 KB | URIs longer than this are rejected with 400 |
+| Limit | Flag | Default | Over the limit |
+|-------|------|---------|----------------|
+| Body size | `--max-body-size` | 1 MB | `413`, `payload-too-large` |
+| Header count | `--max-headers` | 100 | `431`, `header-fields-too-large` |
+| Header size (name and value) | `--max-header-size` | 8 KB | `431`, `header-fields-too-large` |
+| URI length | `--max-uri-length` | 8 KB | `400`, `validation-failed` |
 
 Requests exceeding limits receive an RFC 9457 problem details response:
 
 ```json
 {
-  "type": "urn:barbacane:error:validation-failed",
-  "title": "Request validation failed",
-  "status": 400,
-  "detail": "request body too large: 2000000 bytes exceeds limit of 1048576 bytes"
+  "type": "urn:barbacane:error:header-fields-too-large",
+  "title": "Request Header Fields Too Large",
+  "status": 431,
+  "detail": "too many headers: 150 exceeds limit of 100"
 }
 ```
+
+The HTTP server also checks the headers while it reads the request, before the gateway sees it, and answers `431` with an empty body:
+
+- Over HTTP/1.1, a request with more than `--max-headers` header lines, or a header section larger than 408 KB in all.
+- Over HTTP/2, a header list larger than `--max-header-size` plus 16 KB, counting each field's name and value and 32 bytes (RFC 9113), so the largest header `--max-header-size` admits always fits beside the others.
 
 ### Graceful Shutdown
 
