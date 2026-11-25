@@ -253,3 +253,209 @@ paths:
             .unwrap_or_default()
     );
 }
+
+// ==================== Distributed tracing ====================
+
+/// A gateway exporting spans over OTLP/HTTP to `collector`, proxying `/items`
+/// to `upstream` with `http-upstream`. Batches leave every 100 ms.
+async fn traced_gateway(collector: &str, upstream: &str) -> (tempfile::TempDir, TestGateway) {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let http_upstream = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins/http-upstream/http-upstream.wasm");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  http-upstream:\n    path: {}\n",
+            http_upstream.display()
+        ),
+    )
+    .expect("write manifest");
+    let spec = dir.path().join("traced.yaml");
+    std::fs::write(
+        &spec,
+        format!(
+            r#"openapi: "3.1.0"
+info: {{ title: Traced, version: "1" }}
+paths:
+  /items:
+    get:
+      operationId: listItems
+      x-barbacane-dispatch:
+        name: http-upstream
+        config: {{ url: "{upstream}", path: /items }}
+      responses: {{ "200": {{ description: ok }} }}
+"#
+        ),
+    )
+    .expect("write spec");
+    let gateway = TestGateway::from_spec_with_env(
+        spec.to_str().unwrap(),
+        &[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", collector),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"),
+            ("OTEL_BSP_SCHEDULE_DELAY", "100"),
+        ],
+    )
+    .await
+    .expect("failed to start gateway");
+    (dir, gateway)
+}
+
+/// The OTLP export bodies the collector received, waiting up to 10 s for
+/// one that holds `needle`.
+async fn exported_with(collector: &wiremock::MockServer, needle: &[u8]) -> Vec<u8> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let bodies: Vec<u8> = collector
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.url.path() == "/v1/traces")
+            .flat_map(|r| r.body)
+            .collect();
+        if bodies.windows(needle.len()).any(|w| w == needle) {
+            return bodies;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no exported span holds {:?}",
+            String::from_utf8_lossy(needle)
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// A request carrying a `traceparent` continues that trace: the gateway's
+/// span is its child, the upstream receives the gateway's span as parent and
+/// the gateway's request id, and the spans reach the OTLP collector.
+#[tokio::test]
+async fn a_traced_request_continues_its_trace_upstream_and_is_exported() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let collector = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/traces"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&collector)
+        .await;
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/items"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&upstream)
+        .await;
+    let (_dir, gateway) = traced_gateway(&collector.uri(), &upstream.uri()).await;
+
+    let trace_id = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/items")
+        .header("traceparent", format!("00-{trace_id}-00f067aa0ba902b7-01"))
+        .header("x-request-id", "client-request-1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-trace-id"], trace_id);
+
+    let sent = &upstream.received_requests().await.unwrap()[0];
+    let traceparent = sent.headers["traceparent"].to_str().unwrap();
+    let parts: Vec<&str> = traceparent.split('-').collect();
+    assert_eq!(parts[1], trace_id, "{traceparent}");
+    assert_ne!(
+        parts[2], "00f067aa0ba902b7",
+        "the gateway's span is the parent"
+    );
+    assert_eq!(sent.headers["x-request-id"], "client-request-1");
+
+    let trace_bytes: Vec<u8> = (0..trace_id.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&trace_id[i..i + 2], 16).unwrap())
+        .collect();
+    let exported = exported_with(&collector, b"barbacane.dispatch.http-upstream").await;
+    assert!(exported.windows(16).any(|w| w == trace_bytes.as_slice()));
+    assert!(exported.windows(10).any(|w| w == b"GET /items"));
+}
+
+/// A request without a `traceparent` starts a trace; the upstream receives
+/// it, and the response names it.
+#[tokio::test]
+async fn an_untraced_request_starts_a_trace_the_upstream_receives() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let collector = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&collector)
+        .await;
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/items"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&upstream)
+        .await;
+    let (_dir, gateway) = traced_gateway(&collector.uri(), &upstream.uri()).await;
+
+    let resp = gateway.get("/items").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let trace_id = resp.headers()["x-trace-id"].to_str().unwrap().to_string();
+    let request_id = resp.headers()["x-request-id"].to_str().unwrap().to_string();
+
+    let sent = &upstream.received_requests().await.unwrap()[0];
+    let traceparent = sent.headers["traceparent"].to_str().unwrap();
+    assert_eq!(
+        traceparent.split('-').nth(1),
+        Some(trace_id.as_str()),
+        "{traceparent}"
+    );
+    assert_eq!(sent.headers["x-request-id"], request_id.as_str());
+}
+
+/// The gRPC exporter runs on the gateway's runtime: with no collector to
+/// reach, requests are answered as usual.
+#[tokio::test]
+async fn a_grpc_exporter_without_a_collector_does_not_hold_up_requests() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/items"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&upstream)
+        .await;
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let http_upstream = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins/http-upstream/http-upstream.wasm");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  http-upstream:\n    path: {}\n",
+            http_upstream.display()
+        ),
+    )
+    .expect("write manifest");
+    let spec = dir.path().join("traced.yaml");
+    std::fs::write(
+        &spec,
+        format!(
+            "openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\npaths:\n  /items:\n    get:\n      x-barbacane-dispatch:\n        name: http-upstream\n        config: {{ url: \"{}\", path: /items }}\n      responses: {{ \"200\": {{ description: ok }} }}\n",
+            upstream.uri()
+        ),
+    )
+    .expect("write spec");
+    let gateway = TestGateway::from_spec_with_env(
+        spec.to_str().unwrap(),
+        &[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1"),
+            ("OTEL_BSP_SCHEDULE_DELAY", "50"),
+        ],
+    )
+    .await
+    .expect("failed to start gateway");
+    for _ in 0..5 {
+        assert_eq!(gateway.get("/items").await.unwrap().status(), 200);
+    }
+}

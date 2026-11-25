@@ -288,7 +288,14 @@ pub struct PluginState {
     /// Outbound HTTP request body set by the plugin via
     /// `host_http_request_body_set()`. Consumed by `host_http_call`.
     pub http_request_body: Option<Vec<u8>>,
+
+    /// The spans the plugin opened with `host_span_start` and has not ended,
+    /// innermost last. Those still open end with the instance.
+    pub(crate) spans: Vec<barbacane_telemetry::tracing::ChildSpan>,
 }
+
+/// The most spans a plugin keeps open at once; `host_span_start` refuses more.
+const MAX_OPEN_SPANS: usize = 32;
 
 impl PluginState {
     /// Create new plugin state.
@@ -323,6 +330,7 @@ impl PluginState {
             output_body: None,
             http_response_body: None,
             http_request_body: None,
+            spans: Vec::new(),
         }
     }
 
@@ -2128,12 +2136,22 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     Err(_) => return -1,
                 };
 
-                // Log the span start for now (full tracing integration in Phase 9)
-                let plugin_name = &caller.data().plugin_name;
-                tracing::debug!(plugin = %plugin_name, span = %span_name, "plugin span started");
-
-                // Return a placeholder span ID
-                1
+                let span_name = span_name.to_string();
+                let state = caller.data_mut();
+                if state.spans.len() >= MAX_OPEN_SPANS {
+                    return -1;
+                }
+                // A child of the request's span, named after the plugin.
+                let span = barbacane_telemetry::tracing::ChildSpan::start(
+                    format!(
+                        "{}.{}.{span_name}",
+                        barbacane_telemetry::spans::PLUGIN_PREFIX,
+                        state.plugin_name
+                    ),
+                    Vec::new(),
+                );
+                state.spans.push(span);
+                state.spans.len() as i32
             },
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_span_start: {}", e)))?;
@@ -2143,9 +2161,9 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
         .func_wrap(
             "barbacane",
             "host_span_end",
-            |caller: Caller<'_, PluginState>| {
-                let plugin_name = &caller.data().plugin_name;
-                tracing::debug!(plugin = %plugin_name, "plugin span ended");
+            |mut caller: Caller<'_, PluginState>| {
+                // Dropping the innermost open span ends it.
+                caller.data_mut().spans.pop();
             },
         )
         .map_err(|e| WasmError::Instantiation(format!("failed to add host_span_end: {}", e)))?;
@@ -2185,8 +2203,10 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                     Err(_) => return,
                 };
 
-                let plugin_name = &caller.data().plugin_name;
-                tracing::debug!(plugin = %plugin_name, %key, %value, "plugin span attribute set");
+                let (key, value) = (key.to_string(), value.to_string());
+                if let Some(span) = caller.data_mut().spans.last_mut() {
+                    span.set_attribute(key, value);
+                }
             },
         )
         .map_err(|e| {
@@ -2676,6 +2696,48 @@ mod tests {
             .expect("compiles");
         crate::validate::validate_import_modules(module.module()).expect("all provided");
         PluginInstance::new(&module, limits).expect("every stub links");
+    }
+
+    /// `host_span_start` opens a span and `host_span_end` closes the innermost
+    /// one; a plugin keeps at most `MAX_OPEN_SPANS` open.
+    #[test]
+    fn plugin_spans_nest_and_are_bounded() {
+        let limits = PluginLimits::default();
+        let engine = crate::WasmEngine::with_limits(limits.clone()).expect("engine");
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "barbacane" "host_span_start" (func $start (param i32 i32) (result i32)))
+                (import "barbacane" "host_span_end" (func $end))
+                (import "barbacane" "host_span_set_attribute" (func $attr (param i32 i32 i32 i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 16) "work")
+                (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+                (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+                ;; Two spans, an attribute, one end: one span stays open.
+                (func (export "on_request") (param i32 i32) (result i32)
+                  (drop (call $start (i32.const 16) (i32.const 4)))
+                  (drop (call $start (i32.const 16) (i32.const 4)))
+                  (call $attr (i32.const 16) (i32.const 4) (i32.const 16) (i32.const 4))
+                  (call $end)
+                  (i32.const 0))
+                ;; Spans until refused: 0 when the last start got -1.
+                (func (export "on_response") (param i32 i32) (result i32)
+                  (local $result i32)
+                  (loop $more
+                    (local.set $result (call $start (i32.const 16) (i32.const 4)))
+                    (br_if $more (i32.gt_s (local.get $result) (i32.const 0))))
+                  (i32.ne (local.get $result) (i32.const -1))))"#,
+        )
+        .expect("valid wat");
+        let module = engine
+            .compile(&wasm, "spans".into(), "0.0.0".into(), false)
+            .expect("compiles");
+        let mut instance = PluginInstance::new(&module, limits).expect("instantiates");
+        assert_eq!(instance.init(b"{}").expect("init"), 0);
+        assert_eq!(instance.on_request(b"{}").expect("on_request"), 0);
+        assert_eq!(instance.store.data().spans.len(), 1);
+        assert_eq!(instance.on_response(b"{}").expect("on_response"), 0);
+        assert_eq!(instance.store.data().spans.len(), MAX_OPEN_SPANS);
     }
 
     #[test]

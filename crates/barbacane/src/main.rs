@@ -692,14 +692,19 @@ enum Commands {
         #[arg(long, default_value = "json")]
         log_format: String,
 
-        /// OTLP endpoint for telemetry export (e.g., http://localhost:4317).
-        /// If not set, telemetry is collected locally but not exported.
-        #[arg(long)]
+        /// OTLP collector to export spans to (e.g., http://localhost:4317 for
+        /// gRPC, http://localhost:4318 for HTTP). Without one, spans are not
+        /// exported, and requests still carry trace context.
+        #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
         otlp_endpoint: Option<String>,
 
-        /// Trace sampling rate (0.0 to 1.0). Default: 1.0 (100% sampling).
-        /// Set to 0.0 to disable tracing, 0.1 for 10% sampling, etc.
-        #[arg(long, default_value = "1.0")]
+        /// OTLP transport: `grpc`, or `http/protobuf` (`http`).
+        #[arg(long, env = "OTEL_EXPORTER_OTLP_PROTOCOL", default_value = "grpc", value_parser = parse_otlp_protocol)]
+        otlp_protocol: barbacane_telemetry::OtlpProtocol,
+
+        /// Share of the traces a request starts that are recorded, from 0.0 to
+        /// 1.0. A request whose `traceparent` says sampled or not keeps that.
+        #[arg(long, default_value = "1.0", value_parser = parse_sampling_rate)]
         trace_sampling: f64,
 
         /// Maximum request body size in bytes (default: 1048576 = 1MB).
@@ -1413,22 +1418,63 @@ impl Gateway {
             .and_then(client_request_id)
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let trace_id = req
-            .headers()
-            .get("traceparent")
-            .and_then(|v| v.to_str().ok())
-            .and_then(trace_id_from_traceparent)
-            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
-
+        // The request's span is the OpenTelemetry server span: the client's
+        // `traceparent` names its parent, and its trace id is the one logged.
+        let trace_context: HashMap<String, String> = barbacane_telemetry::tracing::TRACE_HEADERS
+            .iter()
+            .filter_map(|name| {
+                let value = req.headers().get(*name)?.to_str().ok()?;
+                Some((name.to_string(), value.to_string()))
+            })
+            .collect();
         let span = tracing::error_span!(
             "request",
+            otel.name = %req.method(),
+            otel.kind = "server",
             request_id = %request_id,
-            trace_id = %trace_id,
+            trace_id = tracing::field::Empty,
             upstream_endpoint = tracing::field::Empty
         );
-        self.handle_request_in_span(req, client_ip, arrival, start_time, request_id, trace_id)
-            .instrument(span)
-            .await
+        let trace_id = barbacane_telemetry::tracing::adopt_parent(&span, &trace_context)
+            .or_else(|| {
+                trace_context
+                    .get("traceparent")
+                    .and_then(|value| trace_id_from_traceparent(value))
+            })
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+        span.record("trace_id", trace_id.as_str());
+        {
+            use barbacane_telemetry::attributes::*;
+            use barbacane_telemetry::tracing::set_attribute;
+            set_attribute(&span, HTTP_REQUEST_METHOD, req.method().to_string());
+            set_attribute(&span, URL_PATH, req.uri().path().to_string());
+            set_attribute(&span, REQUEST_ID, request_id.clone());
+            set_attribute(
+                &span,
+                NETWORK_PROTOCOL_VERSION,
+                http_version_label(req.version()),
+            );
+            if let Some(ip) = client_ip {
+                set_attribute(&span, CLIENT_ADDRESS, ip.to_string());
+            }
+        }
+
+        let response = self
+            .handle_request_in_span(req, client_ip, arrival, start_time, request_id, trace_id)
+            .instrument(span.clone())
+            .await;
+        if let Ok(response) = &response {
+            let status = response.status();
+            barbacane_telemetry::tracing::set_attribute(
+                &span,
+                barbacane_telemetry::attributes::HTTP_RESPONSE_STATUS_CODE,
+                i64::from(status.as_u16()),
+            );
+            if status.is_server_error() {
+                barbacane_telemetry::tracing::set_error(&span, status.to_string());
+            }
+        }
+        response
     }
 
     async fn handle_request_in_span(
@@ -1609,6 +1655,16 @@ impl Gateway {
                 let operation = &self.operations[entry.operation_index];
                 let validator = &self.validators[entry.operation_index];
                 let route_path = operation.path.clone();
+                {
+                    use barbacane_telemetry::attributes::*;
+                    use barbacane_telemetry::tracing::{set_attribute, set_name};
+                    let span = tracing::Span::current();
+                    set_name(&span, format!("{method_str} {route_path}"));
+                    set_attribute(&span, HTTP_ROUTE, route_path.clone());
+                    if let Some(operation_id) = &operation.operation_id {
+                        set_attribute(&span, OPERATION_ID, operation_id.clone());
+                    }
+                }
 
                 let content_type = headers.get("content-type").map(|s| s.as_str());
 
@@ -1849,6 +1905,18 @@ impl Gateway {
                         &request_id,
                         &trace_id,
                     )));
+                }
+
+                // Plugins and upstreams see the request id the gateway logs
+                // and the trace context of the request's span, in place of
+                // the client's values (validation above read those).
+                headers.insert("x-request-id".to_string(), request_id.clone());
+                let trace_headers = barbacane_telemetry::tracing::current_trace_headers();
+                if !trace_headers.is_empty() {
+                    for name in barbacane_telemetry::tracing::TRACE_HEADERS {
+                        headers.remove(name);
+                    }
+                    headers.extend(trace_headers);
                 }
 
                 let response: Response<AnyBody> = self
@@ -2219,21 +2287,25 @@ impl Gateway {
                     let output = instance.take_output();
                     match barbacane_wasm::parse_middleware_output(&output, result_code) {
                         Ok(barbacane_wasm::OnRequestResult::Continue(new_request)) => {
-                            self.metrics.record_middleware(
+                            observe_middleware(
+                                &self.metrics,
                                 &middleware_name,
                                 "request",
                                 start.elapsed().as_secs_f64(),
+                                false,
                                 false,
                             );
                             current_context = instance.get_context();
                             body_ctrl.collect_after(instance, new_request, has_body_access);
                         }
                         Ok(barbacane_wasm::OnRequestResult::ShortCircuit(response)) => {
-                            self.metrics.record_middleware(
+                            observe_middleware(
+                                &self.metrics,
                                 &middleware_name,
                                 "request",
                                 start.elapsed().as_secs_f64(),
                                 true,
+                                false,
                             );
                             // Always collect short-circuit response body from side-channel.
                             // body_access only controls whether the plugin *receives* the
@@ -2267,11 +2339,13 @@ impl Gateway {
                             };
                         }
                         Err(e) => {
-                            self.metrics.record_middleware(
+                            observe_middleware(
+                                &self.metrics,
                                 &middleware_name,
                                 "request",
                                 start.elapsed().as_secs_f64(),
                                 false,
+                                true,
                             );
                             tracing::error!(error = %e, "middleware chain execution failed");
                             return Err(self.dev_error_response(format_args!(
@@ -2282,11 +2356,13 @@ impl Gateway {
                     }
                 }
                 Err(e) => {
-                    self.metrics.record_middleware(
+                    observe_middleware(
+                        &self.metrics,
                         &middleware_name,
                         "request",
                         start.elapsed().as_secs_f64(),
                         false,
+                        true,
                     );
                     tracing::error!(error = %e, "middleware chain execution failed");
                     return Err(
@@ -2339,21 +2415,25 @@ impl Gateway {
 
             match instance.on_response(&response_for_wasm) {
                 Ok(_result_code) => {
-                    metrics.record_middleware(
+                    observe_middleware(
+                        metrics,
                         &middleware_name,
                         "response",
                         start.elapsed().as_secs_f64(),
+                        false,
                         false,
                     );
                     let output = instance.take_output();
                     body_ctrl.collect_after(instance, output, has_body_access);
                 }
                 Err(e) => {
-                    metrics.record_middleware(
+                    observe_middleware(
+                        metrics,
                         &middleware_name,
                         "response",
                         start.elapsed().as_secs_f64(),
                         false,
+                        true,
                     );
                     return Err(self.dev_error_response(format_args!(
                         "plugin '{middleware_name}' on_response failed: {e}"
@@ -2507,9 +2587,16 @@ impl Gateway {
         // Run WASM dispatch on a blocking thread (WASM execution is synchronous),
         // inside the request's span so host calls can record on it.
         let span = tracing::Span::current();
+        // Ends when the dispatcher returns: for a streamed response, when the
+        // stream does.
+        let mut dispatch_span = barbacane_telemetry::tracing::start_dispatch_span(plugin_name);
         let mut wasm_handle = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
             let result = instance.dispatch(&request_json);
+            if result.is_err() {
+                dispatch_span.set_error("dispatch failed");
+            }
+            drop(dispatch_span);
             let output = instance.take_output();
             let output_body = instance.take_output_body();
             let last_http = instance.take_last_http_result();
@@ -2624,7 +2711,7 @@ impl Gateway {
                                 let resp_json =
                                     serde_json::to_vec(&plugin_resp).unwrap_or_default();
                                 let cb = |name: &str, phase: &str, dur: f64, sc: bool| {
-                                    metrics.record_middleware(name, phase, dur, sc);
+                                    observe_middleware(&metrics, name, phase, dur, sc, false);
                                 };
                                 if let Err(e) = barbacane_wasm::execute_on_response_with_metrics(
                                     &mut instances,
@@ -5827,6 +5914,7 @@ async fn main() -> ExitCode {
             log_level,
             log_format,
             otlp_endpoint,
+            otlp_protocol,
             trace_sampling,
             max_body_size,
             max_headers,
@@ -5860,7 +5948,8 @@ async fn main() -> ExitCode {
             let mut telemetry_config = barbacane_telemetry::TelemetryConfig::new()
                 .with_log_level(&log_level)
                 .with_log_format(log_fmt)
-                .with_trace_sampling(trace_sampling);
+                .with_trace_sampling(trace_sampling)
+                .with_otlp_protocol(otlp_protocol);
 
             if let Some(endpoint) = otlp_endpoint {
                 telemetry_config = telemetry_config.with_otlp_endpoint(endpoint);
@@ -5953,7 +6042,7 @@ async fn main() -> ExitCode {
                 }
             };
 
-            run_serve(
+            let code = run_serve(
                 &artifact,
                 &listen,
                 dev,
@@ -5971,7 +6060,10 @@ async fn main() -> ExitCode {
                 allow_unsigned,
                 trusted_proxies.with_header(client_ip_header),
             )
-            .await
+            .await;
+            // Export the spans still buffered.
+            telemetry.shutdown();
+            code
         }
     }
 }
@@ -5994,6 +6086,24 @@ enum KeyAction {
         #[arg(long)]
         key: std::path::PathBuf,
     },
+}
+
+/// `--otlp-protocol`: the values `OTEL_EXPORTER_OTLP_PROTOCOL` takes, and
+/// `http` for `http/protobuf`.
+fn parse_otlp_protocol(value: &str) -> Result<barbacane_telemetry::OtlpProtocol, String> {
+    match value {
+        "grpc" => Ok(barbacane_telemetry::OtlpProtocol::Grpc),
+        "http/protobuf" | "http" => Ok(barbacane_telemetry::OtlpProtocol::Http),
+        other => Err(format!("{other:?} is not `grpc` or `http/protobuf`")),
+    }
+}
+
+/// `--trace-sampling`: a share from 0.0 to 1.0.
+fn parse_sampling_rate(value: &str) -> Result<f64, String> {
+    match value.parse::<f64>() {
+        Ok(rate) if (0.0..=1.0).contains(&rate) => Ok(rate),
+        _ => Err(format!("{value:?} is not a number from 0.0 to 1.0")),
+    }
 }
 
 fn run_key(action: KeyAction) -> ExitCode {
@@ -6095,6 +6205,37 @@ fn client_request_id(value: &str) -> Option<String> {
         && value.len() <= MAX_REQUEST_ID_BYTES
         && value.bytes().all(|b| (0x21..=0x7e).contains(&b));
     well_formed.then(|| value.to_string())
+}
+
+/// Record a middleware call that ran for `seconds`: its metric, and its span
+/// under the request's.
+fn observe_middleware(
+    metrics: &barbacane_telemetry::MetricsRegistry,
+    name: &str,
+    phase: &str,
+    seconds: f64,
+    short_circuit: bool,
+    failed: bool,
+) {
+    metrics.record_middleware(name, phase, seconds, short_circuit);
+    barbacane_telemetry::tracing::record_middleware_span(
+        name,
+        phase,
+        seconds,
+        short_circuit,
+        failed,
+    );
+}
+
+/// The HTTP version as OpenTelemetry's `network.protocol.version` writes it.
+fn http_version_label(version: hyper::Version) -> &'static str {
+    match version {
+        hyper::Version::HTTP_09 => "0.9",
+        hyper::Version::HTTP_10 => "1.0",
+        hyper::Version::HTTP_2 => "2",
+        hyper::Version::HTTP_3 => "3",
+        _ => "1.1",
+    }
 }
 
 /// The trace id of a W3C `traceparent` (`00-<trace-id>-<parent-id>-<flags>`,

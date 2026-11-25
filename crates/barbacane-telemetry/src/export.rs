@@ -1,6 +1,4 @@
-//! OTLP export for traces and metrics.
-//!
-//! Implements fire-and-forget export to OpenTelemetry Collector.
+//! The tracer provider: sampling, and OTLP export when an endpoint is set.
 
 use std::sync::OnceLock;
 
@@ -9,76 +7,90 @@ use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     propagation::TraceContextPropagator,
-    trace::{Sampler, SdkTracerProvider},
+    runtime,
+    trace::{span_processor_with_async_runtime, Sampler, SdkTracerProvider},
     Resource,
 };
 
-/// The installed OTLP provider, kept so [`shutdown_otlp`] can flush it (OTel 0.29+
-/// removed the global `shutdown_tracer_provider`; shutdown is per-provider).
-static OTLP_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
+/// The installed provider, kept so [`shutdown`] can flush it.
+static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
-/// Initialize OTLP trace exporter.
-///
-/// Sets up async batch export to an OpenTelemetry Collector.
-/// This replaces the basic tracer if OTLP endpoint is configured.
-pub fn init_otlp_tracer(config: &TelemetryConfig) -> Result<(), TelemetryError> {
-    let endpoint = match &config.otlp_endpoint {
-        Some(ep) => ep,
-        None => return Ok(()), // No OTLP endpoint, skip
-    };
-
-    // Build the exporter based on protocol
-    let exporter = match config.otlp_protocol {
-        OtlpProtocol::Grpc => opentelemetry_otlp::SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(endpoint)
-            .build()
-            .map_err(|e| TelemetryError::OtlpInit(format!("gRPC exporter: {}", e)))?,
-        OtlpProtocol::Http => opentelemetry_otlp::SpanExporter::builder()
-            .with_http()
-            .with_endpoint(endpoint)
-            .build()
-            .map_err(|e| TelemetryError::OtlpInit(format!("HTTP exporter: {}", e)))?,
-    };
-
-    // Configure sampler
-    let sampler = if config.trace_sampling >= 1.0 {
+/// The sampler for `rate`: a request whose `traceparent` says sampled or not
+/// keeps that decision; a request that starts a trace is sampled at `rate`.
+fn sampler(rate: f64) -> Sampler {
+    let root = if rate >= 1.0 {
         Sampler::AlwaysOn
-    } else if config.trace_sampling <= 0.0 {
+    } else if rate <= 0.0 {
         Sampler::AlwaysOff
     } else {
-        Sampler::TraceIdRatioBased(config.trace_sampling)
+        Sampler::TraceIdRatioBased(rate)
     };
+    Sampler::ParentBased(Box::new(root))
+}
 
-    // Build resource with service name
+/// Build and install the tracer provider and the W3C Trace Context
+/// propagator. Spans are exported over OTLP when `config` names an endpoint
+/// and dropped otherwise; either way each request gets a trace and span id to
+/// log and propagate.
+///
+/// The gRPC exporter runs on the Tokio runtime, so this is called from within
+/// one; the HTTP exporter runs on a thread of its own.
+pub fn init_tracer_provider(config: &TelemetryConfig) -> Result<SdkTracerProvider, TelemetryError> {
     let resource = Resource::builder()
         .with_service_name(config.service_name.clone())
         .with_attribute(KeyValue::new("service.version", env!("CARGO_PKG_VERSION")))
         .build();
+    let mut builder = SdkTracerProvider::builder()
+        .with_sampler(sampler(config.trace_sampling))
+        .with_resource(resource);
 
-    // Build the tracer provider (batch export runs on a dedicated thread; no
-    // runtime handle needed since OTel 0.30).
-    let provider = SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .with_sampler(sampler)
-        .with_resource(resource)
-        .build();
+    if let Some(endpoint) = &config.otlp_endpoint {
+        builder = match config.otlp_protocol {
+            OtlpProtocol::Grpc => {
+                let exporter = opentelemetry_otlp::SpanExporter::builder()
+                    .with_tonic()
+                    .with_endpoint(endpoint)
+                    .build()
+                    .map_err(|e| TelemetryError::OtlpInit(format!("gRPC exporter: {e}")))?;
+                let processor = span_processor_with_async_runtime::BatchSpanProcessor::builder(
+                    exporter,
+                    runtime::Tokio,
+                )
+                .build();
+                builder.with_span_processor(processor)
+            }
+            OtlpProtocol::Http => {
+                let exporter = opentelemetry_otlp::SpanExporter::builder()
+                    .with_http()
+                    .with_endpoint(http_traces_endpoint(endpoint))
+                    .build()
+                    .map_err(|e| TelemetryError::OtlpInit(format!("HTTP exporter: {e}")))?;
+                builder.with_batch_exporter(exporter)
+            }
+        };
+    }
 
-    // Set as global provider; keep a handle for graceful shutdown/flush.
+    let provider = builder.build();
     global::set_tracer_provider(provider.clone());
-    let _ = OTLP_PROVIDER.set(provider);
-
-    // Set up W3C Trace Context propagator
     global::set_text_map_propagator(TraceContextPropagator::new());
-
-    Ok(())
+    let _ = PROVIDER.set(provider.clone());
+    Ok(provider)
 }
 
-/// Shutdown OTLP exporter gracefully.
-///
-/// Flushes any remaining spans before shutdown.
-pub fn shutdown_otlp() {
-    if let Some(provider) = OTLP_PROVIDER.get() {
+/// The OTLP/HTTP traces URL for `endpoint`: the collector's base URL with
+/// `/v1/traces` after it, unless it already ends so.
+fn http_traces_endpoint(endpoint: &str) -> String {
+    let base = endpoint.trim_end_matches('/');
+    if base.ends_with("/v1/traces") {
+        base.to_string()
+    } else {
+        format!("{base}/v1/traces")
+    }
+}
+
+/// Export the spans still buffered, and stop the provider.
+pub fn shutdown() {
+    if let Some(provider) = PROVIDER.get() {
         let _ = provider.shutdown();
     }
 }
@@ -88,13 +100,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_init_without_endpoint() {
-        let config = TelemetryConfig::default();
-        // Should succeed but do nothing
-        let result = init_otlp_tracer(&config);
-        assert!(result.is_ok());
+    fn the_http_endpoint_gets_the_traces_path_once() {
+        assert_eq!(
+            http_traces_endpoint("http://collector:4318"),
+            "http://collector:4318/v1/traces"
+        );
+        assert_eq!(
+            http_traces_endpoint("http://collector:4318/"),
+            "http://collector:4318/v1/traces"
+        );
+        assert_eq!(
+            http_traces_endpoint("http://collector:4318/v1/traces"),
+            "http://collector:4318/v1/traces"
+        );
     }
-
-    // Note: Testing with actual endpoints requires a running collector
-    // and is better done in integration tests.
 }

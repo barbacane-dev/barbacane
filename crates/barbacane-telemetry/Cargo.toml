@@ -18,8 +18,11 @@ tracing-subscriber = { workspace = true }
 
 # OpenTelemetry
 opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }
+# The gRPC exporter runs on tonic, which needs the Tokio runtime the batch
+# processor gets from this feature.
+opentelemetry_sdk = { workspace = true, features = ["experimental_trace_batch_span_processor_with_async_runtime"] }
 opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 # Metrics
 prometheus-client = { workspace = true }
