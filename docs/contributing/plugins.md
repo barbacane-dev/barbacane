@@ -698,10 +698,12 @@ later middlewares in the same request.
 
 The gateway restores linear memory only, so `init` must leave everything else
 as the module defined it. A module qualifies when it imports no global, defines
-at most one mutable global (the stack pointer, which a call leaves as it found
-it), and changes no table or passive data segment. Plugins built with the SDK
-for `wasm32-unknown-unknown` qualify. Any other module still works: it runs
-`init` for each request instead.
+no mutable global but the stack pointer (which a call leaves as it found it),
+and changes no table or passive data segment. The stack pointer is the global
+the module's `name` section calls `__stack_pointer`, as LLVM names it. Plugins
+built with the SDK for `wasm32-unknown-unknown` qualify; a build that strips the
+`name` section (`strip = true`, `wasm-opt --strip`) does not. Any other module
+still works: it runs `init` for each request instead.
 
 ## Resource Limits
 
