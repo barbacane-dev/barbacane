@@ -487,21 +487,22 @@ mod tests {
     /// A middleware whose `init` stores 7 at 60000 and whose `on_request`
     /// returns 0 when it finds that and no earlier mark, 1 when an earlier
     /// call's mark is in memory or in its global, and 2 when `init`'s value is
-    /// missing. Each call leaves a mark in both.
+    /// missing. Each call leaves a mark in both. The global has the stack
+    /// pointer's name, the one mutable global a replay allows.
     const MARKS_EACH_CALL: &str = r#"(module
       (memory (export "memory") 1)
-      (global $seen (mut i32) (i32.const 0))
+      (global $__stack_pointer (mut i32) (i32.const 0))
       (func (export "alloc") (param i32) (result i32) (i32.const 1024))
       (func (export "init") (param i32 i32) (result i32)
         (i32.store8 (i32.const 60000) (i32.const 7))
         (i32.const 0))
       (func (export "on_request") (param i32 i32) (result i32)
-        (if (i32.or (i32.load8_u (i32.const 60001)) (global.get $seen))
+        (if (i32.or (i32.load8_u (i32.const 60001)) (global.get $__stack_pointer))
           (then (return (i32.const 1))))
         (if (i32.ne (i32.load8_u (i32.const 60000)) (i32.const 7))
           (then (return (i32.const 2))))
         (i32.store8 (i32.const 60001) (i32.const 1))
-        (global.set $seen (i32.const 1))
+        (global.set $__stack_pointer (i32.const 1))
         (i32.const 0))
       (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#;
 
@@ -562,10 +563,46 @@ mod tests {
     #[test]
     fn a_module_init_does_not_fully_describe_runs_init_for_each_instance() {
         let two_globals = MARKS_EACH_CALL.replace(
-            "(global $seen (mut i32) (i32.const 0))",
-            "(global $seen (mut i32) (i32.const 0)) (global $other (mut i32) (i32.const 0))",
+            "(global $__stack_pointer (mut i32) (i32.const 0))",
+            "(global $__stack_pointer (mut i32) (i32.const 0)) (global $other (mut i32) (i32.const 0))",
         );
         let (pool, key) = pool_with("marker", &two_globals);
+        for call in 1..=3 {
+            let mut instance = pool.get_instance(&key).expect("instance");
+            assert_eq!(instance.on_request(b"{}").unwrap(), 0, "call {call}");
+        }
+        assert_eq!(pool.snapshot_count(), 0);
+    }
+
+    /// A bump allocator's heap pointer is state outside memory: replayed at
+    /// its initial value, the request's allocations would land on what `init`
+    /// allocated. Such a module runs `init` for each instance.
+    #[test]
+    fn a_module_with_a_heap_pointer_runs_init_for_each_instance() {
+        let (pool, key) = pool_with(
+            "bump",
+            r#"(module
+              (memory (export "memory") 1)
+              (global $heap (mut i32) (i32.const 2048))
+              (func $bump (param $size i32) (result i32)
+                (global.get $heap)
+                (global.set $heap (i32.add (global.get $heap) (local.get $size))))
+              (func (export "alloc") (param i32) (result i32) (call $bump (local.get 0)))
+              ;; Store 7 in a fresh allocation, and its address at 100.
+              (func (export "init") (param i32 i32) (result i32)
+                (local $at i32)
+                (local.set $at (call $bump (i32.const 4)))
+                (i32.store (local.get $at) (i32.const 7))
+                (i32.store (i32.const 100) (local.get $at))
+                (i32.const 0))
+              ;; Zero a fresh 16-byte allocation, then find init's 7 (0) or not (2).
+              (func (export "on_request") (param i32 i32) (result i32)
+                (memory.fill (call $bump (i32.const 16)) (i32.const 0) (i32.const 16))
+                (if (result i32) (i32.eq (i32.load (i32.load (i32.const 100))) (i32.const 7))
+                  (then (i32.const 0))
+                  (else (i32.const 2))))
+              (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#,
+        );
         for call in 1..=3 {
             let mut instance = pool.get_instance(&key).expect("instance");
             assert_eq!(instance.on_request(b"{}").unwrap(), 0, "call {call}");
