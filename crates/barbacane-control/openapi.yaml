@@ -382,8 +382,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Compilation'
+        '400':
+          description: "`additional_specs` names a spec twice, or the spec compiled"
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
         '404':
-          description: Spec not found
+          description: The spec, or one in `additional_specs`, is not found in its project
           content:
             application/problem+json:
               schema:
@@ -1327,12 +1333,12 @@ paths:
     post:
       tags: [ProjectPlugins]
       summary: Add a plugin to a project
-      description: Add a registered plugin version to a project, with its configuration.
+      description: Let the project's specs use a registered plugin version, with the limits the project sets for it.
       operationId: addProjectPlugin
       parameters:
         - $ref: '#/components/parameters/projectId'
       requestBody:
-        description: The plugin version and its configuration
+        description: The plugin version and its limits
         required: true
         content:
           application/json:
@@ -1362,7 +1368,7 @@ paths:
     put:
       tags: [ProjectPlugins]
       summary: Update a project plugin
-      description: Change the version, state, priority, configuration or limits of a plugin a project uses. Fields left out keep their value; `limits` replaces the project's limits for the plugin, and an empty object removes them.
+      description: Change the version, state or limits of a plugin a project uses. Fields left out keep their value; `limits` replaces the project's limits for the plugin, and an empty object removes them.
       operationId: updateProjectPlugin
       parameters:
         - $ref: '#/components/parameters/projectId'
@@ -1743,7 +1749,7 @@ components:
           items:
             type: string
             format: uuid
-          description: Additional spec IDs to bundle
+          description: Specs of the same project to bundle into the artifact
 
     Compilation:
       description: A compilation job and its result
@@ -2123,9 +2129,11 @@ components:
           description: Number of connected data planes notified
 
     ProjectPluginConfig:
-      description: A plugin a project uses, with its configuration
+      description: >-
+        A registry plugin version the project's specs may use, and the limits
+        the project sets for it. The specs configure the plugin.
       type: object
-      required: [id, project_id, plugin_name, plugin_version, enabled, priority, config, created_at, updated_at]
+      required: [id, project_id, plugin_name, plugin_version, enabled, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2139,11 +2147,7 @@ components:
           type: string
         enabled:
           type: boolean
-        priority:
-          type: integer
-        config:
-          type: object
-          description: The plugin configuration
+          description: Whether the project's specs may use the plugin
         limits:
           description: Limits the project sets for the plugin, replacing its own key by key; null when it sets none
           oneOf:
@@ -2159,6 +2163,7 @@ components:
     AddProjectPluginRequest:
       description: A registered plugin version to add to a project
       type: object
+      additionalProperties: false
       required: [plugin_name, plugin_version]
       properties:
         plugin_name:
@@ -2168,27 +2173,18 @@ components:
         enabled:
           type: boolean
           default: true
-        priority:
-          type: integer
-          default: 0
-        config:
-          type: object
-          default: {}
         limits:
           $ref: '#/components/schemas/PluginLimits'
 
     UpdateProjectPluginRequest:
       description: Changes to a project plugin; fields left out keep their value
       type: object
+      additionalProperties: false
       properties:
         plugin_version:
           type: string
         enabled:
           type: boolean
-        priority:
-          type: integer
-        config:
-          type: object
         limits:
           $ref: '#/components/schemas/PluginLimits'
 

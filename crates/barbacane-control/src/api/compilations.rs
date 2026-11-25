@@ -53,6 +53,24 @@ pub async fn start_compilation(
         .await?
         .ok_or_else(|| ProblemDetails::not_found(format!("Spec {} not found", spec_id)))?;
 
+    let mut bundled = std::collections::HashSet::from([spec_id]);
+    for additional in &request.additional_specs {
+        if !bundled.insert(*additional) {
+            return Err(ProblemDetails::bad_request(format!(
+                "additional_specs names {additional} twice, or names the spec compiled"
+            )));
+        }
+        let in_project = specs_repo
+            .get_by_id(*additional)
+            .await?
+            .is_some_and(|s| s.project_id == spec.project_id);
+        if !in_project {
+            return Err(ProblemDetails::not_found(format!(
+                "Spec {additional} not found in the project of spec {spec_id}"
+            )));
+        }
+    }
+
     let compilations_repo = CompilationsRepository::new(state.pool.clone());
 
     let compilation = compilations_repo

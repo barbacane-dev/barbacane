@@ -1,6 +1,6 @@
 //! Background compilation worker.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -31,16 +31,44 @@ pub async fn run_worker(
                 None => break,
             },
         };
-        if let Err(e) = process_compilation(&pool, compilation_id).await {
-            tracing::error!(
-                compilation_id = %compilation_id,
-                error = %e,
-                "Compilation failed"
-            );
-        }
+        run_compilation(&pool, compilation_id).await;
     }
 
     tracing::info!("Compilation worker stopped");
+}
+
+/// Process a compilation. One that fails after it is claimed, on a database or
+/// file error, is recorded as failed, so it does not stay `compiling`.
+pub(crate) async fn run_compilation(pool: &PgPool, compilation_id: Uuid) {
+    let Err(e) = process_compilation(pool, compilation_id).await else {
+        return;
+    };
+    tracing::error!(compilation_id = %compilation_id, error = %e, "Compilation failed");
+    let errors = serde_json::json!([{
+        "code": "E1000",
+        "message": "the control plane could not finish the compilation; its log has the cause",
+    }]);
+    if let Err(e) = CompilationsRepository::new(pool.clone())
+        .fail_if_compiling(compilation_id, errors)
+        .await
+    {
+        tracing::error!(compilation_id = %compilation_id, error = %e, "Failed to record the failure");
+    }
+}
+
+/// Write a spec into its own directory under `dir`, so specs with the same file
+/// name do not overwrite each other; the compiler refuses those with `E1058`.
+async fn write_spec(
+    dir: &Path,
+    index: usize,
+    filename: &str,
+    content: &[u8],
+) -> std::io::Result<PathBuf> {
+    let spec_dir = dir.join(index.to_string());
+    tokio::fs::create_dir(&spec_dir).await?;
+    let path = spec_dir.join(crate::api::multipart::safe_filename(filename));
+    tokio::fs::write(&path, content).await?;
+    Ok(path)
 }
 
 /// Process a single compilation job.
@@ -78,30 +106,40 @@ async fn process_compilation(pool: &PgPool, compilation_id: Uuid) -> anyhow::Res
         .await?
         .ok_or_else(|| anyhow::anyhow!("Spec revision not found"))?;
 
-    // Write spec to temp file. Sanitize the stored filename to a safe basename
-    // so it cannot escape the temp dir via `../` (defense-in-depth: uploads are
-    // sanitized on ingestion, but older rows may predate that).
     let temp_dir = tempfile::tempdir()?;
-    let spec_path = temp_dir.path().join(crate::api::multipart::safe_filename(
+    let spec_path = write_spec(
+        temp_dir.path(),
+        0,
         &spec_revision.filename,
-    ));
-    tokio::fs::write(&spec_path, &spec_revision.content).await?;
+        &spec_revision.content,
+    )
+    .await?;
+    let mut spec_paths = vec![spec_path];
 
-    // Collect all spec paths
-    let mut spec_paths = vec![spec_path.clone()];
-
-    // Handle additional specs if any
     let additional_spec_ids: Vec<Uuid> =
         serde_json::from_value(compilation.additional_specs.clone()).unwrap_or_default();
-
-    for additional_id in additional_spec_ids {
-        if let Some(additional_revision) = specs_repo.get_latest_revision(additional_id).await? {
-            let additional_path = temp_dir.path().join(crate::api::multipart::safe_filename(
-                &additional_revision.filename,
-            ));
-            tokio::fs::write(&additional_path, &additional_revision.content).await?;
-            spec_paths.push(additional_path);
-        }
+    for (index, additional_id) in additional_spec_ids.into_iter().enumerate() {
+        let Some(revision) = specs_repo.get_latest_revision(additional_id).await? else {
+            compilations_repo
+                .mark_failed(
+                    compilation_id,
+                    serde_json::json!([{
+                        "code": "E1000",
+                        "message": format!("the spec {additional_id} to bundle no longer exists"),
+                    }]),
+                )
+                .await?;
+            return Ok(());
+        };
+        spec_paths.push(
+            write_spec(
+                temp_dir.path(),
+                index + 1,
+                &revision.filename,
+                &revision.content,
+            )
+            .await?,
+        );
     }
 
     // Resolve project plugins — validate that all plugins referenced in specs
@@ -541,5 +579,120 @@ mod tests {
             .expect("the worker returns at once")
             .expect("no panic");
         drop(queue);
+    }
+
+    /// The test database, migrated; `None` when `DATABASE_URL` is unreachable.
+    async fn pool() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string()
+        });
+        let pool = crate::db::create_pool(&url).await.ok()?;
+        crate::db::run_migrations(&pool).await.ok()?;
+        Some(pool)
+    }
+
+    const EMPTY_SPEC: &str = "openapi: 3.1.0\ninfo:\n  title: t\n  version: '1'\npaths: {}\n";
+
+    /// A project with one spec per `(file name, content)`, and their ids.
+    async fn project_with_specs(pool: &PgPool, specs: &[(&str, &str)]) -> (Uuid, Vec<Uuid>) {
+        let project = crate::db::ProjectsRepository::new(pool.clone())
+            .create(crate::db::NewProject {
+                name: format!("worker-{}", Uuid::new_v4().simple()),
+                description: None,
+            })
+            .await
+            .expect("project");
+        let mut ids = Vec::new();
+        for (filename, content) in specs {
+            let spec = SpecsRepository::new(pool.clone())
+                .create(crate::db::NewSpec {
+                    project_id: project.id,
+                    name: format!("spec-{}", Uuid::new_v4().simple()),
+                    spec_type: "openapi".into(),
+                    spec_version: "3.1.0".into(),
+                    sha256: "0".repeat(64),
+                    content: content.as_bytes().to_vec(),
+                    filename: filename.to_string(),
+                })
+                .await
+                .expect("spec");
+            ids.push(spec.id);
+        }
+        (project.id, ids)
+    }
+
+    /// Run a compilation of `spec` bundling `additional`; its status and
+    /// errors.
+    async fn compile(
+        pool: &PgPool,
+        project: Uuid,
+        spec: Uuid,
+        additional: &[Uuid],
+    ) -> (String, serde_json::Value) {
+        let repo = CompilationsRepository::new(pool.clone());
+        let compilation = repo
+            .create(spec, Some(project), true, serde_json::json!(additional))
+            .await
+            .expect("compilation");
+        run_compilation(pool, compilation.id).await;
+        let done = repo
+            .get(compilation.id)
+            .await
+            .expect("get")
+            .expect("exists");
+        (done.status, done.errors)
+    }
+
+    #[tokio::test]
+    async fn a_compilation_that_fails_after_its_claim_is_failed() {
+        let Some(pool) = pool().await else {
+            eprintln!("skip: no database");
+            return;
+        };
+        let (project, specs) = project_with_specs(&pool, &[("api.yaml", EMPTY_SPEC)]).await;
+        sqlx::query("DELETE FROM spec_revisions WHERE spec_id = $1")
+            .bind(specs[0])
+            .execute(&pool)
+            .await
+            .expect("drop the revisions");
+
+        let (status, errors) = compile(&pool, project, specs[0], &[]).await;
+        assert_eq!(status, "failed", "{errors}");
+        assert_eq!(errors[0]["code"], "E1000");
+    }
+
+    #[tokio::test]
+    async fn a_spec_to_bundle_that_no_longer_exists_fails_the_compilation() {
+        let Some(pool) = pool().await else {
+            eprintln!("skip: no database");
+            return;
+        };
+        let (project, specs) = project_with_specs(&pool, &[("api.yaml", EMPTY_SPEC)]).await;
+        let (status, errors) = compile(&pool, project, specs[0], &[]).await;
+        assert_eq!(status, "succeeded", "the spec compiles alone: {errors}");
+
+        let gone = Uuid::new_v4();
+        let (status, errors) = compile(&pool, project, specs[0], &[gone]).await;
+        assert_eq!(status, "failed", "{errors}");
+        assert!(
+            errors[0]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains(&gone.to_string())),
+            "{errors}"
+        );
+    }
+
+    #[tokio::test]
+    async fn specs_with_the_same_file_name_are_refused_by_name() {
+        let Some(pool) = pool().await else {
+            eprintln!("skip: no database");
+            return;
+        };
+        let other = EMPTY_SPEC.replace("title: t", "title: other");
+        let (project, specs) =
+            project_with_specs(&pool, &[("api.yaml", EMPTY_SPEC), ("api.yaml", &other)]).await;
+        let (status, errors) = compile(&pool, project, specs[0], &specs[1..]).await;
+        assert_eq!(status, "failed", "{errors}");
+        assert_eq!(errors[0]["code"], "E1058", "{errors}");
     }
 }
