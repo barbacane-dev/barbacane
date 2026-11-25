@@ -340,8 +340,13 @@ pub static KNOWN: &[KnownDivergence] = &[
                  a key libyaml reads as empty, whose value then replaces another empty key's \
                  (`{\"\": 1, ?:a}`). A comma inside the quoted scalar ends the plain scalar, so \
                  `{?\"name, .ext\": 1}` has the keys `?\"name` and `.ext\"` where libyaml reads \
-                 `name, .ext`. With a space after each such `?`, the module reads the document \
-                 as libyaml does",
+                 `name, .ext`. A quote after the `?` that nothing closes leaves libyaml \
+                 scanning a quoted scalar to the end of the input, so libyaml refuses a document \
+                 the module reads (`{?\"}`). Beside such a key, the rest of the mapping can \
+                 differ in ways a space after the `?` does not settle: libyaml's empty keys \
+                 replacing one another's values (`{?,?-,!,?:\\n7}`), or a value libyaml reads \
+                 that another class keeps the module from reading (`{?\",0\":-}`). With a space \
+                 after each such `?`, the module otherwise reads the document as libyaml does",
         example: "{?a: 1}\n",
         matches: |input, d| {
             input.contains(['{', '['])
@@ -353,7 +358,8 @@ pub static KNOWN: &[KnownDivergence] = &[
                             .is_some_and(starts_with_question_mark)
                             || ours.as_str().is_some_and(starts_with_question_mark)
                             || (has_unspaced_indicator(input, '?')
-                                && explained_by_unspaced_indicators(input, d))
+                                && (explained_by_unspaced_indicators(input, d)
+                                    || question_mark_key_beside(input, pointer)))
                     }
                     Difference::OnlyOursFailed { error } => {
                         (error.contains("misplaced bracket")
@@ -361,7 +367,10 @@ pub static KNOWN: &[KnownDivergence] = &[
                             || (has_unspaced_indicator(input, '?')
                                 && explained_by_unspaced_indicators(input, d))
                     }
-                    Difference::OnlyReferenceFailed { .. } => false,
+                    Difference::OnlyReferenceFailed { error } => {
+                        error.contains("while scanning a quoted scalar")
+                            && question_mark_before_quote(input)
+                    }
                 }
         },
     },
@@ -620,6 +629,29 @@ fn has_indicator_key_reading_as(input: &str, parent: &str, value: &Value) -> boo
                     })
             })
         })
+}
+
+/// Whether the module's reading of `input` has, in the mapping holding the
+/// value at `pointer`, a key starting with `?` not followed by whitespace: a
+/// `?` libyaml reads as an explicit key, past which the two readings of that
+/// mapping no longer line up.
+fn question_mark_key_beside(input: &str, pointer: &str) -> bool {
+    let Some((parent, _)) = pointer.rsplit_once('/') else {
+        return false;
+    };
+    crate::yaml::from_str::<Value>(input).is_ok_and(|ours| {
+        ours.pointer(parent)
+            .and_then(Value::as_object)
+            .is_some_and(|mapping| mapping.keys().any(|key| starts_with_question_mark(key)))
+    })
+}
+
+/// Whether `input` has a `?` starting a node directly followed by a quote,
+/// which libyaml reads as an explicit key and the start of a quoted scalar.
+fn question_mark_before_quote(input: &str) -> bool {
+    unspaced_indicators(input)
+        .iter()
+        .any(|&(at, c)| c == '?' && input[at..].starts_with(['"', '\'']))
 }
 
 /// Whether `text` starts with `?` not followed by whitespace.
