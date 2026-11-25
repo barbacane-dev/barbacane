@@ -118,10 +118,15 @@ impl FireAndForgetDispatcher {
 
     /// Build the configured static response.
     fn build_response(&self) -> Response {
-        let mut headers = self.response.headers.clone();
+        let mut headers: ResponseHeaders = self
+            .response
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), vec![value.clone()]))
+            .collect();
         headers.insert(
             "content-type".to_string(),
-            self.response.content_type.clone(),
+            vec![self.response.content_type.clone()],
         );
 
         let body = if self.response.body.is_empty() {
@@ -310,8 +315,8 @@ mod tests {
 
         assert_eq!(resp.status, 202);
         assert_eq!(resp.body_str(), Some("{\"accepted\":true}"));
-        assert_eq!(resp.headers["content-type"], "application/json");
-        assert_eq!(resp.headers["x-request-id"], "abc");
+        assert_eq!(resp.header("content-type"), Some("application/json"));
+        assert_eq!(resp.header("x-request-id"), Some("abc"));
     }
 
     #[test]

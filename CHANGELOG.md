@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   > **Upgrade note (breaking):** a spec whose server URLs carry a path moves its routes under that path, and `http-upstream` without `path` forwards the base path to the upstream. Where a proxy in front of the gateway strips the base path, make the server URL the path the gateway receives.
 - **ci**: a change to any file under `crates/` runs the code jobs (migrations, the control plane's `openapi.yaml` and test fixtures were skipped), a change to the workspace, its lockfile or a plugin builds and scans the images, and the WASM plugin cache and the plugin jobs follow `barbacane-plugin-macros` and `barbacane-sigv4` too.
+- **plugins**: response headers keep every field. `Response.headers` and `HttpResponse.headers` in the SDK map each name to its values, `BTreeMap<String, Vec<String>>` (`ResponseHeaders`), one per field in the order sent, with `header`, `header_values`, `set_header`, `append_header` and `remove_header`; `with_header` keeps its signature and sets one value. The host carries an upstream's fields the same way through `host_http_call`, `host_http_stream` and the response cache, and sends each value as its own field, so two `Set-Cookie`, `Link` or `WWW-Authenticate` fields from an upstream reach the client as two; they arrived as one, the last. `cors` adds `Origin` to an upstream's `Vary` instead of replacing it, and `http-log` logs a repeated response header's values joined with `, ` (#435).
+
+  > **Upgrade note (breaking):** the plugin ABI is version 2. A plugin built with an earlier SDK, the 1.0.0 release candidates included, is refused with `E1045`: rebuild it with SDK 1.0, and change code that reads or writes `Response.headers` to the lists or the accessors. An artifact compiled by a release candidate bundles ABI 1 plugins and is refused: recompile it.
 
 ### Fixed
 

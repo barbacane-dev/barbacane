@@ -142,8 +142,9 @@ impl HttpRequest {
 #[non_exhaustive]
 pub struct HttpResponse {
     pub status: u16,
+    /// The header fields, by lower-case name, each with its values.
     #[serde(default)]
-    pub headers: BTreeMap<String, String>,
+    pub headers: crate::types::ResponseHeaders,
     #[serde(skip)]
     pub body: Option<Vec<u8>>,
 }
@@ -156,6 +157,16 @@ impl HttpResponse {
             headers: BTreeMap::new(),
             body: None,
         }
+    }
+
+    /// The first value of a header.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name)?.first().map(String::as_str)
+    }
+
+    /// Every value of a header, in order; empty when it has none.
+    pub fn header_values(&self, name: &str) -> &[String] {
+        self.headers.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// The response body as a UTF-8 string, if present and valid.

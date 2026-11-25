@@ -418,7 +418,10 @@ impl JwtAuth {
             barbacane_plugin_sdk::log::warn(&format!("jwt-auth: unsupported algorithm {alg:?}"));
         }
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         // RFC 6750: WWW-Authenticate header for Bearer token scheme
         let www_auth = format!(
@@ -426,7 +429,7 @@ impl JwtAuth {
             error.as_str(),
             error.description()
         );
-        headers.insert("www-authenticate".to_string(), www_auth);
+        headers.insert("www-authenticate".to_string(), vec![www_auth]);
 
         let body = serde_json::json!({
             "type": "urn:barbacane:error:authentication-failed",
@@ -923,13 +926,10 @@ mod tests {
         let response = config.unauthorized_response(&error);
 
         assert_eq!(response.status, 401);
-        assert_eq!(
-            response.headers.get("content-type"),
-            Some(&"application/json".to_string())
-        );
+        assert_eq!(response.header("content-type"), Some("application/json"));
         assert!(response.headers.contains_key("www-authenticate"));
 
-        let www_auth = response.headers.get("www-authenticate").unwrap();
+        let www_auth = response.header("www-authenticate").unwrap();
         assert!(www_auth.starts_with("Bearer realm=\"api\""));
         assert!(www_auth.contains("error=\"missing_token\""));
         assert!(www_auth.contains("error_description=\"Bearer token required\""));
@@ -956,7 +956,7 @@ mod tests {
             JwtError::UnsupportedAlgorithm("x\", error=\"none\", scope=\"admin".to_string());
         let response = config.unauthorized_response(&error);
         assert_eq!(
-            response.headers["www-authenticate"],
+            response.header("www-authenticate").unwrap(),
             "Bearer realm=\"api\", error=\"invalid_token\", error_description=\"Unsupported algorithm\""
         );
         let body = String::from_utf8(response.body.unwrap()).unwrap();

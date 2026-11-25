@@ -16,7 +16,7 @@
 pub const ABI_SECTION: &str = "barbacane_abi";
 
 /// The ABI version this compiler and its gateway speak.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// Host functions a plugin may still import, each with its replacement and
 /// the earliest release that may drop it.
@@ -192,7 +192,7 @@ pub(crate) fn test_module(plugin_type: &str) -> Vec<u8> {
         .collect::<Vec<_>>()
         .join("\n");
     wat::parse_str(format!(
-        r#"(module (@custom "barbacane_abi" "\01\00\00\00") (memory (export "memory") 1) {exports})"#
+        r#"(module (@custom "barbacane_abi" "\02\00\00\00") (memory (export "memory") 1) {exports})"#
     ))
     .expect("valid WAT")
 }
@@ -214,9 +214,9 @@ mod tests {
     #[test]
     fn a_plugin_of_this_abi_passes() {
         let wasm = module(&format!(
-            r#"(@custom "barbacane_abi" "\01\00\00\00") {DISPATCHER_EXPORTS}"#
+            r#"(@custom "barbacane_abi" "\02\00\00\00") {DISPATCHER_EXPORTS}"#
         ));
-        assert_eq!(abi_version(&wasm), Ok(Some(1)));
+        assert_eq!(abi_version(&wasm), Ok(Some(ABI_VERSION)));
         assert_eq!(check(&wasm, "dispatcher"), Ok(None));
     }
 
@@ -224,7 +224,7 @@ mod tests {
     fn a_second_memory_or_table_is_named() {
         let with = |extra: &str| {
             module(&format!(
-                r#"{extra} (@custom "barbacane_abi" "\01\00\00\00") {DISPATCHER_EXPORTS}"#
+                r#"{extra} (@custom "barbacane_abi" "\02\00\00\00") {DISPATCHER_EXPORTS}"#
             ))
         };
         assert_eq!(check(&with("(table 1 funcref)"), "dispatcher"), Ok(None));
@@ -248,15 +248,15 @@ mod tests {
     #[test]
     fn another_version_is_named() {
         let wasm = module(&format!(
-            r#"(@custom "barbacane_abi" "\02\00\00\00") {DISPATCHER_EXPORTS}"#
+            r#"(@custom "barbacane_abi" "\03\00\00\00") {DISPATCHER_EXPORTS}"#
         ));
         assert_eq!(
             check(&wasm, "dispatcher"),
-            Ok(Some(AbiMismatch::Version(2)))
+            Ok(Some(AbiMismatch::Version(3)))
         );
         assert_eq!(
-            AbiMismatch::Version(2).to_string(),
-            "it is built for plugin ABI 2, and this release supports ABI 1"
+            AbiMismatch::Version(3).to_string(),
+            "it is built for plugin ABI 3, and this release supports ABI 2"
         );
     }
 
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn a_missing_export_is_named() {
         let wasm = module(
-            r#"(@custom "barbacane_abi" "\01\00\00\00")
+            r#"(@custom "barbacane_abi" "\02\00\00\00")
                (memory (export "memory") 1)
                (func (export "init") (param i32 i32) (result i32) (i32.const 0))
                (func (export "dispatch") (param i32 i32) (result i32) (i32.const 0))"#,
@@ -285,7 +285,7 @@ mod tests {
             Ok(Some(AbiMismatch::MissingExport("alloc".into())))
         );
         let wasm = module(&format!(
-            r#"(@custom "barbacane_abi" "\01\00\00\00") {DISPATCHER_EXPORTS}"#
+            r#"(@custom "barbacane_abi" "\02\00\00\00") {DISPATCHER_EXPORTS}"#
         ));
         assert_eq!(
             check(&wasm, "middleware"),

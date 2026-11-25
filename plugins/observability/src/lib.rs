@@ -148,7 +148,7 @@ impl Observability {
 
         // Log detailed response info if enabled
         if self.detailed_response_logs {
-            let headers_count = resp.headers.len();
+            let headers_count: usize = resp.headers.values().map(Vec::len).sum();
             let body_size = resp.body.as_ref().map(|b| b.len()).unwrap_or(0);
             log_message(
                 Level::Warn, // INFO
@@ -538,8 +538,7 @@ mod tests {
         mock_host::set_time(250);
 
         let mut resp = create_test_response();
-        resp.headers
-            .insert("Content-Type".to_string(), "application/json".to_string());
+        resp.set_header("Content-Type", "application/json");
 
         let _ = plugin.on_response(resp);
 
@@ -595,15 +594,14 @@ mod tests {
 
         let mut resp = create_test_response();
         resp.status = 404;
-        resp.headers
-            .insert("X-Custom".to_string(), "value".to_string());
+        resp.set_header("X-Custom", "value");
         resp.body = Some(b"not found".to_vec());
 
         let result = plugin.on_response(resp);
 
         // Verify response is completely unchanged
         assert_eq!(result.status, 404);
-        assert_eq!(result.headers.get("X-Custom"), Some(&"value".to_string()));
+        assert_eq!(result.header("X-Custom"), Some("value"));
         assert_eq!(result.body, Some(b"not found".to_vec()));
     }
 

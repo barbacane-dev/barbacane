@@ -33,7 +33,7 @@
 /// The plugin ABI version this SDK builds for. The macros embed it in the
 /// plugin's `barbacane_abi` custom section; the compiler and the gateway
 /// refuse a plugin built for another version.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 pub mod body;
 pub mod clock;

@@ -846,14 +846,17 @@ impl OidcAuth {
         }
         let status = error.status_code();
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         let www_auth = format!(
             "Bearer realm=\"api\", error=\"{}\", error_description=\"{}\"",
             error.as_str(),
             error.description()
         );
-        headers.insert("www-authenticate".to_string(), www_auth);
+        headers.insert("www-authenticate".to_string(), vec![www_auth]);
 
         let error_type = match status {
             403 => "urn:barbacane:error:authorization-failed",
@@ -1598,13 +1601,10 @@ mod tests {
         let response = config.error_response(&error);
 
         assert_eq!(response.status, 401);
-        assert_eq!(
-            response.headers.get("content-type"),
-            Some(&"application/json".to_string())
-        );
+        assert_eq!(response.header("content-type"), Some("application/json"));
         assert!(response.headers.contains_key("www-authenticate"));
 
-        let www_auth = response.headers.get("www-authenticate").unwrap();
+        let www_auth = response.header("www-authenticate").unwrap();
         assert!(www_auth.contains("error=\"missing_token\""));
 
         let body = response.body.unwrap();
@@ -1636,7 +1636,7 @@ mod tests {
             OidcError::SignatureVerificationFailed(injected.to_string()),
         ] {
             let response = config.error_response(&error);
-            let www_auth = &response.headers["www-authenticate"];
+            let www_auth = &response.header("www-authenticate").unwrap();
             assert_eq!(
                 www_auth,
                 &format!(
@@ -1654,7 +1654,7 @@ mod tests {
         let config = create_test_config();
         let error = OidcError::TokenExpired;
         let response = config.error_response(&error);
-        let www_auth = response.headers.get("www-authenticate").unwrap();
+        let www_auth = response.header("www-authenticate").unwrap();
         assert!(www_auth.contains("Bearer realm=\"api\""));
         assert!(www_auth.contains("error=\"invalid_token\""));
         assert!(www_auth.contains("Token has expired"));

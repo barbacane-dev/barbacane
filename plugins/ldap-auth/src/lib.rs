@@ -458,8 +458,8 @@ impl LdapAuth {
                 .detail(error.description())
                 .into_response();
                 // RFC 7617 challenge; the realm is operator-configured and quoted.
-                resp.headers.insert(
-                    "www-authenticate".to_string(),
+                resp.set_header(
+                    "www-authenticate",
                     format!(
                         "Basic realm=\"{}\", error=\"{}\", error_description=\"{}\"",
                         self.realm.replace('"', "'"),
@@ -902,10 +902,10 @@ mod tests {
         let resp = expect_short_circuit(p.on_request(request(None)));
         assert_eq!(resp.status, 401);
         assert_eq!(
-            resp.headers.get("content-type").unwrap(),
+            resp.header("content-type").unwrap(),
             "application/problem+json"
         );
-        let challenge = resp.headers.get("www-authenticate").unwrap();
+        let challenge = resp.header("www-authenticate").unwrap();
         assert!(challenge.starts_with("Basic realm=\"test-api\""));
         assert!(challenge.contains("missing_credentials"));
         let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
@@ -925,8 +925,7 @@ mod tests {
             let resp = expect_short_circuit(p.on_request(request(Some(header))));
             assert_eq!(resp.status, 401);
             assert!(resp
-                .headers
-                .get("www-authenticate")
+                .header("www-authenticate")
                 .unwrap()
                 .contains("invalid_request"));
         }
@@ -940,8 +939,7 @@ mod tests {
         let resp = expect_short_circuit(p.on_request(request(Some(&basic("alice", "")))));
         assert_eq!(resp.status, 401);
         assert!(resp
-            .headers
-            .get("www-authenticate")
+            .header("www-authenticate")
             .unwrap()
             .contains("invalid_credentials"));
         assert_eq!(calls(), (0, 0));

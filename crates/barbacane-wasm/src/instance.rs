@@ -56,7 +56,7 @@ pub enum StreamEvent {
     /// Response status and headers from the upstream (sent before body chunks).
     Headers {
         status: u16,
-        headers: BTreeMap<String, String>,
+        headers: barbacane_plugin_sdk::types::ResponseHeaders,
     },
     /// Body chunk forwarded from the upstream streaming response.
     Chunk(bytes::Bytes),
@@ -1534,15 +1534,8 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                             match http_client.stream_raw(request, tls.as_ref()).await {
                                 Ok(upstream) => {
                                     let status = upstream.status().as_u16();
-                                    let upstream_headers: BTreeMap<String, String> = upstream
-                                        .headers()
-                                        .iter()
-                                        .filter_map(|(k, v)| {
-                                            v.to_str()
-                                                .ok()
-                                                .map(|v| (k.as_str().to_lowercase(), v.to_string()))
-                                        })
-                                        .collect();
+                                    let upstream_headers =
+                                        crate::http_client::response_header_fields(upstream.headers());
 
                                     // Send headers through the streaming channel. A
                                     // closed channel means the client is gone: there
@@ -2891,14 +2884,14 @@ mod tests {
             status: 200,
             headers: std::collections::BTreeMap::from([(
                 "content-type".to_string(),
-                "text/event-stream".to_string(),
+                vec!["text/event-stream".to_string()],
             )]),
         };
         if let StreamEvent::Headers { status, headers } = event {
             assert_eq!(status, 200);
             assert_eq!(
-                headers.get("content-type").map(String::as_str),
-                Some("text/event-stream")
+                headers.get("content-type"),
+                Some(&vec!["text/event-stream".to_string()])
             );
         } else {
             panic!("expected Headers variant");

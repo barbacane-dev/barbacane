@@ -394,8 +394,8 @@ mod tests {
         let resp = acl.forbidden_response(Some("alice"));
         assert_eq!(resp.status, 403);
         assert_eq!(
-            resp.headers.get("content-type").unwrap(),
-            "application/problem+json"
+            resp.header("content-type"),
+            Some("application/problem+json")
         );
         let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:acl-denied");

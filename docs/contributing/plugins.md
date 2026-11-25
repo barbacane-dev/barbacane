@@ -268,12 +268,14 @@ Build one with `Request::new(method, path)` and `with_query`, `with_header`, `wi
 #[non_exhaustive]
 pub struct Response {
     pub status: u16,
-    pub headers: BTreeMap<String, String>,
+    pub headers: ResponseHeaders,   // BTreeMap<String, Vec<String>>
     pub body: Option<Vec<u8>>,      // binary-safe, travels via side-channel
 }
 ```
 
 Build one with `Response::new(status)` and `with_header`, `with_headers`, `with_body`, or `Response::text(status, headers, &str)`; `Response::default()` is an empty `200`. Helper methods: `body_str() -> Option<&str>`, `set_body_text(&str)`.
+
+`headers` maps each lower-case name to its values, one per header field, in the order they are sent: an upstream's two `set-cookie` fields are two values, and the client gets two fields. Read one with `header(name) -> Option<&str>` (the first value) or `header_values(name) -> &[String]`; write with `set_header(name, value)` (replaces the values), `append_header(name, value)` (one more field) and `remove_header(name)`. `with_header` sets, as `set_header` does. Request headers stay one value per name.
 
 ```rust
 let denied = Response::new(403)
@@ -367,6 +369,7 @@ let req = http::HttpRequest::new("GET", "https://api.example.com")
 match http::call(&req, None) {
     Ok(resp) => {
         let _status = resp.status;
+        let _type = resp.header("content-type"); // first value; header_values() for all
         let _body = resp.body_str(); // Option<&str>
     }
     Err(e) => { /* http::HttpError: Unreachable / Empty / ReadFailed / ... */ }
@@ -524,9 +527,9 @@ are not. To see what a build imports, run
 
 ### ABI version
 
-The plugin ABI is the set of exports the gateway calls (`memory`, `alloc`, `init`, and `on_request` and `on_response` or `dispatch`), the host functions above with their signatures, and the WASI functions. It has a version, `1`. The SDK macros embed it in a `barbacane_abi` custom section (a little-endian `u32`, `barbacane_plugin_sdk::ABI_VERSION`); the compiler refuses a plugin without the section or built for another version (`E1045`), and the data plane refuses it again when it loads an artifact. A plugin built with an SDK before 1.0 carries no section: rebuild it.
+The plugin ABI is the set of exports the gateway calls (`memory`, `alloc`, `init`, and `on_request` and `on_response` or `dispatch`), the host functions above with their signatures, and the WASI functions. It has a version, `2`. The SDK macros embed it in a `barbacane_abi` custom section (a little-endian `u32`, `barbacane_plugin_sdk::ABI_VERSION`); the compiler refuses a plugin without the section or built for another version (`E1045`), and the data plane refuses it again when it loads an artifact. A plugin built with an SDK before 1.0 carries no section: rebuild it.
 
-A minor release may add host functions, capabilities and exports it calls when present; it keeps the version at `1`. The version changes only when a plugin built for the previous one would no longer run, which is a major release of Barbacane.
+A minor release may add host functions, capabilities and exports it calls when present; it keeps the version at `2`. The version changes only when a plugin built for the previous one would no longer run, which is a major release of Barbacane.
 
 ### Deprecated host functions
 

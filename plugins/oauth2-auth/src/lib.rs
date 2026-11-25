@@ -359,7 +359,10 @@ impl OAuth2Auth {
     fn error_response(&self, error: &OAuth2Error) -> Response {
         let status = error.status_code();
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         // RFC 6750: WWW-Authenticate header, on the answers that challenge the client.
         if status != 503 {
@@ -368,7 +371,7 @@ impl OAuth2Auth {
                 error.as_str(),
                 error.description()
             );
-            headers.insert("www-authenticate".to_string(), www_auth);
+            headers.insert("www-authenticate".to_string(), vec![www_auth]);
         }
 
         let (error_type, title) = match status {
@@ -678,10 +681,7 @@ mod tests {
 
         let response = config.error_response(&error);
         assert_eq!(response.status, 401);
-        assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(response.header("content-type").unwrap(), "application/json");
         assert!(response.headers.contains_key("www-authenticate"));
 
         let body = String::from_utf8(response.body.unwrap()).unwrap();
@@ -697,10 +697,7 @@ mod tests {
 
         let response = config.error_response(&error);
         assert_eq!(response.status, 403);
-        assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(response.header("content-type").unwrap(), "application/json");
 
         let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(body.contains("\"status\":403"));
@@ -714,7 +711,7 @@ mod tests {
         let error = OAuth2Error::MissingToken;
 
         let response = config.error_response(&error);
-        let www_auth = response.headers.get("www-authenticate").unwrap();
+        let www_auth = response.header("www-authenticate").unwrap();
         assert!(www_auth.contains("Bearer realm=\"api\""));
         assert!(www_auth.contains("error=\"missing_token\""));
         assert!(www_auth.contains("Bearer token required"));

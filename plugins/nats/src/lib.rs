@@ -133,13 +133,16 @@ impl NatsDispatcher {
     /// Build the 202 Accepted response.
     fn accepted_response(&self, result: &PublishResult) -> Response {
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         // Add custom headers from config
         if let Some(ref ack) = self.ack_response {
             if let Some(ref custom_headers) = ack.headers {
                 for (k, v) in custom_headers {
-                    headers.insert(k.clone(), v.clone());
+                    headers.insert(k.clone(), vec![v.clone()]);
                 }
             }
         }
@@ -236,10 +239,7 @@ mod tests {
         let response = dispatcher.accepted_response(&result);
 
         assert_eq!(response.status, 202);
-        assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(response.header("content-type").unwrap(), "application/json");
 
         let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(
@@ -274,15 +274,9 @@ mod tests {
         let response = dispatcher.accepted_response(&result);
 
         assert_eq!(response.status, 202);
-        assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/json"
-        );
-        assert_eq!(
-            response.headers.get("x-custom-header").unwrap(),
-            "custom-value"
-        );
-        assert_eq!(response.headers.get("x-correlation-id").unwrap(), "abc123");
+        assert_eq!(response.header("content-type").unwrap(), "application/json");
+        assert_eq!(response.header("x-custom-header").unwrap(), "custom-value");
+        assert_eq!(response.header("x-correlation-id").unwrap(), "abc123");
 
         let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(
@@ -314,7 +308,7 @@ mod tests {
 
         assert_eq!(response.status, 502);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
 
@@ -334,7 +328,7 @@ mod tests {
 
         assert_eq!(response.status, 503);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
 
@@ -391,7 +385,7 @@ mod tests {
         // Native stub returns -1, so we expect a 502 error
         assert_eq!(response.status, 502);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
 
