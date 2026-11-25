@@ -12,7 +12,7 @@ publish = false
 libc = "0.2"
 barbacane-compiler = { workspace = true }
 tokio = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["http2"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
@@ -37,6 +37,8 @@ predicates = { workspace = true }
 # a single tampered byte. Same crates the compiler uses for the .bca format.
 flate2 = { workspace = true }
 tar = { workspace = true }
+# Creating topics and reading back what the kafka dispatcher published.
+rskafka = { workspace = true }
 
 [lints]
 workspace = true

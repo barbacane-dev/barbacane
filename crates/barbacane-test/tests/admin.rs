@@ -46,20 +46,24 @@ async fn test_admin_provenance_returns_artifact_hash() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
 
-    // Artifact hash is always present
-    let hash = body["artifact_hash"].as_str().unwrap();
-    assert!(
-        hash.starts_with("sha256:"),
-        "artifact_hash should start with sha256:, got: {}",
-        hash,
-    );
+    // The hash and the specs are those the artifact records.
+    let archive = barbacane_compiler::ArtifactArchive::read(&gateway.artifact_path())
+        .expect("the served artifact");
+    let manifest = archive.manifest();
+    assert!(manifest.artifact_hash.starts_with("sha256:"));
+    assert_eq!(body["artifact_hash"], manifest.artifact_hash.as_str());
 
-    // Source specs are present
     let source_specs = body["source_specs"].as_array().unwrap();
-    assert!(!source_specs.is_empty());
-    assert!(source_specs[0]["file"].is_string());
-    assert!(source_specs[0]["sha256"].is_string());
-    assert!(source_specs[0]["type"].is_string());
+    assert_eq!(source_specs.len(), manifest.source_specs.len());
+    assert_eq!(
+        source_specs[0]["file"],
+        manifest.source_specs[0].file.as_str()
+    );
+    assert_eq!(
+        source_specs[0]["sha256"],
+        manifest.source_specs[0].sha256.as_str()
+    );
+    assert_eq!(source_specs[0]["type"], "openapi");
 
     // drift_detected is present (false by default)
     assert_eq!(body["drift_detected"], false);

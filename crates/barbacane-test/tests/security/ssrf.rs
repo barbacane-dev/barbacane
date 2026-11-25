@@ -21,10 +21,11 @@
 //!
 //! The security invariant is therefore: **a request whose `opa_url` points at a
 //! blocked address must never return 200** (the protected upstream must never be
-//! reached). Today the host does not enforce an egress denylist, so a request
-//! pointed at, e.g., a co-located metadata mock could succeed — hence RED. Once
-//! the denylist lands, the host refuses the connection and the middleware
-//! fails closed (403/503), which is what we assert.
+//! reached): the host refuses the connection and the middleware fails closed
+//! (403/503). The fixture's targets do not answer, so a failed connection looks
+//! the same with or without the guard; `a_live_loopback_target_is_refused_by_the_guard_alone`
+//! points at a target that answers and allows, and checks the guard is what
+//! refuses it.
 
 use barbacane_test::TestGateway;
 
@@ -92,5 +93,86 @@ async fn dns_resolved_metadata_is_blocked() {
         200,
         "host must resolve the hostname and refuse link-local / metadata IPs, \
          including via redirects"
+    );
+}
+
+/// A project in a temporary directory whose `GET /live-loopback` asks the OPA
+/// at `opa_url` before answering 200 from the mock dispatcher.
+fn live_target_spec(opa_url: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  mock:\n    path: {}\n  opa-authz:\n    path: {}\n",
+            plugins.join("mock/mock.wasm").display(),
+            plugins.join("opa-authz/opa-authz.wasm").display()
+        ),
+    )
+    .expect("manifest");
+    let spec = dir.path().join("api.yaml");
+    std::fs::write(
+        &spec,
+        format!(
+            r#"openapi: "3.1.0"
+info: {{ title: Live loopback target, version: "1.0.0" }}
+paths:
+  /live-loopback:
+    get:
+      operationId: liveLoopback
+      x-barbacane-middlewares:
+        - name: opa-authz
+          config:
+            opa_url: "{opa_url}"
+            timeout: 2
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{{"reached":"loopback"}}'
+      responses:
+        "200": {{ description: reached }}
+"#
+        ),
+    )
+    .expect("spec");
+    (dir, spec.display().to_string())
+}
+
+/// The loopback block is the guard's: the target answers and allows the
+/// request. With internal egress allowed it is queried and the upstream
+/// reached; with the guard on it is never queried.
+#[tokio::test]
+async fn a_live_loopback_target_is_refused_by_the_guard_alone() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let opa = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": true})))
+        .mount(&opa)
+        .await;
+    let (_dir, spec) = live_target_spec(&format!("{}/v1/data/authz/allow", opa.uri()));
+
+    let open = TestGateway::from_spec(&spec)
+        .await
+        .expect("the gateway starts");
+    let resp = open.get("/live-loopback").await.unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "internal egress allowed: the target allows it"
+    );
+    assert_eq!(opa.received_requests().await.unwrap().len(), 1);
+
+    let guarded = TestGateway::from_spec_blocked_egress(&spec)
+        .await
+        .expect("the gateway starts");
+    let resp = guarded.get("/live-loopback").await.unwrap();
+    assert_ne!(resp.status(), 200, "the guard refuses the loopback target");
+    assert_eq!(
+        opa.received_requests().await.unwrap().len(),
+        1,
+        "the guarded gateway never connected to it"
     );
 }
