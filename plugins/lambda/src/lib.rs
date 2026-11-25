@@ -51,12 +51,23 @@ impl LambdaDispatcher {
     }
 
     /// Invoke the Lambda function and return the response.
+    /// The Function URL with the request's path and query after it: the
+    /// function reads them as `rawPath` and `rawQueryString`.
+    fn invocation_url(&self, req: &Request) -> String {
+        let mut url = format!("{}{}", self.url.trim_end_matches('/'), req.path);
+        if let Some(query) = req.query.as_deref().filter(|q| !q.is_empty()) {
+            url.push('?');
+            url.push_str(query);
+        }
+        url
+    }
+
     pub fn dispatch(&mut self, req: Request) -> Response {
         let headers = self.lambda_headers(&req);
 
         // Build the HTTP request to Lambda. The request body travels via the
         // SDK side-channel inside `http::call`, not embedded in JSON.
-        let mut http_request = HttpRequest::new(req.method.clone(), self.url.clone())
+        let mut http_request = HttpRequest::new(req.method.clone(), self.invocation_url(&req))
             .timeout_ms((self.timeout * 1000.0) as u64);
         http_request.headers = headers;
 
@@ -132,6 +143,25 @@ impl LambdaDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The request's path and query reach the function after its URL.
+    #[test]
+    fn the_request_path_and_query_follow_the_function_url() {
+        let config = LambdaDispatcher {
+            url: "https://example.lambda-url.us-east-1.on.aws/".to_string(),
+            timeout: 30.0,
+            pass_through_headers: true,
+        };
+        let req = Request::new("GET", "/orders/42").with_query("expand=items&page=2");
+        assert_eq!(
+            config.invocation_url(&req),
+            "https://example.lambda-url.us-east-1.on.aws/orders/42?expand=items&page=2"
+        );
+        assert_eq!(
+            config.invocation_url(&Request::new("POST", "/")),
+            "https://example.lambda-url.us-east-1.on.aws/"
+        );
+    }
 
     #[test]
     fn test_error_response_502() {

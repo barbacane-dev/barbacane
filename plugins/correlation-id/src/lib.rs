@@ -58,10 +58,11 @@ impl CorrelationId {
         let mut modified_req = req;
         let header_name_lower = self.header_name.to_lowercase();
 
-        // Check for existing correlation ID
+        // An untrusted client value goes, whether or not one is generated.
         let existing_id = if self.trust_incoming {
             modified_req.headers.get(&header_name_lower).cloned()
         } else {
+            modified_req.headers.remove(&header_name_lower);
             None
         };
 
@@ -174,6 +175,25 @@ mod tests {
 
     fn create_test_response() -> Response {
         Response::new(200)
+    }
+
+    /// An untrusted client value does not reach the upstream, even when no
+    /// replacement is generated.
+    #[test]
+    fn an_untrusted_client_value_is_removed() {
+        mock_host::reset();
+        let mut config: CorrelationId =
+            serde_json::from_str(r#"{"trust_incoming": false, "generate_if_missing": false}"#)
+                .unwrap();
+        let mut req = create_test_request();
+        req.headers
+            .insert("x-correlation-id".to_string(), "forged".to_string());
+        match config.on_request(req) {
+            Action::Continue(forwarded) => {
+                assert!(!forwarded.headers.contains_key("x-correlation-id"))
+            }
+            Action::ShortCircuit(_) => panic!("expected Continue"),
+        }
     }
 
     #[test]

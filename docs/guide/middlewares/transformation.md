@@ -131,13 +131,18 @@ By default an `add` or `set` is written even when its variables resolve to empty
 For example, to send the SSO cookie as a bearer token when the request has no `Authorization` header, and no `Authorization` at all when it has neither:
 
 ```yaml
-- name: request-transformer
-  config:
-    skip_if_empty: true
-    headers:
-      set:                                  # set = only when absent
-        Authorization: "Bearer $cookie.sso_token"
+parameters:
+  - { name: sso_token, in: cookie, schema: { type: string } }  # admits the Cookie header
+x-barbacane-middlewares:
+  - name: request-transformer
+    config:
+      skip_if_empty: true
+      headers:
+        set:                                  # set = only when absent
+          Authorization: "Bearer $cookie.sso_token"
 ```
+
+An operation passes on only the request headers it admits: the `Cookie` header when it declares an `in: cookie` parameter, and a header a `$header.<name>` variable reads when it declares that header (`in: header`) or a security scheme names it. Without the declaration the variable resolves empty.
 
 | `Authorization` in | `Cookie` in | `Authorization` out |
 |--------------------|-------------|---------------------|

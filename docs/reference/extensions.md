@@ -505,9 +505,9 @@ Per-operation observability middleware for SLO monitoring, detailed logging, and
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `latency_slo_ms` | integer | - | Latency threshold in ms; increments `barbacane_plugin_observability_slo_violation_total{slo_ms}` when exceeded |
-| `detailed_request_logs` | boolean | `false` | Log incoming request details |
-| `detailed_response_logs` | boolean | `false` | Log outgoing response details including duration |
+| `latency_slo_ms` | integer | - | Latency threshold in ms; increments `barbacane_plugin_observability_slo_violation_total{slo_ms}` and logs a warning when exceeded |
+| `detailed_request_logs` | boolean | `false` | Log incoming request details, at info |
+| `detailed_response_logs` | boolean | `false` | Log outgoing response details including duration, at info |
 | `emit_latency_histogram` | boolean | `false` | Emit `barbacane_plugin_observability_latency_seconds{status}`, a latency histogram |
 
 ---
