@@ -723,16 +723,46 @@ mod tests {
         assert_eq!(metrics.wasm_instances.get(), 0);
     }
 
+    /// Marks memory only a slot's reset clears: a chunk `init` never writes,
+    /// which the snapshot does not restore, and a page grown during the call.
+    /// Returns 1 or 2 when an earlier instance's mark is still there.
+    const MARKS_UNSNAPSHOTTED_MEMORY: &str = r#"(module
+      (memory (export "memory") 1)
+      (global $__stack_pointer (mut i32) (i32.const 0))
+      (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+      (func (export "init") (param i32 i32) (result i32)
+        (i32.store8 (i32.const 60000) (i32.const 7))
+        (i32.const 0))
+      (func (export "on_request") (param i32 i32) (result i32)
+        (if (i32.load8_u (i32.const 30000))
+          (then (return (i32.const 1))))
+        (if (i32.ne (memory.size) (i32.const 1))
+          (then (return (i32.const 2))))
+        (drop (memory.grow (i32.const 1)))
+        (if (i32.load8_u (i32.const 70000))
+          (then (return (i32.const 2))))
+        (i32.store8 (i32.const 30000) (i32.const 1))
+        (i32.store8 (i32.const 70000) (i32.const 1))
+        (i32.const 0))
+      (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#;
+
     #[test]
     fn a_reused_slot_holds_nothing_from_its_last_instance() {
         // One slot: every instance after the first reuses the memory the
         // previous one wrote to.
-        let (pool, key, metrics) = pooled_with("marker", MARKS_EACH_CALL, 1, 16 * MIB);
+        let (pool, key, metrics) = pooled_with("marker", MARKS_UNSNAPSHOTTED_MEMORY, 1, 16 * MIB);
         for call in 1..=5 {
             let mut instance = pool.get_instance(&key).expect("instance");
             assert!(!instance.pool_was_full(), "call {call}");
             assert_eq!(instance.on_request(b"{}").unwrap(), 0, "call {call}");
         }
+
+        // The marks are what the reset clears: one instance called twice,
+        // with no reset between, sees its own.
+        let mut instance = pool.get_instance(&key).expect("instance");
+        assert_eq!(instance.on_request(b"{}").unwrap(), 0);
+        assert_eq!(instance.on_request(b"{}").unwrap(), 1);
+        drop(instance);
         assert_eq!(pool.snapshot_count(), 1);
         assert_eq!(metrics.wasm_instances_unpooled_total.get(), 0);
     }
