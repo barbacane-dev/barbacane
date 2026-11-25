@@ -818,6 +818,12 @@ enum Commands {
         #[arg(long)]
         data_plane_name: Option<String>,
 
+        /// PEM file of the CAs the control plane's certificate is checked
+        /// against, for the WebSocket and the artifact downloads, in place of
+        /// the public roots.
+        #[arg(long, env = "BARBACANE_CONTROL_PLANE_CA")]
+        control_plane_ca: Option<std::path::PathBuf>,
+
         /// Admin API listen address (health, metrics, provenance).
         /// Set to "off" to disable.
         #[arg(long, default_value = "127.0.0.1:8081")]
@@ -4176,6 +4182,7 @@ Thumbs.db
 async fn perform_hot_reload(
     notification: control_plane::ArtifactNotification,
     download_token: Option<String>,
+    download_trust: control_plane::ControlPlaneTrust,
     shared_gateway: &SharedGateway,
     artifact_dir: &Path,
     dev_mode: bool,
@@ -4197,7 +4204,7 @@ async fn perform_hot_reload(
     );
 
     // Step 1: Download and verify artifact
-    let download = match hot_reload::download_client() {
+    let download = match hot_reload::download_client(&download_trust) {
         Ok(client) => {
             hot_reload::download_artifact(
                 &client,
@@ -4297,7 +4304,7 @@ async fn bootstrap_deployment(
         .map_err(|e| format!("cannot create {}: {e}", artifact_dir.display()))?;
     let base = ws_url_to_http_base(&config.control_plane_url);
     let url = format!("{base}/projects/{}/deployment", config.project_id);
-    let client = hot_reload::download_client()?;
+    let client = hot_reload::download_client(&config.trust)?;
     let response = client
         .get(&url)
         .bearer_auth(&config.api_key)
@@ -5031,6 +5038,8 @@ struct ConnectedModeConfig {
     data_plane_name: Option<String>,
     /// Artifact ID currently loaded (set after loading).
     initial_artifact_id: Option<uuid::Uuid>,
+    /// The CAs the control plane's certificate is checked against.
+    trust: control_plane::ControlPlaneTrust,
 }
 
 /// Whether a request is a WebSocket handshake (RFC 6455 section 4.1): a GET
@@ -5073,25 +5082,31 @@ fn control_plane_link_allowed(url: &str, allow_plaintext: bool) -> Result<(), St
     }
 }
 
-/// Convert a WebSocket URL to an HTTP base URL.
-///
-/// E.g., `ws://host:9090/ws/data-plane` → `http://host:9090`
-///       `wss://host:9090/ws/data-plane` → `https://host:9090`
+/// The control plane's API base for its WebSocket URL: `wss://host/ws/data-plane`
+/// gives `https://host`, `wss://host/cp/ws/data-plane` gives `https://host/cp`.
 fn ws_url_to_http_base(ws_url: &str) -> String {
     let http_url = ws_url
         .replacen("wss://", "https://", 1)
         .replacen("ws://", "http://", 1);
-    // Strip the path portion, keeping only scheme + authority
-    // Find the third '/' (after "http://") to locate where the path starts
-    if let Some(authority_end) = http_url
+    // The API is served beside the WebSocket: under the path that precedes
+    // `/ws/data-plane`, or at the root for any other path.
+    if let Some(base) = http_url
+        .trim_end_matches('/')
+        .strip_suffix(DATA_PLANE_SOCKET_PATH)
+    {
+        return base.to_string();
+    }
+    match http_url
         .find("://")
         .and_then(|i| http_url[i + 3..].find('/').map(|j| i + 3 + j))
     {
-        http_url[..authority_end].to_string()
-    } else {
-        http_url
+        Some(authority_end) => http_url[..authority_end].to_string(),
+        None => http_url,
     }
 }
+
+/// The path of the control plane's data-plane WebSocket.
+const DATA_PLANE_SOCKET_PATH: &str = "/ws/data-plane";
 
 /// The peer as the gateway reports it. A dual-stack listener sees an IPv4
 /// client as an IPv4-mapped IPv6 address, which is reported as the IPv4 address.
@@ -5307,6 +5322,10 @@ async fn run_serve(
     // Start control plane client if in connected mode. Artifacts are downloaded
     // with the same key the data plane registers with.
     let download_token = connected_mode.as_ref().map(|config| config.api_key.clone());
+    let download_trust = connected_mode
+        .as_ref()
+        .map(|config| config.trust.clone())
+        .unwrap_or_default();
     let (mut artifact_rx, response_tx, control_plane_http_base) = if let Some(config) =
         connected_mode
     {
@@ -5321,6 +5340,7 @@ async fn run_serve(
             api_key: config.api_key,
             data_plane_name: config.data_plane_name,
             initial_artifact_id: config.initial_artifact_id,
+            trust: config.trust,
         });
         let (rx, tx) = client.start(
             shutdown_rx.clone(),
@@ -5425,11 +5445,13 @@ async fn run_serve(
                 let admin_manifest_clone = admin_manifest.clone();
                 let trust_clone = trust.clone();
                 let download_token = download_token.clone();
+                let download_trust = download_trust.clone();
 
                 tokio::spawn(async move {
                     let result = perform_hot_reload(
                         notification,
                         download_token,
+                        download_trust,
                         &gateway_clone,
                         &artifact_dir_clone,
                         dev,
@@ -5934,6 +5956,7 @@ async fn main() -> ExitCode {
             project_id,
             api_key,
             data_plane_name,
+            control_plane_ca,
             admin_bind,
             no_introspection,
             trusted_proxies,
@@ -6022,12 +6045,23 @@ async fn main() -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    let trust = match &control_plane_ca {
+                        Some(path) => match control_plane::ControlPlaneTrust::from_pem_file(path) {
+                            Ok(trust) => trust,
+                            Err(e) => {
+                                eprintln!("error: {e}");
+                                return ExitCode::from(1);
+                            }
+                        },
+                        None => control_plane::ControlPlaneTrust::default(),
+                    };
                     Some(ConnectedModeConfig {
                         control_plane_url: cp.clone(),
                         project_id: project_uuid,
                         api_key: key.clone(),
                         data_plane_name: data_plane_name.clone(),
                         initial_artifact_id: None,
+                        trust,
                     })
                 }
                 (None, None, None) => None,
@@ -7041,6 +7075,20 @@ mod tests {
         assert_eq!(
             ws_url_to_http_base("ws://localhost:9090"),
             "http://localhost:9090"
+        );
+        // A control plane served under a path keeps it.
+        assert_eq!(
+            ws_url_to_http_base("wss://gw.example.com/barbacane/ws/data-plane"),
+            "https://gw.example.com/barbacane"
+        );
+        assert_eq!(
+            ws_url_to_http_base("wss://gw.example.com/a/b/ws/data-plane/"),
+            "https://gw.example.com/a/b"
+        );
+        // Another socket path: the API is taken to be at the root.
+        assert_eq!(
+            ws_url_to_http_base("wss://gw.example.com/socket"),
+            "https://gw.example.com"
         );
     }
 }

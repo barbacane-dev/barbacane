@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use tokio::sync::{mpsc, Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use super::protocol::ControlPlaneMessage;
@@ -13,6 +13,40 @@ use super::protocol::ControlPlaneMessage;
 /// attacker can pin during the pre-registration window.
 const MAX_CONCURRENT_WS_SESSIONS: usize = 1024;
 
+/// Why the control plane ends a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionEnd {
+    /// The API key the data plane registered with was revoked.
+    KeyRevoked,
+    /// The API key was revoked or expired, as a periodic check found.
+    KeyInactive,
+    /// The data plane sent nothing for three heartbeat intervals.
+    Silent,
+    /// The data plane's record was deleted.
+    Removed,
+    /// The control plane is shutting down.
+    ShuttingDown,
+}
+
+impl SessionEnd {
+    /// The reason sent in the `disconnect` message and the close frame.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::KeyRevoked => "API key revoked",
+            Self::KeyInactive => "API key revoked or expired",
+            Self::Silent => "no message from the data plane",
+            Self::Removed => "data plane removed",
+            Self::ShuttingDown => "control plane shutting down",
+        }
+    }
+
+    /// Whether the data plane registers again: not once its record is
+    /// deleted.
+    pub fn reconnect(self) -> bool {
+        self != Self::Removed
+    }
+}
+
 /// Information about a connected data plane.
 #[derive(Debug, Clone)]
 struct DataPlaneConnection {
@@ -20,8 +54,8 @@ struct DataPlaneConnection {
     /// The API key the data plane registered with.
     key_id: Uuid,
     tx: mpsc::Sender<ControlPlaneMessage>,
-    /// Signalled to end the session.
-    close: Arc<Notify>,
+    /// Set to end the session, with the reason.
+    close: Arc<watch::Sender<Option<SessionEnd>>>,
 }
 
 /// Manages active WebSocket connections to data planes.
@@ -80,20 +114,20 @@ impl ConnectionManager {
     }
 
     /// Register a new connection, authenticated with the API key `key_id`.
-    /// Returns the signal that ends the session.
+    /// Returns the signal that ends the session, which carries why.
     pub fn register(
         &self,
         data_plane_id: Uuid,
         project_id: Uuid,
         key_id: Uuid,
         tx: mpsc::Sender<ControlPlaneMessage>,
-    ) -> Arc<Notify> {
-        let close = Arc::new(Notify::new());
+    ) -> watch::Receiver<Option<SessionEnd>> {
+        let (close, ended) = watch::channel(None);
         let conn = DataPlaneConnection {
             project_id,
             key_id,
             tx,
-            close: Arc::clone(&close),
+            close: Arc::new(close),
         };
 
         self.connections.insert(data_plane_id, conn);
@@ -108,7 +142,7 @@ impl ConnectionManager {
             project_id = %project_id,
             "Data plane registered"
         );
-        close
+        ended
     }
 
     /// Data planes with an open session.
@@ -120,7 +154,7 @@ impl ConnectionManager {
     pub fn close_all(&self) -> usize {
         let mut closed = 0;
         for conn in self.connections.iter() {
-            conn.close.notify_one();
+            conn.close.send_replace(Some(SessionEnd::ShuttingDown));
             closed += 1;
         }
         closed
@@ -131,28 +165,33 @@ impl ConnectionManager {
     pub fn close_sessions_for_key(&self, key_id: Uuid) -> usize {
         let mut closed = 0;
         for conn in self.connections.iter().filter(|c| c.key_id == key_id) {
-            conn.close.notify_one();
+            conn.close.send_replace(Some(SessionEnd::KeyRevoked));
             closed += 1;
         }
         closed
     }
 
-    /// Remove a connection and end its session, so a data plane whose record
-    /// is deleted stops receiving deployments at once.
+    /// End the session of a data plane whose record is deleted: it stops
+    /// receiving deployments at once, and does not register again until it
+    /// restarts.
     pub fn remove(&self, data_plane_id: Uuid) {
-        if let Some((_, conn)) = self.connections.remove(&data_plane_id) {
-            conn.close.notify_one();
-            // Remove from project index
-            if let Some(mut ids) = self.project_connections.get_mut(&conn.project_id) {
-                ids.retain(|id| *id != data_plane_id);
-            }
-
-            tracing::info!(
-                data_plane_id = %data_plane_id,
-                project_id = %conn.project_id,
-                "Data plane disconnected"
-            );
+        if let Some(conn) = self.take(data_plane_id) {
+            conn.close.send_replace(Some(SessionEnd::Removed));
         }
+    }
+
+    /// Forget the connection of a session that ended.
+    pub fn unregister(&self, data_plane_id: Uuid) {
+        self.take(data_plane_id);
+    }
+
+    /// Remove a connection from the indexes, returning it.
+    fn take(&self, data_plane_id: Uuid) -> Option<DataPlaneConnection> {
+        let (_, conn) = self.connections.remove(&data_plane_id)?;
+        if let Some(mut ids) = self.project_connections.get_mut(&conn.project_id) {
+            ids.retain(|id| *id != data_plane_id);
+        }
+        Some(conn)
     }
 
     /// List all connected data plane IDs for a project.
@@ -237,8 +276,29 @@ mod tests {
 
         assert_eq!(manager.close_sessions_for_key(revoked_key), 1);
 
-        let wait = std::time::Duration::from_millis(50);
-        assert!(tokio::time::timeout(wait, revoked.notified()).await.is_ok());
-        assert!(tokio::time::timeout(wait, other.notified()).await.is_err());
+        assert_eq!(*revoked.borrow(), Some(SessionEnd::KeyRevoked));
+        assert_eq!(*other.borrow(), None);
+    }
+
+    #[tokio::test]
+    async fn each_end_says_why_and_only_a_removal_is_final() {
+        let manager = ConnectionManager::new();
+        let (tx, _rx) = mpsc::channel(1);
+        let (removed_id, kept_id) = (Uuid::new_v4(), Uuid::new_v4());
+        let removed = manager.register(removed_id, Uuid::new_v4(), Uuid::new_v4(), tx.clone());
+        let kept = manager.register(kept_id, Uuid::new_v4(), Uuid::new_v4(), tx);
+
+        manager.remove(removed_id);
+        assert_eq!(*removed.borrow(), Some(SessionEnd::Removed));
+        assert!(!SessionEnd::Removed.reconnect());
+        assert_eq!(manager.connected(), 1);
+
+        manager.close_all();
+        assert_eq!(*kept.borrow(), Some(SessionEnd::ShuttingDown));
+        assert!(SessionEnd::ShuttingDown.reconnect());
+        assert!(SessionEnd::KeyRevoked.reconnect());
+
+        manager.unregister(kept_id);
+        assert_eq!(manager.connected(), 0);
     }
 }

@@ -965,7 +965,12 @@ paths:
     delete:
       tags: [DataPlanes]
       summary: Disconnect data plane
-      description: Disconnect a data plane from the project. This closes the WebSocket connection.
+      description: |
+        Delete the data plane's record and end its session with a
+        `disconnect` saying `reconnect: false`. The data plane keeps serving
+        the artifact it runs, receives no deployment, and does not register
+        again until it restarts; revoke its API key to keep it out after a
+        restart.
       operationId: disconnectProjectDataPlane
       parameters:
         - $ref: '#/components/parameters/projectId'
@@ -1187,6 +1192,12 @@ paths:
         - `{"type": "registered", "data_plane_id": "uuid", "heartbeat_interval_secs": 30}`
         - `{"type": "artifact_available", "artifact_id": "uuid", "download_url": "/artifacts/{id}/download", "sha256": "..."}`
         - `{"type": "heartbeat_ack"}`
+        - `{"type": "disconnect", "reason": "...", "reconnect": true}`: the
+          session ends, then the socket closes. `reason` is `API key revoked`,
+          `API key revoked or expired`, `no message from the data plane`,
+          `data plane removed` or `control plane shutting down`; the data
+          plane registers again unless `reconnect` is false, which only
+          `data plane removed` says.
       operationId: dataPlaneWebSocket
       x-cli: { skip: true }
       responses:

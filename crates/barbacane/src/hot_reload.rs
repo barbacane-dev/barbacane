@@ -74,11 +74,13 @@ pub async fn promote(artifact_dir: &Path, artifact_id: Uuid) -> Result<PathBuf, 
     Ok(current)
 }
 
-/// The client artifacts are downloaded with. It does not decompress, so the
-/// bytes written are the bytes the checksum covers.
-pub fn download_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .no_gzip()
+/// The client artifacts are downloaded with, trusting `trust`'s CAs. It does
+/// not decompress, so the bytes written are the bytes the checksum covers.
+pub fn download_client(
+    trust: &crate::control_plane::ControlPlaneTrust,
+) -> Result<reqwest::Client, String> {
+    trust
+        .apply(reqwest::Client::builder().no_gzip())?
         .build()
         .map_err(|e| format!("failed to build the download client: {e}"))
 }
@@ -301,7 +303,7 @@ mod tests {
         let url = format!("http://{}/artifact.bca", addr);
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let client = download_client().unwrap();
+        let client = download_client(&Default::default()).unwrap();
         let sha = compute_sha256(&content);
         let error = download_artifact(&client, &url, None, &sha, temp_dir.path(), 1024)
             .await
@@ -320,7 +322,7 @@ mod tests {
         let url = format!("http://{}/artifact.bca", addr);
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let client = download_client().unwrap();
+        let client = download_client(&Default::default()).unwrap();
         let result = download_artifact(&client, &url, None, "dummy", temp_dir.path(), MAX).await;
         assert!(result.is_err());
         assert!(is_empty(temp_dir.path()), "the partial file is removed");
@@ -343,7 +345,7 @@ mod tests {
         let url = format!("http://{}/artifact.bca", addr);
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let client = download_client().unwrap();
+        let client = download_client(&Default::default()).unwrap();
         let path = download_artifact(
             &client,
             &url,
@@ -394,7 +396,7 @@ mod tests {
     async fn the_bearer_token_is_sent_with_the_download() {
         let content = b"artifact".to_vec();
         let sha = compute_sha256(&content);
-        let client = download_client().unwrap();
+        let client = download_client(&Default::default()).unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
 
         let (addr, server) = start_bearer_server(content.clone(), "bbk_secret").await;

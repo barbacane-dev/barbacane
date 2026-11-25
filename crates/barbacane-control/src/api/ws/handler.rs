@@ -25,6 +25,7 @@ fn to_ws_message(msg: &ControlPlaneMessage) -> Message {
             .into(),
     )
 }
+use super::manager::SessionEnd;
 use crate::api::router::AppState;
 use crate::db::{
     ApiKeysRepository, ArtifactsRepository, DataPlanesRepository, NewDataPlane, ProjectsRepository,
@@ -199,7 +200,7 @@ async fn handle_socket(
     let (tx, mut rx) = mpsc::channel::<ControlPlaneMessage>(32);
 
     // Register in connection manager
-    let close = state
+    let mut close = state
         .connection_manager
         .register(data_plane_id, project_id, api_key.id, tx);
 
@@ -230,13 +231,16 @@ async fn handle_socket(
         tokio::select! {
             () = &mut silence => {
                 tracing::warn!(data_plane_id = %data_plane_id, "Data plane silent; ending the session");
-                end_session(&mut sender, "no message from the data plane").await;
+                end_session(&mut sender, SessionEnd::Silent).await;
                 break;
             }
 
-            // The API key was revoked through this control plane.
-            _ = close.notified() => {
-                end_session(&mut sender, "API key revoked").await;
+            // Ended by this control plane: a revoked key, a deleted record,
+            // a shutdown.
+            end = async { close.wait_for(Option::is_some).await.ok().and_then(|end| *end) } => {
+                if let Some(end) = end {
+                    end_session(&mut sender, end).await;
+                }
                 break;
             }
 
@@ -244,7 +248,7 @@ async fn handle_socket(
                 match api_keys_repo.is_active(api_key.id).await {
                     Ok(true) => {}
                     Ok(false) => {
-                        end_session(&mut sender, "API key revoked or expired").await;
+                        end_session(&mut sender, SessionEnd::KeyInactive).await;
                         break;
                     }
                     Err(e) => tracing::warn!(error = %e, "Failed to recheck the API key"),
@@ -305,7 +309,7 @@ async fn handle_socket(
     }
 
     // Cleanup
-    state.connection_manager.remove(data_plane_id);
+    state.connection_manager.unregister(data_plane_id);
     if let Err(e) = data_planes_repo.mark_offline(data_plane_id).await {
         tracing::error!(error = %e, "Failed to mark data plane offline");
     }
@@ -348,19 +352,25 @@ async fn owned_artifact(
     Ok(owned.then_some(id))
 }
 
-/// Tell the data plane why its session ends, then close the socket.
+/// Tell the data plane why its session ends, and whether to register again,
+/// then close the socket.
 async fn end_session(
     sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    reason: &'static str,
+    end: SessionEnd,
 ) {
     let notice = ControlPlaneMessage::Disconnect {
-        reason: reason.to_string(),
+        reason: end.reason().to_string(),
+        reconnect: end.reconnect(),
     };
     let _ = sender.send(to_ws_message(&notice)).await;
+    let code = match end {
+        SessionEnd::ShuttingDown => close_code::AWAY,
+        _ => close_code::POLICY,
+    };
     let _ = sender
         .send(Message::Close(Some(CloseFrame {
-            code: close_code::POLICY,
-            reason: reason.into(),
+            code,
+            reason: end.reason().into(),
         })))
         .await;
 }

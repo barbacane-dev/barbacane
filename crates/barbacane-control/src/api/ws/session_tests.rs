@@ -75,7 +75,8 @@ async fn registered_session(pool: &PgPool, base: &str) -> (Uuid, Uuid, Socket) {
     (project, data_plane_id, ws)
 }
 
-/// Deleting a data plane's record ends its session.
+/// Deleting a data plane's record ends its session, telling the data plane
+/// not to register again.
 #[tokio::test]
 async fn deleting_a_data_plane_ends_its_session() {
     let Some((pool, base)) = serve().await else {
@@ -93,10 +94,17 @@ async fn deleting_a_data_plane_ends_its_session() {
         .expect("delete");
     assert_eq!(deleted.status(), 204);
 
+    let mut notice = None;
     let ended = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match ws.next().await {
                 None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
+                Some(Ok(Message::Text(text))) => {
+                    let message: serde_json::Value = serde_json::from_str(&text).expect("json");
+                    if message["type"] == "disconnect" {
+                        notice = Some(message);
+                    }
+                }
                 Some(Ok(_)) => continue,
             }
         }
@@ -106,4 +114,7 @@ async fn deleting_a_data_plane_ends_its_session() {
         ended.is_ok(),
         "the session must end once the record is deleted"
     );
+    let notice = notice.expect("a disconnect notice");
+    assert_eq!(notice["reason"], "data plane removed", "{notice}");
+    assert_eq!(notice["reconnect"], false, "{notice}");
 }
