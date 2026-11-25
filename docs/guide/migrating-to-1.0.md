@@ -89,6 +89,10 @@ A parameter without `name` or `in`, with an `in` other than `path`, `query`, `he
 
 `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, and `x-barbacane-waf` anywhere but the document root fail compilation with `E1017`; they had no effect. Every `x-barbacane-waf` key is checked (`E1080`): an unknown key or a value of the wrong type or out of range is refused, where it fell back to a default. An `x-sunset` that is not a date fails with `E1018`; a valid one is sent as a `Sunset` header even on an operation that is not deprecated.
 
+### The Deprecation header is a date
+
+`Deprecation` follows RFC 9745: its value is the date of the deprecation, `@` and the Unix time (`Deprecation: @1782777600`), taken from the operation's new `x-deprecation` extension. `deprecated: true` carries no date and no longer sends `Deprecation: true`. To keep the header, add `x-deprecation` with the date the operation was deprecated; a client that read `true` reads a date. An `x-deprecation` that is not a date, or an `x-sunset` earlier than it, fails with `E1018`.
+
 ### YAML is read by a different parser
 
 Specs are read by serde-saphyr, configured to read documents as libyaml did. The constructs a spec can meet that read differently, and what to do:
