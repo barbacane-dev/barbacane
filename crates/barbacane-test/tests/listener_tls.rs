@@ -1,5 +1,6 @@
-//! The listener's TLS: client certificates (`--tls-client-ca`) and reloading
-//! the certificate, key and client CA while serving.
+//! The listener's TLS: client certificates (`--tls-client-ca`), the minimum
+//! version (`--tls-min-version`), and reloading the certificate, key and
+//! client CA while serving.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -480,4 +481,64 @@ fn a_client_ca_needs_tls_and_certificates() {
     ]);
     assert_eq!(code, Some(1), "{stderr}");
     assert!(stderr.contains("no certificates found"), "{stderr}");
+}
+
+/// The TLS version a handshake with the listener on `port` settles on, the
+/// client offering only `versions` and trusting `root`.
+fn handshake(
+    port: u16,
+    root: &CertificateDer<'static>,
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) -> Result<rustls::ProtocolVersion, String> {
+    let mut store = rustls::RootCertStore::empty();
+    store.add(root.clone()).map_err(|e| e.to_string())?;
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(versions)
+        .map_err(|e| e.to_string())?
+        .with_root_certificates(store)
+        .with_no_client_auth();
+    let mut conn = rustls::ClientConnection::new(
+        Arc::new(config),
+        "localhost".try_into().expect("server name"),
+    )
+    .map_err(|e| e.to_string())?;
+    let mut socket =
+        std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
+    socket
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| e.to_string())?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut socket).map_err(|e| e.to_string())?;
+    }
+    conn.protocol_version()
+        .ok_or_else(|| "no version".to_string())
+}
+
+#[test]
+fn tls_min_version_1_3_refuses_a_tls_1_2_client() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let artifact = artifact(dir.path());
+    let files = Files::new(dir.path());
+    let cert = server_cert();
+    files.serve(&cert);
+    let tls12 = [&rustls::version::TLS12];
+    let tls13 = [&rustls::version::TLS13];
+
+    let (mut strict, port) = spawn(&artifact, &files, &["--tls-min-version", "1.3"]);
+    assert_eq!(
+        handshake(port, &cert.der, &tls13),
+        Ok(rustls::ProtocolVersion::TLSv1_3)
+    );
+    let refused = handshake(port, &cert.der, &tls12);
+    assert!(refused.is_err(), "{refused:?}");
+    strict.kill_and_reap();
+
+    let (mut default, port) = spawn(&artifact, &files, &[]);
+    assert_eq!(
+        handshake(port, &cert.der, &tls12),
+        Ok(rustls::ProtocolVersion::TLSv1_2),
+        "TLS 1.2 is served by default"
+    );
+    default.kill_and_reap();
 }

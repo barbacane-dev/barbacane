@@ -1861,3 +1861,247 @@ async fn test_http_log_includes_body_sizes() {
         "{entry}"
     );
 }
+
+// ========================
+// Bot Detection
+// ========================
+
+/// `GET path` with `user_agent` as `User-Agent`, or none: the status.
+async fn with_user_agent(gateway: &TestGateway, path: &str, user_agent: Option<&str>) -> u16 {
+    let mut request = gateway.request_builder(reqwest::Method::GET, path);
+    if let Some(user_agent) = user_agent {
+        request = request.header("user-agent", user_agent);
+    }
+    request.send().await.unwrap().status().as_u16()
+}
+
+#[tokio::test]
+async fn bot_detection_blocks_denied_agents_and_lets_others_through() {
+    let gateway = TestGateway::from_spec(&fixture("bot-detection.yaml"))
+        .await
+        .expect("failed to start gateway");
+    let browser = Some("Mozilla/5.0 (X11; Linux x86_64) Firefox/120.0");
+
+    for (path, user_agent, expected) in [
+        ("/denylist", browser, 200),
+        ("/denylist", Some("Scrapy/2.11 (+https://scrapy.org)"), 403),
+        (
+            "/denylist",
+            Some("Mozilla/5.0 (compatible; AhrefsBot/7.0)"),
+            403,
+        ),
+        (
+            "/allow-trusted-bots",
+            Some("Mozilla/5.0 (compatible; Googlebot/2.1)"),
+            200,
+        ),
+        ("/allow-trusted-bots", Some("SomeOtherBot/1.0"), 403),
+        ("/block-empty-ua", None, 403),
+        ("/block-empty-ua", browser, 200),
+        ("/custom-status", Some("curl/8.4.0"), 429),
+        ("/public", Some("Scrapy/2.11"), 200),
+    ] {
+        assert_eq!(
+            with_user_agent(&gateway, path, user_agent).await,
+            expected,
+            "{path} with {user_agent:?}"
+        );
+    }
+
+    let resp = gateway
+        .request_builder(reqwest::Method::GET, "/custom-status")
+        .header("user-agent", "Wget/1.21")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("Automated access is not permitted"), "{body}");
+}
+
+// ========================
+// Lambda Dispatcher
+// ========================
+
+/// A project whose `POST /invoke` is dispatched to the Lambda Function URL
+/// `url`.
+fn lambda_spec(url: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  lambda:\n    path: {}\n",
+            plugins.join("lambda/lambda.wasm").display()
+        ),
+    )
+    .expect("manifest");
+    let spec = dir.path().join("api.yaml");
+    std::fs::write(
+        &spec,
+        format!(
+            r#"openapi: "3.1.0"
+info: {{ title: Lambda, version: "1.0.0" }}
+paths:
+  /invoke:
+    post:
+      operationId: invoke
+      parameters:
+        - {{ name: x-tenant, in: header, schema: {{ type: string }} }}
+      x-barbacane-dispatch:
+        name: lambda
+        config:
+          url: "{url}"
+          timeout: 5
+      requestBody:
+        content:
+          application/json:
+            schema: {{ type: object }}
+      responses:
+        "201": {{ description: created }}
+"#
+        ),
+    )
+    .expect("spec");
+    (dir, spec.display().to_string())
+}
+
+/// The Lambda dispatcher invokes the function URL with the request's method,
+/// headers and body, and relays the function's status, headers and body.
+#[tokio::test]
+async fn lambda_invokes_the_function_and_relays_its_response() {
+    use wiremock::matchers::{body_string, header, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let function = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(header("x-tenant", "acme"))
+        .and(body_string(r#"{"order":42}"#))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("x-function", "invoked")
+                .set_body_string(r#"{"created":42}"#),
+        )
+        .expect(1)
+        .mount(&function)
+        .await;
+    let (_dir, spec) = lambda_spec(&format!("{}/", function.uri()));
+    let gateway = TestGateway::from_spec(&spec)
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway
+        .request_builder(reqwest::Method::POST, "/invoke")
+        .header("content-type", "application/json")
+        .header("x-tenant", "acme")
+        .body(r#"{"order":42}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.headers()["x-function"], "invoked");
+    assert_eq!(resp.text().await.unwrap(), r#"{"created":42}"#);
+}
+
+// ========================
+// NATS publish success
+// ========================
+
+/// A NATS server on loopback that speaks enough of the protocol for a client
+/// to connect and publish. Sends each published `(subject, payload)` on the
+/// channel; returns its port.
+async fn fake_nats() -> (u16, tokio::sync::mpsc::UnboundedReceiver<(String, Vec<u8>)>) {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let (read, mut write) = socket.into_split();
+                let info = format!(
+                    "INFO {{\"server_id\":\"test\",\"version\":\"2.10.0\",\"go\":\"go1.22\",\"host\":\"127.0.0.1\",\"port\":{port},\"headers\":true,\"max_payload\":1048576,\"proto\":1}}\r\n"
+                );
+                if write.write_all(info.as_bytes()).await.is_err() {
+                    return;
+                }
+                let mut read = BufReader::new(read);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    if read.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let words: Vec<&str> = line.split_whitespace().collect();
+                    match words.first().map(|w| w.to_ascii_uppercase()).as_deref() {
+                        Some("PING") => {
+                            let _ = write.write_all(b"PONG\r\n").await;
+                        }
+                        Some("PUB") | Some("HPUB") => {
+                            let hpub = words[0].eq_ignore_ascii_case("HPUB");
+                            let total: usize =
+                                words.last().and_then(|n| n.parse().ok()).unwrap_or(0);
+                            let headers: usize = if hpub {
+                                words[words.len() - 2].parse().unwrap_or(0)
+                            } else {
+                                0
+                            };
+                            let mut message = vec![0u8; total + 2];
+                            if read.read_exact(&mut message).await.is_err() {
+                                return;
+                            }
+                            let payload = message[headers..total].to_vec();
+                            let _ = tx.send((words[1].to_string(), payload));
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+    });
+    (port, rx)
+}
+
+/// With a broker that answers, the NATS dispatcher publishes the request body
+/// to the configured subject and answers 202.
+#[tokio::test]
+async fn nats_publishes_the_request_body_to_the_subject() {
+    let (port, mut published) = fake_nats().await;
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let fixture_spec = std::fs::read_to_string(fixture("nats-dispatch.yaml")).unwrap();
+    let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    std::fs::write(
+        dir.path().join("barbacane.yaml"),
+        format!(
+            "plugins:\n  nats:\n    path: {}\n",
+            plugins.join("nats/nats.wasm").display()
+        ),
+    )
+    .unwrap();
+    let spec = dir.path().join("nats.yaml");
+    std::fs::write(
+        &spec,
+        fixture_spec.replace(
+            "nats://127.0.0.1:14222",
+            &format!("nats://127.0.0.1:{port}"),
+        ),
+    )
+    .unwrap();
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let body = r#"{"userId":"550e8400-e29b-41d4-a716-446655440000","email":"test@example.com"}"#;
+    let resp = gateway.post("/events/users", body).await.unwrap();
+    assert_eq!(resp.status(), 202);
+
+    let (subject, payload) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), published.recv())
+            .await
+            .expect("published in time")
+            .expect("a message");
+    assert_eq!(subject, "events.users");
+    assert_eq!(payload, body.as_bytes());
+}
