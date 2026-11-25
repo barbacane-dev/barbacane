@@ -313,6 +313,9 @@ pub fn create_router(
         // Default request-body ceiling for all routes (upload routes opt into a
         // larger limit via their own inner DefaultBodyLimit layer).
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY))
+        .layer(axum::middleware::map_response(
+            crate::error::problem_json_errors,
+        ))
         // Middleware applied to all routes
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(log_mutations))

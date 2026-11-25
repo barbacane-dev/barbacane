@@ -4,14 +4,23 @@ info:
   description: |
     REST API for managing API specifications, plugins, artifacts, and compilations
     in the Barbacane API Gateway control plane.
+
+    Every error is an RFC 9457 problem (`application/problem+json`). Besides
+    the statuses each operation lists, a request can be refused before the
+    operation runs: `400` for a JSON body that does not parse or does not fit
+    the operation, `413` for a body over the limit, `415` for a body that is
+    not `application/json` where JSON is expected, `404` for an unknown path
+    and `405` for an unknown method.
   version: 1.0.0-rc.3
   license:
     name: AGPL-3.0-only
     url: https://www.gnu.org/licenses/agpl-3.0.html
 
 # Every operation takes the admin bearer token (BARBACANE_CONTROL_ADMIN_TOKEN)
-# unless it says `security: []`: the liveness probe and the data-plane
-# WebSocket, which authenticates with its API key inside the connection.
+# unless it says otherwise: the probes and the data-plane WebSocket take none
+# (`security: []`), and the artifact download and the project's deployment
+# also take a data-plane API key. `GET /openapi` (this document) and
+# `GET /docs` (its viewer) are served without a token too.
 security:
   - adminToken: []
 
@@ -65,6 +74,7 @@ paths:
 
   /ready:
     get:
+      security: []
       tags: [Health]
       summary: Readiness probe
       description: |
@@ -358,7 +368,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/specId'
       requestBody:
-        description: Compilation options
+        description: Compilation options; without a body, the defaults
         content:
           application/json:
             schema:
@@ -719,6 +729,9 @@ paths:
       tags: [Artifacts]
       summary: Download artifact
       operationId: downloadArtifact
+      security:
+        - adminToken: []
+        - dataPlaneKey: []
       description: |
         Download the compiled .bca artifact file. Takes the admin bearer token,
         or the data-plane API key of the artifact's project: a data plane
@@ -978,7 +991,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/projectId'
       requestBody:
-        description: The artifact to deploy
+        description: The artifact to deploy; without a body, the latest artifact
         content:
           application/json:
             schema:
@@ -1009,6 +1022,9 @@ paths:
         project: a data plane started without an artifact fetches it with
         its own key.
       operationId: getProjectDeployment
+      security:
+        - adminToken: []
+        - dataPlaneKey: []
       x-cli: { name: deployment }
       parameters:
         - $ref: '#/components/parameters/projectId'
@@ -1090,6 +1106,12 @@ paths:
                 $ref: '#/components/schemas/ApiKeyCreated'
         '400':
           description: Invalid request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Project not found
           content:
             application/problem+json:
               schema:
@@ -1440,6 +1462,12 @@ components:
       type: http
       scheme: bearer
       description: The control plane's admin token, `BARBACANE_CONTROL_ADMIN_TOKEN`.
+    dataPlaneKey:
+      type: http
+      scheme: bearer
+      description: |
+        A data-plane API key of the project, with the `data-plane:connect`
+        scope, as `createProjectApiKey` returns it.
   parameters:
     limit:
       name: limit
@@ -1944,7 +1972,7 @@ components:
           description: Project name
         description:
           type: [string, 'null']
-          description: Project description
+          description: Project description; `null` clears it
 
     DataPlane:
       description: A data plane connected to the control plane

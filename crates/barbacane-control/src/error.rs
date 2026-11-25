@@ -1,7 +1,7 @@
 //! RFC 9457 Problem Details error responses.
 
 use axum::{
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -87,6 +87,72 @@ impl ProblemDetails {
             title: "Internal Server Error".into(),
             status: 500,
             detail: Some(detail.into()),
+            instance: None,
+            errors: vec![],
+        }
+    }
+}
+
+/// Largest error body read to become a problem's `detail`.
+const MAX_DETAIL_BYTES: usize = 4096;
+
+/// Turn an error response that is not JSON (an extractor rejection, the body
+/// limit, an unknown route or method) into problem+json, keeping its headers.
+/// The text of a 4xx becomes the `detail`. A JSON body that does not fit the
+/// operation is a 400, as the API's own validation errors are.
+pub async fn problem_json_errors(response: Response) -> Response {
+    let status = response.status();
+    let is_json = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            let media = value.split(';').next().unwrap_or_default().trim();
+            media.eq_ignore_ascii_case("application/json")
+                || media.eq_ignore_ascii_case("application/problem+json")
+        });
+    if !(status.is_client_error() || status.is_server_error()) || is_json {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let detail = axum::body::to_bytes(body, MAX_DETAIL_BYTES)
+        .await
+        .ok()
+        .filter(|_| status.is_client_error())
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
+        .filter(|text| !text.is_empty());
+    let status = match status {
+        StatusCode::UNPROCESSABLE_ENTITY => StatusCode::BAD_REQUEST,
+        other => other,
+    };
+    let problem = ProblemDetails::for_status(status, detail);
+    parts.headers.remove(header::CONTENT_TYPE);
+    parts.headers.remove(header::CONTENT_LENGTH);
+    let mut response = problem.into_response();
+    response.headers_mut().extend(parts.headers);
+    response
+}
+
+impl ProblemDetails {
+    /// The problem for `status`, typed after it.
+    fn for_status(status: StatusCode, detail: Option<String>) -> Self {
+        let title = match status {
+            StatusCode::PAYLOAD_TOO_LARGE => "Content Too Large",
+            s => s.canonical_reason().unwrap_or("Error"),
+        };
+        let slug = match status {
+            StatusCode::BAD_REQUEST => "bad-request".to_string(),
+            StatusCode::NOT_FOUND => "not-found".to_string(),
+            StatusCode::PAYLOAD_TOO_LARGE => "content-too-large".to_string(),
+            s if s.is_server_error() => "internal-error".to_string(),
+            _ => title.to_ascii_lowercase().replace(' ', "-"),
+        };
+        Self {
+            error_type: format!("urn:barbacane:error:{slug}"),
+            title: title.into(),
+            status: status.as_u16(),
+            detail,
             instance: None,
             errors: vec![],
         }

@@ -15,6 +15,7 @@ use crate::error::ProblemDetails;
 
 use super::router::AppState;
 
+/// Compilation options; a request without a body takes the defaults.
 #[derive(Debug, Deserialize)]
 pub struct CompileRequest {
     /// Enable production mode checks.
@@ -29,12 +30,22 @@ fn default_true() -> bool {
     true
 }
 
+impl Default for CompileRequest {
+    fn default() -> Self {
+        Self {
+            production: true,
+            additional_specs: Vec::new(),
+        }
+    }
+}
+
 /// POST /specs/:id/compile - Start async compilation
 pub async fn start_compilation(
     State(state): State<AppState>,
     Path(spec_id): Path<Uuid>,
-    Json(request): Json<CompileRequest>,
+    request: Option<Json<CompileRequest>>,
 ) -> Result<(StatusCode, Json<Compilation>), ProblemDetails> {
+    let request = request.map(|Json(r)| r).unwrap_or_default();
     // Verify spec exists and get project_id
     let specs_repo = SpecsRepository::new(state.pool.clone());
     let spec = specs_repo

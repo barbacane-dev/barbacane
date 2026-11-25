@@ -11,7 +11,6 @@ pub struct Project {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    pub production_mode: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// The artifact the last deploy named, which every data plane of the
@@ -26,20 +25,26 @@ pub struct Project {
 pub struct NewProject {
     pub name: String,
     pub description: Option<String>,
-    #[serde(default = "default_production_mode")]
-    pub production_mode: bool,
-}
-
-fn default_production_mode() -> bool {
-    true
 }
 
 /// Input for updating a project.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateProject {
     pub name: Option<String>,
-    pub description: Option<String>,
-    pub production_mode: Option<bool>,
+    /// `None` (missing) = no change, `Some(None)` (null) = clear.
+    #[serde(default, deserialize_with = "present")]
+    pub description: Option<Option<String>>,
+}
+
+/// A field that is present: `Some` of its value, `null` included, which plain
+/// `Option<Option<T>>` reads as missing. A missing field takes the `default`,
+/// `None`.
+pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Project plugin configuration - per-project plugin settings.

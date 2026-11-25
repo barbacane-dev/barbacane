@@ -87,8 +87,8 @@ pub async fn disconnect_data_plane(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Deploy request body.
-#[derive(Debug, Deserialize)]
+/// Deploy request body; a request without a body deploys the latest artifact.
+#[derive(Debug, Default, Deserialize)]
 pub struct DeployRequest {
     /// Artifact ID to deploy. If not specified, uses the latest artifact.
     pub artifact_id: Option<Uuid>,
@@ -107,8 +107,9 @@ pub struct DeployResponse {
 pub async fn deploy_to_data_planes(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-    Json(request): Json<DeployRequest>,
+    request: Option<Json<DeployRequest>>,
 ) -> Result<(StatusCode, Json<DeployResponse>), ProblemDetails> {
+    let request = request.map(|Json(r)| r).unwrap_or_default();
     let artifacts_repo = ArtifactsRepository::new(state.pool.clone());
 
     // Get the artifact to deploy

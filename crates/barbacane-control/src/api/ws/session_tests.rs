@@ -37,7 +37,6 @@ async fn registered_session(pool: &PgPool, base: &str) -> (Uuid, Uuid, Socket) {
         .create(NewProject {
             name: format!("ws-{}", Uuid::new_v4().simple()),
             description: None,
-            production_mode: false,
         })
         .await
         .expect("project")
