@@ -2236,7 +2236,13 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
 
                 let topic = message.topic.clone();
                 let key = message.key.clone();
-                let payload = message.payload.clone();
+                let payload = match message.payload_bytes() {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        tracing::error!("Kafka publish: {e}");
+                        return -1;
+                    }
+                };
                 let headers = message.headers.clone();
 
                 // Use thread::scope to escape the main tokio runtime context,
@@ -2344,7 +2350,13 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
                 };
 
                 let subject = message.topic.clone();
-                let payload = bytes::Bytes::from(message.payload.clone());
+                let payload = match message.payload_bytes() {
+                    Ok(payload) => bytes::Bytes::from(payload),
+                    Err(e) => {
+                        tracing::error!("NATS publish: {e}");
+                        return -1;
+                    }
+                };
                 let headers = message.headers.clone();
 
                 // Use thread::scope to escape the main tokio runtime context,

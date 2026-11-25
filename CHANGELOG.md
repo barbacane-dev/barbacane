@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **plugins**: `kafka` and `nats` match `headers_from_request` and `$request.header.<name>` in any case; request header names are lower-case, so the documented `$request.header.X-Order-Id` never matched. A body that is not UTF-8 is published as its bytes (the host's broker message takes `payload_base64`), where it was published empty with a 202. `nats` refuses, when `init` reads it, a `subject` with a wildcard, an empty token or whitespace: NATS cannot publish to one, and the guide said wildcards were supported (#435).
 - **validation**: array and object parameters are read in their `style` and `explode`: `form` (`?tag=a&tag=b`, or `?ids=1,2` with `explode: false`), `spaceDelimited`, `pipeDelimited` and `deepObject` in the query, `simple`, `label` and `matrix` in the path, and `simple` in headers. A parameter described by `content` is validated against its media type's schema, parsed as JSON under a JSON media type; an OpenAPI 3.2 `querystring` with `application/x-www-form-urlencoded` and an object schema is checked as the object its fields make. A path parameter keeps `+` as `+` (#431).
 
   > **Upgrade note (breaking):** a parameter without `name` or `in`, with an unknown `in`, a `style` its location does not take, both `schema` and `content`, or a `content` that names more or fewer than one media type fails compilation with `E1004`; it was skipped or checked as a string.
