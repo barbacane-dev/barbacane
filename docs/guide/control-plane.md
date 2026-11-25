@@ -271,7 +271,9 @@ barbacane control deploy --project <PROJECT_ID> --artifact <ARTIFACT_ID> --wait
 
 Without `--artifact`, the project's latest artifact is deployed. `--wait` returns once every connected data plane runs it, or fails after `--timeout` seconds (120 by default).
 
-A deploy makes the artifact the project's deployment (`GET /projects/{id}/deployment` returns it, to the admin token or a data-plane key of the project). The control plane sends it to the connected data planes, which download it with their API key (`GET /artifacts/{id}/download` takes the admin token or the data-plane key of the artifact's project), verify its checksum, and perform a hot-reload. A data plane that registers later without it, a new replica or one that was offline, is sent it on registration. A deployment that arrives while a reload runs waits for it.
+A deploy makes the artifact the project's deployment (`GET /projects/{id}/deployment` returns it, to the admin token or a data-plane key of the project). The control plane sends it to the connected data planes, which download it with their API key (`GET /artifacts/{id}/download` takes the admin token or the data-plane key of the artifact's project), verify its checksum, and perform a hot-reload. A data plane that registers later without it, a new replica or one that was offline, is sent it on registration.
+
+A data plane applies deployments one at a time, the latest first: a deployment that arrives while an earlier one downloads cancels that download, and one that arrives while an artifact loads is applied next, in place of any it replaces. A download that receives nothing for 30 seconds is abandoned and reported as failed. A hot reload keeps the rate-limit counters, the cached responses and the upstream pools' state of the configurations the new artifact keeps; a restart clears them.
 
 ## Interactive API Documentation
 
