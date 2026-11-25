@@ -536,6 +536,10 @@ pub struct CompiledOperation {
     /// Sunset date for deprecated operations (HTTP-date format per RFC 9110).
     #[serde(default)]
     pub sunset: Option<String>,
+    /// The spec the operation comes from: its file name without the
+    /// extension, the `api` label of its metrics.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api: String,
     /// AsyncAPI messages (for async operations only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
@@ -1537,6 +1541,11 @@ fn compile_inner(
                 middlewares,
                 deprecated: op.deprecated,
                 sunset: op.sunset.clone(),
+                api: std::path::Path::new(spec_file)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("default")
+                    .to_string(),
                 messages: op.messages.clone(),
                 bindings: op.bindings.clone(),
                 responses: op.responses.clone(),

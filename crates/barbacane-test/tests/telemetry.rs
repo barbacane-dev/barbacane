@@ -459,3 +459,84 @@ async fn a_grpc_exporter_without_a_collector_does_not_hold_up_requests() {
         assert_eq!(gateway.get("/items").await.unwrap().status(), 200);
     }
 }
+
+// ==================== Runtime metrics ====================
+
+/// The admin endpoint's metrics text, once it holds `needle`.
+async fn metrics_with(gateway: &TestGateway, needle: &str) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let body = gateway
+            .admin_get("/metrics")
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        if body.contains(needle) || std::time::Instant::now() >= deadline {
+            return body;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// A dispatch is measured, and so is each plugin call.
+#[tokio::test]
+async fn dispatches_and_plugin_calls_are_measured() {
+    let gateway = TestGateway::from_spec(&fixture("minimal.yaml"))
+        .await
+        .expect("failed to start gateway");
+    assert_eq!(gateway.get("/health").await.unwrap().status(), 200);
+
+    let dispatch = r#"barbacane_dispatch_duration_seconds_count{dispatcher="mock"} 1"#;
+    let body = metrics_with(&gateway, dispatch).await;
+    assert!(body.contains(dispatch), "{body}");
+    assert!(
+        body.contains(
+            r#"barbacane_wasm_execution_duration_seconds_count{plugin="mock",function="dispatch"} 1"#
+        ),
+        "{body}"
+    );
+}
+
+/// A request to a deprecated operation is counted by route and spec.
+#[tokio::test]
+async fn requests_to_deprecated_routes_are_counted() {
+    let gateway = TestGateway::from_spec(&fixture("deprecated.yaml"))
+        .await
+        .expect("failed to start gateway");
+    assert_eq!(gateway.get("/v1/users").await.unwrap().status(), 200);
+    assert_eq!(gateway.get("/v2/users").await.unwrap().status(), 200);
+
+    let deprecated = r#"barbacane_deprecated_route_requests_total{method="GET",path="/v1/users",api="deprecated"} 1"#;
+    let body = metrics_with(&gateway, deprecated).await;
+    assert!(body.contains(deprecated), "{body}");
+    assert!(!body
+        .contains(r#"barbacane_deprecated_route_requests_total{method="GET",path="/v2/users""#));
+}
+
+/// The `api` label names the spec each operation comes from.
+#[tokio::test]
+async fn the_api_label_is_the_operations_spec() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/multi-spec");
+    let gateway = TestGateway::from_specs(&[
+        dir.join("users.yaml").to_str().unwrap(),
+        dir.join("orders.yaml").to_str().unwrap(),
+    ])
+    .await
+    .expect("failed to start gateway");
+    assert_eq!(gateway.get("/users").await.unwrap().status(), 200);
+    assert_eq!(gateway.get("/orders").await.unwrap().status(), 200);
+
+    let orders =
+        r#"barbacane_requests_total{method="GET",path="/orders",status="200",api="orders"} 1"#;
+    let body = metrics_with(&gateway, orders).await;
+    assert!(body.contains(orders), "{body}");
+    assert!(
+        body.contains(
+            r#"barbacane_requests_total{method="GET",path="/users",status="200",api="users"} 1"#
+        ),
+        "{body}"
+    );
+}

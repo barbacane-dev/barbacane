@@ -608,11 +608,20 @@ impl PluginInstance {
         self.reset_budget();
 
         // Call init
-        let result = init_func.call(&mut self.store, (ptr, len)).map_err(|e| {
-            call_error(e, self.limits.max_fuel, self.limits.max_execution_ms.max(1))
-        })?;
-
-        Ok(result)
+        let started = std::time::Instant::now();
+        let result = init_func
+            .call(&mut self.store, (ptr, len))
+            .map_err(|e| call_error(e, self.limits.max_fuel, self.limits.max_execution_ms.max(1)));
+        if let Some(metrics) = &self.store.data().metrics {
+            let trap = matches!(result, Err(WasmError::Trap(_) | WasmError::Timeout(_)));
+            metrics.record_wasm_execution(
+                &self.store.data().plugin_name,
+                "init",
+                started.elapsed().as_secs_f64(),
+                trap,
+            );
+        }
+        result
     }
 
     /// Call on_request with the given request data.
@@ -622,7 +631,7 @@ impl PluginInstance {
             .clone()
             .ok_or_else(|| WasmError::MissingExport("on_request".into()))?;
 
-        self.call_handler(func, request_json)
+        self.call_handler("on_request", func, request_json)
     }
 
     /// Call on_response with the given response data. A non-zero result is a
@@ -634,7 +643,7 @@ impl PluginInstance {
             .clone()
             .ok_or_else(|| WasmError::MissingExport("on_response".into()))?;
 
-        match self.call_handler(func, response_json)? {
+        match self.call_handler("on_response", func, response_json)? {
             0 => Ok(0),
             code => Err(WasmError::InvalidReturnCode(code)),
         }
@@ -647,11 +656,33 @@ impl PluginInstance {
             .clone()
             .ok_or_else(|| WasmError::MissingExport("dispatch".into()))?;
 
-        self.call_handler(func, request_json)
+        self.call_handler("dispatch", func, request_json)
     }
 
     /// Call a handler function with data.
+    /// Call `function` with `data`, and record its duration, and a trap
+    /// (a fault, fuel exhausted or the deadline passed), in the metrics.
     fn call_handler(
+        &mut self,
+        function: &'static str,
+        func: TypedFunc<(i32, i32), i32>,
+        data: &[u8],
+    ) -> Result<i32, WasmError> {
+        let started = std::time::Instant::now();
+        let result = self.run_handler(func, data);
+        if let Some(metrics) = &self.store.data().metrics {
+            let trap = matches!(result, Err(WasmError::Trap(_) | WasmError::Timeout(_)));
+            metrics.record_wasm_execution(
+                &self.store.data().plugin_name,
+                function,
+                started.elapsed().as_secs_f64(),
+                trap,
+            );
+        }
+        result
+    }
+
+    fn run_handler(
         &mut self,
         func: TypedFunc<(i32, i32), i32>,
         data: &[u8],

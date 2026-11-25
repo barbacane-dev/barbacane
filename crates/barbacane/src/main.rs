@@ -894,8 +894,6 @@ struct Gateway {
     balancer: Arc<Balancer>,
     /// Metrics registry for observability.
     metrics: Arc<MetricsRegistry>,
-    /// API name from the first spec's title (for metrics labels).
-    api_name: String,
 }
 
 impl Gateway {
@@ -1283,20 +1281,6 @@ impl Gateway {
             }
         }
 
-        // Extract API name from manifest (first source spec file or "default")
-        let api_name = manifest
-            .source_specs
-            .first()
-            .map(|s| {
-                // Remove extension and path, just keep the file name
-                Path::new(&s.file)
-                    .file_stem()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("default")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "default".to_string());
-
         // Keep pool state for the pools this artifact's configs list, drop the
         // rest with their metric series (ADR-0035). Done last, so a load that
         // fails leaves it as it was.
@@ -1323,7 +1307,6 @@ impl Gateway {
             plugin_instance_pool,
             balancer,
             metrics,
-            api_name,
         })
     }
 
@@ -1499,6 +1482,7 @@ impl Gateway {
             self.record_request_metrics(
                 &method_str,
                 UNMATCHED_ROUTE_LABEL,
+                UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
                 0,
@@ -1517,6 +1501,7 @@ impl Gateway {
             self.record_request_metrics(
                 &method_str,
                 // Bounded label: raw paths would let a scanner explode metric cardinality.
+                UNMATCHED_ROUTE_LABEL,
                 UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
@@ -1608,6 +1593,7 @@ impl Gateway {
             self.record_request_metrics(
                 &method_str,
                 UNMATCHED_ROUTE_LABEL,
+                UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
                 0,
@@ -1627,6 +1613,7 @@ impl Gateway {
                     let response = self.payload_too_large_response(self.limits.max_body_size);
                     self.record_request_metrics(
                         &method_str,
+                        UNMATCHED_ROUTE_LABEL,
                         UNMATCHED_ROUTE_LABEL,
                         response.status().as_u16(),
                         0,
@@ -1664,6 +1651,11 @@ impl Gateway {
                     if let Some(operation_id) = &operation.operation_id {
                         set_attribute(&span, OPERATION_ID, operation_id.clone());
                     }
+                    set_attribute(&span, API, operation.api.clone());
+                }
+                if operation.deprecated {
+                    self.metrics
+                        .record_deprecated_route(&method_str, &route_path, &operation.api);
                 }
 
                 let content_type = headers.get("content-type").map(|s| s.as_str());
@@ -1707,6 +1699,7 @@ impl Gateway {
                             self.record_request_metrics(
                                 &method_str,
                                 &route_path,
+                                &operation.api,
                                 response.status().as_u16(),
                                 0,
                                 0,
@@ -1735,6 +1728,7 @@ impl Gateway {
                             self.record_request_metrics(
                                 &method_str,
                                 &route_path,
+                                &operation.api,
                                 response.status().as_u16(),
                                 0,
                                 0,
@@ -1762,6 +1756,7 @@ impl Gateway {
                     self.record_request_metrics(
                         &method_str,
                         &route_path,
+                        &operation.api,
                         response.status().as_u16(),
                         request_size,
                         0,
@@ -1844,6 +1839,7 @@ impl Gateway {
                         self.record_request_metrics(
                             &method_str,
                             &route_path,
+                            &operation.api,
                             response.status().as_u16(),
                             request_size,
                             0,
@@ -1895,6 +1891,7 @@ impl Gateway {
                     self.record_request_metrics(
                         &method_str,
                         &route_path,
+                        &operation.api,
                         response.status().as_u16(),
                         request_size,
                         0,
@@ -1959,6 +1956,7 @@ impl Gateway {
                         self.record_request_metrics(
                             &method_str,
                             &route_path,
+                            &operation.api,
                             response.status().as_u16(),
                             request_size,
                             response_size,
@@ -1968,7 +1966,7 @@ impl Gateway {
                     }
                     None => {
                         let metrics = Arc::clone(&self.metrics);
-                        let api = self.api_name.clone();
+                        let api = operation.api.clone();
                         let status = response.status().as_u16();
                         let (method, route) = (method_str.clone(), route_path.clone());
                         response.map(|body| {
@@ -2019,6 +2017,7 @@ impl Gateway {
                                 self.record_request_metrics(
                                     &method_str,
                                     UNMATCHED_ROUTE_LABEL,
+                                    UNMATCHED_ROUTE_LABEL,
                                     response.status().as_u16(),
                                     0,
                                     0,
@@ -2034,6 +2033,7 @@ impl Gateway {
                 let response = self.method_not_allowed_response(allowed, &method_str, &path);
                 self.record_request_metrics(
                     &method_str,
+                    UNMATCHED_ROUTE_LABEL,
                     UNMATCHED_ROUTE_LABEL,
                     response.status().as_u16(),
                     0,
@@ -2051,6 +2051,7 @@ impl Gateway {
                 self.record_request_metrics(
                     &method_str,
                     UNMATCHED_ROUTE_LABEL,
+                    UNMATCHED_ROUTE_LABEL,
                     response.status().as_u16(),
                     0,
                     0,
@@ -2066,10 +2067,15 @@ impl Gateway {
     }
 
     /// Record request metrics.
+    /// Record a request: `path` is the route template, or
+    /// `UNMATCHED_ROUTE_LABEL`, and the `api` label is that of the matched
+    /// operation's spec, or the same unmatched label.
+    #[allow(clippy::too_many_arguments)]
     fn record_request_metrics(
         &self,
         method: &str,
         path: &str,
+        api: &str,
         status: u16,
         request_size: u64,
         response_size: u64,
@@ -2080,7 +2086,7 @@ impl Gateway {
             method,
             path,
             status,
-            &self.api_name,
+            api,
             duration,
             request_size,
             response_size,
@@ -2590,6 +2596,8 @@ impl Gateway {
         // Ends when the dispatcher returns: for a streamed response, when the
         // stream does.
         let mut dispatch_span = barbacane_telemetry::tracing::start_dispatch_span(plugin_name);
+        let (dispatch_metrics, dispatcher) = (Arc::clone(&self.metrics), plugin_name.to_string());
+        let dispatch_started = Instant::now();
         let mut wasm_handle = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
             let result = instance.dispatch(&request_json);
@@ -2597,6 +2605,11 @@ impl Gateway {
                 dispatch_span.set_error("dispatch failed");
             }
             drop(dispatch_span);
+            dispatch_metrics.record_dispatch(
+                &dispatcher,
+                dispatch_started.elapsed().as_secs_f64(),
+                result.is_err(),
+            );
             let output = instance.take_output();
             let output_body = instance.take_output_body();
             let last_http = instance.take_last_http_result();
