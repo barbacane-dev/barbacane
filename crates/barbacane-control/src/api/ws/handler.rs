@@ -185,12 +185,14 @@ async fn handle_socket(
     // it: a restarted instance, a new replica, one that was offline.
     match deployment_to_send(&state.pool, project_id, claimed_artifact).await {
         Ok(Some(available)) => {
+            // `deploying` before the data plane can act on the message, so
+            // its report never lands before the status it settles.
+            let _ = data_planes_repo.mark_one_deploying(data_plane_id).await;
             if let Err(e) = sender.send(to_ws_message(&available)).await {
                 tracing::error!(error = %e, "Failed to send the project's deployment");
                 let _ = data_planes_repo.mark_offline(data_plane_id).await;
                 return;
             }
-            let _ = data_planes_repo.mark_one_deploying(data_plane_id).await;
         }
         Ok(None) => {}
         Err(e) => tracing::error!(error = %e, "Failed to read the project's deployment"),
