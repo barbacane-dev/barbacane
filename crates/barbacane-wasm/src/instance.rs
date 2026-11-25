@@ -2600,13 +2600,15 @@ pub(crate) fn add_host_functions(linker: &mut Linker<PluginState>) -> Result<(),
         )
         .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
 
-    // proc_exit — traps the module (should never be reached).
+    // proc_exit — traps: the call ends where the plugin asked to exit.
     linker
         .func_wrap(
             "wasi_snapshot_preview1",
             "proc_exit",
-            |_caller: Caller<'_, PluginState>, _code: i32| {
-                // Intentional trap — WASM execution stops here
+            |_caller: Caller<'_, PluginState>, code: i32| -> wasmtime::Result<()> {
+                Err(wasmtime::Error::msg(format!(
+                    "plugin called proc_exit({code})"
+                )))
             },
         )
         .map_err(|e| WasmError::Instantiation(format!("wasi stub: {e}")))?;
@@ -2676,6 +2678,32 @@ mod tests {
             .expect("compiles");
         crate::validate::validate_import_modules(module.module()).expect("all provided");
         PluginInstance::new(&module, limits).expect("every stub links");
+    }
+
+    /// `proc_exit` ends the call with a trap; the code after it does not run.
+    #[test]
+    fn proc_exit_traps() {
+        let limits = PluginLimits::default();
+        let engine = crate::WasmEngine::with_limits(limits.clone()).expect("engine");
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+                (memory (export "memory") 1)
+                (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+                (func (export "init") (param i32 i32) (result i32) (i32.const 0))
+                (func (export "on_request") (param i32 i32) (result i32)
+                  (call $exit (i32.const 3))
+                  (i32.const 0))
+                (func (export "on_response") (param i32 i32) (result i32) (i32.const 0)))"#,
+        )
+        .expect("valid wat");
+        let module = engine
+            .compile(&wasm, "exits".into(), "0.0.0".into(), false)
+            .expect("compiles");
+        let mut instance = PluginInstance::new(&module, limits).expect("instantiates");
+        assert_eq!(instance.init(b"{}").expect("init succeeds"), 0);
+        let error = instance.on_request(b"{}").expect_err("proc_exit traps");
+        assert!(format!("{error:#}").contains("proc_exit(3)"), "{error:#}");
     }
 
     #[test]
