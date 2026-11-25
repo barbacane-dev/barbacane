@@ -33,7 +33,7 @@ The server automatically runs database migrations on startup.
 
 ### Signing artifacts
 
-Data planes serve only artifacts signed by the key they pin. Generate a key with `barbacane key generate --out signing.pk8` and set `BARBACANE_SIGNING_KEY` on the control plane to its path: every artifact the control plane compiles is then signed. Each data plane pins the matching public key (`barbacane key public --key signing.pk8`) with `BARBACANE_TRUSTED_PUBKEY`. The control plane does not hand the key out, so the channel that delivers artifacts cannot also choose the key that vouches for them.
+Data planes serve only artifacts signed by the key they pin. Generate a key with `barbacane key generate --out signing.pk8` and set `BARBACANE_SIGNING_KEY` on the control plane to its path: every artifact the control plane compiles is then signed. The control plane reads the key when it starts, and refuses to start when it cannot. `key generate` writes the file readable by its owner only; the control plane's image runs as uid 65532, so give that user the file (`sudo chown 65532 signing.pk8`) before mounting it. Each data plane pins the matching public key (`barbacane key public --key signing.pk8`) with `BARBACANE_TRUSTED_PUBKEY`. The control plane does not hand the key out, so the channel that delivers artifacts cannot also choose the key that vouches for them.
 
 ### Point the CLI at it
 
@@ -223,6 +223,8 @@ barbacane serve \
   --api-key dp_key_abc123
 ```
 
+Started without `--artifact`, the data plane fetches the project's deployment (`GET /projects/{id}/deployment` with its key), downloads it and serves it; it refuses to start when the project has none yet. Started with `--artifact`, it serves that file until the control plane sends the deployment, which it does when the data plane registers without it. Deployed artifacts are kept in the artifact directory, `--artifact-dir` (`BARBACANE_ARTIFACT_DIR`, `/var/lib/barbacane` in the image), else the directory of `--artifact`: the artifact as `current.bca` and its id as `current.id`. A data plane started again loads `current.bca` and registers as running it. The directory must be writable by the user the data plane runs as, uid 65532 in the image: a named volume mounted at `/var/lib/barbacane` is; a host directory bind-mounted there needs `chown 65532`.
+
 The link carries the data plane's API key, so it uses `wss://`: the control plane serves plain HTTP, and TLS is terminated in front of it by a load balancer or reverse proxy. A `ws://` link is accepted to a loopback address only (`ws://localhost:9090/ws/data-plane` on a development machine), or with `--allow-plaintext-control-plane` on a network you trust.
 
 ### Create API Key for Data Plane
@@ -246,7 +248,7 @@ Revoking a key (`DELETE /projects/{id}/api-keys/{key_id}`) ends the data plane s
 barbacane control data-planes list --project-id <PROJECT_ID>
 ```
 
-Each data plane reports its `status` (`online`, `deploying` or `offline`) and the `artifact_id` it runs.
+Each data plane reports its `status` (`online`, `deploying` or `offline`) and the `artifact_id` it runs. It is `deploying` from the moment it is sent the project's deployment until it reports loading it, or failing to: `deploy_error` then says why, and is cleared once it loads an artifact. `drift_detected` is set when the artifact it reports is not the project's deployment.
 
 ## Deploy
 
@@ -260,7 +262,7 @@ barbacane control deploy --project <PROJECT_ID> --artifact <ARTIFACT_ID> --wait
 
 Without `--artifact`, the project's latest artifact is deployed. `--wait` returns once every connected data plane runs it, or fails after `--timeout` seconds (120 by default).
 
-The control plane notifies all connected data planes, which download the new artifact with their API key (`GET /artifacts/{id}/download` takes the admin token or the data-plane key of the artifact's project), verify its checksum, and perform a hot-reload. The artifact is kept as `current.bca` next to the `--artifact` file, and a data plane started in connected mode loads it in place of `--artifact` when it exists, so a restart serves the last deployed artifact. A deployment that arrives while a reload runs waits for it.
+A deploy makes the artifact the project's deployment (`GET /projects/{id}/deployment` returns it, to the admin token or a data-plane key of the project). The control plane sends it to the connected data planes, which download it with their API key (`GET /artifacts/{id}/download` takes the admin token or the data-plane key of the artifact's project), verify its checksum, and perform a hot-reload. A data plane that registers later without it, a new replica or one that was offline, is sent it on registration. A deployment that arrives while a reload runs waits for it.
 
 ## Interactive API Documentation
 
@@ -438,6 +440,7 @@ services:
   data-plane:
     image: ghcr.io/barbacane-dev/barbacane:latest
     # Plaintext over compose's private network only; use wss:// elsewhere.
+    # Without --artifact, it starts from the project's deployment.
     command: >
       serve
       --control-plane ws://control-plane:9090/ws/data-plane
@@ -446,6 +449,8 @@ services:
       --api-key ${DATA_PLANE_API_KEY}
     environment:
       BARBACANE_TRUSTED_PUBKEY: ${BARBACANE_TRUSTED_PUBKEY}
+    volumes:
+      - artifacts:/var/lib/barbacane
     ports:
       - "8080:8080"
     depends_on:
@@ -453,6 +458,7 @@ services:
 
 volumes:
   pgdata:
+  artifacts:
 ```
 
 ### Production Considerations

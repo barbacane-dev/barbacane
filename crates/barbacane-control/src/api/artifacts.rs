@@ -23,6 +23,73 @@ fn key_may_download(key: &ApiKey, artifact_project: Option<Uuid>) -> bool {
         && artifact_project == Some(key.project_id)
 }
 
+/// A project's deployment: the artifact its data planes run.
+#[derive(Debug, serde::Serialize)]
+pub struct Deployment {
+    pub artifact_id: Uuid,
+    /// SHA-256 of the artifact file, as `sha256` in `ArtifactAvailable`.
+    pub sha256: String,
+    pub deployed_at: chrono::DateTime<chrono::Utc>,
+    /// Where to download it, relative to the control plane.
+    pub download_url: String,
+}
+
+/// GET /projects/:id/deployment - The artifact the project's data planes run
+///
+/// Takes the admin token, or a data-plane API key of the project, so a data
+/// plane started without an artifact fetches the deployment with its own
+/// key. Another project's deployment is not found.
+pub async fn get_deployment(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Deployment>, Response> {
+    let none = || {
+        ProblemDetails::not_found(format!("Project {project_id} has no deployment")).into_response()
+    };
+    if !matches!(state.admin_auth, AdminAuth::Disabled) {
+        let Some(token) = bearer_token(&headers) else {
+            return Err(unauthorized(
+                "an admin bearer token or a data-plane API key is required",
+            ));
+        };
+        if !state.admin_auth.accepts(token) {
+            let key = ApiKeysRepository::new(state.pool.clone())
+                .validate_and_touch(token)
+                .await
+                .map_err(|e| ProblemDetails::from(e).into_response())?;
+            let Some(key) = key else {
+                return Err(unauthorized("the API key is invalid, expired or revoked"));
+            };
+            if !key_may_download(&key, Some(project_id)) {
+                return Err(none());
+            }
+        }
+    }
+
+    let project = crate::db::ProjectsRepository::new(state.pool.clone())
+        .get_by_id(project_id)
+        .await
+        .map_err(|e| ProblemDetails::from(e).into_response())?
+        .ok_or_else(none)?;
+    let (Some(artifact_id), Some(deployed_at)) =
+        (project.deployed_artifact_id, project.deployed_at)
+    else {
+        return Err(none());
+    };
+    let artifact = ArtifactsRepository::new(state.pool.clone())
+        .get(artifact_id)
+        .await
+        .map_err(|e| ProblemDetails::from(e).into_response())?
+        .ok_or_else(none)?;
+    Ok(Json(Deployment {
+        artifact_id,
+        sha256: artifact.sha256,
+        deployed_at,
+        download_url: format!("/artifacts/{artifact_id}/download"),
+    }))
+}
+
 /// GET /artifacts - List all artifacts
 pub async fn list_artifacts(
     State(state): State<AppState>,

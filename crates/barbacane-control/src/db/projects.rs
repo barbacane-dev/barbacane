@@ -101,6 +101,18 @@ impl ProjectsRepository {
         q.fetch_optional(&self.pool).await
     }
 
+    /// Record `artifact_id` as the project's deployment.
+    pub async fn set_deployment(&self, id: Uuid, artifact_id: Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE projects SET deployed_artifact_id = $2, deployed_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(artifact_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Delete a project and all associated entities (cascade).
     pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM projects WHERE id = $1")

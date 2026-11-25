@@ -24,7 +24,7 @@ pub fn signing_public_key(key_file: &[u8]) -> Result<String, String> {
 }
 
 /// Read a signing key from the bytes of a PKCS#8 file, DER or PEM.
-pub(crate) fn load_signing_key(key_file: &[u8]) -> Result<Ed25519KeyPair, String> {
+pub fn load_signing_key(key_file: &[u8]) -> Result<Ed25519KeyPair, String> {
     let der = pkcs8_der(key_file)?;
     Ed25519KeyPair::from_pkcs8_maybe_unchecked(&der)
         .map_err(|e| format!("not a PKCS#8 Ed25519 private key: {e}"))

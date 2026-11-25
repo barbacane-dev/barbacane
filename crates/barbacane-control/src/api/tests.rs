@@ -1379,3 +1379,137 @@ async fn a_list_is_read_page_by_page() {
     assert!(page("?offset=3").await.is_empty());
     assert_eq!(page("").await, vec!["Paged A", "Paged B", "Paged C"]);
 }
+
+// ---------------------------------------------------------------------------
+// Deployments
+// ---------------------------------------------------------------------------
+
+/// A request with `Authorization: Bearer <token>`.
+fn bearer_req(method: Method, uri: &str, token: &str, body: Option<Value>) -> Request<Body> {
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"));
+    match body {
+        Some(body) => builder
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+        None => builder.body(Body::empty()).expect("request"),
+    }
+}
+
+/// A deploy makes the artifact the project's deployment. The admin token
+/// and a data-plane key of the project read it; another project's key finds
+/// none, and no credential is refused.
+#[tokio::test]
+async fn a_deploy_becomes_the_projects_deployment() {
+    const TOKEN: &str = "an-admin-token-of-at-least-32-bytes!!";
+    let Some(pool) = crate::api::test_pool().await else {
+        eprintln!("skip: database not available");
+        return;
+    };
+    let app = crate::api::create_router(
+        pool.clone(),
+        None,
+        Arc::new(crate::api::ConnectionManager::new()),
+        crate::api::AdminAuth::from_tokens(TOKEN, None),
+    );
+    let projects = crate::db::ProjectsRepository::new(pool.clone());
+    let new_project = |name: String| crate::db::NewProject {
+        name,
+        description: None,
+        production_mode: false,
+    };
+    let project = projects
+        .create(new_project(unique_project_name()))
+        .await
+        .unwrap()
+        .id;
+    let other = projects
+        .create(new_project(unique_project_name()))
+        .await
+        .unwrap()
+        .id;
+    let artifact = crate::db::ArtifactsRepository::new(pool.clone())
+        .create(
+            Some(project),
+            json!({}),
+            b"artifact".to_vec(),
+            &"a".repeat(64),
+            "test",
+        )
+        .await
+        .unwrap();
+    let key_of = |project_id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            crate::db::ApiKeysRepository::new(pool)
+                .create(
+                    project_id,
+                    crate::db::NewApiKey {
+                        name: format!("dp-{}", Uuid::new_v4().simple()),
+                        scopes: vec!["data-plane:connect".to_string()],
+                        expires_at: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .key
+        }
+    };
+    let deployment = format!("/projects/{project}/deployment");
+
+    let (status, _) = send(
+        app.clone(),
+        bearer_req(Method::GET, &deployment, TOKEN, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = send(
+        app.clone(),
+        bearer_req(
+            Method::POST,
+            &format!("/projects/{project}/deploy"),
+            TOKEN,
+            Some(json!({"artifact_id": artifact.id})),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", json_body(&body));
+
+    let (status, body) = send(
+        app.clone(),
+        bearer_req(Method::GET, &deployment, TOKEN, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", json_body(&body));
+    let read = json_body(&body);
+    assert_eq!(read["artifact_id"], artifact.id.to_string());
+    assert_eq!(read["sha256"], "a".repeat(64));
+    assert_eq!(
+        read["download_url"],
+        format!("/artifacts/{}/download", artifact.id)
+    );
+
+    let own_key = key_of(project).await;
+    let (status, _) = send(
+        app.clone(),
+        bearer_req(Method::GET, &deployment, &own_key, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let other_key = key_of(other).await;
+    let (status, _) = send(
+        app.clone(),
+        bearer_req(Method::GET, &deployment, &other_key, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(app, empty_req(Method::GET, &deployment)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let stored = projects.get_by_id(project).await.unwrap().unwrap();
+    assert_eq!(stored.deployed_artifact_id, Some(artifact.id));
+}

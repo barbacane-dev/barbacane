@@ -110,6 +110,55 @@ impl DataPlanesRepository {
         .await
     }
 
+    /// Mark the project's connected data planes as loading a deployment.
+    pub async fn mark_deploying(&self, project_id: Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE data_planes SET status = 'deploying' WHERE project_id = $1 AND status = 'online'",
+        )
+        .bind(project_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Mark one data plane as loading a deployment.
+    pub async fn mark_one_deploying(&self, id: Uuid) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE data_planes SET status = 'deploying' WHERE id = $1 AND status <> 'offline'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record the outcome of a deployment a data plane was sent: on success
+    /// it runs `artifact_id`; on failure it keeps its artifact and `error`
+    /// says why. Either way it is online again.
+    pub async fn record_deploy_result(
+        &self,
+        id: Uuid,
+        artifact_id: Option<Uuid>,
+        error: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE data_planes
+            SET status = CASE WHEN status = 'offline' THEN status ELSE 'online' END,
+                artifact_id = COALESCE($2, artifact_id),
+                deploy_error = $3,
+                last_seen = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(artifact_id)
+        .bind(error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Delete a data plane record.
     pub async fn delete(&self, id: Uuid) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM data_planes WHERE id = $1")
@@ -211,8 +260,8 @@ impl DataPlanesRepository {
         Ok(())
     }
 
-    /// Get the expected artifact hash for a data plane by looking up the
-    /// artifact it should be running (via artifact_id → artifacts.manifest).
+    /// The artifact hash a data plane should report: that of its project's
+    /// deployment, `None` while the project has none.
     pub async fn get_expected_artifact_hash(
         &self,
         data_plane_id: Uuid,
@@ -221,7 +270,8 @@ impl DataPlanesRepository {
             r#"
             SELECT a.manifest->>'artifact_hash' as artifact_hash
             FROM data_planes dp
-            JOIN artifacts a ON a.id = dp.artifact_id
+            JOIN projects p ON p.id = dp.project_id
+            JOIN artifacts a ON a.id = p.deployed_artifact_id
             WHERE dp.id = $1
             "#,
         )

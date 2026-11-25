@@ -672,9 +672,16 @@ enum Commands {
 
     /// Run the gateway server.
     Serve {
-        /// Path to the .bca artifact file.
+        /// Path to the .bca artifact file. Required without --control-plane;
+        /// in connected mode, the artifact served until the control plane
+        /// sends its deployment, and optional.
         #[arg(long)]
-        artifact: String,
+        artifact: Option<String>,
+
+        /// Directory the artifacts the control plane deploys are kept in
+        /// (connected mode). Defaults to the directory of --artifact.
+        #[arg(long, env = "BARBACANE_ARTIFACT_DIR")]
+        artifact_dir: Option<String>,
 
         /// Listen address.
         #[arg(long, default_value = "0.0.0.0:8080")]
@@ -4263,11 +4270,71 @@ async fn perform_hot_reload(
     retire(old_gateway);
 
     // The gateway runs the new artifact: it becomes the one a restart loads.
-    if let Err(e) = hot_reload::promote(artifact_dir).await {
+    if let Err(e) = hot_reload::promote(artifact_dir, artifact_id).await {
         tracing::warn!(artifact_id = %artifact_id, error = %e, "the deployed artifact could not be kept for a restart");
     }
 
     HotReloadResult::Success { artifact_id }
+}
+
+/// The project's deployment, fetched from the control plane with the data
+/// plane's key and kept in `artifact_dir` as the current artifact: how a data
+/// plane started without an artifact gets its first one. Returns its path and
+/// id.
+async fn bootstrap_deployment(
+    config: &ConnectedModeConfig,
+    artifact_dir: &Path,
+) -> Result<(std::path::PathBuf, uuid::Uuid), String> {
+    #[derive(serde::Deserialize)]
+    struct Deployment {
+        artifact_id: uuid::Uuid,
+        sha256: String,
+        download_url: String,
+    }
+
+    tokio::fs::create_dir_all(artifact_dir)
+        .await
+        .map_err(|e| format!("cannot create {}: {e}", artifact_dir.display()))?;
+    let base = ws_url_to_http_base(&config.control_plane_url);
+    let url = format!("{base}/projects/{}/deployment", config.project_id);
+    let client = hot_reload::download_client()?;
+    let response = client
+        .get(&url)
+        .bearer_auth(&config.api_key)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("cannot reach the control plane at {url}: {e}"))?;
+    match response.status() {
+        StatusCode::NOT_FOUND => {
+            return Err(format!(
+                "project {} has no deployment yet: deploy an artifact, or start with --artifact",
+                config.project_id
+            ))
+        }
+        status if !status.is_success() => return Err(format!("{url} answered {status}")),
+        _ => {}
+    }
+    let deployment: Deployment = response
+        .json()
+        .await
+        .map_err(|e| format!("{url} answered an unreadable deployment: {e}"))?;
+    let download_url = if deployment.download_url.starts_with('/') {
+        format!("{base}{}", deployment.download_url)
+    } else {
+        deployment.download_url
+    };
+    hot_reload::download_artifact(
+        &client,
+        &download_url,
+        Some(&config.api_key),
+        &deployment.sha256,
+        artifact_dir,
+        barbacane_compiler::MAX_ARTIFACT_BYTES,
+    )
+    .await?;
+    let current = hot_reload::promote(artifact_dir, deployment.artifact_id).await?;
+    Ok((current, deployment.artifact_id))
 }
 
 /// Run the compile command.
@@ -5035,7 +5102,8 @@ fn canonical_peer(addr: SocketAddr) -> SocketAddr {
 /// Run the serve command.
 #[allow(clippy::too_many_arguments)]
 async fn run_serve(
-    artifact: &str,
+    artifact: Option<&str>,
+    artifact_dir: std::path::PathBuf,
     listen: &str,
     dev: bool,
     limits: RequestLimits,
@@ -5052,12 +5120,6 @@ async fn run_serve(
     allow_unsigned: bool,
     trusted_proxies: TrustedProxies,
 ) -> ExitCode {
-    let artifact_path = Path::new(artifact);
-    if !artifact_path.exists() {
-        eprintln!("error: artifact not found: {}", artifact);
-        return ExitCode::from(1);
-    }
-
     let pinned = std::env::var("BARBACANE_TRUSTED_PUBKEY").ok();
     let trust = match artifact_trust(pinned.as_deref(), dev, allow_unsigned) {
         Ok(trust) => trust,
@@ -5067,29 +5129,52 @@ async fn run_serve(
         }
     };
 
-    // Determine artifact directory for hot-reload downloads
-    let artifact_dir = artifact_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
-
-    // In connected mode the last deployed artifact, kept next to the
-    // `--artifact` file, is what a restart serves.
-    let initial_artifact = match connected_mode
+    // The artifact to start with. In connected mode: the last one deployed,
+    // kept in the artifact directory; else --artifact; with neither, the
+    // project's deployment, fetched from the control plane.
+    let mut connected_mode = connected_mode;
+    let current = connected_mode
         .as_ref()
-        .and_then(|_| hot_reload::current_artifact(&artifact_dir))
-    {
-        Some(current) => {
-            eprintln!(
-                "barbacane: loading the last deployed artifact {} in place of {}",
-                current.display(),
-                artifact_path.display()
-            );
-            current
+        .and_then(|_| hot_reload::current_artifact(&artifact_dir));
+    let (initial_artifact, initial_artifact_id) = match (current, artifact, &connected_mode) {
+        (Some(current), _, _) => {
+            if let Some(artifact) = artifact {
+                eprintln!(
+                    "barbacane: loading the last deployed artifact {} in place of {artifact}",
+                    current.display(),
+                );
+            }
+            (current, hot_reload::current_artifact_id(&artifact_dir))
         }
-        None => artifact_path.to_path_buf(),
+        (None, Some(artifact), _) => {
+            let path = Path::new(artifact);
+            if !path.exists() {
+                eprintln!("error: artifact not found: {artifact}");
+                return ExitCode::from(1);
+            }
+            (path.to_path_buf(), None)
+        }
+        (None, None, Some(config)) => {
+            eprintln!(
+                "barbacane: no artifact yet; fetching project {}'s deployment from the control plane",
+                config.project_id
+            );
+            match bootstrap_deployment(config, &artifact_dir).await {
+                Ok((path, id)) => (path, Some(id)),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(1);
+                }
+            }
+        }
+        (None, None, None) => {
+            eprintln!("error: --artifact is required without --control-plane");
+            return ExitCode::from(1);
+        }
     };
-
+    if let Some(config) = connected_mode.as_mut() {
+        config.initial_artifact_id = initial_artifact_id;
+    }
     let gateway: SharedGateway = match Gateway::load(
         &initial_artifact,
         dev,
@@ -5210,7 +5295,7 @@ async fn run_serve(
     // Artifact hash watch channel for drift detection
     let initial_hash = gateway.load().manifest.artifact_hash.clone();
     let (artifact_hash_tx, artifact_hash_rx) = watch::channel(Some(initial_hash));
-    let (artifact_id_tx, artifact_id_rx) = watch::channel(None::<uuid::Uuid>);
+    let (artifact_id_tx, artifact_id_rx) = watch::channel(initial_artifact_id);
 
     // Shared manifest for admin API (updated on hot-reload)
     let admin_manifest: Arc<ArcSwap<barbacane_compiler::Manifest>> = {
@@ -5822,6 +5907,7 @@ async fn main() -> ExitCode {
         } => run_init(&name, &template, fetch_plugins).await,
         Commands::Serve {
             artifact,
+            artifact_dir,
             listen,
             dev,
             log_level,
@@ -5953,8 +6039,29 @@ async fn main() -> ExitCode {
                 }
             };
 
+            // Deployed artifacts are kept in --artifact-dir, else next to
+            // --artifact. Without a control plane, --artifact is the artifact.
+            let artifact_dir = match (&artifact_dir, &artifact, &connected_mode) {
+                (Some(dir), _, _) => std::path::PathBuf::from(dir),
+                (None, Some(path), _) => Path::new(path)
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .to_path_buf(),
+                (None, None, Some(_)) => {
+                    eprintln!(
+                        "error: connected mode needs --artifact-dir (BARBACANE_ARTIFACT_DIR) or --artifact"
+                    );
+                    return ExitCode::from(1);
+                }
+                (None, None, None) => {
+                    eprintln!("error: --artifact is required without --control-plane");
+                    return ExitCode::from(1);
+                }
+            };
+
             run_serve(
-                &artifact,
+                artifact.as_deref(),
+                artifact_dir,
                 &listen,
                 dev,
                 limits,

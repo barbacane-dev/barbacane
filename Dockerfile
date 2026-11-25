@@ -44,7 +44,8 @@ ENV CARGO_BUILD_JOBS=2
 
 # Build the data plane binary
 RUN cargo auditable build --locked --release --package barbacane && \
-    cp target/release/barbacane /usr/local/bin/barbacane
+    cp target/release/barbacane /usr/local/bin/barbacane && \
+    mkdir /artifacts
 
 FROM scratch
 
@@ -58,6 +59,11 @@ COPY --from=runtime --chown=65532:65532 /rootfs/home/nonroot/ /home/nonroot/
 
 # Copy the binary from builder
 COPY --from=builder /usr/local/bin/barbacane /barbacane
+
+# Where a data plane in connected mode keeps the artifacts it is deployed:
+# owned by the user it runs as, which a named volume mounted here inherits.
+COPY --from=builder --chown=65532:65532 /artifacts/ /var/lib/barbacane/
+ENV BARBACANE_ARTIFACT_DIR=/var/lib/barbacane
 
 # The compiler caches downloaded plugins under $HOME.
 ENV HOME=/home/nonroot

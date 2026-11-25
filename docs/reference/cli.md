@@ -531,6 +531,7 @@ Connected data plane management.
 | `data-planes get` | `GET /projects/{projectId}/data-planes/{dataPlaneId}` | `--project-id`, `--data-plane-id` |
 | `data-planes disconnect` | `DELETE /projects/{projectId}/data-planes/{dataPlaneId}` | `--project-id`, `--data-plane-id` |
 | `data-planes deploy` | `POST /projects/{projectId}/deploy` | `--project-id`, `--file` (optional) |
+| `data-planes deployment` | `GET /projects/{projectId}/deployment` | `--project-id` |
 
 #### health
 
@@ -623,7 +624,7 @@ The examples below assume the key is set.
 
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
-| `--artifact` | Yes | - | Path to the `.bca` artifact file |
+| `--artifact` | Without `--control-plane` | - | Path to the `.bca` artifact file. In connected mode, optional: the artifact served until the control plane sends the project's deployment; without it, the data plane fetches the deployment before it starts |
 | `--listen` | No | `0.0.0.0:8080` | Listen address (ip:port) |
 | `--dev` | No | `false` | Enable development mode |
 | `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
@@ -655,6 +656,7 @@ The examples below assume the key is set.
 | Option | Required | Default | Description |
 |--------|----------|---------|-------------|
 | `--control-plane` | No | - | Control plane WebSocket URL (e.g., `wss://control:9090/ws/data-plane`). A `ws://` link to a host other than loopback is refused unless `--allow-plaintext-control-plane` is set |
+| `--artifact-dir` | No | - | Directory the artifacts the control plane deploys are kept in (connected mode). Defaults to the directory of `--artifact`; also read from `BARBACANE_ARTIFACT_DIR` (`/var/lib/barbacane` in the image) |
 | `--project-id` | No | - | Project UUID for control plane registration. Required if `--control-plane` is set |
 | `--api-key` | No | - | The data plane API key the control plane issued for the project. Also read from `BARBACANE_CONTROL_API_KEY` |
 | `--data-plane-name` | No | - | Name of this instance in the control plane, at most 128 characters |

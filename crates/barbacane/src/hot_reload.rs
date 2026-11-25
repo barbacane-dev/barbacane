@@ -21,9 +21,13 @@ pub enum HotReloadResult {
 /// Lock to prevent concurrent hot-reloads.
 pub static HOT_RELOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// The last artifact deployed, next to the `--artifact` file. A data plane in
+/// The last artifact deployed, in the artifact directory. A data plane in
 /// connected mode loads it in place of `--artifact` when it exists.
 pub const CURRENT_ARTIFACT: &str = "current.bca";
+
+/// The control plane's id of [`CURRENT_ARTIFACT`], which a restarted data
+/// plane reports when it registers.
+pub const CURRENT_ARTIFACT_ID: &str = "current.id";
 
 /// A downloaded artifact, verified but not yet loaded. Promoted to
 /// [`CURRENT_ARTIFACT`] once the gateway runs it.
@@ -35,14 +39,30 @@ pub fn current_artifact(artifact_dir: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// Make the downloaded artifact the current one, and remove what earlier
-/// downloads left (`artifact-<uuid>.bca`, stale `.next` files).
-pub async fn promote(artifact_dir: &Path) -> Result<PathBuf, String> {
+/// The id [`CURRENT_ARTIFACT_ID`] records, when the file holds one.
+pub fn current_artifact_id(artifact_dir: &Path) -> Option<Uuid> {
+    std::fs::read_to_string(artifact_dir.join(CURRENT_ARTIFACT_ID))
+        .ok()
+        .and_then(|id| id.trim().parse().ok())
+}
+
+/// Make the downloaded artifact the current one, record `artifact_id` as its
+/// id, and remove what earlier downloads left (`artifact-<uuid>.bca`, stale
+/// `.next` files).
+pub async fn promote(artifact_dir: &Path, artifact_id: Uuid) -> Result<PathBuf, String> {
     let next = artifact_dir.join(NEXT_ARTIFACT);
     let current = artifact_dir.join(CURRENT_ARTIFACT);
     tokio::fs::rename(&next, &current)
         .await
         .map_err(|e| format!("cannot replace {}: {e}", current.display()))?;
+    let id_next = artifact_dir.join(format!("{CURRENT_ARTIFACT_ID}.next"));
+    let id_path = artifact_dir.join(CURRENT_ARTIFACT_ID);
+    tokio::fs::write(&id_next, artifact_id.to_string())
+        .await
+        .map_err(|e| format!("cannot write {}: {e}", id_next.display()))?;
+    tokio::fs::rename(&id_next, &id_path)
+        .await
+        .map_err(|e| format!("cannot replace {}: {e}", id_path.display()))?;
     if let Ok(mut entries) = tokio::fs::read_dir(artifact_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -177,15 +197,25 @@ mod file_tests {
         std::fs::write(dir.path().join("artifact-1234.bca"), b"legacy").unwrap();
         std::fs::write(dir.path().join(NEXT_ARTIFACT), b"new").unwrap();
 
-        let current = promote(dir.path()).await.unwrap();
+        let id = Uuid::new_v4();
+        let current = promote(dir.path(), id).await.unwrap();
         assert_eq!(current, dir.path().join(CURRENT_ARTIFACT));
         assert_eq!(std::fs::read(&current).unwrap(), b"new");
-        let names: Vec<String> = std::fs::read_dir(dir.path())
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(names, vec![CURRENT_ARTIFACT.to_string()], "{names:?}");
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                CURRENT_ARTIFACT.to_string(),
+                CURRENT_ARTIFACT_ID.to_string()
+            ],
+            "{names:?}"
+        );
         assert_eq!(current_artifact(dir.path()), Some(current));
+        assert_eq!(current_artifact_id(dir.path()), Some(id));
     }
 
     #[test]

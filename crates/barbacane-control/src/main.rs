@@ -164,6 +164,24 @@ fn check_health(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read and parse the key `BARBACANE_SIGNING_KEY` names, when it names one.
+fn check_signing_key() -> anyhow::Result<()> {
+    let Some(path) = std::env::var_os("BARBACANE_SIGNING_KEY").filter(|p| !p.is_empty()) else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(path);
+    let key = std::fs::read(&path).with_context(|| {
+        format!(
+            "cannot read the signing key {} (BARBACANE_SIGNING_KEY); the control plane's image \
+             runs as uid 65532, so the file must be readable by it",
+            path.display()
+        )
+    })?;
+    barbacane_compiler::signing::load_signing_key(&key)
+        .map_err(|e| anyhow::anyhow!("the signing key {} is not usable: {e}", path.display()))?;
+    Ok(())
+}
+
 async fn run_server(listen: SocketAddr, database_url: &str, migrate: bool) -> anyhow::Result<()> {
     // Admin authentication is mandatory: the control plane can mint API keys,
     // upload plugin WASM, and deploy artifacts, so it must never run without a
@@ -177,6 +195,10 @@ async fn run_server(listen: SocketAddr, database_url: &str, migrate: bool) -> an
             .as_deref(),
     )
     .map_err(|e| anyhow::anyhow!(e))?;
+
+    // The signing key is read at every compilation; read it now, so a key the
+    // process cannot open stops the start instead of the first compilation.
+    check_signing_key()?;
 
     // Create database pool
     let pool = db::create_pool(database_url).await?;
