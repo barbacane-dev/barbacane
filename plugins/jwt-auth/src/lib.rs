@@ -20,7 +20,7 @@ pub struct JwtAuth {
     issuer: Option<String>,
 
     /// Expected audience (aud claim). If set, tokens must match.
-    #[serde(default)]
+    #[serde(default = "no_audience", deserialize_with = "audience")]
     audience: Option<String>,
 
     /// Clock skew tolerance in seconds for exp/nbf validation.
@@ -398,15 +398,12 @@ impl JwtAuth {
         }
 
         // Validate audience (aud). When unset, any token minted for any relying
-        // party at this issuer is accepted (confused-deputy risk on shared
-        // IdPs), so warn once to surface the gap.
+        // party at this issuer is accepted; `init` warned about it.
         if let Some(expected_aud) = &self.audience {
             match &claims.aud {
                 Some(aud) if aud.contains(expected_aud) => {}
                 _ => return Err(JwtError::InvalidAudience),
             }
-        } else {
-            warn_once_no_audience();
         }
 
         Ok(())
@@ -456,23 +453,39 @@ unsafe fn host_verify_signature(_req_ptr: i32, _req_len: i32) -> i32 {
     -1
 }
 
-/// Warn (once) that no `audience` is configured, so tokens for any relying party
-/// at the issuer are accepted. Logged via host_log on the WASM target.
+/// The `audience` setting. Without one, tokens for any audience at the issuer are
+/// accepted (confused-deputy risk on shared IdPs), which `init` warns about.
+fn audience<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    let audience = Option::<String>::deserialize(deserializer)?;
+    if audience.is_none() {
+        warn_no_audience();
+    }
+    Ok(audience)
+}
+
+/// No `audience` setting: `init` warns.
+fn no_audience() -> Option<String> {
+    warn_no_audience();
+    None
+}
+
 #[cfg(target_arch = "wasm32")]
-fn warn_once_no_audience() {
-    use core::cell::Cell;
-    thread_local! { static WARNED: Cell<bool> = const { Cell::new(false) }; }
-    WARNED.with(|w| {
-        if !w.get() {
-            w.set(true);
-            let msg = "jwt-auth: no 'audience' configured; tokens for any audience at this issuer are accepted (confused-deputy risk). Set 'audience' for multi-RP IdPs.";
-            barbacane_plugin_sdk::log::warn(msg);
-        }
-    });
+fn warn_no_audience() {
+    barbacane_plugin_sdk::log::warn(
+        "jwt-auth: no 'audience' configured; tokens for any audience at this issuer are accepted (confused-deputy risk). Set 'audience' for multi-RP IdPs.",
+    );
+}
+
+/// Counts the warnings, for the tests.
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_no_audience() {
+    NO_AUDIENCE_WARNINGS.with(|count| count.set(count.get() + 1));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn warn_once_no_audience() {}
+thread_local! {
+    static NO_AUDIENCE_WARNINGS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 /// Get current Unix timestamp (WASM version using host function).
 #[cfg(target_arch = "wasm32")]
@@ -961,6 +974,37 @@ mod tests {
         );
         let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(!body.contains("admin"), "{body}");
+    }
+
+    fn no_audience_warnings() -> u32 {
+        NO_AUDIENCE_WARNINGS.with(|count| count.get())
+    }
+
+    /// A configuration without `audience` is warned about when `init` reads
+    /// it, not on each request it validates.
+    #[test]
+    fn a_missing_audience_is_warned_about_once_per_configuration() {
+        mock_time::set_mock_timestamp(1000);
+        let before = no_audience_warnings();
+        let config: JwtAuth = serde_json::from_str(r#"{"issuer": "test-issuer"}"#).unwrap();
+        let _: JwtAuth = serde_json::from_str(r#"{"audience": null}"#).unwrap();
+        let _: JwtAuth = serde_json::from_str(r#"{"audience": "api"}"#).unwrap();
+        assert_eq!(no_audience_warnings(), before + 2);
+
+        let claims = JwtClaims {
+            sub: Some("user123".to_string()),
+            iss: Some("test-issuer".to_string()),
+            aud: Some(Audience::Single("any".to_string())),
+            exp: Some(2000),
+            nbf: Some(500),
+            iat: Some(500),
+            jti: None,
+            extra: BTreeMap::new(),
+        };
+        for _ in 0..3 {
+            assert!(config.validate_claims(&claims).is_ok());
+        }
+        assert_eq!(no_audience_warnings(), before + 2);
     }
 
     #[test]

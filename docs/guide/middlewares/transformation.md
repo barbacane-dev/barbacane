@@ -84,7 +84,7 @@ x-barbacane-middlewares:
 | `replace.pattern` | string | - | Regex pattern to match in path |
 | `replace.replacement` | string | - | Replacement string (supports regex capture groups) |
 
-Path operations are applied in order: strip prefix, add prefix, regex replace.
+Path operations are applied in order: strip prefix, add prefix, regex replace. An invalid `replace.pattern` fails the plugin's `init`: `barbacane check` reports it, and each request to the operation fails.
 
 #### body
 

@@ -31,7 +31,7 @@ pub struct OAuth2Auth {
     /// Expected audience (`aud`). If set, the introspection response's `aud` must
     /// contain this value; otherwise tokens minted for any audience at this
     /// authorization server are accepted (confused-deputy risk on shared IdPs).
-    #[serde(default)]
+    #[serde(default = "no_audience", deserialize_with = "audience")]
     audience: Option<String>,
 
     /// Request timeout in seconds for introspection call.
@@ -43,23 +43,39 @@ fn default_timeout() -> f64 {
     5.0 // 5 seconds default for auth calls
 }
 
-/// Warn (once) that no `audience` is configured, so tokens for any audience at
-/// this authorization server are accepted (confused-deputy risk on shared IdPs).
+/// The `audience` setting. Without one, tokens for any audience at this authorization server are
+/// accepted (confused-deputy risk on shared IdPs), which `init` warns about.
+fn audience<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    let audience = Option::<String>::deserialize(deserializer)?;
+    if audience.is_none() {
+        warn_no_audience();
+    }
+    Ok(audience)
+}
+
+/// No `audience` setting: `init` warns.
+fn no_audience() -> Option<String> {
+    warn_no_audience();
+    None
+}
+
 #[cfg(target_arch = "wasm32")]
-fn warn_once_no_audience() {
-    use core::cell::Cell;
-    thread_local! { static WARNED: Cell<bool> = const { Cell::new(false) }; }
-    WARNED.with(|w| {
-        if !w.get() {
-            w.set(true);
-            let msg = "oauth2-auth: no 'audience' configured; tokens for any audience at this authorization server are accepted (confused-deputy risk). Set 'audience' for multi-RP setups.";
-            barbacane_plugin_sdk::log::warn(msg);
-        }
-    });
+fn warn_no_audience() {
+    barbacane_plugin_sdk::log::warn(
+        "oauth2-auth: no 'audience' configured; tokens for any audience at this authorization server are accepted (confused-deputy risk). Set 'audience' for multi-RP setups.",
+    );
+}
+
+/// Counts the warnings, for the tests.
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_no_audience() {
+    NO_AUDIENCE_WARNINGS.with(|count| count.set(count.get() + 1));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn warn_once_no_audience() {}
+thread_local! {
+    static NO_AUDIENCE_WARNINGS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 /// RFC 7662 Token Introspection Response.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -250,15 +266,12 @@ impl OAuth2Auth {
     }
 
     /// Validate the introspection `aud` against the configured `audience`. When no
-    /// audience is configured, tokens for any audience are accepted; warn once so
-    /// operators on shared authorization servers know to set it (RFC 8725).
+    /// audience is configured, tokens for any audience are accepted; `init`
+    /// warned about it (RFC 8725).
     fn check_audience(&self, introspection: &IntrospectionResponse) -> Result<(), OAuth2Error> {
         let expected = match &self.audience {
             Some(a) => a.as_str(),
-            None => {
-                warn_once_no_audience();
-                return Ok(());
-            }
+            None => return Ok(()),
         };
         let matches = match &introspection.aud {
             Some(serde_json::Value::String(s)) => s == expected,
@@ -466,6 +479,29 @@ mod tests {
             aud,
             ..Default::default()
         }
+    }
+
+    fn no_audience_warnings() -> u32 {
+        NO_AUDIENCE_WARNINGS.with(|count| count.get())
+    }
+
+    /// A configuration without `audience` is warned about when `init` reads
+    /// it, not on each request it checks.
+    #[test]
+    fn a_missing_audience_is_warned_about_once_per_configuration() {
+        let before = no_audience_warnings();
+        let config: OAuth2Auth = serde_json::from_str(
+            r#"{"introspection_endpoint": "https://auth.example.com/introspect",
+                "client_id": "c", "client_secret": "s"}"#,
+        )
+        .unwrap();
+        assert_eq!(no_audience_warnings(), before + 1);
+        for _ in 0..3 {
+            assert!(config
+                .check_audience(&introspection(true, Some(serde_json::json!("any"))))
+                .is_ok());
+        }
+        assert_eq!(no_audience_warnings(), before + 1);
     }
 
     #[test]
