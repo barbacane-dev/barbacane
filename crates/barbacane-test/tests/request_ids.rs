@@ -75,7 +75,8 @@ async fn a_malformed_traceparent_gives_a_new_trace_id() {
 }
 
 /// Each request ends with a `request completed` line whose `request_id` and
-/// `trace_id`, at the top level, are those the response carries.
+/// `trace_id`, at the top level, are those the response carries, beside the
+/// `timestamp`, `level`, `target` and `message` every line has.
 #[tokio::test]
 async fn each_request_is_logged_with_its_ids() {
     let gateway = TestGateway::from_spec(&fixture("minimal.yaml"))
@@ -108,6 +109,13 @@ async fn each_request_is_logged_with_its_ids() {
     assert_eq!(line["path"], "/health");
     assert_eq!(line["status"], 200);
     assert_eq!(line["target"], "barbacane::access");
+    // The fields the stability policy covers, by name.
+    assert_eq!(line["level"], "INFO");
+    let timestamp = line["timestamp"].as_str().unwrap_or_default();
+    assert!(
+        timestamp.len() >= 20 && timestamp.as_bytes()[10] == b'T' && timestamp.ends_with('Z'),
+        "an RFC 3339 UTC time: {line}"
+    );
     assert!(line["duration_ms"].is_u64(), "{line}");
     assert!(line.get("span").is_none(), "{line}");
 }
