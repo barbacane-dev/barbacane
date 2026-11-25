@@ -7,6 +7,8 @@ Barbacane ships two programs:
 
 Install them from the release binaries, the container images, crates.io, or the source.
 
+> **Until 1.0.0 is released**, `latest` (the binaries and the images) and `cargo install` without a version install 0.12.5, which this guide does not describe: it has no `key` command and no `--allow-unsigned`. Install the release candidate by its tag: `releases/download/v1.0.0-rc.3/…`, the image tag `1.0.0-rc.3`, or `cargo install --locked barbacane --version 1.0.0-rc.3`.
+
 ## Release binaries
 
 Every [GitHub release](https://github.com/barbacane-dev/barbacane/releases) carries both programs for:

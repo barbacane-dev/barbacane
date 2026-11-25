@@ -70,13 +70,20 @@ barbacane serve --artifact api.bca --listen 0.0.0.0:8080
 ### HTTP Upstream with API Key
 
 ```yaml
+x-barbacane-middlewares:
+  - name: request-transformer
+    config:
+      headers:
+        add:
+          # The whole value is the reference: UPSTREAM_AUTHORIZATION holds "Bearer <key>".
+          Authorization: "env://UPSTREAM_AUTHORIZATION"
 x-barbacane-dispatch:
   name: http-upstream
   config:
     url: https://api.provider.com/v1
-    headers:
-      Authorization: "Bearer env://UPSTREAM_API_KEY"
 ```
+
+A secret reference is a whole value: `"Bearer env://UPSTREAM_API_KEY"` is a literal string and is sent as written. `http-upstream` has no header settings; a header for the upstream is added by a middleware before it.
 
 ### S3 with Mounted Credentials
 

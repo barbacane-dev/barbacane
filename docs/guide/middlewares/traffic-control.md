@@ -114,7 +114,7 @@ x-barbacane-middlewares:
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `allowed_origins` | array | `[]` | Allowed origins (`["*"]` for any, or specific origins) |
+| `allowed_origins` | array | **required** | Allowed origins (`["*"]` for any, or specific origins) |
 | `allowed_methods` | array | `["GET", "POST"]` | Allowed HTTP methods |
 | `allowed_headers` | array | `[]` | Allowed request headers (beyond simple headers) |
 | `expose_headers` | array | `[]` | Headers exposed to browser JavaScript |

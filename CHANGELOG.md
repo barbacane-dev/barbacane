@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs**: examples that did not compile (`cors` with `allow_origin`, `http-upstream` with `headers` and `"Bearer env://..."`, the README's `oidc-auth` without a `security` requirement) are corrected and checked with `compile`. The CLI reference lists every compile code (E1023, E1050, E1054, E1055, E1058, E1070, E1080, W1080 were missing), says `compile` refuses E1020 and exits 1, and says which codes `validate` reports. The migration guide carries rc.1's breaking items for custom plugins (`#[non_exhaustive]` types, `log::Level`, the `alloc` export) and for `cors` and `oauth2-auth`. The artifact reference has the formats up to 9, an `http-upstream` route and a Rust example that compiles. `barbacane init` links to `docs.barbacane.dev`. The installation guide says how to install the release candidate while `latest` is 0.12.5, and stale test counts, benchmark tables and release dates are corrected (#438).
 - **validation**: array and object parameters are read in their `style` and `explode`: `form` (`?tag=a&tag=b`, or `?ids=1,2` with `explode: false`), `spaceDelimited`, `pipeDelimited` and `deepObject` in the query, `simple`, `label` and `matrix` in the path, and `simple` in headers. A parameter described by `content` is validated against its media type's schema, parsed as JSON under a JSON media type; an OpenAPI 3.2 `querystring` with `application/x-www-form-urlencoded` and an object schema is checked as the object its fields make. A path parameter keeps `+` as `+` (#431).
 
   > **Upgrade note (breaking):** a parameter without `name` or `in`, with an unknown `in`, a `style` its location does not take, both `schema` and `content`, or a `content` that names more or fewer than one media type fails compilation with `E1004`; it was skipped or checked as a string.
@@ -39,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   > **Upgrade note (breaking):** a request schema that reaches more than 1024 properties through `$ref` fails compilation with `E1052`.
 - **routing**: a path parameter may share its segment with literal text (`/reports/{id}.pdf`, `/files/{id}/thumbnail.{ext}`); such a segment was matched as literal text and never answered. A segment with more than one parameter, and an `in: path` parameter the template does not name, which made every request answer 400, fail compilation with `E1054`. `E1010` compares routes as the router files them: an AsyncAPI `send` and an OpenAPI `post` on one address, or `/users` and `/users/`, compiled and the router kept one of them (#431).
 
-## [1.0.0-rc.3] - 2026-11-23
+## [1.0.0-rc.3] - 2026-11-24
 
 Fixes for the vulnerabilities the pre-release review found, published as security advisories with this release, and plugin instances from Wasmtime's pooling allocator. Eight changes are breaking; each has an **Upgrade note (breaking)** below, and the [migration guide](docs/guide/migrating-to-1.0.md) gathers them. Upgrade data planes before the control plane. Artifacts move to format 9; the format 8 artifacts of rc.1 and rc.2 still load.
 
@@ -135,7 +136,7 @@ One change is breaking: the control-plane image has no shell, so a health check 
 - **wasm runtime**: Wasmtime 48.0.9, for RUSTSEC-2026-0566 to RUSTSEC-2026-0573. None of them reaches the gateway: two are in `wasmtime-wasi` and `wasmtime-wasi-http`, which it does not build (it provides its seven WASI functions itself), and one in the component model, which it does not load; two abort builds without the `threads` or `gc` feature, and it builds both; one is a panic in `Caller::get_module_export`, which it does not call; one needs a host function that hands the guest a GC reference, and none does; one needs a GC heap reservation that is not a multiple of the page size, and it configures none.
 - **dependencies**: tar 0.4.46 and rand 0.8.6. tar 0.4.45 applied a PAX header to the extension header after it rather than to the file, so a crafted archive lists different members under tar-rs than under other tar readers (GHSA-3pv8-6f4r-ffg2). Barbacane opens a `.bca` only with tar-rs, so its own readers agree; a review of the archive with another tool could miss a member. rand 0.8.5 is unsound when a custom `log` logger draws from `thread_rng` (GHSA-cq8v-f236-94qc); Barbacane builds rand 0.8 without its `log` feature. Neither advisory has a RustSec id, so `cargo deny` does not report them.
 
-## [1.0.0-rc.1] - 2026-11-16
+## [1.0.0-rc.1] - 2026-11-17
 
 The breaking changes below are gathered, with what to do and in which order, in the [migration guide](docs/guide/migrating-to-1.0.md). Each is marked **Upgrade note (breaking)** here.
 
