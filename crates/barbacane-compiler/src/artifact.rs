@@ -540,6 +540,10 @@ pub struct CompiledOperation {
     /// (RFC 9745).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deprecation: Option<i64>,
+    /// The spec the operation comes from: its file name without the
+    /// extension, the `api` label of its metrics.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api: String,
     /// AsyncAPI messages (for async operations only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
@@ -1542,6 +1546,11 @@ fn compile_inner(
                 deprecated: op.deprecated,
                 sunset: op.sunset.clone(),
                 deprecation: op.deprecation,
+                api: std::path::Path::new(spec_file)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("default")
+                    .to_string(),
                 messages: op.messages.clone(),
                 bindings: op.bindings.clone(),
                 responses: op.responses.clone(),

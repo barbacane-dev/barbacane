@@ -95,6 +95,16 @@ async fn a_trapping_plugin_is_answered_with_500_and_logged_with_its_name() {
         "names the plugin: {line}"
     );
     assert!(line.contains("unreachable"), "names the trap: {line}");
+    let traps = gateway
+        .metric(r#"barbacane_wasm_traps_total{plugin="trapper",function="dispatch"}"#)
+        .await
+        .expect("metrics");
+    assert_eq!(traps, Some(1.0), "the trap is counted");
+    let errors = gateway
+        .metric(r#"barbacane_dispatch_errors_total{dispatcher="trapper"}"#)
+        .await
+        .expect("metrics");
+    assert_eq!(errors, Some(1.0), "the failed dispatch is counted");
     assert!(
         line.contains(&request_id),
         "carries the request ID the caller got back ({request_id}): {line}"
