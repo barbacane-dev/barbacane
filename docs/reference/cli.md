@@ -777,6 +777,8 @@ A request holds one instance per middleware on its route and one for its dispatc
 
 Each instance in the pool reserves about 4 GiB of virtual address space, not memory: the default reserves about 4 TiB. Where the address space is smaller (an address-space limit such as `ulimit -v`, an ARM kernel with 39-bit addresses), the gateway logs `cannot set up the plugin instance pool` and allocates every instance for its request alone; a smaller `--plugin-instance-pool` fits. A plugin whose memory or table cannot fit a pool slot runs the same way; the gateway logs `plugin does not fit the instance pool` when it loads the artifact.
 
+A hot reload keeps the pool when the new artifact's plugins need the same slot size: the requests still running on the old artifact and the new ones share it, and instances past its size are allocated per request until the old ones end. An artifact whose largest plugin memory differs gets a new pool, which reserves its address space beside the old one's until those requests end.
+
 ### Client address
 
 Each request is attributed to a client address, which plugins receive as `client_ip` (rate limiting, IP restriction, `{{request.client_ip}}`, `$client_ip`), the WAF evaluates as `REMOTE_ADDR`, and the WAF audit record names. By default it is the TCP peer.

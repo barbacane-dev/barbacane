@@ -891,8 +891,15 @@ struct Gateway {
     allow_internal_egress: bool,
     /// Whether `ws://` upstreams are allowed (`--allow-plaintext-upstream`).
     allow_plaintext_upstream: bool,
-    /// WASM engine for plugin execution (kept alive for engine lifetime).
-    _wasm_engine: Arc<WasmEngine>,
+    /// WASM engine for plugin execution, with its instance pool.
+    wasm_engine: Arc<WasmEngine>,
+    /// What the engine was built for; the next artifact's gateway reuses the
+    /// engine when it needs the same.
+    engine_shape: EngineShape,
+    /// Rate-limit counters, handed to the next artifact's gateway.
+    rate_limiter: RateLimiter,
+    /// Cached responses, handed to the next artifact's gateway.
+    response_cache: ResponseCache,
     /// Plugin instance pool.
     plugin_pool: Arc<InstancePool>,
     /// Size of the WASM engine's instance pool, handed to the next artifact's
@@ -906,7 +913,35 @@ struct Gateway {
     api_name: String,
 }
 
+/// The default plugin limits and the instance pool a WASM engine is built
+/// for.
+type EngineShape = (PluginLimits, PoolSize);
+
+/// What a gateway hands to the next artifact's: endpoint pool state,
+/// rate-limit counters, cached responses, and the WASM engine with its
+/// instance pool, so a reload neither resets them nor reserves a second
+/// pool while the old gateway drains.
+#[derive(Clone)]
+struct Carried {
+    balancer: Arc<Balancer>,
+    rate_limiter: RateLimiter,
+    response_cache: ResponseCache,
+    wasm_engine: Arc<WasmEngine>,
+    engine_shape: EngineShape,
+}
+
 impl Gateway {
+    /// The state this gateway hands to the next artifact's.
+    fn carried(&self) -> Carried {
+        Carried {
+            balancer: Arc::clone(&self.balancer),
+            rate_limiter: self.rate_limiter.clone(),
+            response_cache: self.response_cache.clone(),
+            wasm_engine: Arc::clone(&self.wasm_engine),
+            engine_shape: self.engine_shape.clone(),
+        }
+    }
+
     /// Load a gateway from a .bca artifact.
     #[allow(clippy::too_many_arguments)]
     fn load(
@@ -916,7 +951,7 @@ impl Gateway {
         allow_plaintext_upstream: bool,
         metrics: Arc<MetricsRegistry>,
         trust: &ArtifactTrust,
-        balancer: Option<Arc<Balancer>>,
+        carried: Option<Carried>,
         plugin_instance_pool: u32,
     ) -> Result<Self, String> {
         let archive = ArtifactArchive::read(artifact_path)
@@ -974,7 +1009,10 @@ impl Gateway {
             ..Default::default()
         };
         // Endpoint pool state carries over from the previous artifact.
-        let balancer = balancer.unwrap_or_default();
+        let balancer = carried
+            .as_ref()
+            .map(|c| Arc::clone(&c.balancer))
+            .unwrap_or_default();
         let http_client = HttpClient::with_balancer(http_client_config, Arc::clone(&balancer))
             .map_err(|e| format!("failed to create HTTP client: {}", e))?;
         let http_client = Arc::new(http_client);
@@ -1005,16 +1043,26 @@ impl Gateway {
                 .max()
                 .unwrap_or(plugin_limits.max_memory_bytes),
         };
-        let wasm_engine = WasmEngine::with_pool(plugin_limits.clone(), Some(pool))
-            .map_err(|e| format!("failed to create WASM engine: {}", e))?;
-        if wasm_engine.pool_instances() > 0 {
-            tracing::info!(
-                instances = wasm_engine.pool_instances(),
-                max_memory_mib = pool.max_memory_bytes.div_ceil(1024 * 1024),
-                "plugin instance pool ready"
-            );
-        }
-        let wasm_engine = Arc::new(wasm_engine);
+        let engine_shape: EngineShape = (plugin_limits.clone(), pool);
+        let reused = carried
+            .as_ref()
+            .filter(|c| c.engine_shape == engine_shape)
+            .map(|c| Arc::clone(&c.wasm_engine));
+        let wasm_engine = match reused {
+            Some(engine) => engine,
+            None => {
+                let engine = WasmEngine::with_pool(plugin_limits.clone(), Some(pool))
+                    .map_err(|e| format!("failed to create WASM engine: {}", e))?;
+                if engine.pool_instances() > 0 {
+                    tracing::info!(
+                        instances = engine.pool_instances(),
+                        max_memory_mib = pool.max_memory_bytes.div_ceil(1024 * 1024),
+                        "plugin instance pool ready"
+                    );
+                }
+                Arc::new(engine)
+            }
+        };
 
         if bundled_plugins.is_empty() {
             tracing::warn!("no plugins bundled in artifact - ensure barbacane.yaml manifest was used during compilation");
@@ -1186,10 +1234,16 @@ impl Gateway {
         }
 
         // Create rate limiter for host_rate_limit_check calls
-        let rate_limiter = RateLimiter::new();
+        let rate_limiter = carried
+            .as_ref()
+            .map(|c| c.rate_limiter.clone())
+            .unwrap_or_default();
 
         // Create response cache for host_cache_get/set calls
-        let response_cache = ResponseCache::new();
+        let response_cache = carried
+            .as_ref()
+            .map(|c| c.response_cache.clone())
+            .unwrap_or_default();
 
         // Create NATS publisher for host_nats_publish calls. Broker egress
         // honors the same internal-egress policy as plugin HTTP calls.
@@ -1211,8 +1265,8 @@ impl Gateway {
             plugin_limits,
             Some(http_client),
             Some(secrets_store),
-            Some(rate_limiter),
-            Some(response_cache),
+            Some(rate_limiter.clone()),
+            Some(response_cache.clone()),
             Some(Arc::new(nats_publisher)),
             Some(Arc::new(kafka_publisher)),
             Some(Arc::new(ldap_client)),
@@ -1326,7 +1380,10 @@ impl Gateway {
             dev_mode,
             allow_internal_egress,
             allow_plaintext_upstream,
-            _wasm_engine: wasm_engine,
+            wasm_engine,
+            engine_shape,
+            rate_limiter,
+            response_cache,
             plugin_pool: Arc::new(plugin_pool),
             plugin_instance_pool,
             balancer,
@@ -4195,111 +4252,167 @@ Thumbs.db
 // Hot-Reload Functions
 // =============================================================================
 
-/// Perform hot-reload: download, verify, load, and swap the gateway state.
-#[allow(clippy::too_many_arguments)]
-async fn perform_hot_reload(
-    notification: control_plane::ArtifactNotification,
-    download_token: Option<String>,
-    download_trust: control_plane::ControlPlaneTrust,
-    shared_gateway: &SharedGateway,
-    artifact_dir: &Path,
+/// What the reload task needs to download a deployment, load it, and report
+/// the outcome to the control plane.
+struct Reloader {
+    gateway: SharedGateway,
+    artifact_dir: std::path::PathBuf,
     dev_mode: bool,
     limits: RequestLimits,
     allow_plaintext_upstream: bool,
     metrics: Arc<MetricsRegistry>,
     trust: ArtifactTrust,
-) -> HotReloadResult {
-    let artifact_id = notification.artifact_id;
+    /// The data plane's API key, which downloads present.
+    download_token: Option<String>,
+    download_trust: control_plane::ControlPlaneTrust,
+    responses: tokio::sync::mpsc::Sender<control_plane::ArtifactDownloadedResponse>,
+    artifact_hash_tx: watch::Sender<Option<String>>,
+    artifact_id_tx: watch::Sender<Option<uuid::Uuid>>,
+    admin_manifest: Arc<ArcSwap<barbacane_compiler::Manifest>>,
+}
 
-    // One reload at a time; a deployment that arrives during a reload waits
-    // for it and is applied next.
-    let _guard = hot_reload::HOT_RELOAD_LOCK.lock().await;
-
-    tracing::info!(
-        artifact_id = %artifact_id,
-        download_url = %notification.download_url,
-        "Starting hot-reload"
-    );
-
-    // Step 1: Download and verify artifact
-    let download = match hot_reload::download_client(&download_trust) {
-        Ok(client) => {
-            hot_reload::download_artifact(
-                &client,
-                &notification.download_url,
-                download_token.as_deref(),
-                &notification.sha256,
-                artifact_dir,
-                barbacane_compiler::MAX_ARTIFACT_BYTES,
-            )
-            .await
-        }
-        Err(e) => Err(e),
-    };
-    let artifact_path = match download {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(
-                artifact_id = %artifact_id,
-                error = %e,
-                "Hot-reload download failed"
-            );
-            return HotReloadResult::Failed {
-                artifact_id,
-                error: format!("download failed: {}", e),
-            };
-        }
-    };
-
-    // Step 2: Load and compile new Gateway. Compiling every plugin takes
-    // seconds; the runtime hands this worker's other tasks elsewhere.
-    let balancer = Arc::clone(&shared_gateway.load().balancer);
-    let new_gateway = match tokio::task::block_in_place(|| {
-        Gateway::load(
-            &artifact_path,
-            dev_mode,
-            limits,
-            allow_plaintext_upstream,
-            metrics,
-            &trust,
-            Some(balancer),
-            shared_gateway.load().plugin_instance_pool,
+impl Reloader {
+    /// Download and verify the deployment's artifact.
+    async fn download(
+        &self,
+        notification: &control_plane::ArtifactNotification,
+    ) -> Result<std::path::PathBuf, String> {
+        tracing::info!(
+            artifact_id = %notification.artifact_id,
+            download_url = %notification.download_url,
+            "Starting hot-reload"
+        );
+        let client = hot_reload::download_client(&self.download_trust)?;
+        hot_reload::download_artifact(
+            &client,
+            &notification.download_url,
+            self.download_token.as_deref(),
+            &notification.sha256,
+            &self.artifact_dir,
+            barbacane_compiler::MAX_ARTIFACT_BYTES,
         )
-    }) {
-        Ok(g) => g,
-        Err(e) => {
-            // Clean up downloaded artifact on failure
-            let _ = tokio::fs::remove_file(&artifact_path).await;
-            tracing::error!(
-                artifact_id = %artifact_id,
-                error = %e,
-                "Hot-reload load failed"
-            );
-            return HotReloadResult::Failed {
-                artifact_id,
-                error: format!("load failed: {}", e),
-            };
-        }
-    };
-
-    // Step 3: Atomic swap
-    let old_gateway = shared_gateway.swap(Arc::new(new_gateway));
-
-    tracing::info!(
-        artifact_id = %artifact_id,
-        old_routes = old_gateway.manifest.routes_count,
-        new_routes = shared_gateway.load().manifest.routes_count,
-        "Hot-reload completed successfully"
-    );
-
-    retire(old_gateway);
-
-    // The gateway runs the new artifact: it becomes the one a restart loads.
-    if let Err(e) = hot_reload::promote(artifact_dir, artifact_id).await {
-        tracing::warn!(artifact_id = %artifact_id, error = %e, "the deployed artifact could not be kept for a restart");
+        .await
     }
 
-    HotReloadResult::Success { artifact_id }
+    /// Load what [`Self::download`] fetched, swap it in, and report the
+    /// outcome.
+    async fn apply(
+        &self,
+        notification: control_plane::ArtifactNotification,
+        downloaded: Result<std::path::PathBuf, String>,
+    ) {
+        let artifact_id = notification.artifact_id;
+        let result = match downloaded {
+            Ok(path) => self.load(&path, artifact_id).await,
+            Err(e) => {
+                tracing::error!(artifact_id = %artifact_id, error = %e, "Hot-reload download failed");
+                HotReloadResult::Failed {
+                    artifact_id,
+                    error: format!("download failed: {e}"),
+                }
+            }
+        };
+        self.report(result).await;
+    }
+
+    /// Load the artifact at `path` and swap it in, with the state the running
+    /// gateway hands over.
+    async fn load(&self, path: &Path, artifact_id: uuid::Uuid) -> HotReloadResult {
+        // Compiling every plugin takes seconds; the runtime hands this
+        // worker's other tasks elsewhere.
+        let running = self.gateway.load_full();
+        let new_gateway = match tokio::task::block_in_place(|| {
+            Gateway::load(
+                path,
+                self.dev_mode,
+                self.limits.clone(),
+                self.allow_plaintext_upstream,
+                Arc::clone(&self.metrics),
+                &self.trust,
+                Some(running.carried()),
+                running.plugin_instance_pool,
+            )
+        }) {
+            Ok(g) => g,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(path).await;
+                tracing::error!(artifact_id = %artifact_id, error = %e, "Hot-reload load failed");
+                return HotReloadResult::Failed {
+                    artifact_id,
+                    error: format!("load failed: {e}"),
+                };
+            }
+        };
+        drop(running);
+
+        let old_gateway = self.gateway.swap(Arc::new(new_gateway));
+        tracing::info!(
+            artifact_id = %artifact_id,
+            old_routes = old_gateway.manifest.routes_count,
+            new_routes = self.gateway.load().manifest.routes_count,
+            "Hot-reload completed successfully"
+        );
+        retire(old_gateway);
+
+        // The gateway runs the new artifact: it becomes the one a restart loads.
+        if let Err(e) = hot_reload::promote(&self.artifact_dir, artifact_id).await {
+            tracing::warn!(artifact_id = %artifact_id, error = %e, "the deployed artifact could not be kept for a restart");
+        }
+        HotReloadResult::Success { artifact_id }
+    }
+
+    /// Tell the control plane, the heartbeat and the admin API the outcome.
+    async fn report(&self, result: HotReloadResult) {
+        let response = match result {
+            HotReloadResult::Success { artifact_id } => {
+                eprintln!("barbacane: hot-reload successful for artifact {artifact_id}");
+                let gw = self.gateway.load();
+                let _ = self
+                    .artifact_hash_tx
+                    .send(Some(gw.manifest.artifact_hash.clone()));
+                let _ = self.artifact_id_tx.send(Some(artifact_id));
+                self.admin_manifest.store(Arc::new(gw.manifest.clone()));
+                control_plane::ArtifactDownloadedResponse {
+                    artifact_id,
+                    success: true,
+                    error: None,
+                }
+            }
+            HotReloadResult::Failed { artifact_id, error } => {
+                eprintln!("barbacane: hot-reload failed for artifact {artifact_id}: {error}");
+                control_plane::ArtifactDownloadedResponse {
+                    artifact_id,
+                    success: false,
+                    error: Some(error),
+                }
+            }
+        };
+        if let Err(e) = self.responses.send(response).await {
+            tracing::warn!(error = %e, "Failed to send hot-reload response");
+        }
+    }
+}
+
+/// Run the reloads of the deployments `deployments` receives, the latest
+/// first: see [`hot_reload::apply_latest`].
+async fn run_reloads(
+    deployments: watch::Receiver<Option<control_plane::ArtifactNotification>>,
+    reloader: Reloader,
+) {
+    let reloader = Arc::new(reloader);
+    let fetching = Arc::clone(&reloader);
+    hot_reload::apply_latest(
+        deployments,
+        move |notification: &control_plane::ArtifactNotification| {
+            let (reloader, notification) = (Arc::clone(&fetching), notification.clone());
+            async move { reloader.download(&notification).await }
+        },
+        move |notification, downloaded| {
+            let reloader = Arc::clone(&reloader);
+            async move { reloader.apply(notification, downloaded).await }
+        },
+    )
+    .await;
 }
 
 /// The project's deployment, fetched from the control plane with the data
@@ -4817,7 +4930,7 @@ async fn run_dev(
                 }
 
                 // Load new gateway, off the async workers.
-                let balancer = Arc::clone(&gateway.load().balancer);
+                let carried = gateway.load().carried();
                 match tokio::task::block_in_place(|| {
                     Gateway::load(
                         &new_path,
@@ -4826,7 +4939,7 @@ async fn run_dev(
                         true,
                         metrics.clone(),
                         &trust,
-                        Some(balancer),
+                        Some(carried),
                         gateway.load().plugin_instance_pool,
                     )
                 }) {
@@ -5372,6 +5485,30 @@ async fn run_serve(
         (None, None, None)
     };
 
+    // One task applies the deployments, the latest first.
+    let deployments = response_tx.map(|responses| {
+        let (deployments, received) = watch::channel(None);
+        tokio::spawn(run_reloads(
+            received,
+            Reloader {
+                gateway: gateway.clone(),
+                artifact_dir: artifact_dir.clone(),
+                dev_mode: dev,
+                limits: limits.clone(),
+                allow_plaintext_upstream,
+                metrics: metrics.clone(),
+                trust: trust.clone(),
+                download_token: download_token.clone(),
+                download_trust: download_trust.clone(),
+                responses,
+                artifact_hash_tx: artifact_hash_tx.clone(),
+                artifact_id_tx: artifact_id_tx.clone(),
+                admin_manifest: admin_manifest.clone(),
+            },
+        ));
+        deployments
+    });
+
     // Start admin API server if enabled
     if admin_bind != "off" {
         let admin_addr: SocketAddr = match admin_bind.parse() {
@@ -5452,76 +5589,9 @@ async fn run_serve(
                     "barbacane: new artifact available: {}, initiating hot-reload",
                     notification.artifact_id
                 );
-
-                // Clone values for the spawned task
-                let gateway_clone = gateway.clone();
-                let artifact_dir_clone = artifact_dir.clone();
-                let limits_clone = limits.clone();
-                let metrics_clone = metrics.clone();
-                let response_tx_clone = response_tx.clone();
-                let artifact_hash_tx_clone = artifact_hash_tx.clone();
-                let artifact_id_tx_clone = artifact_id_tx.clone();
-                let admin_manifest_clone = admin_manifest.clone();
-                let trust_clone = trust.clone();
-                let download_token = download_token.clone();
-                let download_trust = download_trust.clone();
-
-                tokio::spawn(async move {
-                    let result = perform_hot_reload(
-                        notification,
-                        download_token,
-                        download_trust,
-                        &gateway_clone,
-                        &artifact_dir_clone,
-                        dev,
-                        limits_clone,
-                        allow_plaintext_upstream,
-                        metrics_clone,
-                        trust_clone,
-                    )
-                    .await;
-
-                    // Send response to control plane
-                    let response = match &result {
-                        HotReloadResult::Success { artifact_id } => {
-                            eprintln!(
-                                "barbacane: hot-reload successful for artifact {}",
-                                artifact_id
-                            );
-                            // Update artifact hash for drift detection
-                            let gw = gateway_clone.load();
-                            let _ =
-                                artifact_hash_tx_clone.send(Some(gw.manifest.artifact_hash.clone()));
-                            let _ = artifact_id_tx_clone.send(Some(*artifact_id));
-                            // Update admin API manifest
-                            admin_manifest_clone.store(Arc::new(gw.manifest.clone()));
-
-                            control_plane::ArtifactDownloadedResponse {
-                                artifact_id: *artifact_id,
-                                success: true,
-                                error: None,
-                            }
-                        }
-                        HotReloadResult::Failed { artifact_id, error } => {
-                            eprintln!(
-                                "barbacane: hot-reload failed for artifact {}: {}",
-                                artifact_id, error
-                            );
-                            control_plane::ArtifactDownloadedResponse {
-                                artifact_id: *artifact_id,
-                                success: false,
-                                error: Some(error.clone()),
-                            }
-                        }
-                    };
-
-                    // Send response if we have a channel
-                    if let Some(tx) = response_tx_clone {
-                        if let Err(e) = tx.send(response).await {
-                            tracing::warn!(error = %e, "Failed to send hot-reload response");
-                        }
-                    }
-                });
+                if let Some(deployments) = &deployments {
+                    deployments.send_replace(Some(notification));
+                }
             }
             // Accept new connections
             accept_result = listener.accept() => {
@@ -6328,6 +6398,60 @@ fn limits_for_plugin(
         max_fuel: declared.fuel.unwrap_or(defaults.max_fuel),
         max_execution_ms: declared.timeout_ms.unwrap_or(defaults.max_execution_ms),
         ..defaults
+    }
+}
+
+#[cfg(test)]
+mod reload_tests {
+    use super::*;
+
+    /// A gateway for the released `items` artifact, with `carried` from a
+    /// previous one and a pool of `pool` instances.
+    fn load(carried: Option<Carried>, pool: u32) -> Gateway {
+        let artifact = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/artifacts/v9/items.bca");
+        Gateway::load(
+            &artifact,
+            false,
+            RequestLimits::default(),
+            false,
+            Arc::new(MetricsRegistry::new()),
+            &ArtifactTrust::Unsigned,
+            carried,
+            pool,
+        )
+        .expect("the fixture loads")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reload_keeps_rate_limits_cached_responses_and_the_engine() {
+        let first = load(None, 2);
+        assert!(first.rate_limiter.check("scope", "client", 1, 60).allowed);
+        let entry = barbacane_wasm::CacheEntry {
+            status: 200,
+            headers: HashMap::new(),
+            body: Some(b"cached".to_vec()),
+            metadata: None,
+        };
+        first.response_cache.set("key", entry, 60);
+
+        let second = load(Some(first.carried()), 2);
+        assert!(
+            !second.rate_limiter.check("scope", "client", 1, 60).allowed,
+            "the quota spent before the reload stays spent"
+        );
+        assert_eq!(second.response_cache.stats().valid_entries, 1);
+        assert!(
+            Arc::ptr_eq(&first.wasm_engine, &second.wasm_engine),
+            "the new gateway uses the running instance pool"
+        );
+
+        let resized = load(Some(second.carried()), 3);
+        assert!(
+            !Arc::ptr_eq(&second.wasm_engine, &resized.wasm_engine),
+            "a pool of another size is a new engine"
+        );
+        assert!(Arc::ptr_eq(&second.balancer, &resized.balancer));
     }
 }
 

@@ -14,7 +14,7 @@ pub const MAX_CALL_FUEL: u64 = 10_000_000_000;
 pub const MAX_CALL_TIMEOUT_MS: u64 = 10_000;
 
 /// Resource limits for plugin execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginLimits {
     /// Maximum linear memory in bytes (default: 16 MB).
     pub max_memory_bytes: usize,

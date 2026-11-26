@@ -5,8 +5,11 @@
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 /// Result of a hot-reload attempt.
@@ -17,9 +20,6 @@ pub enum HotReloadResult {
     /// Hot-reload failed with an error.
     Failed { artifact_id: Uuid, error: String },
 }
-
-/// Lock to prevent concurrent hot-reloads.
-pub static HOT_RELOAD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The last artifact deployed, in the artifact directory. A data plane in
 /// connected mode loads it in place of `--artifact` when it exists.
@@ -74,15 +74,70 @@ pub async fn promote(artifact_dir: &Path, artifact_id: Uuid) -> Result<PathBuf, 
     Ok(current)
 }
 
+/// How long a download may take to connect to the control plane.
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a download may wait for the next bytes before it is abandoned.
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The client artifacts are downloaded with, trusting `trust`'s CAs. It does
-/// not decompress, so the bytes written are the bytes the checksum covers.
+/// not decompress, so the bytes written are the bytes the checksum covers. A
+/// download that stalls is abandoned.
 pub fn download_client(
     trust: &crate::control_plane::ControlPlaneTrust,
 ) -> Result<reqwest::Client, String> {
+    client_with_read_timeout(trust, DOWNLOAD_READ_TIMEOUT)
+}
+
+fn client_with_read_timeout(
+    trust: &crate::control_plane::ControlPlaneTrust,
+    read_timeout: Duration,
+) -> Result<reqwest::Client, String> {
     trust
-        .apply(reqwest::Client::builder().no_gzip())?
+        .apply(
+            reqwest::Client::builder()
+                .no_gzip()
+                .connect_timeout(DOWNLOAD_CONNECT_TIMEOUT)
+                .read_timeout(read_timeout),
+        )?
         .build()
         .map_err(|e| format!("failed to build the download client: {e}"))
+}
+
+/// Apply the latest deployment `deployments` holds, one at a time: `fetch` it,
+/// then `apply` what it fetched. A newer deployment that arrives while `fetch`
+/// runs cancels it and is fetched instead; one that arrives while `apply` runs
+/// is fetched next. Returns once the sender is dropped.
+pub async fn apply_latest<N, P, F, FF, A, AF>(
+    mut deployments: watch::Receiver<Option<N>>,
+    fetch: F,
+    mut apply: A,
+) where
+    N: Clone,
+    F: Fn(&N) -> FF,
+    FF: Future<Output = P>,
+    A: FnMut(N, P) -> AF,
+    AF: Future<Output = ()>,
+{
+    loop {
+        let next = deployments.borrow_and_update().clone();
+        if let Some(deployment) = next {
+            let fetched = tokio::select! {
+                changed = deployments.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    tracing::info!("a newer deployment replaces the one being downloaded");
+                    continue;
+                }
+                fetched = fetch(&deployment) => fetched,
+            };
+            apply(deployment, fetched).await;
+        }
+        if deployments.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 /// Download an artifact from the control plane and verify its checksum.
@@ -294,6 +349,112 @@ mod tests {
 
     fn is_empty(dir: &Path) -> bool {
         std::fs::read_dir(dir).unwrap().next().is_none()
+    }
+
+    #[tokio::test]
+    async fn a_stalled_download_is_abandoned_and_removed() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\npartial")
+                    .await;
+                // The rest never comes, and the connection stays open.
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+        let temp_dir = tempfile::tempdir().unwrap();
+        let client =
+            client_with_read_timeout(&Default::default(), Duration::from_millis(200)).unwrap();
+        let url = format!("http://{addr}/artifact.bca");
+
+        let download = download_artifact(&client, &url, None, "0", temp_dir.path(), MAX);
+        let outcome = tokio::time::timeout(Duration::from_secs(5), download).await;
+        let error = outcome.expect("the download gives up").unwrap_err();
+        assert!(error.contains("download stream error"), "{error}");
+        assert!(is_empty(temp_dir.path()), "the partial file is removed");
+        server.abort();
+    }
+
+    /// Run [`apply_latest`] over string deployments: `fetch` returns at once
+    /// except for one named `stall`, which never returns, and `apply` records
+    /// each deployment once `gate` lets it finish. The deployments sender, the
+    /// gate, and what was applied.
+    #[allow(clippy::type_complexity)]
+    fn driver() -> (
+        watch::Sender<Option<&'static str>>,
+        std::sync::Arc<tokio::sync::Semaphore>,
+        std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (tx, rx) = watch::channel(None);
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+        let applied = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (task_gate, task_applied) = (gate.clone(), applied.clone());
+        let task = tokio::spawn(apply_latest(
+            rx,
+            |deployment: &&'static str| {
+                let stall = *deployment == "stall";
+                async move {
+                    if stall {
+                        std::future::pending::<()>().await;
+                    }
+                }
+            },
+            move |deployment, ()| {
+                let (gate, applied) = (task_gate.clone(), task_applied.clone());
+                async move {
+                    gate.acquire().await.expect("gate").forget();
+                    applied.lock().expect("lock").push(deployment);
+                }
+            },
+        ));
+        (tx, gate, applied, task)
+    }
+
+    /// Wait until `applied` holds `count` deployments.
+    async fn applied_count(applied: &std::sync::Mutex<Vec<&'static str>>, count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while applied.lock().expect("lock").len() < count {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("applied in time");
+    }
+
+    #[tokio::test]
+    async fn a_newer_deployment_replaces_a_download_that_stalls() {
+        let (tx, gate, applied, task) = driver();
+        gate.add_permits(10);
+        tx.send_replace(Some("stall"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tx.send_replace(Some("v2"));
+        applied_count(&applied, 1).await;
+        assert_eq!(*applied.lock().expect("lock"), vec!["v2"]);
+
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the driver returns once the sender is gone")
+            .expect("no panic");
+    }
+
+    #[tokio::test]
+    async fn the_latest_deployment_sent_during_a_load_comes_next() {
+        let (tx, gate, applied, _task) = driver();
+        tx.send_replace(Some("v1"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // v1 is being applied; v2 and v3 arrive meanwhile.
+        tx.send_replace(Some("v2"));
+        tx.send_replace(Some("v3"));
+        gate.add_permits(10);
+        applied_count(&applied, 2).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(*applied.lock().expect("lock"), vec!["v1", "v3"]);
     }
 
     #[tokio::test]
@@ -543,24 +704,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_hot_reload_lock_prevents_concurrent_reloads() {
-        // Acquire the lock
-        let guard = HOT_RELOAD_LOCK.try_lock();
-        assert!(guard.is_ok(), "first lock should succeed");
-
-        // Try to acquire again
-        let second_guard = HOT_RELOAD_LOCK.try_lock();
-        assert!(second_guard.is_err(), "second lock should fail");
-
-        // Drop first lock
-        drop(guard);
-
-        // Now should succeed
-        let third_guard = HOT_RELOAD_LOCK.try_lock();
-        assert!(third_guard.is_ok(), "third lock should succeed after drop");
-    }
-
     #[test]
     fn test_compute_sha256() {
         let data = b"hello world";
@@ -581,26 +724,5 @@ mod tests {
             hash,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
-    }
-
-    #[test]
-    fn test_hot_reload_result_equality() {
-        let id = Uuid::new_v4();
-
-        let success1 = HotReloadResult::Success { artifact_id: id };
-        let success2 = HotReloadResult::Success { artifact_id: id };
-        assert_eq!(success1, success2);
-
-        let failed1 = HotReloadResult::Failed {
-            artifact_id: id,
-            error: "test error".to_string(),
-        };
-        let failed2 = HotReloadResult::Failed {
-            artifact_id: id,
-            error: "test error".to_string(),
-        };
-        assert_eq!(failed1, failed2);
-
-        assert_ne!(success1, failed1);
     }
 }
