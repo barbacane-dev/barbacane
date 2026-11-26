@@ -637,8 +637,9 @@ The examples below assume the key is set.
 | `--dev` | No | `false` | Enable development mode |
 | `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
 | `--log-format` | No | `json` | Log format (`json` or `pretty`) |
-| `--otlp-endpoint` | No | - | OpenTelemetry endpoint for trace export (e.g., `http://localhost:4317`) |
-| `--trace-sampling` | No | `1.0` | Trace sampling rate (0.0 to 1.0). 1.0 = 100%, 0.1 = 10%, 0.0 = disabled |
+| `--otlp-endpoint` | No | - | OTLP collector to export spans to (e.g., `http://localhost:4317` for gRPC, `http://localhost:4318` for HTTP). Also read from `OTEL_EXPORTER_OTLP_ENDPOINT`. Without one, spans are not exported and requests still carry trace context. See [Distributed tracing](../guide/observability.md#distributed-tracing) |
+| `--otlp-protocol` | No | `grpc` | OTLP transport: `grpc` or `http/protobuf` (`http`). Also read from `OTEL_EXPORTER_OTLP_PROTOCOL` |
+| `--trace-sampling` | No | `1.0` | Share of the traces a request starts that are recorded, from 0.0 to 1.0; a request whose `traceparent` says sampled or not keeps that |
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes (1MB) |
 | `--max-headers` | No | `100` | Maximum number of request headers. See [Request Limits](#request-limits) |
 | `--max-header-size` | No | `8192` | Maximum size of a single header (name and value) in bytes (8KB) |
@@ -953,6 +954,7 @@ $ echo $?
 |----------|-------------|
 | `RUST_LOG` | Override log level (e.g., `RUST_LOG=debug`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Alternative to `--otlp-endpoint` flag |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Alternative to `--otlp-protocol` flag |
 
 ---
 

@@ -456,7 +456,7 @@ if let Some(token) = jwt::bearer_token(auth_header) {
 
 With the `telemetry` capability, `host_metric_counter_inc(name, labels, value)` and `host_metric_histogram_observe(name, labels, value)` record a metric, `labels` being a JSON object such as `{"status": 200}`. The gateway exports it as `barbacane_plugin_<plugin>_<name>` with those labels; observe histograms in seconds. Keep labels bounded: a value per request, such as a duration or an ID, makes a series per request, and each plugin may create 1,000. The [observability guide](../guide/observability.md#plugin-metrics) gives the naming rules and what is refused.
 
-The same capability grants `host_span_start(name)`, `host_span_end()` and `host_span_set_attribute(key, value)`. The gateway records them as debug log events and answers `host_span_start` with the id `1`; they do not create spans in the request's trace.
+The same capability grants `host_span_start(name)`, `host_span_end()` and `host_span_set_attribute(key, value)`. `host_span_start` opens a span named `barbacane.plugin.<plugin>.<name>`, a child of the request's span, and returns how many of the plugin's spans are open; `host_span_end` ends the innermost one, and `host_span_set_attribute` sets an attribute on it. A plugin keeps at most 32 spans open (`host_span_start` answers `-1` beyond), and the spans still open end with the instance.
 
 ### Clock, secrets (host imports)
 

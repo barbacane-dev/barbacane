@@ -124,7 +124,7 @@ barbacane_active_connections
 
 ## Distributed Tracing
 
-Barbacane supports W3C Trace Context for distributed tracing and can export spans via OpenTelemetry Protocol (OTLP).
+Every request is an OpenTelemetry span, exported over OTLP when the gateway has a collector to send it to, and its trace context reaches the plugins and the upstream.
 
 ### Enable OTLP Export
 
@@ -133,42 +133,48 @@ barbacane serve --artifact api.bca \
   --otlp-endpoint http://otel-collector:4317
 ```
 
-Or use the environment variable:
+Or use the environment variables:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 barbacane serve --artifact api.bca
 ```
 
+Spans go over OTLP/gRPC by default. `--otlp-protocol http/protobuf` (or `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`) sends them over OTLP/HTTP, to the endpoint with `/v1/traces` after it, typically on port 4318. They leave in batches; the OpenTelemetry `OTEL_BSP_*` variables (`OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_MAX_QUEUE_SIZE`, ...) tune the batching. Spans still buffered are exported when the gateway shuts down. Without an endpoint no span is exported, and requests still carry trace context.
+
+### Sampling
+
+`--trace-sampling` is the share of the traces the gateway starts that are recorded, from `0.0` to `1.0` (default). A request whose `traceparent` says its trace is sampled, or not, keeps that decision, so a trace is recorded whole or not at all.
+
 ### Trace Context Propagation
 
-Barbacane automatically:
-- Extracts `traceparent` and `tracestate` headers from incoming requests
-- Generates a new trace ID if none provided
-- Injects trace context into upstream requests
-
-This enables end-to-end tracing across your entire service mesh.
+- A request's `traceparent` and `tracestate` (W3C Trace Context) name the parent of its span; without a valid `traceparent` the request starts a trace. The response's `x-trace-id` is the trace id.
+- Plugins and upstreams receive a `traceparent` and `tracestate` that name the request's span as their parent, in place of the client's.
+- They receive `x-request-id` holding the request id the gateway logs and answers with: the client's when it is well-formed, a generated one otherwise.
 
 ### Span Structure
 
-Each request creates a span tree:
-
 ```
-barbacane.request (root span)
-├── barbacane.routing
-├── barbacane.validation
+GET /orders/{id}                        server span: the method and the route
 ├── barbacane.middleware.jwt-auth.request
 ├── barbacane.middleware.rate-limit.request
 ├── barbacane.dispatch.http-upstream
+├── barbacane.plugin.<plugin>.<name>    spans a plugin opens (telemetry capability)
 ├── barbacane.middleware.rate-limit.response
 └── barbacane.middleware.jwt-auth.response
 ```
 
+A request that matches no route keeps the method alone as its name. The dispatch span of a streamed response ends when the stream does.
+
 ### Span Attributes
 
-Spans include attributes like:
-- `http.method`, `http.route`, `http.status_code`
-- `barbacane.api`, `barbacane.operation_id`
-- `barbacane.middleware`, `barbacane.dispatcher`
+| Span | Attributes |
+|------|------------|
+| server | `http.request.method`, `url.path`, `http.route`, `http.response.status_code`, `network.protocol.version`, `client.address`, `barbacane.request_id`, `barbacane.operation_id`; an error status for a `5xx` answer |
+| middleware | `barbacane.middleware`, `barbacane.middleware.short_circuit` when it answered the request; an error status when it failed |
+| dispatch | `barbacane.dispatcher`; an error status when the dispatcher failed |
+| plugin | what the plugin sets with `host_span_set_attribute` |
+
+The resource carries `service.name` (`barbacane`) and `service.version`.
 
 ### Integration with Collectors
 
