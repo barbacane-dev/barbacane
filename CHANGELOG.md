@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   > **Upgrade note (breaking):** a spec whose server URLs carry a path moves its routes under that path, and `http-upstream` without `path` forwards the base path to the upstream. Where a proxy in front of the gateway strips the base path, make the server URL the path the gateway receives.
 - **ci**: a change to any file under `crates/` runs the code jobs (migrations, the control plane's `openapi.yaml` and test fixtures were skipped), a change to the workspace, its lockfile or a plugin builds and scans the images, and the WASM plugin cache and the plugin jobs follow `barbacane-plugin-macros` and `barbacane-sigv4` too.
+- **lifecycle**: the `Deprecation` header follows RFC 9745: it holds the date of the deprecation, `@` and the Unix time (`Deprecation: @1782777600`), from the operation's new `x-deprecation` extension, which takes the formats `x-sunset` takes. `deprecated: true` carries no date and sends no `Deprecation` header; it sent `Deprecation: true`, the value of an early draft. An `x-sunset` earlier than the operation's `x-deprecation` fails compilation with `E1018` (#463).
+
+  > **Upgrade note (breaking):** a deprecated operation without `x-deprecation` no longer sends `Deprecation`. Add `x-deprecation` with the date it was deprecated; clients that read `true` read a date.
 
 ### Fixed
 

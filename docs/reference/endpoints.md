@@ -115,7 +115,7 @@ curl "http://localhost:8080/__barbacane/specs/openapi?format=yaml"
 
 ### Extension Stripping
 
-All specs served via these endpoints have internal `x-barbacane-*` extensions stripped automatically. Only standard OpenAPI/AsyncAPI fields and the `x-sunset` extension (RFC 8594) are preserved.
+All specs served via these endpoints have internal `x-barbacane-*` extensions stripped automatically. Standard OpenAPI/AsyncAPI fields and other extensions, such as `x-deprecation` and `x-sunset`, are preserved.
 
 ### Usage
 
