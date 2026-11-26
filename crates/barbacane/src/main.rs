@@ -5484,6 +5484,15 @@ async fn run_serve(
         None => None,
     };
 
+    // Before the listener is announced: a SIGHUP sent once it is reloads.
+    if let (Some(settings), Some(shared)) = (tls_config, &tls_server_config) {
+        tokio::spawn(tls::reload(
+            settings,
+            Arc::clone(shared),
+            Duration::from_secs(tls_reload_interval),
+        ));
+    }
+
     let protocol = if tls_server_config.is_some() {
         "https"
     } else {
@@ -5526,13 +5535,6 @@ async fn run_serve(
         );
     }
     let trusted_proxies = Arc::new(trusted_proxies);
-    if let (Some(settings), Some(shared)) = (tls_config, &tls_server_config) {
-        tokio::spawn(tls::reload(
-            settings,
-            Arc::clone(shared),
-            Duration::from_secs(tls_reload_interval),
-        ));
-    }
 
     // Create shutdown signal channel
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
