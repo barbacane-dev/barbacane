@@ -2683,15 +2683,21 @@ impl Gateway {
                 // Strip the response body to avoid WASM OOM with large streamed payloads.
                 let wh = wasm_handle;
                 let metrics = Arc::clone(&self.metrics);
+                let span = tracing::Span::current();
                 background().spawn(async move {
                     match wh.await {
                         Ok((Ok(_), _, _, Some(last_http), _, post_ctx))
                             if !middleware_instances.is_empty() =>
                         {
-                            if let Ok(plugin_resp) =
-                                serde_json::from_slice::<barbacane_wasm::Response>(&last_http)
-                            {
-                                // Strip body: observability-only, modifications discarded.
+                            // WASM and its host calls block: run them on a blocking
+                            // thread, as every other plugin call does.
+                            let on_response = tokio::task::spawn_blocking(move || {
+                                let _entered = span.enter();
+                                let Ok(plugin_resp) =
+                                    serde_json::from_slice::<barbacane_wasm::Response>(&last_http)
+                                else {
+                                    return;
+                                };
                                 // Body is already None (side-channel), just pass metadata.
                                 let mut instances = middleware_instances;
                                 let resp_json =
@@ -2710,6 +2716,12 @@ impl Gateway {
                                         "middleware failed after a streamed response was sent"
                                     );
                                 }
+                            });
+                            if let Err(e) = on_response.await {
+                                tracing::warn!(
+                                    error = %e,
+                                    "streamed on_response task panicked (response already sent)"
+                                );
                             }
                         }
                         Ok((Err(e), _, _, _, _, _)) => {
