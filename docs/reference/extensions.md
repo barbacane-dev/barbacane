@@ -199,13 +199,20 @@ Config values can reference secrets instead of hardcoding sensitive data. Secret
 
 **Example with secret reference:**
 ```yaml
+x-barbacane-middlewares:
+  - name: request-transformer
+    config:
+      headers:
+        add:
+          # The whole value is the reference: UPSTREAM_AUTHORIZATION holds "Bearer <key>".
+          Authorization: "env://UPSTREAM_AUTHORIZATION"
 x-barbacane-dispatch:
   name: http-upstream
   config:
     url: "https://api.example.com"
-    headers:
-      Authorization: "Bearer env://UPSTREAM_API_KEY"
 ```
+
+A secret reference resolves only as a whole value.
 
 If a secret cannot be resolved, the gateway fails to start with exit code 13.
 

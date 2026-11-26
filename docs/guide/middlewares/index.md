@@ -83,7 +83,7 @@ x-barbacane-middlewares:
   - name: rate-limit
     config: { quota: 100, window: 60 }
   - name: cors
-    config: { allow_origin: "*" }
+    config: { allowed_origins: ["*"] }
 
 paths:
   /public/feed:

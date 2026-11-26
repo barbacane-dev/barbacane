@@ -114,7 +114,7 @@ x-barbacane-middlewares:
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `allowed_origins` | array | `[]` | Allowed origins (`["*"]` for any, or specific origins) |
+| `allowed_origins` | array | **required** | Allowed origins (`["*"]` for any, or specific origins) |
 | `allowed_methods` | array | `["GET", "POST"]` | Allowed HTTP methods |
 | `allowed_headers` | array | `[]` | Request headers a preflight may name beyond the CORS-safelisted `Accept`, `Accept-Language`, `Content-Language` and `Content-Type`, which are always admitted (`["*"]` for any). The preflight's `Access-Control-Allow-Headers` repeats the headers it named |
 | `expose_headers` | array | `[]` | Headers exposed to browser JavaScript |

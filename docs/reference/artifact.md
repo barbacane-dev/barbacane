@@ -131,9 +131,9 @@ Compiled operations with routing information.
       "method": "GET",
       "operation_id": "listUsers",
       "dispatch": {
-        "name": "http",
+        "name": "http-upstream",
         "config": {
-          "upstream": "backend",
+          "url": "https://backend.internal",
           "path": "/api/users"
         }
       }
@@ -144,9 +144,9 @@ Compiled operations with routing information.
       "method": "GET",
       "operation_id": "getUser",
       "dispatch": {
-        "name": "http",
+        "name": "http-upstream",
         "config": {
-          "upstream": "backend",
+          "url": "https://backend.internal",
           "path": "/api/users/{id}"
         }
       }
@@ -177,11 +177,13 @@ Files retain their original names.
 
 ## Version History
 
-| Version | Changes |
-|---------|---------|
-| 9 | `artifact_hash` also binds `barbacane_artifact_version`, `compiler_version`, `routes_count` and `provenance` |
-| 2 | Added `artifact_hash` (combined SHA-256 fingerprint) and `provenance` (build metadata) fields |
-| 1 | Initial format |
+| Version | Written by | Changes |
+|---------|------------|---------|
+| 9 | 1.0.0-rc.3 and later | `artifact_hash` also binds `barbacane_artifact_version`, `compiler_version`, `routes_count` and `provenance` |
+| 8 | 1.0.0-rc.1, rc.2 | The MCP configuration is out of `artifact_hash` |
+| 1 to 7 | 0.x | Earlier formats; a 1.0 data plane refuses them |
+
+A 1.0 data plane loads formats 8 and 9. An artifact's plugins must also be built for the gateway's plugin ABI, which the release candidates' plugins are not: recompile an artifact a release candidate wrote.
 
 ## Inspecting Artifacts
 
@@ -245,33 +247,27 @@ sha256sum extracted/routes.json
 ### Rust
 
 ```rust
-use barbacane_compiler::{load_manifest, load_routes, load_specs, load_plugins};
+use barbacane_compiler::ArtifactArchive;
 use std::path::Path;
 
 let path = Path::new("artifact.bca");
 
-// Load manifest
-let manifest = load_manifest(path)?;
-println!("Routes: {}", manifest.routes_count);
+// Read every member, then check each against the manifest's hashes.
+let artifact = ArtifactArchive::read(path)?.verify()?;
+println!("Routes: {}", artifact.manifest.routes_count);
 
-// Load routes
-let routes = load_routes(path)?;
-for op in &routes.operations {
+for op in &artifact.routes.operations {
     println!("{} {}", op.method, op.path);
 }
-
-// Load specs
-let specs = load_specs(path)?;
-for (name, content) in &specs {
+for (name, content) in &artifact.specs {
     println!("Spec: {} ({} bytes)", name, content.len());
 }
-
-// Load plugins
-let plugins = load_plugins(path)?;
-for (name, wasm_bytes) in &plugins {
-    println!("Plugin: {} ({} bytes)", name, wasm_bytes.len());
+for (name, plugin) in &artifact.plugins {
+    println!("Plugin: {name} {} ({} bytes)", plugin.version, plugin.wasm_bytes.len());
 }
 ```
+
+`load_manifest(path)` and `load_routes(path)` read the manifest or the routes alone, without verifying the rest. `verify` checks content hashes, not the signature: `barbacane_compiler::verify_artifact_signature` checks that against a public key.
 
 ## Best Practices
 

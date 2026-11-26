@@ -9,10 +9,6 @@
 <p align="center">
   <a href="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml"><img src="https://github.com/barbacane-dev/barbacane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://docs.barbacane.dev"><img src="https://img.shields.io/badge/docs-docs.barbacane.dev-blue" alt="Documentation"></a>
-  <img src="https://img.shields.io/badge/unit%20tests-517%20passing-brightgreen" alt="Unit Tests">
-  <img src="https://img.shields.io/badge/plugin%20tests-759%20passing-brightgreen" alt="Plugin Tests">
-  <img src="https://img.shields.io/badge/integration%20tests-294%20passing-brightgreen" alt="Integration Tests">
-  <img src="https://img.shields.io/badge/cli%20tests-23%20passing-brightgreen" alt="CLI Tests">
   <img src="https://img.shields.io/badge/rust-1.95%2B-orange" alt="Rust Version">
   <a href="LICENSING.md"><img src="https://img.shields.io/badge/license-AGPLv3-blue" alt="License"></a>
 </p>
@@ -27,7 +23,7 @@ Barbacane is a spec-driven API gateway built in Rust. Point it at an OpenAPI or 
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises. Route lookup in ~83 ns, full request validation in ~1.2 µs.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls (FIPS-ready via aws-lc-rs), sandboxed WASM plugins, secrets resolved at runtime via `env://`, `file://`, and similar references — never baked into artifacts.
 - **Edge-ready** — Stateless data plane instances designed to run close to your users, with a separate control plane handling compilation, artifact distribution, and hot-reload.
-- **Extensible** — 29 official plugins; write your own in any language that compiles to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
+- **Extensible** — 29 official plugins; write your own in Rust with the plugin SDK, compiled to WebAssembly. Plugins run in a sandbox, so a buggy plugin can't take down the gateway.
 - **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export. Per-middleware timing comes for free.
 
 ## Quick Start
@@ -80,6 +76,8 @@ paths:
           in: path
           required: true
           schema: { type: string }
+      security:
+        - oidc: []
       x-barbacane-middlewares:
         - name: oidc-auth
           config:
@@ -94,6 +92,12 @@ paths:
         config:
           url: "https://orders.internal.example"
           timeout: 5.0
+
+components:
+  securitySchemes:
+    oidc:
+      type: openIdConnect
+      openIdConnectUrl: "https://auth.example/.well-known/openid-configuration"
 ```
 
 The compiler validates the spec against each plugin's JSON schema (`vacuum:barbacane`) and seals everything into a single `.bca` artifact — including pinned plugin WASM. The data plane runs the artifact; nothing is fetched at request time.
@@ -162,46 +166,7 @@ The playground includes a Train Travel API demo with WireMock backend, full obse
 
 ## Performance
 
-Benchmark results on Apple M4 (MacBook Air 16GB):
-
-**Routing & Validation**
-
-| Operation | Latency |
-|-----------|---------|
-| Route lookup (1000 routes) | ~83 ns |
-| Request validation (full) | ~1.2 µs |
-| Body validation (JSON) | ~458 ns |
-| Router build (500 routes) | ~130 µs |
-
-**WASM Plugin Runtime**
-
-| Operation | Latency |
-|-----------|---------|
-| Module compilation | ~210 µs |
-| Instance creation | ~17 µs |
-| Middleware chain (1 plugin) | ~261 µs |
-| Middleware chain (3 plugins) | ~941 µs |
-| Middleware chain (5 plugins) | ~1.32 ms |
-| Memory write (1 KB) | ~14 ns |
-| Memory write (100 KB) | ~1.4 µs |
-
-**Serialization**
-
-| Operation | Latency |
-|-----------|---------|
-| Request (minimal) | ~118 ns |
-| Request (full, 1 KB body) | ~921 ns |
-| Response (1 KB body) | ~417 ns |
-
-**Spec Compilation**
-
-| Operation | Latency |
-|-----------|---------|
-| Compile 10 operations | ~550 µs |
-| Compile 50 operations | ~2.17 ms |
-| Compile 100 operations | ~3.72 ms |
-
-Run your own benchmarks:
+Under load (wrk, 64 connections, routes behind two middlewares, Linux 7.0), plugin instances from Wasmtime's pooling allocator serve 2.0x the requests of per-request instances on a mock route and 1.5x on a proxied one; the [CHANGELOG](CHANGELOG.md) gives the figures with each change that moves them. The Criterion micro-benchmarks (routing, validation, the plugin runtime, compilation) run with:
 
 ```bash
 cargo bench --workspace
