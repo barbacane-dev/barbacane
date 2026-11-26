@@ -930,7 +930,7 @@ x-barbacane-dispatch:
 
 1. The request arrives (already processed by the middleware chain)
 2. The dispatcher forwards method, headers, and body to the configured `url`
-3. The upstream response is discarded — errors are logged as warnings
+3. The upstream response is discarded; a connection failure, a timeout or a status of 400 or above is logged as a warning
 4. The configured static response is returned to the client
 
 Because the upstream call happens synchronously in the WASM runtime, the client does wait for the HTTP call to complete (or time out). For truly decoupled async processing, consider using the `kafka` or `nats` dispatchers with a consumer behind them.

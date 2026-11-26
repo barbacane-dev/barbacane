@@ -31,6 +31,34 @@ pub fn unix_time() -> u64 {
     unsafe { host_get_unix_timestamp() }
 }
 
+/// Milliseconds since the Unix epoch, from the host's wall clock. It reads the
+/// WASI `clock_time_get`, which every plugin may import: no capability needed.
+#[cfg(target_arch = "wasm32")]
+pub fn unix_time_ms() -> u64 {
+    #[link(wasm_import_module = "wasi_snapshot_preview1")]
+    extern "C" {
+        fn clock_time_get(clock_id: i32, precision: i64, time: i32) -> i32;
+    }
+    let mut nanos: u64 = 0;
+    // SAFETY: `nanos` is a live, writable 8-byte value for the call; the host
+    // writes the time there and nothing else. Clock 0 is the realtime clock.
+    let errno = unsafe { clock_time_get(0, 1_000_000, &mut nanos as *mut u64 as i32) };
+    if errno == 0 {
+        nanos / 1_000_000
+    } else {
+        0
+    }
+}
+
+/// Milliseconds since the Unix epoch, on non-wasm targets.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn unix_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Milliseconds since the first call, on non-wasm targets.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn now_ms() -> u64 {

@@ -462,7 +462,9 @@ The same capability grants `host_span_start(name)`, `host_span_end()` and `host_
 
 With the `clock_now` capability, `barbacane_plugin_sdk::clock::now_ms()` reads a
 monotonic clock in milliseconds (only differences are meaningful) and
-`clock::unix_time()` the seconds since the Unix epoch. Secrets have no SDK
+`clock::unix_time()` the seconds since the Unix epoch. `clock::unix_time_ms()`
+reads the milliseconds since the Unix epoch through the WASI `clock_time_get`,
+with no capability. Secrets have no SDK
 wrapper: declare `get_secret` and import `host_get_secret` directly (see
 `oidc-auth` for the `extern "C"` binding pattern).
 

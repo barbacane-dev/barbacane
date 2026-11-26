@@ -87,11 +87,11 @@ Each log entry is a JSON object:
 }
 ```
 
-Optional fields (`correlation_id`, `headers`, `body_size`, `query`) are omitted when not available or not enabled.
+`timestamp_ms` is the Unix time, in milliseconds, at which the request reached the plugin; `duration_ms` runs from then to the response. Optional fields (`correlation_id`, `headers`, `body_size`, `query`) are omitted when not available or not enabled. A response header the response repeats is one string, its values joined with `, `.
 
 ### Behavior
 
 - Runs in the **response phase** (after dispatch) to capture both request and response data
-- Log delivery is **best-effort** — failures never affect the upstream response
+- Log delivery is **best-effort** — failures never affect the upstream response. An entry the endpoint does not accept (no connection, a timeout, a status outside 2xx) is logged as a warning
 - The `correlation_id` field is automatically populated if the `correlation-id` middleware runs earlier in the chain
 - Custom fields are flattened into the top-level JSON object
