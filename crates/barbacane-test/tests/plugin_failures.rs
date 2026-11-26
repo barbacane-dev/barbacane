@@ -9,7 +9,7 @@ use barbacane_test::TestGateway;
 
 /// A dispatcher whose `dispatch` traps on `unreachable`.
 const TRAPPING_DISPATCHER: &str = r#"(module
-  (@custom "barbacane_abi" "\01\00\00\00")
+  (@custom "barbacane_abi" "\02\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))
@@ -147,7 +147,7 @@ async fn the_ids_stay_on_the_failure_log_when_only_errors_are_logged() {
 
 /// A middleware that lets every request through and traps in `on_response`.
 const RESPONSE_TRAPPING_MIDDLEWARE: &str = r#"(module
-  (@custom "barbacane_abi" "\01\00\00\00")
+  (@custom "barbacane_abi" "\02\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))
@@ -158,7 +158,7 @@ const RESPONSE_TRAPPING_MIDDLEWARE: &str = r#"(module
 /// A middleware whose `on_response` returns 1 without an output, as the SDK
 /// macros do when the response cannot be parsed.
 const RESPONSE_REFUSING_MIDDLEWARE: &str = r#"(module
-  (@custom "barbacane_abi" "\01\00\00\00")
+  (@custom "barbacane_abi" "\02\00\00\00")
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
   (func (export "init") (param i32 i32) (result i32) (i32.const 0))
@@ -279,7 +279,7 @@ async fn a_response_middleware_that_returns_an_error_is_answered_with_500() {
 
 /// A dispatcher importing a WASI function the gateway does not provide.
 const UNSUPPORTED_WASI_DISPATCHER: &str = r#"(module
-  (@custom "barbacane_abi" "\01\00\00\00")
+  (@custom "barbacane_abi" "\02\00\00\00")
   (import "wasi_snapshot_preview1" "fd_close" (func (param i32) (result i32)))
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
@@ -349,7 +349,7 @@ async fn a_plugin_without_an_abi_version_does_not_compile() {
 
     let with_version = DISPATCHER_WITHOUT_ABI_VERSION.replacen(
         "(module\n",
-        "(module\n  (@custom \"barbacane_abi\" \"\\01\\00\\00\\00\")\n",
+        "(module\n  (@custom \"barbacane_abi\" \"\\02\\00\\00\\00\")\n",
         1,
     );
     let gateway = compile_dispatcher(&with_version)
@@ -363,15 +363,15 @@ async fn a_plugin_without_an_abi_version_does_not_compile() {
 async fn a_plugin_for_another_abi_version_does_not_compile() {
     let other = DISPATCHER_WITHOUT_ABI_VERSION.replacen(
         "(module\n",
-        "(module\n  (@custom \"barbacane_abi\" \"\\02\\00\\00\\00\")\n",
+        "(module\n  (@custom \"barbacane_abi\" \"\\03\\00\\00\\00\")\n",
         1,
     );
     let error = match compile_dispatcher(&other).await {
-        Ok(_) => panic!("compiled a plugin for ABI 2"),
+        Ok(_) => panic!("compiled a plugin for ABI 3"),
         Err(e) => e,
     };
     assert!(
-        error.contains("E1045") && error.contains("ABI 2") && error.contains("supports ABI 1"),
+        error.contains("E1045") && error.contains("ABI 3") && error.contains("supports ABI 2"),
         "{error}"
     );
 }

@@ -2445,6 +2445,43 @@ impl Gateway {
         Ok(resp)
     }
 
+    /// The header fields of a plugin's response as `http` values, each value
+    /// its own field, in order.
+    ///
+    /// Framing headers are left out: the plugin (or its upstream) may have set
+    /// them for another body, and hyper computes them for the one it sends; a
+    /// stale `content-length` would truncate the response after a middleware
+    /// such as `response-transformer` changed the body. A name or value the
+    /// `http` crate rejects (empty, whitespace, control byte, CR or LF) is left
+    /// out too: plugins are untrusted, and `http` defers that check to
+    /// `.body()`, where it would fail the response.
+    fn plugin_header_fields(
+        headers: &std::collections::BTreeMap<String, Vec<String>>,
+    ) -> Vec<(HeaderName, HeaderValue)> {
+        let mut fields = Vec::new();
+        for (key, values) in headers {
+            if matches!(
+                key.to_ascii_lowercase().as_str(),
+                "content-length" | "transfer-encoding" | "connection" | "keep-alive"
+            ) {
+                continue;
+            }
+            let Ok(name) = HeaderName::from_bytes(key.as_bytes()) else {
+                tracing::debug!(header = %key, "skipping invalid plugin response header name");
+                continue;
+            };
+            for value in values {
+                match HeaderValue::from_str(value) {
+                    Ok(value) => fields.push((name.clone(), value)),
+                    Err(_) => {
+                        tracing::debug!(header = %key, "skipping invalid plugin response header value")
+                    }
+                }
+            }
+        }
+        fields
+    }
+
     /// Build an HTTP response from a plugin Response.
     ///
     /// Does not use `self` (associated fn) so it can be unit-tested directly for
@@ -2455,42 +2492,8 @@ impl Gateway {
         let status = StatusCode::from_u16(plugin_response.status).unwrap_or(StatusCode::OK);
         let mut builder = Response::builder().status(status);
 
-        for (key, value) in &plugin_response.headers {
-            // Skip framing headers that the plugin (or its upstream) may have
-            // set for a different body. hyper recomputes `content-length` from
-            // the actual `Full<Bytes>` payload; keeping a stale value would
-            // cause the client to see a truncated response (`IncompleteMessage`)
-            // when a middleware (for example `response-transformer`)
-            // modifies the body length.
-            let key_lc = key.to_ascii_lowercase();
-            if matches!(
-                key_lc.as_str(),
-                "content-length" | "transfer-encoding" | "connection" | "keep-alive"
-            ) {
-                continue;
-            }
-            // Validate the plugin-supplied header before insertion. The `http`
-            // crate defers validation to `.body()`, so an illegal name/value
-            // (empty, whitespace, control byte, or a value with CR/LF) would
-            // otherwise surface as a panic there. Plugins are untrusted, so skip
-            // invalid headers instead of aborting the connection task (a plugin
-            // reflecting an attacker field into a header could otherwise DoS the
-            // route). Mirrors add_standard_headers' defensive handling.
-            let name = match HeaderName::from_bytes(key.as_bytes()) {
-                Ok(name) => name,
-                Err(_) => {
-                    tracing::debug!(header = %key, "skipping invalid plugin response header name");
-                    continue;
-                }
-            };
-            let header_value = match HeaderValue::from_str(value) {
-                Ok(v) => v,
-                Err(_) => {
-                    tracing::debug!(header = %key, "skipping invalid plugin response header value");
-                    continue;
-                }
-            };
-            builder = builder.header(name, header_value);
+        for (name, value) in Self::plugin_header_fields(&plugin_response.headers) {
+            builder = builder.header(name, value);
         }
 
         let body = plugin_response.body.clone().unwrap_or_default();
@@ -2617,31 +2620,7 @@ impl Gateway {
             Some(StreamEvent::Headers { status, headers }) => {
                 let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
                 let mut builder = Response::builder().status(status_code);
-                for (k, v) in &headers {
-                    // Same defensive validation as build_response_from_plugin:
-                    // skip framing headers and any name/value the `http` crate
-                    // would reject (which would otherwise panic at `.body()`).
-                    let k_lc = k.to_ascii_lowercase();
-                    if matches!(
-                        k_lc.as_str(),
-                        "content-length" | "transfer-encoding" | "connection" | "keep-alive"
-                    ) {
-                        continue;
-                    }
-                    let name = match HeaderName::from_bytes(k.as_bytes()) {
-                        Ok(name) => name,
-                        Err(_) => {
-                            tracing::debug!(header = %k, "skipping invalid streamed response header name");
-                            continue;
-                        }
-                    };
-                    let value = match HeaderValue::from_str(v) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            tracing::debug!(header = %k, "skipping invalid streamed response header value");
-                            continue;
-                        }
-                    };
+                for (name, value) in Self::plugin_header_fields(&headers) {
                     builder = builder.header(name, value);
                 }
 
@@ -6444,7 +6423,7 @@ mod reload_tests {
         assert!(first.rate_limiter.check("scope", "client", 1, 60).allowed);
         let entry = barbacane_wasm::CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: Some(b"cached".to_vec()),
             metadata: None,
         };
@@ -7197,12 +7176,13 @@ mod tests {
         // An untrusted plugin returns headers with an illegal name, an illegal
         // value (embedded newline), and framing headers — none may panic the
         // task, and the invalid/framing ones must be dropped.
+        let field = |value: &str| vec![value.to_string()];
         let mut headers = BTreeMap::new();
-        headers.insert("x-ok".to_string(), "fine".to_string());
-        headers.insert("bad name".to_string(), "1".to_string()); // space in name
-        headers.insert("".to_string(), "empty-name".to_string()); // empty name
-        headers.insert("x-inject".to_string(), "a\r\nb".to_string()); // CRLF in value
-        headers.insert("content-length".to_string(), "999".to_string()); // framing
+        headers.insert("x-ok".to_string(), field("fine"));
+        headers.insert("bad name".to_string(), field("1")); // space in name
+        headers.insert("".to_string(), field("empty-name")); // empty name
+        headers.insert("x-inject".to_string(), field("a\r\nb")); // CRLF in value
+        headers.insert("content-length".to_string(), field("999")); // framing
         let plugin_response = barbacane_wasm::Response::new(200)
             .with_headers(headers)
             .with_body(b"hello".to_vec());
@@ -7214,6 +7194,27 @@ mod tests {
         assert!(resp.headers().get("x-inject").is_none());
         // Framing header is dropped (hyper recomputes content-length).
         assert!(resp.headers().get("content-length").is_none());
+    }
+
+    /// A header with several values is sent as one field per value, in order;
+    /// an invalid value is dropped without the others.
+    #[test]
+    fn build_response_from_plugin_sends_each_value_as_a_field() {
+        let mut plugin_response = barbacane_wasm::Response::new(200);
+        plugin_response.append_header("set-cookie", "a=1; Path=/");
+        plugin_response.append_header("set-cookie", "bad\nvalue");
+        plugin_response.append_header("set-cookie", "b=2; Path=/");
+        plugin_response.set_header("link", "</a>; rel=next");
+
+        let resp = Gateway::build_response_from_plugin(&plugin_response);
+        let cookies: Vec<&str> = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(cookies, ["a=1; Path=/", "b=2; Path=/"]);
+        assert_eq!(resp.headers().get("link").unwrap(), "</a>; rel=next");
     }
 
     #[test]

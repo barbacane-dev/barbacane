@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **lifecycle**: the `Deprecation` header follows RFC 9745: it holds the date of the deprecation, `@` and the Unix time (`Deprecation: @1782777600`), from the operation's new `x-deprecation` extension, which takes the formats `x-sunset` takes. `deprecated: true` carries no date and sends no `Deprecation` header; it sent `Deprecation: true`, the value of an early draft. An `x-sunset` earlier than the operation's `x-deprecation` fails compilation with `E1018` (#463).
 
   > **Upgrade note (breaking):** a deprecated operation without `x-deprecation` no longer sends `Deprecation`. Add `x-deprecation` with the date it was deprecated; clients that read `true` read a date.
+- **plugins**: response headers keep every field. `Response.headers` and `HttpResponse.headers` in the SDK map each name to its values, `BTreeMap<String, Vec<String>>` (`ResponseHeaders`), one per field in the order sent, with `header`, `header_values`, `set_header`, `append_header` and `remove_header`; `with_header` keeps its signature and sets one value. The host carries an upstream's fields the same way through `host_http_call`, `host_http_stream` and the response cache, and sends each value as its own field, so two `Set-Cookie`, `Link` or `WWW-Authenticate` fields from an upstream reach the client as two; they arrived as one, the last. `cors` adds `Origin` to an upstream's `Vary` instead of replacing it, and `http-log` logs a repeated response header's values joined with `, ` (#435).
+
+  > **Upgrade note (breaking):** the plugin ABI is version 2. A plugin built with an earlier SDK, the 1.0.0 release candidates included, is refused with `E1045`: rebuild it with SDK 1.0, and change code that reads or writes `Response.headers` to the lists or the accessors. An artifact compiled by a release candidate bundles ABI 1 plugins and is refused: recompile it.
 
 ### Fixed
 

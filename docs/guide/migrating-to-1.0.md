@@ -28,7 +28,7 @@ On the control plane, set `BARBACANE_SIGNING_KEY` so compilations are signed. Fo
 
 ### Recompile every artifact
 
-The artifact format is 8. A 1.0 data plane refuses an artifact built by an earlier compiler, with a message saying to recompile. From 1.0.0 on, a data plane of the same major version loads every format from 8 up to the one it writes, so this is the last recompilation an upgrade requires.
+A 1.0 data plane refuses an artifact built by an earlier compiler, with a message saying to recompile. That includes the 1.0.0 release candidates: their artifacts bundle plugins built for plugin ABI 1, and 1.0 loads ABI 2. From 1.0.0 on, a data plane of the same major version loads every artifact a compiler of that major writes, so this is the last recompilation an upgrade requires.
 
 An artifact compiled without a manifest, with `barbacane_compiler::compile` from your own code, carries no plugin capabilities and is refused: compile with `--manifest barbacane.yaml` or `compile_with_manifest`.
 
@@ -124,6 +124,7 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 - **Timeouts.** `timeout_ms` on an outbound call is cut to 60 seconds and a WebSocket `connect_timeout_ms` to 30.
 - **`host_log`** messages are cut at 4 KiB and their control characters replaced.
 - **Metrics** emitted through the `telemetry` capability are their own Prometheus families, `barbacane_plugin_<plugin>_<metric>`, with the plugin's labels as labels (see [Observability](#observability)).
+- **Response headers are lists.** `Response.headers` and `HttpResponse.headers` map each name to its values (`BTreeMap<String, Vec<String>>`), one per header field, so an upstream's repeated `set-cookie`, `link` or `www-authenticate` fields reach the client as they were sent. Read with `header(name)` or `header_values(name)`; write with `with_header`, `set_header` or `append_header`. Request headers keep one value per name. The plugin ABI is version 2: a plugin built with an earlier SDK, release candidates included, is refused with `E1045` until it is rebuilt.
 - **`resolve_client_ip`** is gone from the SDK. `req.client_ip` is the address the gateway attributes the request to, already resolved behind its `--trusted-proxies`; read it instead.
 
 ### Official plugins
@@ -210,7 +211,7 @@ A request whose body did not arrive in time answers `urn:barbacane:error:request
 | signing | every compiler and the control plane have `BARBACANE_SIGNING_KEY`; every data plane has `BARBACANE_TRUSTED_PUBKEY` and starts without `--allow-unsigned` |
 | artifacts | every artifact recompiled with the 1.0 compiler and loaded by a 1.0 data plane |
 | `barbacane.yaml` and specs | compile without errors; middleware entries checked for `@version`; YAML constructs from the table checked |
-| custom plugins | rebuilt on SDK 1.0; `E1043` clean; `body_access` declared where a body is read; `HttpRequest` literals use `Default`; `resolve_client_ip` calls replaced by `req.client_ip` |
+| custom plugins | rebuilt on SDK 1.0 (plugin ABI 2); response header code reads and writes lists; `E1043` clean; `body_access` declared where a body is read; `HttpRequest` literals use `Default`; `resolve_client_ip` calls replaced by `req.client_ip` |
 | proxies | `trusted_proxies` removed from `ip-restriction` and `rate-limit`; the proxies listed in the data plane's `--trusted-proxies` |
 | control plane | port 9090; token of 32 bytes or more; clients regenerated from `/openapi`; probes on `/health` and `/ready`; data planes use `BARBACANE_CONTROL_API_KEY` and `wss://` |
 | observability | dashboards and alerts updated for the problem types, the `method` label and the plugin metric families; probes parse `/__barbacane/health` for `status` only |

@@ -467,7 +467,7 @@ fn artifact_with_mock_plugin(dir: &Path, wat: &str) -> PathBuf {
 fn dispatcher_importing(wasi_function: &str, signature: &str) -> String {
     format!(
         r#"(module
-  (@custom "barbacane_abi" "\01\00\00\00")
+  (@custom "barbacane_abi" "\02\00\00\00")
   (import "wasi_snapshot_preview1" "{wasi_function}" (func {signature}))
   (memory (export "memory") 1)
   (func (export "alloc") (param i32) (result i32) (i32.const 1024))
@@ -510,7 +510,7 @@ async fn a_plugin_without_an_abi_version_is_refused_on_load() {
     }
     let tagged = dispatcher_importing("random_get", "(param i32 i32) (result i32)");
     let untagged = tagged.replacen(
-        "  (@custom \"barbacane_abi\" \"\\01\\00\\00\\00\")\n",
+        "  (@custom \"barbacane_abi\" \"\\02\\00\\00\\00\")\n",
         "",
         1,
     );
@@ -525,7 +525,7 @@ async fn a_plugin_without_an_abi_version_is_refused_on_load() {
     let dir = TempDir::new().unwrap();
     assert!(!gateway_loads_artifact(&artifact_with_mock_plugin(dir.path(), &untagged)).await);
 
-    let other_version = tagged.replacen("\\01\\00\\00\\00", "\\02\\00\\00\\00", 1);
+    let other_version = tagged.replacen("\\02\\00\\00\\00", "\\03\\00\\00\\00", 1);
     let dir = TempDir::new().unwrap();
     assert!(!gateway_loads_artifact(&artifact_with_mock_plugin(dir.path(), &other_version)).await);
 }

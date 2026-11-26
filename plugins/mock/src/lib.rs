@@ -49,8 +49,12 @@ impl MockDispatcher {
     /// for a JSON media type, as HTML text for any other. Unresolved
     /// placeholders are left as-is.
     pub fn dispatch(&mut self, req: Request) -> Response {
-        let mut headers = self.headers.clone();
-        headers.insert("content-type".to_string(), self.content_type.clone());
+        let mut headers: ResponseHeaders = self
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), vec![value.clone()]))
+            .collect();
+        headers.insert("content-type".to_string(), vec![self.content_type.clone()]);
 
         let body = if self.body.is_empty() {
             None
@@ -185,10 +189,7 @@ mod tests {
         let mut plugin: MockDispatcher = serde_json::from_value(serde_json::json!({})).unwrap();
         let resp = plugin.dispatch(test_request());
         assert_eq!(resp.status, 200);
-        assert_eq!(
-            resp.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(resp.header("content-type").unwrap(), "application/json");
         assert!(resp.body.is_none());
     }
 
@@ -220,11 +221,8 @@ mod tests {
         }))
         .unwrap();
         let resp = plugin.dispatch(test_request());
-        assert_eq!(resp.headers.get("x-custom").unwrap(), "value");
-        assert_eq!(
-            resp.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(resp.header("x-custom").unwrap(), "value");
+        assert_eq!(resp.header("content-type").unwrap(), "application/json");
     }
 
     #[test]
@@ -235,7 +233,7 @@ mod tests {
         }))
         .unwrap();
         let resp = plugin.dispatch(test_request());
-        assert_eq!(resp.headers.get("content-type").unwrap(), "text/plain");
+        assert_eq!(resp.header("content-type").unwrap(), "text/plain");
     }
 
     #[test]

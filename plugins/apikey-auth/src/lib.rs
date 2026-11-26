@@ -202,7 +202,10 @@ impl ApiKeyAuth {
     /// Generate 401 Unauthorized response.
     fn unauthorized_response(&self, error: &ApiKeyError) -> Response {
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         // WWW-Authenticate header for API key scheme
         let www_auth = format!(
@@ -210,7 +213,7 @@ impl ApiKeyAuth {
             error.as_str(),
             error.description()
         );
-        headers.insert("www-authenticate".to_string(), www_auth);
+        headers.insert("www-authenticate".to_string(), vec![www_auth]);
 
         let body = serde_json::json!({
             "type": "urn:barbacane:error:authentication-failed",
@@ -437,8 +440,7 @@ mod tests {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 401);
                 assert!(r
-                    .headers
-                    .get("www-authenticate")
+                    .header("www-authenticate")
                     .unwrap()
                     .contains("missing_key"));
             }
@@ -454,8 +456,7 @@ mod tests {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 401);
                 assert!(r
-                    .headers
-                    .get("www-authenticate")
+                    .header("www-authenticate")
                     .unwrap()
                     .contains("invalid_key"));
             }
@@ -484,10 +485,7 @@ mod tests {
         let plugin = test_plugin();
         let resp = plugin.unauthorized_response(&ApiKeyError::MissingKey);
         assert_eq!(resp.status, 401);
-        assert_eq!(
-            resp.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(resp.header("content-type").unwrap(), "application/json");
         let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:authentication-failed");
         assert_eq!(body["status"], 401);

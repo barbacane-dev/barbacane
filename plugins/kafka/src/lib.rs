@@ -167,13 +167,16 @@ impl KafkaDispatcher {
     /// Build the 202 Accepted response.
     fn accepted_response(&self, result: &PublishResult) -> Response {
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         // Add custom headers from config
         if let Some(ref ack) = self.ack_response {
             if let Some(ref custom_headers) = ack.headers {
                 for (k, v) in custom_headers {
-                    headers.insert(k.clone(), v.clone());
+                    headers.insert(k.clone(), vec![v.clone()]);
                 }
             }
         }
@@ -367,10 +370,7 @@ mod tests {
 
         let response = dispatcher.accepted_response(&result);
         assert_eq!(response.status, 202);
-        assert_eq!(
-            response.headers.get("content-type"),
-            Some(&"application/json".to_string())
-        );
+        assert_eq!(response.header("content-type"), Some("application/json"));
 
         let body: serde_json::Value =
             serde_json::from_slice(response.body.as_ref().unwrap()).unwrap();
@@ -448,8 +448,8 @@ mod tests {
         let response = dispatcher.error_response(502, "Kafka publish failed", "connection timeout");
         assert_eq!(response.status, 502);
         assert_eq!(
-            response.headers.get("content-type"),
-            Some(&"application/problem+json".to_string())
+            response.header("content-type"),
+            Some("application/problem+json")
         );
 
         let body: serde_json::Value =
@@ -497,18 +497,9 @@ mod tests {
         let result = create_publish_result(true);
 
         let response = dispatcher.accepted_response(&result);
-        assert_eq!(
-            response.headers.get("x-custom-response"),
-            Some(&"custom-value".to_string())
-        );
-        assert_eq!(
-            response.headers.get("x-tracking-id"),
-            Some(&"track-123".to_string())
-        );
-        assert_eq!(
-            response.headers.get("content-type"),
-            Some(&"application/json".to_string())
-        );
+        assert_eq!(response.header("x-custom-response"), Some("custom-value"));
+        assert_eq!(response.header("x-tracking-id"), Some("track-123"));
+        assert_eq!(response.header("content-type"), Some("application/json"));
     }
 
     #[test]
@@ -568,8 +559,8 @@ mod tests {
         let response = dispatcher.dispatch(req);
         assert_eq!(response.status, 502);
         assert_eq!(
-            response.headers.get("content-type"),
-            Some(&"application/problem+json".to_string())
+            response.header("content-type"),
+            Some("application/problem+json")
         );
 
         let body: serde_json::Value =

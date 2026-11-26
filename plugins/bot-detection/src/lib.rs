@@ -304,7 +304,7 @@ mod tests {
         let resp = plugin.blocked_response(Some("scrapy/2.11"));
         assert_eq!(resp.status, 403);
         assert_eq!(
-            resp.headers.get("content-type").map(String::as_str),
+            resp.header("content-type"),
             Some("application/problem+json")
         );
         let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();

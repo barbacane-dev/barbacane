@@ -4,6 +4,8 @@
 //! per-endpoint health (ADR-0035).
 
 use std::collections::HashMap;
+
+use barbacane_plugin_sdk::types::ResponseHeaders;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
@@ -527,15 +529,7 @@ impl HttpClient {
         match req_builder.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let headers: HashMap<String, String> = response
-                    .headers()
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        v.to_str()
-                            .ok()
-                            .map(|v| (k.as_str().to_lowercase(), v.to_string()))
-                    })
-                    .collect();
+                let headers = response_header_fields(response.headers());
 
                 let body = self.read_body_capped(response).await.map_err(|e| {
                     let failure = match e {
@@ -973,8 +967,8 @@ pub struct HttpRequest {
 pub struct HttpResponse {
     /// HTTP status code.
     pub status: u16,
-    /// Response headers.
-    pub headers: HashMap<String, String>,
+    /// Response header fields, by lower-case name, each with its values.
+    pub headers: ResponseHeaders,
     /// Response body (optional, base64-encoded in JSON for WASM transport).
     #[serde(default, with = "base64_body")]
     pub body: Option<Vec<u8>>,
@@ -990,10 +984,10 @@ impl HttpResponse {
             "detail": detail
         });
 
-        let mut headers = HashMap::new();
+        let mut headers = ResponseHeaders::new();
         headers.insert(
             "content-type".to_string(),
-            "application/problem+json".to_string(),
+            vec!["application/problem+json".to_string()],
         );
 
         Self {
@@ -1002,6 +996,21 @@ impl HttpResponse {
             body: Some(body.to_string().into_bytes()),
         }
     }
+}
+
+/// The header fields of an upstream response, by lower-case name, each with
+/// its values in order. A value that is not visible ASCII is left out.
+pub(crate) fn response_header_fields(headers: &reqwest::header::HeaderMap) -> ResponseHeaders {
+    let mut fields = ResponseHeaders::new();
+    for (name, value) in headers {
+        if let Ok(value) = value.to_str() {
+            fields
+                .entry(name.as_str().to_string())
+                .or_default()
+                .push(value.to_string());
+        }
+    }
+    fields
 }
 
 /// `error` and each error it was caused by, joined by `: `. A reqwest error's
@@ -1238,7 +1247,7 @@ mod tests {
         assert_eq!(resp.status, 502);
         assert_eq!(
             resp.headers.get("content-type"),
-            Some(&"application/problem+json".to_string())
+            Some(&vec!["application/problem+json".to_string()])
         );
     }
 

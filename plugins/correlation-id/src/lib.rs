@@ -105,9 +105,7 @@ impl CorrelationId {
         let mut modified_resp = resp;
         if let Some(correlation_id) = context::get("correlation-id") {
             let header_name_lower = self.header_name.to_lowercase();
-            modified_resp
-                .headers
-                .insert(header_name_lower, correlation_id);
+            modified_resp.set_header(header_name_lower, correlation_id);
         }
 
         modified_resp
@@ -339,8 +337,8 @@ mod tests {
         let modified_resp = middleware.on_response(resp);
 
         assert_eq!(
-            modified_resp.headers.get("x-correlation-id"),
-            Some(&"test-id-456".to_string())
+            modified_resp.header("x-correlation-id"),
+            Some("test-id-456")
         );
     }
 
@@ -393,10 +391,7 @@ mod tests {
         let resp = create_test_response();
         let modified_resp = middleware.on_response(resp);
 
-        assert_eq!(
-            modified_resp.headers.get("x-request-id"),
-            Some(&"custom-id-abc".to_string())
-        );
+        assert_eq!(modified_resp.header("x-request-id"), Some("custom-id-abc"));
     }
 
     #[test]

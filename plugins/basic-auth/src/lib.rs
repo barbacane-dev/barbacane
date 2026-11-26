@@ -193,7 +193,10 @@ impl BasicAuth {
     /// Generate a 401 Unauthorized response.
     fn unauthorized_response(&self, error: &BasicAuthError) -> Response {
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         // RFC 7617: WWW-Authenticate: Basic realm="..."
         let www_auth = format!(
@@ -202,7 +205,7 @@ impl BasicAuth {
             error.as_str(),
             error.description()
         );
-        headers.insert("www-authenticate".to_string(), www_auth);
+        headers.insert("www-authenticate".to_string(), vec![www_auth]);
 
         let body = serde_json::json!({
             "type": "urn:barbacane:error:authentication-failed",
@@ -509,8 +512,7 @@ mod tests {
             Action::ShortCircuit(resp) => {
                 assert_eq!(resp.status, 401);
                 assert!(resp
-                    .headers
-                    .get("www-authenticate")
+                    .header("www-authenticate")
                     .unwrap()
                     .contains("test-api"));
             }
@@ -526,12 +528,9 @@ mod tests {
         let resp = plugin.unauthorized_response(&BasicAuthError::InvalidCredentials);
 
         assert_eq!(resp.status, 401);
-        assert_eq!(
-            resp.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(resp.header("content-type").unwrap(), "application/json");
 
-        let www_auth = resp.headers.get("www-authenticate").unwrap();
+        let www_auth = resp.header("www-authenticate").unwrap();
         assert!(www_auth.contains("Basic realm=\"test-api\""));
         assert!(www_auth.contains("invalid_credentials"));
 

@@ -443,8 +443,8 @@ mod tests {
         let response = dispatcher.error_response(400, "Bad Request", "test", "debug");
         assert_eq!(response.status, 400);
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/problem+json"
+            response.header("content-type"),
+            Some("application/problem+json")
         );
 
         let body: serde_json::Value =
