@@ -200,6 +200,8 @@ A request whose body did not arrive in time answers `urn:barbacane:error:request
 
 - The control plane logs every request that changes something at `info`, with method, path and status.
 - A plugin's log line cut at 4 KiB carries `truncated=true`.
+- A JSON log line carries `request_id` and `trace_id` at the top level, where 0.12 nested them in `span`; a log pipeline that read `span.request_id` reads `request_id`.
+- Each request ends with a `request completed` line at `info` (target `barbacane::access`) with method, path, status and duration; `RUST_LOG=info,barbacane::access=off` leaves it out.
 
 ## Removed features
 
