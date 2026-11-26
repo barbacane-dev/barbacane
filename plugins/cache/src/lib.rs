@@ -7,7 +7,6 @@ use barbacane_plugin_sdk::log::log as log_message;
 use barbacane_plugin_sdk::log::Level;
 use barbacane_plugin_sdk::prelude::*;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 /// Cache middleware configuration.
 #[barbacane_middleware]
@@ -66,7 +65,7 @@ struct CacheResult {
 #[derive(Debug, Deserialize, serde::Serialize)]
 struct CacheEntry {
     status: u16,
-    headers: BTreeMap<String, String>,
+    headers: ResponseHeaders,
     #[serde(with = "barbacane_plugin_sdk::types::base64_body")]
     body: Option<Vec<u8>>,
 }
@@ -102,7 +101,7 @@ impl Cache {
 
                     // Build response with cache headers
                     let mut headers = entry.headers;
-                    headers.insert("x-cache".to_string(), "HIT".to_string());
+                    headers.insert("x-cache".to_string(), vec!["HIT".to_string()]);
 
                     return Action::ShortCircuit({
                         let mut resp = Response::new(entry.status).with_headers(headers);
@@ -139,7 +138,7 @@ impl Cache {
 
         // `no-cache` requires revalidation before reuse, which this cache does
         // not do, so such a response is not stored (RFC 9111 §5.2.2.4).
-        let directives = cache_control_directives(resp.headers.get("cache-control"));
+        let directives = cache_control_directives(resp.header_values("cache-control"));
         if directives
             .iter()
             .any(|d| matches!(d.as_str(), "no-store" | "private" | "no-cache"))
@@ -181,9 +180,7 @@ impl Cache {
 
         // Add cache header to response
         let mut modified_resp = resp;
-        modified_resp
-            .headers
-            .insert("x-cache".to_string(), "MISS".to_string());
+        modified_resp.set_header("x-cache", "MISS");
         modified_resp
     }
 
@@ -195,20 +192,23 @@ impl Cache {
     }
 
     /// Build cache key from request.
+    /// The cache key of `req`: `METHOD:path?query|name=value…` for each vary
+    /// header present. `%`, `?` and `|` inside a part are percent-encoded, so
+    /// they only separate parts and two requests never share a key by accident.
     fn build_cache_key(&self, req: &Request) -> String {
-        let mut key = format!("{}:{}", req.method, req.path);
+        let mut key = format!("{}:{}", req.method, key_part(&req.path));
 
         // Add query string if present
         if let Some(query) = &req.query {
             key.push('?');
-            key.push_str(query);
+            key.push_str(&key_part(query));
         }
 
         // Add vary header values
         for header_name in &self.vary {
             let lower_name = header_name.to_lowercase();
             if let Some(value) = req.headers.get(&lower_name) {
-                key.push_str(&format!("|{}={}", lower_name, value));
+                key.push_str(&format!("|{}={}", key_part(&lower_name), key_part(value)));
             }
         }
 
@@ -242,23 +242,29 @@ impl Cache {
     }
 }
 
-/// Lowercased directive names of a `Cache-Control` value, without their arguments.
-fn cache_control_directives(value: Option<&String>) -> Vec<String> {
-    value
-        .map(|v| {
-            v.split(',')
-                .filter_map(|d| {
-                    let name = d
-                        .split('=')
-                        .next()
-                        .unwrap_or_default()
-                        .trim()
-                        .to_ascii_lowercase();
-                    (!name.is_empty()).then_some(name)
-                })
-                .collect()
+/// `part` with `%`, `?` and `|` percent-encoded, for a cache key.
+fn key_part(part: &str) -> String {
+    part.replace('%', "%25")
+        .replace('?', "%3F")
+        .replace('|', "%7C")
+}
+
+/// Lowercased directive names of the `Cache-Control` fields, without their
+/// arguments.
+fn cache_control_directives(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|v| v.split(','))
+        .filter_map(|d| {
+            let name = d
+                .split('=')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            (!name.is_empty()).then_some(name)
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// Call host_cache_get with a string key.
@@ -381,6 +387,7 @@ fn call_cache_set(key: &str, entry_json: &str, ttl_secs: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// A configuration with a key the plugin does not know is refused at init
     /// rather than ignored in part.
@@ -423,6 +430,29 @@ mod tests {
         let req = create_test_request("GET", "/api/users");
         let key = cache.build_cache_key(&req);
         assert_eq!(key, "GET:/api/users");
+    }
+
+    /// A `|` in the path, the query or a vary value cannot make one request's
+    /// key another's.
+    #[test]
+    fn keys_do_not_collide_through_separators() {
+        let cache: Cache = serde_json::from_str(r#"{"vary": ["accept"]}"#).unwrap();
+        let mut varied = create_test_request("GET", "/api");
+        varied.query = Some("a=1".to_string());
+        varied
+            .headers
+            .insert("accept".to_string(), "json".to_string());
+        let mut in_query = create_test_request("GET", "/api");
+        in_query.query = Some("a=1|accept=json".to_string());
+        let in_path = create_test_request("GET", "/api?a=1|accept=json");
+        let keys = [
+            cache.build_cache_key(&varied),
+            cache.build_cache_key(&in_query),
+            cache.build_cache_key(&in_path),
+        ];
+        assert_ne!(keys[0], keys[1]);
+        assert_ne!(keys[0], keys[2]);
+        assert_ne!(keys[1], keys[2]);
     }
 
     #[test]
@@ -547,7 +577,10 @@ mod tests {
             status: 200,
             headers: {
                 let mut h = BTreeMap::new();
-                h.insert("content-type".to_string(), "application/json".to_string());
+                h.insert(
+                    "content-type".to_string(),
+                    vec!["application/json".to_string()],
+                );
                 h
             },
             body: Some(br#"{"users":[]}"#.to_vec()),
@@ -571,11 +604,8 @@ mod tests {
         match action {
             Action::ShortCircuit(resp) => {
                 assert_eq!(resp.status, 200);
-                assert_eq!(resp.headers.get("x-cache"), Some(&"HIT".to_string()));
-                assert_eq!(
-                    resp.headers.get("content-type"),
-                    Some(&"application/json".to_string())
-                );
+                assert_eq!(resp.header("x-cache"), Some("HIT"));
+                assert_eq!(resp.header("content-type"), Some("application/json"));
                 assert_eq!(resp.body, Some(br#"{"users":[]}"#.to_vec()));
             }
             _ => panic!("Expected Action::ShortCircuit for cache hit"),
@@ -598,7 +628,10 @@ mod tests {
         let resp = Response::new(200)
             .with_headers({
                 let mut h = BTreeMap::new();
-                h.insert("content-type".to_string(), "application/json".to_string());
+                h.insert(
+                    "content-type".to_string(),
+                    vec!["application/json".to_string()],
+                );
                 h
             })
             .with_body(br#"{"users":[]}"#.to_vec());
@@ -606,7 +639,7 @@ mod tests {
         let result = cache.on_response(resp);
 
         assert_eq!(result.status, 200);
-        assert_eq!(result.headers.get("x-cache"), Some(&"MISS".to_string()));
+        assert_eq!(result.header("x-cache"), Some("MISS"));
 
         // Verify it was stored in cache
         let result_len = call_cache_get("GET:/api/users");
@@ -657,7 +690,7 @@ mod tests {
         let resp = Response::new(200)
             .with_headers({
                 let mut h = BTreeMap::new();
-                h.insert("cache-control".to_string(), "no-store".to_string());
+                h.insert("cache-control".to_string(), vec!["no-store".to_string()]);
                 h
             })
             .with_body(br#"{"users":[]}"#.to_vec());
@@ -726,7 +759,7 @@ mod tests {
                 let mut h = BTreeMap::new();
                 h.insert(
                     "cache-control".to_string(),
-                    "private, max-age=3600".to_string(),
+                    vec!["private, max-age=3600".to_string()],
                 );
                 h
             })
@@ -782,8 +815,11 @@ mod tests {
         let resp = Response::new(200)
             .with_headers({
                 let mut h = BTreeMap::new();
-                h.insert("content-type".to_string(), "application/json".to_string());
-                h.insert("x-custom".to_string(), "value".to_string());
+                h.insert(
+                    "content-type".to_string(),
+                    vec!["application/json".to_string()],
+                );
+                h.insert("x-custom".to_string(), vec!["value".to_string()]);
                 h
             })
             .with_body(br#"{"data":"test"}"#.to_vec());
@@ -793,11 +829,8 @@ mod tests {
         // Should pass through without x-cache header when no cache key
         assert_eq!(result.status, resp.status);
         assert_eq!(result.body, resp.body);
-        assert_eq!(
-            result.headers.get("content-type"),
-            Some(&"application/json".to_string())
-        );
-        assert_eq!(result.headers.get("x-custom"), Some(&"value".to_string()));
+        assert_eq!(result.header("content-type"), Some("application/json"));
+        assert_eq!(result.header("x-custom"), Some("value"));
         assert!(!result.headers.contains_key("x-cache"));
     }
 
@@ -832,7 +865,7 @@ mod tests {
             let result = cache.on_response(resp);
 
             if should_cache {
-                assert_eq!(result.headers.get("x-cache"), Some(&"MISS".to_string()));
+                assert_eq!(result.header("x-cache"), Some("MISS"));
             } else {
                 assert!(!result.headers.contains_key("x-cache"));
             }
@@ -849,7 +882,7 @@ mod tests {
     fn response_with_cache_control(value: Option<&str>) -> Response {
         let mut headers = BTreeMap::new();
         if let Some(value) = value {
-            headers.insert("cache-control".to_string(), value.to_string());
+            headers.insert("cache-control".to_string(), vec![value.to_string()]);
         }
         Response::new(200)
             .with_headers(headers)
@@ -944,11 +977,14 @@ mod tests {
 
     #[test]
     fn test_cache_control_directives_are_matched_by_name() {
-        let value = "Public, max-age=60, S-MaxAge=30, x-private-hint".to_string();
+        let values = [
+            "Public, max-age=60".to_string(),
+            "S-MaxAge=30, x-private-hint".to_string(),
+        ];
         assert_eq!(
-            cache_control_directives(Some(&value)),
+            cache_control_directives(&values),
             vec!["public", "max-age", "s-maxage", "x-private-hint"]
         );
-        assert!(cache_control_directives(None).is_empty());
+        assert!(cache_control_directives(&[]).is_empty());
     }
 }

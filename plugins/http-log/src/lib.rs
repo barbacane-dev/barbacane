@@ -114,7 +114,9 @@ struct HttpRequest {
 impl HttpLog {
     /// Capture request metadata for the response phase.
     pub fn on_request(&mut self, req: Request) -> Action<Request> {
-        // Record start time
+        // Record the start: the wall clock for the entry's timestamp, the
+        // monotonic clock for its duration.
+        context::set("http_log_started_at_ms", &host::unix_time_ms().to_string());
         let start_ms = host_time_now_ms();
         context::set("http_log_start_ms", &start_ms.to_string());
 
@@ -167,8 +169,12 @@ impl HttpLog {
             None
         };
 
+        let started_at_ms = context::get("http_log_started_at_ms")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+
         let log_entry = LogEntry {
-            timestamp_ms: start_ms,
+            timestamp_ms: started_at_ms,
             duration_ms,
             correlation_id,
             request: RequestLog {
@@ -181,11 +187,13 @@ impl HttpLog {
             },
             response: ResponseLog {
                 status: resp.status,
-                headers: if self.include_headers {
-                    Some(resp.headers.clone())
-                } else {
-                    None
-                },
+                headers: self.include_headers.then(|| {
+                    // A repeated field's values, combined as RFC 9110 5.3 allows.
+                    resp.headers
+                        .iter()
+                        .map(|(name, values)| (name.clone(), values.join(", ")))
+                        .collect()
+                }),
                 body_size: if self.include_body {
                     resp.body.as_ref().map(|b| b.len())
                 } else {
@@ -214,11 +222,14 @@ impl HttpLog {
 
         // Best-effort: the payload travels via the side-channel inside
         // `http::call`; a failure is logged but never affects the response.
-        if host::http_call(&request, Some(payload.as_bytes())).is_err() {
-            log_message(
-                Level::Info,
-                "http-log: failed to send log entry (connection error)",
-            );
+        // The host answers a connection failure or a timeout with 502 or 504.
+        match host::http_call(&request, Some(payload.as_bytes())) {
+            Ok(status) if (200..300).contains(&status) => {}
+            Ok(status) => log_message(
+                Level::Warn,
+                &format!("http-log: log entry not delivered: the endpoint answered {status}"),
+            ),
+            Err(()) => log_message(Level::Warn, "http-log: log entry not delivered"),
         }
     }
 }
@@ -235,14 +246,19 @@ mod host {
         barbacane_plugin_sdk::clock::now_ms()
     }
 
-    /// Send the log entry through the shared SDK HTTP helper. The response is
-    /// discarded (best-effort logging); any transport error maps to `Err(())`.
+    /// Milliseconds since the Unix epoch.
+    pub fn unix_time_ms() -> u64 {
+        barbacane_plugin_sdk::clock::unix_time_ms()
+    }
+
+    /// Send the log entry through the shared SDK HTTP helper, returning the
+    /// status the endpoint (or the host, for a failed call) answered.
     pub fn http_call(
         request: &barbacane_plugin_sdk::http::HttpRequest,
         body: Option<&[u8]>,
-    ) -> Result<(), ()> {
+    ) -> Result<u16, ()> {
         barbacane_plugin_sdk::http::call(request, body)
-            .map(|_| ())
+            .map(|response| response.status)
             .map_err(|_| ())
     }
 }
@@ -253,12 +269,19 @@ mod host {
 
     thread_local! {
         static TIME_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        static UNIX_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        static STATUS: std::cell::Cell<u16> = const { std::cell::Cell::new(200) };
         static HTTP_CALLS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+        static HTTP_BODIES: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
         static LOG_MESSAGES: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
     }
 
     pub fn time_now_ms() -> u64 {
         TIME_MS.with(|t| t.get())
+    }
+
+    pub fn unix_time_ms() -> u64 {
+        UNIX_MS.with(|t| t.get())
     }
 
     pub fn log_message(level: barbacane_plugin_sdk::log::Level, msg: &str) {
@@ -275,11 +298,12 @@ mod host {
     /// on native and wasm.
     pub fn http_call(
         request: &barbacane_plugin_sdk::http::HttpRequest,
-        _body: Option<&[u8]>,
-    ) -> Result<(), ()> {
+        body: Option<&[u8]>,
+    ) -> Result<u16, ()> {
         let json = serde_json::to_vec(request).unwrap_or_default();
         HTTP_CALLS.with(|calls| calls.borrow_mut().push(json));
-        Ok(())
+        HTTP_BODIES.with(|bodies| bodies.borrow_mut().push(body.unwrap_or_default().to_vec()));
+        Ok(STATUS.with(|s| s.get()))
     }
 
     // ==================== Test helpers ====================
@@ -290,11 +314,29 @@ mod host {
     }
 
     #[cfg(test)]
+    pub fn set_mock_unix_time(ms: u64) {
+        UNIX_MS.with(|t| t.set(ms));
+    }
+
+    #[cfg(test)]
+    pub fn set_endpoint_status(status: u16) {
+        STATUS.with(|s| s.set(status));
+    }
+
+    #[cfg(test)]
     pub fn reset_mock_state() {
         super::context::clear();
         TIME_MS.with(|t| t.set(0));
+        UNIX_MS.with(|t| t.set(0));
+        STATUS.with(|s| s.set(200));
         HTTP_CALLS.with(|calls| calls.borrow_mut().clear());
+        HTTP_BODIES.with(|bodies| bodies.borrow_mut().clear());
         LOG_MESSAGES.with(|logs| logs.borrow_mut().clear());
+    }
+
+    #[cfg(test)]
+    pub fn get_http_bodies() -> Vec<Vec<u8>> {
+        HTTP_BODIES.with(|bodies| bodies.borrow().clone())
     }
 
     #[cfg(test)]
@@ -303,7 +345,6 @@ mod host {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub fn get_log_messages() -> Vec<(i32, String)> {
         LOG_MESSAGES.with(|logs| logs.borrow().clone())
     }
@@ -363,10 +404,8 @@ mod tests {
     }
 
     fn test_response() -> Response {
-        let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
         Response::new(201)
-            .with_headers(headers)
+            .with_header("content-type", "application/json")
             .with_body(br#"{"id":42}"#.to_vec())
     }
 
@@ -556,6 +595,45 @@ mod tests {
 
         // Body payload is sent via set_http_request_body side-channel (no-op in
         // native stubs); log entry structure is verified by log_entry_* tests.
+    }
+
+    /// `timestamp_ms` is Unix time at the request's start; `duration_ms` is
+    /// measured on the monotonic clock.
+    #[test]
+    fn the_entry_is_stamped_with_unix_time() {
+        host::reset_mock_state();
+        host::set_mock_unix_time(1_764_000_000_123);
+        host::set_mock_time(1000);
+        let mut plugin = test_plugin();
+        plugin.on_request(test_request());
+        host::set_mock_unix_time(1_764_000_000_173);
+        host::set_mock_time(1050);
+        plugin.on_response(test_response());
+
+        let entry: serde_json::Value =
+            serde_json::from_slice(&host::get_http_bodies()[0]).expect("a JSON entry");
+        assert_eq!(entry["timestamp_ms"], 1_764_000_000_123u64);
+        assert_eq!(entry["duration_ms"], 50);
+    }
+
+    /// The host answers a failed call with a status: an entry the endpoint
+    /// did not accept is a warning, one it accepted is not.
+    #[test]
+    fn an_undelivered_entry_is_a_warning() {
+        for (status, warned) in [(502, true), (504, true), (500, true), (204, false)] {
+            host::reset_mock_state();
+            host::set_endpoint_status(status);
+            let mut plugin = test_plugin();
+            plugin.on_request(test_request());
+            plugin.on_response(test_response());
+            let warnings: Vec<_> = host::get_log_messages()
+                .into_iter()
+                .filter(|(level, msg)| {
+                    *level == Level::Warn as i32 && msg.contains("not delivered")
+                })
+                .collect();
+            assert_eq!(!warnings.is_empty(), warned, "{status}: {warnings:?}");
+        }
     }
 
     #[test]

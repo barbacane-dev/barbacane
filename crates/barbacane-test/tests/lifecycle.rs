@@ -38,61 +38,43 @@ async fn test_deprecation_header_not_present_on_current_endpoint() {
     );
 }
 
+/// `deprecated: true` carries no date, and RFC 9745's `Deprecation` is a
+/// date: without `x-deprecation` the header is not sent.
 #[tokio::test]
-async fn test_deprecation_header_present_on_deprecated_endpoint() {
+async fn test_deprecated_without_a_date_sends_no_deprecation_header() {
     let gateway = TestGateway::from_spec(&fixture("deprecated.yaml"))
         .await
         .expect("failed to start gateway");
 
-    // Deprecated endpoint (without sunset) should have Deprecation header only
     let resp = gateway.get("/v1/users").await.unwrap();
     assert_eq!(resp.status(), 200);
-
-    let deprecation = resp.headers().get("deprecation");
-    assert!(
-        deprecation.is_some(),
-        "Deprecated endpoint should have Deprecation header"
-    );
-    assert_eq!(
-        deprecation.unwrap().to_str().unwrap(),
-        "true",
-        "Deprecation header should be 'true'"
-    );
-
-    // This endpoint has no sunset date configured
-    assert!(
-        !resp.headers().contains_key("sunset"),
-        "Endpoint without x-sunset should not have Sunset header"
-    );
+    assert!(!resp.headers().contains_key("deprecation"));
+    assert!(!resp.headers().contains_key("sunset"));
 }
 
+/// `x-deprecation` is sent as an RFC 9745 Date (`@<unix seconds>`), and
+/// `x-sunset` as an HTTP-date.
 #[tokio::test]
 async fn test_deprecation_and_sunset_headers_present() {
     let gateway = TestGateway::from_spec(&fixture("deprecated.yaml"))
         .await
         .expect("failed to start gateway");
 
-    // Deprecated endpoint with sunset date should have both headers
     let resp = gateway.get("/v1/users/123").await.unwrap();
     assert_eq!(resp.status(), 200);
 
-    let deprecation = resp.headers().get("deprecation");
-    assert!(
-        deprecation.is_some(),
-        "Deprecated endpoint should have Deprecation header"
-    );
-    assert_eq!(deprecation.unwrap().to_str().unwrap(), "true");
-
-    let sunset = resp.headers().get("sunset");
-    assert!(
-        sunset.is_some(),
-        "Endpoint with x-sunset should have Sunset header"
+    // 2025-06-30T00:00:00Z
+    assert_eq!(
+        resp.headers()
+            .get("deprecation")
+            .map(|v| v.to_str().unwrap()),
+        Some("@1751241600")
     );
     // The fixture writes "Sat, 31 Dec 2025 23:59:59 GMT"; that day is a
     // Wednesday, and the header names it.
     assert_eq!(
-        sunset.unwrap().to_str().unwrap(),
-        "Wed, 31 Dec 2025 23:59:59 GMT"
+        resp.headers().get("sunset").map(|v| v.to_str().unwrap()),
+        Some("Wed, 31 Dec 2025 23:59:59 GMT")
     );
 }
 
@@ -122,8 +104,13 @@ async fn test_legacy_endpoint_with_far_future_sunset() {
     let resp = gateway.get("/legacy/status").await.unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Check both headers
-    assert!(resp.headers().contains_key("deprecation"));
+    // 2029-01-01T12:00:00+02:00 is 10:00 UTC.
+    assert_eq!(
+        resp.headers()
+            .get("deprecation")
+            .map(|v| v.to_str().unwrap()),
+        Some("@1861956000")
+    );
     let sunset = resp.headers().get("sunset");
     assert!(sunset.is_some());
     let sunset_val = sunset.unwrap().to_str().unwrap();

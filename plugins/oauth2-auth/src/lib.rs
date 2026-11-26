@@ -31,7 +31,7 @@ pub struct OAuth2Auth {
     /// Expected audience (`aud`). If set, the introspection response's `aud` must
     /// contain this value; otherwise tokens minted for any audience at this
     /// authorization server are accepted (confused-deputy risk on shared IdPs).
-    #[serde(default)]
+    #[serde(default = "no_audience", deserialize_with = "audience")]
     audience: Option<String>,
 
     /// Request timeout in seconds for introspection call.
@@ -43,23 +43,39 @@ fn default_timeout() -> f64 {
     5.0 // 5 seconds default for auth calls
 }
 
-/// Warn (once) that no `audience` is configured, so tokens for any audience at
-/// this authorization server are accepted (confused-deputy risk on shared IdPs).
+/// The `audience` setting. Without one, tokens for any audience at this authorization server are
+/// accepted (confused-deputy risk on shared IdPs), which `init` warns about.
+fn audience<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    let audience = Option::<String>::deserialize(deserializer)?;
+    if audience.is_none() {
+        warn_no_audience();
+    }
+    Ok(audience)
+}
+
+/// No `audience` setting: `init` warns.
+fn no_audience() -> Option<String> {
+    warn_no_audience();
+    None
+}
+
 #[cfg(target_arch = "wasm32")]
-fn warn_once_no_audience() {
-    use core::cell::Cell;
-    thread_local! { static WARNED: Cell<bool> = const { Cell::new(false) }; }
-    WARNED.with(|w| {
-        if !w.get() {
-            w.set(true);
-            let msg = "oauth2-auth: no 'audience' configured; tokens for any audience at this authorization server are accepted (confused-deputy risk). Set 'audience' for multi-RP setups.";
-            barbacane_plugin_sdk::log::warn(msg);
-        }
-    });
+fn warn_no_audience() {
+    barbacane_plugin_sdk::log::warn(
+        "oauth2-auth: no 'audience' configured; tokens for any audience at this authorization server are accepted (confused-deputy risk). Set 'audience' for multi-RP setups.",
+    );
+}
+
+/// Counts the warnings, for the tests.
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_no_audience() {
+    NO_AUDIENCE_WARNINGS.with(|count| count.set(count.get() + 1));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn warn_once_no_audience() {}
+thread_local! {
+    static NO_AUDIENCE_WARNINGS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 /// RFC 7662 Token Introspection Response.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -110,6 +126,11 @@ struct IntrospectionResponse {
     /// OPTIONAL. JWT ID.
     #[serde(default)]
     jti: Option<String>,
+
+    /// Every other member of the response (RFC 7662 section 2.2 lets the
+    /// server add its own), carried in `x-auth-claims`.
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// OAuth2 validation error.
@@ -250,15 +271,12 @@ impl OAuth2Auth {
     }
 
     /// Validate the introspection `aud` against the configured `audience`. When no
-    /// audience is configured, tokens for any audience are accepted; warn once so
-    /// operators on shared authorization servers know to set it (RFC 8725).
+    /// audience is configured, tokens for any audience are accepted; `init`
+    /// warned about it (RFC 8725).
     fn check_audience(&self, introspection: &IntrospectionResponse) -> Result<(), OAuth2Error> {
         let expected = match &self.audience {
             Some(a) => a.as_str(),
-            None => {
-                warn_once_no_audience();
-                return Ok(());
-            }
+            None => return Ok(()),
         };
         let matches = match &introspection.aud {
             Some(serde_json::Value::String(s)) => s == expected,
@@ -359,7 +377,10 @@ impl OAuth2Auth {
     fn error_response(&self, error: &OAuth2Error) -> Response {
         let status = error.status_code();
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         // RFC 6750: WWW-Authenticate header, on the answers that challenge the client.
         if status != 503 {
@@ -368,7 +389,7 @@ impl OAuth2Auth {
                 error.as_str(),
                 error.description()
             );
-            headers.insert("www-authenticate".to_string(), www_auth);
+            headers.insert("www-authenticate".to_string(), vec![www_auth]);
         }
 
         let (error_type, title) = match status {
@@ -466,6 +487,44 @@ mod tests {
             aud,
             ..Default::default()
         }
+    }
+
+    fn no_audience_warnings() -> u32 {
+        NO_AUDIENCE_WARNINGS.with(|count| count.get())
+    }
+
+    /// A configuration without `audience` is warned about when `init` reads
+    /// it, not on each request it checks.
+    #[test]
+    fn a_missing_audience_is_warned_about_once_per_configuration() {
+        let before = no_audience_warnings();
+        let config: OAuth2Auth = serde_json::from_str(
+            r#"{"introspection_endpoint": "https://auth.example.com/introspect",
+                "client_id": "c", "client_secret": "s"}"#,
+        )
+        .unwrap();
+        assert_eq!(no_audience_warnings(), before + 1);
+        for _ in 0..3 {
+            assert!(config
+                .check_audience(&introspection(true, Some(serde_json::json!("any"))))
+                .is_ok());
+        }
+        assert_eq!(no_audience_warnings(), before + 1);
+    }
+
+    /// `x-auth-claims` carries the members the server adds beside the
+    /// standard ones.
+    #[test]
+    fn the_claims_header_keeps_every_member() {
+        let introspection: IntrospectionResponse = serde_json::from_str(
+            r#"{"active": true, "sub": "alice", "tenant": "acme", "roles": ["admin"]}"#,
+        )
+        .unwrap();
+        let claims: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&introspection).unwrap()).unwrap();
+        assert_eq!(claims["sub"], "alice");
+        assert_eq!(claims["tenant"], "acme");
+        assert_eq!(claims["roles"], serde_json::json!(["admin"]));
     }
 
     #[test]
@@ -591,6 +650,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "read write");
@@ -613,6 +673,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "read write");
@@ -639,6 +700,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "read");
@@ -665,6 +727,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "");
@@ -678,10 +741,7 @@ mod tests {
 
         let response = config.error_response(&error);
         assert_eq!(response.status, 401);
-        assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(response.header("content-type").unwrap(), "application/json");
         assert!(response.headers.contains_key("www-authenticate"));
 
         let body = String::from_utf8(response.body.unwrap()).unwrap();
@@ -697,10 +757,7 @@ mod tests {
 
         let response = config.error_response(&error);
         assert_eq!(response.status, 403);
-        assert_eq!(
-            response.headers.get("content-type").unwrap(),
-            "application/json"
-        );
+        assert_eq!(response.header("content-type").unwrap(), "application/json");
 
         let body = String::from_utf8(response.body.unwrap()).unwrap();
         assert!(body.contains("\"status\":403"));
@@ -714,7 +771,7 @@ mod tests {
         let error = OAuth2Error::MissingToken;
 
         let response = config.error_response(&error);
-        let www_auth = response.headers.get("www-authenticate").unwrap();
+        let www_auth = response.header("www-authenticate").unwrap();
         assert!(www_auth.contains("Bearer realm=\"api\""));
         assert!(www_auth.contains("error=\"missing_token\""));
         assert!(www_auth.contains("Bearer token required"));
@@ -912,6 +969,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         // Simulate on_request header logic: sub takes precedence over username
@@ -937,6 +995,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let consumer = introspection

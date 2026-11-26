@@ -25,7 +25,7 @@ x-barbacane-middlewares:
 |----------|------|---------|-------------|
 | `header_name` | string | `X-Correlation-ID` | Header name for the correlation ID |
 | `generate_if_missing` | boolean | `true` | Generate new UUID v7 if not provided |
-| `trust_incoming` | boolean | `true` | Trust and propagate incoming correlation IDs |
+| `trust_incoming` | boolean | `true` | Trust and propagate incoming correlation IDs. When `false`, the client's header is removed, and replaced only when `generate_if_missing` is set |
 | `include_in_response` | boolean | `true` | Include correlation ID in response headers |
 
 ---
@@ -87,11 +87,11 @@ Each log entry is a JSON object:
 }
 ```
 
-Optional fields (`correlation_id`, `headers`, `body_size`, `query`) are omitted when not available or not enabled.
+`timestamp_ms` is the Unix time, in milliseconds, at which the request reached the plugin; `duration_ms` runs from then to the response. Optional fields (`correlation_id`, `headers`, `body_size`, `query`) are omitted when not available or not enabled. A response header the response repeats is one string, its values joined with `, `.
 
 ### Behavior
 
 - Runs in the **response phase** (after dispatch) to capture both request and response data
-- Log delivery is **best-effort** — failures never affect the upstream response
+- Log delivery is **best-effort** — failures never affect the upstream response. An entry the endpoint does not accept (no connection, a timeout, a status outside 2xx) is logged as a warning
 - The `correlation_id` field is automatically populated if the `correlation-id` middleware runs earlier in the chain
 - Custom fields are flattened into the top-level JSON object

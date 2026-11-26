@@ -197,7 +197,7 @@ signed by the release workflow run that produced it. Verify a download before
 using it:
 
 ```bash
-gh attestation verify barbacane-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify barbacane-x86_64-unknown-linux-gnu \
   --repo barbacane-dev/barbacane
 ```
 

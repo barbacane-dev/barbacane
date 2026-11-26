@@ -8,7 +8,7 @@
 - **Compile-time safety** — Misconfigurations, ambiguous routes, and missing plugins are caught at compile time, not at 3 AM.
 - **Fast and predictable** — Built on Rust, Tokio, and Hyper. No garbage collector, no latency surprises.
 - **Secure by default** — Memory-safe runtime, TLS via Rustls, sandboxed WASM plugins, secrets never baked into artifacts.
-- **Extensible** — Write plugins in any language that compiles to WebAssembly. They run in a sandbox, so a buggy plugin can't take down the gateway.
+- **Extensible** — Write plugins in Rust with the plugin SDK, compiled to WebAssembly. They run in a sandbox, so a buggy plugin can't take down the gateway.
 - **Observable** — Prometheus metrics, structured JSON logging, and distributed tracing with W3C Trace Context and OTLP export.
 
 ## Quick Start

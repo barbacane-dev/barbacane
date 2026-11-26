@@ -10,7 +10,7 @@
 //!     .with("consumer", "alice")
 //!     .into_response();
 //! assert_eq!(resp.status, 403);
-//! assert_eq!(resp.headers.get("content-type").unwrap(), "application/problem+json");
+//! assert_eq!(resp.header("content-type"), Some("application/problem+json"));
 //! ```
 
 use std::collections::BTreeMap;
@@ -73,7 +73,7 @@ impl ProblemDetails {
         let mut headers = BTreeMap::new();
         headers.insert(
             "content-type".to_string(),
-            "application/problem+json".to_string(),
+            vec!["application/problem+json".to_string()],
         );
         // A problem object always serializes; fall back to a minimal body if not.
         let body = serde_json::to_vec(&self.to_json()).unwrap_or_else(|_| {
@@ -104,8 +104,8 @@ mod tests {
 
         assert_eq!(resp.status, 403);
         assert_eq!(
-            resp.headers.get("content-type").unwrap(),
-            "application/problem+json"
+            resp.header("content-type"),
+            Some("application/problem+json")
         );
         let body: serde_json::Value = serde_json::from_slice(resp.body.as_ref().unwrap()).unwrap();
         assert_eq!(body["type"], "urn:barbacane:error:acl-denied");

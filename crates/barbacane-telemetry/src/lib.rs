@@ -34,7 +34,7 @@ pub use config::{LogFormat, OtlpProtocol, TelemetryConfig};
 pub use logging::events;
 pub use metrics::MetricsRegistry;
 pub use prometheus::PROMETHEUS_CONTENT_TYPE;
-pub use tracing::{attributes, spans, TracingContext};
+pub use tracing::{attributes, spans};
 
 use std::sync::Arc;
 use thiserror::Error;
@@ -65,26 +65,13 @@ pub struct Telemetry {
 }
 
 impl Telemetry {
-    /// Initialize telemetry with the given configuration.
-    ///
-    /// This sets up:
-    /// - Structured logging (JSON or pretty format)
-    /// - Metrics registry
-    /// - OTLP exporter (if endpoint configured)
+    /// Initialize telemetry with the given configuration: the tracer
+    /// provider (OTLP export when an endpoint is set), structured logging with
+    /// the OpenTelemetry layer, and the metrics registry.
     pub fn init(config: TelemetryConfig) -> Result<Self, TelemetryError> {
-        // Initialize structured logging
-        logging::init_logging(&config)?;
-
-        // Initialize metrics registry
+        let provider = export::init_tracer_provider(&config)?;
+        logging::init_logging(&config, &provider)?;
         let metrics = Arc::new(MetricsRegistry::new());
-
-        // Initialize tracer - OTLP if endpoint configured, basic otherwise
-        if config.otlp_endpoint.is_some() {
-            export::init_otlp_tracer(&config)?;
-        } else {
-            tracing::init_basic_tracer(&config.service_name, config.trace_sampling);
-        }
-
         Ok(Self { config, metrics })
     }
 
@@ -92,28 +79,14 @@ impl Telemetry {
     ///
     /// Use this when logging is already initialized (e.g., in tests).
     pub fn init_without_logging(config: TelemetryConfig) -> Result<Self, TelemetryError> {
-        // Initialize metrics registry
+        export::init_tracer_provider(&config)?;
         let metrics = Arc::new(MetricsRegistry::new());
-
-        // Initialize tracer - OTLP if endpoint configured, basic otherwise
-        if config.otlp_endpoint.is_some() {
-            export::init_otlp_tracer(&config)?;
-        } else {
-            tracing::init_basic_tracer(&config.service_name, config.trace_sampling);
-        }
-
         Ok(Self { config, metrics })
     }
 
-    /// Shutdown telemetry gracefully.
-    ///
-    /// Flushes any remaining spans before shutdown.
+    /// Shutdown telemetry gracefully: export the spans still buffered.
     pub fn shutdown(&self) {
-        if self.config.otlp_endpoint.is_some() {
-            export::shutdown_otlp();
-        } else {
-            tracing::shutdown_tracer();
-        }
+        export::shutdown();
     }
 
     /// Get the telemetry configuration.

@@ -134,6 +134,43 @@ async fn test_http_upstream_get() {
     );
 }
 
+/// Header fields the upstream repeats reach the client as separate fields,
+/// each with its value: two cookies stay two cookies.
+#[tokio::test]
+async fn test_http_upstream_keeps_repeated_response_headers() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/get"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .append_header("set-cookie", "a=1; Path=/")
+                .append_header("set-cookie", "b=2; Path=/")
+                .append_header("link", "</next>; rel=next")
+                .set_body_string("ok"),
+        )
+        .mount(&upstream)
+        .await;
+
+    let (_tmp, spec) = http_upstream_spec(&upstream.uri());
+    let gateway = TestGateway::from_spec(spec.to_str().unwrap())
+        .await
+        .expect("failed to start gateway");
+
+    let resp = gateway.get("/proxy/get").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let cookies: Vec<&str> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect();
+    assert_eq!(cookies, ["a=1; Path=/", "b=2; Path=/"]);
+    assert_eq!(resp.headers().get("link").unwrap(), "</next>; rel=next");
+}
+
 #[tokio::test]
 async fn test_http_upstream_post() {
     use wiremock::matchers::{method, path};

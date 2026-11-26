@@ -199,13 +199,20 @@ Config values can reference secrets instead of hardcoding sensitive data. Secret
 
 **Example with secret reference:**
 ```yaml
+x-barbacane-middlewares:
+  - name: request-transformer
+    config:
+      headers:
+        add:
+          # The whole value is the reference: UPSTREAM_AUTHORIZATION holds "Bearer <key>".
+          Authorization: "env://UPSTREAM_AUTHORIZATION"
 x-barbacane-dispatch:
   name: http-upstream
   config:
     url: "https://api.example.com"
-    headers:
-      Authorization: "Bearer env://UPSTREAM_API_KEY"
 ```
+
+A secret reference resolves only as a whole value.
 
 If a secret cannot be resolved, the gateway fails to start with exit code 13.
 
@@ -505,9 +512,9 @@ Per-operation observability middleware for SLO monitoring, detailed logging, and
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `latency_slo_ms` | integer | - | Latency threshold in ms; increments `barbacane_plugin_observability_slo_violation_total{slo_ms}` when exceeded |
-| `detailed_request_logs` | boolean | `false` | Log incoming request details |
-| `detailed_response_logs` | boolean | `false` | Log outgoing response details including duration |
+| `latency_slo_ms` | integer | - | Latency threshold in ms; increments `barbacane_plugin_observability_slo_violation_total{slo_ms}` and logs a warning when exceeded |
+| `detailed_request_logs` | boolean | `false` | Log incoming request details, at info |
+| `detailed_response_logs` | boolean | `false` | Log outgoing response details including duration, at info |
 | `emit_latency_histogram` | boolean | `false` | Emit `barbacane_plugin_observability_latency_seconds{status}`, a latency histogram |
 
 ---

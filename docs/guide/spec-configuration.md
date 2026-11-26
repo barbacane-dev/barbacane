@@ -52,7 +52,7 @@ paths:
             type: string
 ```
 
-Every `in: path` parameter must be named in the path template; one the template does not name would never be captured, and fails compilation with `E1054`.
+Every `in: path` parameter must be named in the path template; one the template does not name would never be captured, and fails compilation with `E1054`. A parameter name is any text without `{`, `}` or `/`: `{user-id}` and `{item.id}` are names.
 
 ### A Parameter Within a Segment
 
@@ -93,7 +93,7 @@ A `GET /files/my-bucket/docs/2024/report.pdf` request captures `bucket=my-bucket
 **Rules:**
 - The wildcard parameter must be the **last segment** of the path
 - At most one wildcard parameter per path
-- Parameter names use the same characters as regular params (alphanumeric and `_`)
+- `+` ends the name: `{path+}` captures `path`, and a `+` elsewhere in the name fails with `E1054`
 
 **`allowReserved` note:** This is advisory metadata for client generators and documentation tools — it signals that the value may contain unencoded `/` characters. Barbacane does not parse or enforce it, but including it produces correct client SDKs.
 
@@ -240,7 +240,7 @@ x-barbacane-middlewares:
       window: 60
   - name: cors
     config:
-      allow_origin: "*"
+      allowed_origins: ["*"]
 
 paths:
   /public/stats:
@@ -494,7 +494,7 @@ operations:
 
 ## API Lifecycle
 
-Barbacane supports API lifecycle management through standard OpenAPI deprecation and the `x-sunset` extension.
+Barbacane supports API lifecycle management through standard OpenAPI deprecation and the `x-deprecation` and `x-sunset` extensions.
 
 ### Marking Operations as Deprecated
 
@@ -512,7 +512,25 @@ paths:
           url: "https://api.example.com"
 ```
 
-When a client calls a deprecated endpoint, the response includes a `Deprecation: true` header per [draft-ietf-httpapi-deprecation-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-deprecation-header/).
+`deprecated: true` marks the operation in the spec. It carries no date, so on its own it adds no header.
+
+### Setting a Deprecation Date
+
+Use `x-deprecation` to give the date the endpoint was or will be deprecated (per [RFC 9745](https://www.rfc-editor.org/rfc/rfc9745.html)):
+
+```yaml
+paths:
+  /v1/users:
+    get:
+      deprecated: true
+      x-deprecation: "2026-06-30"
+      x-barbacane-dispatch:
+        name: http-upstream
+        config:
+          url: "https://api.example.com"
+```
+
+The response includes a `Deprecation` header holding that date as a Structured Field Date, the Unix time prefixed with `@` (`Deprecation: @1782777600`). The date may be in the future, to announce a deprecation. `x-deprecation` takes the same formats as `x-sunset` below; any other value fails compilation with `E1018`.
 
 ### Setting a Sunset Date
 
@@ -523,6 +541,7 @@ paths:
   /v1/users:
     get:
       deprecated: true
+      x-deprecation: "2026-06-30"
       x-sunset: "Thu, 31 Dec 2026 23:59:59 GMT"
       x-barbacane-dispatch:
         name: http-upstream
@@ -530,20 +549,20 @@ paths:
           url: "https://api.example.com"
 ```
 
-The response includes a `Sunset` header per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594), whether or not the operation is deprecated. `x-sunset` is an HTTP-date (RFC 9110), an RFC 3339 date-time, or a date (`2026-12-31`, midnight UTC); the header carries it as an HTTP-date, with the day name of its date. Any other value fails compilation with `E1018`.
+The response includes a `Sunset` header per [RFC 8594](https://datatracker.ietf.org/doc/html/rfc8594), whether or not the operation is deprecated. `x-sunset` is an HTTP-date (RFC 9110), an RFC 3339 date-time, or a date (`2026-12-31`, midnight UTC); the header carries it as an HTTP-date, with the day name of its date. Any other value fails compilation with `E1018`, and so does a sunset earlier than the operation's `x-deprecation` (RFC 9745, section 4).
 
 ### Example Response Headers
 
 ```
 HTTP/1.1 200 OK
-Deprecation: true
+Deprecation: @1782777600
 Sunset: Thu, 31 Dec 2026 23:59:59 GMT
 Content-Type: application/json
 ```
 
 ### Best Practices
 
-1. **Mark deprecated first**: Set `deprecated: true` before setting a sunset date
+1. **Announce the deprecation first**: Set `deprecated: true` and `x-deprecation` before setting a sunset date
 2. **Give advance notice**: Set the sunset date at least 6 months in advance
 3. **Update API docs**: Include migration instructions in the operation summary or description
 4. **Monitor usage**: Track calls to deprecated endpoints via metrics
@@ -552,20 +571,21 @@ Content-Type: application/json
 
 ## Validation
 
-The compiler validates your spec:
+`barbacane validate` checks a spec without plugins or an artifact; `barbacane compile` runs every check:
 
 ```bash
 barbacane validate --spec api.yaml
+barbacane compile --spec api.yaml --manifest barbacane.yaml --output api.bca
 ```
 
-Errors you might see:
+Errors you might see (the [CLI reference](../reference/cli.md#error-codes) lists every code and which command reports it):
 
 | Error Code | Meaning |
 |------------|---------|
 | E1010 | Routing conflict: two operations the router files as one route, in one spec or several. Paths compare by their non-empty segments, under their servers' base paths (`/users/` is `/users`), and an AsyncAPI `send` is a `POST`, a `receive` a `GET` |
-| E1020 | Missing `x-barbacane-dispatch` on operation |
+| E1020 | Missing `x-barbacane-dispatch` on operation (`validate` warns, `compile` refuses) |
 | E1031 | Plaintext `http://` or `ws://` upstream URL (use HTTPS or WSS, or `--allow-plaintext` at compile time) |
-| E1054 | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |
+| E1054 | Invalid path template (unbalanced braces, empty param name, `/` in a param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |
 
 ### Request values
 

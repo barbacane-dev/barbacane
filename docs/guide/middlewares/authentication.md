@@ -122,6 +122,7 @@ The `client_secret` uses a secret reference (`env://`) which is resolved at gate
 | `client_id` | string | **required** | Client ID for introspection auth |
 | `client_secret` | string | **required** | Client secret for introspection auth |
 | `required_scopes` | string | - | Space-separated required scopes |
+| `audience` | string | - | Audience the introspection response's `aud` must contain; without it, tokens for any audience at this authorization server are accepted, and `init` logs a warning |
 | `timeout` | float | `5.0` | Introspection request timeout (seconds), at most 60 |
 
 ### Context headers
@@ -133,7 +134,7 @@ Sets headers for downstream:
 - `x-auth-scope` — Token scopes
 - `x-auth-client-id` — Client ID
 - `x-auth-username` — Username (if present)
-- `x-auth-claims` — Full introspection response as JSON
+- `x-auth-claims` — Full introspection response as JSON, members the server adds included
 
 ### Error responses
 
@@ -200,8 +201,9 @@ Sets headers for downstream:
 
 - `401 Unauthorized` — Missing token, invalid token, expired token, bad signature, unknown issuer
 - `403 Forbidden` — Token lacks required scopes
+- `503 Service Unavailable` (`urn:barbacane:error:oidc-unavailable`) — The provider's discovery document or keys cannot be fetched; the token was not judged
 
-Includes RFC 6750 `WWW-Authenticate` header with error details.
+The `401` and `403` answers include an RFC 6750 `WWW-Authenticate` header with error details.
 
 ---
 
@@ -265,7 +267,7 @@ Returns `401 Unauthorized` with `WWW-Authenticate: Basic realm="<realm>"` and Pr
 
 ## ldap-auth
 
-Authenticates `Authorization: Basic` credentials (RFC 7617) against an LDAP or Active Directory server. The user entry is located with a search as a service account, the password is verified with a bind as that entry, and groups come from the entry's membership attribute (`memberOf` by default) or from a group search. Verified and rejected credentials are cached for `cache_ttl_seconds`, so repeated requests with the same credentials do not reach the directory again until the entry expires. Attempts with different passwords each reach the directory; put `rate-limit` in front of `ldap-auth` to bound them.
+Authenticates `Authorization: Basic` credentials (RFC 7617) against an LDAP or Active Directory server. The user entry is located with a search as a service account, the password is verified with a bind as that entry, and groups come from the entry's membership attribute (`memberOf` by default) or from a group search. Verified and rejected credentials are cached for `cache_ttl_seconds`, so repeated requests with the same credentials do not reach the directory again until the entry expires. The gateway holds the cache for every request (the plugin uses the `cache` capability), under a key fingerprinting the configuration, the username and the password; it starts empty at each start and artifact load. Attempts with different passwords each reach the directory; put `rate-limit` in front of `ldap-auth` to bound them.
 
 ```yaml
 x-barbacane-middlewares:

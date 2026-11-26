@@ -213,14 +213,10 @@ mod tests {
     use super::*;
     use crate::db::{NewProject, NewSpec, ProjectsRepository, SpecsRepository};
 
-    /// The test database, migrated; `None` when `DATABASE_URL` is unreachable.
+    /// The test database ([`crate::api::test_pool`]: skipped locally without
+    /// one, failed under CI).
     async fn pool() -> Option<PgPool> {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://barbacane:barbacane@localhost:5432/barbacane".to_string()
-        });
-        let pool = crate::db::create_pool(&url).await.ok()?;
-        crate::db::run_migrations(&pool).await.ok()?;
-        Some(pool)
+        crate::api::test_pool().await
     }
 
     #[tokio::test]

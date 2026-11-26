@@ -101,7 +101,7 @@ my-api/
 ├── specs/
 │   └── api.yaml      # OpenAPI 3.1 specification
 ├── plugins/          # Directory for WASM plugins
-└── .gitignore        # Ignores *.bca, target/, plugins/*.wasm
+└── .gitignore        # Ignores *.bca, target/, *.pk8 signing keys and IDE folders
 ```
 
 ### Exit Codes
@@ -256,8 +256,9 @@ plugins and builds an artifact.
 | E1015 | Extension | Unknown `x-barbacane-*` extension (warning) |
 | E1016 | Plugin | A plugin imports a deprecated host function; it still loads until the release named in the [plugin guide](../contributing/plugins.md#deprecated-host-functions) (warning) |
 | E1017 | Extension | A known extension is set where it has no effect: `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, `x-barbacane-waf` outside the document root |
-| E1018 | Extension | An operation's `x-sunset` is not an HTTP-date, an RFC 3339 date-time or a date |
-| E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
+| E1018 | Extension | An operation's `x-sunset` or `x-deprecation` is not an HTTP-date, an RFC 3339 date-time or a date, or its sunset is earlier than its deprecation |
+| E1020 | Extension | Operation missing `x-barbacane-dispatch` |
+| E1023 | Plugin | A plugin's configuration does not satisfy the JSON Schema the plugin publishes for it |
 | E1031 | Extension | Plaintext `http://` or `ws://` upstream URL not allowed (use `--allow-plaintext` to override) |
 | E1032 | Security | An operation runs an authentication middleware that reads none of the schemes its `security` requirement names |
 | E1033 | Security | An operation requires a credential and runs no authentication middleware (warning) |
@@ -267,22 +268,28 @@ plugins and builds an artifact.
 | E1045 | Plugin | A plugin is not built for this gateway's plugin ABI: it carries no ABI version, names another one, or lacks an export the gateway calls (see the [plugin guide](../contributing/plugins.md#abi-version)), or it has more than one linear memory or table; rebuild it with `barbacane-plugin-sdk` 1.x |
 | E1046 | Plugin | A plugin reference pins a version (`name@1.2.0`) other than the version of the plugin bundled under that name |
 | E1047 | Plugin | A plugin is used in a role its type does not have: a middleware in `x-barbacane-dispatch`, or a dispatcher in `x-barbacane-middlewares` |
+| E1050 | Routing | Two paths match the same requests and differ only in their parameter names (`/users/{id}` and `/users/{userId}`) |
 | E1051 | Schema | A request schema nests more than 32 levels deep, within it or within a definition it references |
 | E1052 | Schema | A request schema holds more than 1024 properties, counting the definitions it references |
+| E1054 | Routing | Invalid path template (unbalanced braces, empty param name, duplicate param, `{param+}` not last segment, multiple wildcards, more than one parameter in a segment), or a path parameter the template does not name |
+| E1055 | Spec validity | Two operations share an `operationId`, in one spec or several |
 | E1056 | Headers | A declared header name is in the reserved `x-auth-*` namespace |
 | E1057 | Security | An operation runs an authentication middleware without a `security` requirement |
+| E1058 | Spec validity | Two specs share a file name; the artifact stores each spec by its name |
 | E1059 | Schema | A request schema cannot be enforced: its `$schema` names neither a JSON Schema draft nor an OpenAPI dialect, it refers to a resource outside the spec, or it does not compile (an invalid `pattern`, for one) |
+| E1070 | Security | A plugin configuration field that holds a secret is a plaintext literal; use an `env://` or `file://` reference (warning) |
 | E1071 | Manifest | A plugin was bundled without its manifest or config schema, so its configured headers are not admitted (warning) |
 | E1072 | Security | A security scheme and an authentication plugin's configuration name different credential headers (warning) |
 | E1073 | Schema | A request body schema the gateway does not apply: one for a content type other than JSON and form bodies, or an AsyncAPI message payload in a format other than JSON Schema (warning) |
+| E1080 | WAF | `x-barbacane-waf` cannot be enforced: no `ruleset`, a rule set that is missing or unreadable, a rule it cannot run, or a key or value it does not read |
+| W1080 | WAF | A rule of the WAF rule set is skipped, as `unsupported_rules` allows (warning) |
 
 ### Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Compilation error (validation failed, routing conflict, undeclared plugin) |
-| 2 | Manifest or plugin resolution error |
+| 1 | Compilation failed: a spec or manifest error, a routing conflict, or a plugin that cannot be resolved or used |
 
 ---
 
@@ -318,8 +325,9 @@ no artifact, so it reports only the codes that need neither.
 | E1013 | Extension | Operation middleware entry sets `enabled: false` but matches no global entry |
 | E1014 | Extension | Global middleware entry sets `enabled: false` |
 | E1017 | Extension | A known extension is set where it has no effect: `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, `x-barbacane-waf` outside the document root |
-| E1018 | Extension | An operation's `x-sunset` is not an HTTP-date, an RFC 3339 date-time or a date |
-| E1020 | Extension | Operation missing `x-barbacane-dispatch` (warning) |
+| E1018 | Extension | An operation's `x-sunset` or `x-deprecation` is not an HTTP-date, an RFC 3339 date-time or a date, or its sunset is earlier than its deprecation |
+| E1010 | Extension | Routing conflict: two operations the router files as one route |
+| E1020 | Extension | Operation missing `x-barbacane-dispatch` (a warning here; `compile` refuses it) |
 
 Every other code is reported by `barbacane compile`, whose table lists them all.
 
@@ -629,8 +637,9 @@ The examples below assume the key is set.
 | `--dev` | No | `false` | Enable development mode |
 | `--log-level` | No | `info` | Log level (trace, debug, info, warn, error) |
 | `--log-format` | No | `json` | Log format (`json` or `pretty`) |
-| `--otlp-endpoint` | No | - | OpenTelemetry endpoint for trace export (e.g., `http://localhost:4317`) |
-| `--trace-sampling` | No | `1.0` | Trace sampling rate (0.0 to 1.0). 1.0 = 100%, 0.1 = 10%, 0.0 = disabled |
+| `--otlp-endpoint` | No | - | OTLP collector to export spans to (e.g., `http://localhost:4317` for gRPC, `http://localhost:4318` for HTTP). Also read from `OTEL_EXPORTER_OTLP_ENDPOINT`. Without one, spans are not exported and requests still carry trace context. See [Distributed tracing](../guide/observability.md#distributed-tracing) |
+| `--otlp-protocol` | No | `grpc` | OTLP transport: `grpc` or `http/protobuf` (`http`). Also read from `OTEL_EXPORTER_OTLP_PROTOCOL` |
+| `--trace-sampling` | No | `1.0` | Share of the traces a request starts that are recorded, from 0.0 to 1.0; a request whose `traceparent` says sampled or not keeps that |
 | `--max-body-size` | No | `1048576` | Maximum request body size in bytes (1MB) |
 | `--max-headers` | No | `100` | Maximum number of request headers. See [Request Limits](#request-limits) |
 | `--max-header-size` | No | `8192` | Maximum size of a single header (name and value) in bytes (8KB) |
@@ -899,20 +908,20 @@ Content-Type: application/json
 
 ### API Lifecycle Headers
 
-For deprecated operations, additional headers are included:
+An operation with an `x-deprecation` or `x-sunset` date answers with these headers:
 
 | Header | Description |
 |--------|-------------|
-| `Deprecation` | `true` - indicates the endpoint is deprecated (per draft-ietf-httpapi-deprecation-header) |
-| `Sunset` | HTTP-date when the endpoint will be removed (per RFC 8594) |
+| `Deprecation` | `@` and the Unix time the endpoint was or will be deprecated, from `x-deprecation` (per RFC 9745) |
+| `Sunset` | HTTP-date when the endpoint will be removed, from `x-sunset` (per RFC 8594) |
 
 Example for deprecated endpoint:
 
 ```
 HTTP/1.1 200 OK
 Server: barbacane
-Deprecation: true
-Sunset: Sat, 31 Dec 2025 23:59:59 GMT
+Deprecation: @1751241600
+Sunset: Wed, 31 Dec 2025 23:59:59 GMT
 Content-Type: application/json
 ```
 
@@ -945,6 +954,7 @@ $ echo $?
 |----------|-------------|
 | `RUST_LOG` | Override log level (e.g., `RUST_LOG=debug`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Alternative to `--otlp-endpoint` flag |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Alternative to `--otlp-protocol` flag |
 
 ---
 

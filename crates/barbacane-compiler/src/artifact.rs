@@ -536,6 +536,14 @@ pub struct CompiledOperation {
     /// Sunset date for deprecated operations (HTTP-date format per RFC 9110).
     #[serde(default)]
     pub sunset: Option<String>,
+    /// Deprecation date, in Unix seconds, sent as `Deprecation: @<seconds>`
+    /// (RFC 9745).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecation: Option<i64>,
+    /// The spec the operation comes from: its file name without the
+    /// extension, the `api` label of its metrics.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api: String,
     /// AsyncAPI messages (for async operations only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
@@ -1537,6 +1545,12 @@ fn compile_inner(
                 middlewares,
                 deprecated: op.deprecated,
                 sunset: op.sunset.clone(),
+                deprecation: op.deprecation,
+                api: std::path::Path::new(spec_file)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("default")
+                    .to_string(),
                 messages: op.messages.clone(),
                 bindings: op.bindings.clone(),
                 responses: op.responses.clone(),
@@ -2197,7 +2211,7 @@ fn extract_upstream_urls(config: &serde_json::Value) -> Vec<String> {
 /// Checks for:
 /// - Balanced braces
 /// - Non-empty parameter names
-/// - Valid characters in parameter names (alphanumeric + underscore)
+/// - No `/` in parameter names (OpenAPI allows any character but `{` and `}`)
 /// - Wildcard suffix `+` allowed only as the last character before `}`, and only on the final segment
 /// - At most one wildcard parameter per path
 /// - No duplicate parameter names in the same path
@@ -2282,26 +2296,20 @@ fn validate_path_template(path: &str, location: &str) -> Result<(), CompileError
                 current_param.clear();
             }
             _ if in_param => {
-                // Allow `+` only as the final character before `}` (wildcard suffix).
-                // We check this lazily: accept `+` here but verify at `}` that it's last.
-                if ch == '+' {
-                    // Peek-ahead isn't available in a char iterator; we'll detect misplacement
-                    // at `}` time by checking that `+` is the last char of current_param.
-                    current_param.push(ch);
-                } else if !ch.is_alphanumeric() && ch != '_' {
+                if ch == '/' {
                     return Err(CompileError::InvalidPathTemplate(format!(
-                        "{} - invalid character '{}' in parameter name",
-                        location, ch
+                        "{} - invalid character '/' in parameter name",
+                        location
                     )));
-                } else if current_param.ends_with('+') {
-                    // A non-`}` character after `+` means `+` was mid-name, not a suffix.
+                }
+                // A character after `+` means `+` was mid-name, not the wildcard suffix.
+                if current_param.ends_with('+') {
                     return Err(CompileError::InvalidPathTemplate(format!(
                         "{} - '+' is only allowed as the last character of a wildcard parameter name (e.g. {{key+}})",
                         location
                     )));
-                } else {
-                    current_param.push(ch);
                 }
+                current_param.push(ch);
             }
             _ => {}
         }
@@ -3691,6 +3699,7 @@ mod tests {
                 middlewares: None,
                 deprecated: false,
                 sunset: None,
+                deprecation: None,
                 extensions: BTreeMap::new(),
                 messages: vec![],
                 bindings: BTreeMap::new(),
@@ -5788,6 +5797,10 @@ paths:
         // A parameter with literal text around it
         assert!(validate_path_template("/reports/{id}.pdf", "test").is_ok());
         assert!(validate_path_template("/files/{id}/thumbnail.{ext}", "test").is_ok());
+        // Names are any characters but `{`, `}` and `/`
+        assert!(validate_path_template("/users/{user-id}", "test").is_ok());
+        assert!(validate_path_template("/items/{item.id}", "test").is_ok());
+        assert!(validate_path_template("/files/{file-path+}", "test").is_ok());
     }
 
     #[test]
@@ -5800,14 +5813,15 @@ paths:
         assert!(validate_path_template("/users/{id}/posts/{id}", "test").is_err());
         // Nested braces
         assert!(validate_path_template("/users/{{id}}", "test").is_err());
-        // Invalid character in param name
-        assert!(validate_path_template("/users/{id-name}", "test").is_err());
+        // `/` in a param name
+        assert!(validate_path_template("/users/{a/b}", "test").is_err());
         // Wildcard not at end
         assert!(validate_path_template("/users/{id+}/orders", "test").is_err());
         // Multiple wildcards
         assert!(validate_path_template("/a/{x+}/{y+}", "test").is_err());
         // `+` in the middle of the name (not a suffix)
         assert!(validate_path_template("/users/{na+me}", "test").is_err());
+        assert!(validate_path_template("/files/{path++}", "test").is_err());
         // Two parameters in one segment
         assert!(validate_path_template("/files/{name}.{ext}", "test").is_err());
         assert!(validate_path_template("/range/{from}-{to}", "test").is_err());

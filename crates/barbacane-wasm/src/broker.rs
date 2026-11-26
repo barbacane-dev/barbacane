@@ -83,12 +83,33 @@ pub struct BrokerMessage {
     #[serde(default)]
     pub key: Option<String>,
 
-    /// Message payload (JSON serialized).
+    /// Message payload, as text.
     pub payload: String,
+
+    /// Message payload as base64, for bytes that are not UTF-8. When set, it is
+    /// the payload and `payload` is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_base64: Option<String>,
 
     /// Message headers/metadata.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+}
+
+impl BrokerMessage {
+    /// The bytes to publish: `payload_base64` decoded when set, `payload`
+    /// otherwise.
+    pub fn payload_bytes(&self) -> Result<Vec<u8>, String> {
+        match &self.payload_base64 {
+            Some(encoded) => {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|e| format!("payload_base64 is not base64: {e}"))
+            }
+            None => Ok(self.payload.as_bytes().to_vec()),
+        }
+    }
 }
 
 /// Result of a publish operation.
@@ -141,6 +162,22 @@ impl PublishResult {
 mod tests {
     use super::*;
 
+    /// `payload_base64` carries bytes that are not UTF-8; without it the text
+    /// payload is sent.
+    #[test]
+    fn the_payload_is_the_base64_bytes_when_set() {
+        let text: BrokerMessage = serde_json::from_str(r#"{"topic":"t","payload":"hi"}"#).unwrap();
+        assert_eq!(text.payload_bytes().unwrap(), b"hi");
+
+        let binary: BrokerMessage =
+            serde_json::from_str(r#"{"topic":"t","payload":"","payload_base64":"/wA="}"#).unwrap();
+        assert_eq!(binary.payload_bytes().unwrap(), [0xff, 0x00]);
+
+        let invalid: BrokerMessage =
+            serde_json::from_str(r#"{"topic":"t","payload":"","payload_base64":"%%"}"#).unwrap();
+        assert!(invalid.payload_bytes().is_err());
+    }
+
     #[test]
     fn broker_message_url_roundtrip() {
         let message = BrokerMessage {
@@ -148,6 +185,7 @@ mod tests {
             topic: "test.subject".to_string(),
             key: None,
             payload: r#"{"data":"hello"}"#.to_string(),
+            payload_base64: None,
             headers: BTreeMap::new(),
         };
 
@@ -178,6 +216,7 @@ mod tests {
             topic: "orders.placed".to_string(),
             key: Some("order-789".to_string()),
             payload: r#"{"orderId":"789"}"#.to_string(),
+            payload_base64: None,
             headers,
         };
 

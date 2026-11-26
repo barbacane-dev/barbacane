@@ -115,7 +115,7 @@ curl "http://localhost:8080/__barbacane/specs/openapi?format=yaml"
 
 ### Extension Stripping
 
-All specs served via these endpoints have internal `x-barbacane-*` extensions stripped automatically. Only standard OpenAPI/AsyncAPI fields and the `x-sunset` extension (RFC 8594) are preserved.
+All specs served via these endpoints have internal `x-barbacane-*` extensions stripped automatically. Standard OpenAPI/AsyncAPI fields and other extensions, such as `x-deprecation` and `x-sunset`, are preserved.
 
 ### Usage
 
@@ -188,11 +188,11 @@ Returns gateway metrics in Prometheus text exposition format.
 ```
 # HELP barbacane_requests_total Total number of HTTP requests processed
 # TYPE barbacane_requests_total counter
-barbacane_requests_total{method="GET",path="/users",status="200",api="users-api"} 42
+barbacane_requests_total{method="GET",path="/users",status="200",api="users"} 42
 
 # HELP barbacane_request_duration_seconds HTTP request duration in seconds
 # TYPE barbacane_request_duration_seconds histogram
-barbacane_request_duration_seconds_bucket{method="GET",path="/users",status="200",api="users-api",le="0.01"} 35
+barbacane_request_duration_seconds_bucket{method="GET",path="/users",status="200",api="users",le="0.01"} 35
 ...
 
 # HELP barbacane_active_connections Number of currently active connections
@@ -201,6 +201,8 @@ barbacane_active_connections 5
 ```
 
 #### Available Metrics
+
+`api` is the file name, without its extension, of the spec the matched operation comes from (`users` for `users.yaml`), and `<unmatched>` for a request that matches no route, as `path` is.
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
@@ -212,8 +214,11 @@ barbacane_active_connections 5
 | `barbacane_connections_total` | counter | - | Total connections accepted |
 | `barbacane_validation_failures_total` | counter | method, path, reason | Validation errors |
 | `barbacane_middleware_duration_seconds` | histogram | middleware, phase | Middleware execution time |
-| `barbacane_dispatch_duration_seconds` | histogram | dispatcher, upstream | Dispatcher execution time |
-| `barbacane_wasm_execution_duration_seconds` | histogram | plugin, function | WASM plugin execution time |
+| `barbacane_dispatch_duration_seconds` | histogram | dispatcher | Dispatcher execution time; for a streamed response, until the stream ends |
+| `barbacane_dispatch_errors_total` | counter | dispatcher | Dispatches that failed: the dispatcher trapped, ran out of fuel or passed its deadline |
+| `barbacane_wasm_execution_duration_seconds` | histogram | plugin, function | Time of each plugin call; `function` is `init`, `on_request`, `on_response` or `dispatch` |
+| `barbacane_wasm_traps_total` | counter | plugin, function | Plugin calls that trapped, ran out of fuel or passed their deadline |
+| `barbacane_deprecated_route_requests_total` | counter | method, path, api | Requests to operations marked `deprecated: true` |
 | `barbacane_wasm_instances` | gauge | - | Plugin instances alive now |
 | `barbacane_wasm_instances_unpooled_total` | counter | - | Plugin instances allocated per request because the instance pool was full |
 

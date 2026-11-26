@@ -151,7 +151,7 @@ impl RateLimit {
         }
         for header in RESPONSE_HEADERS {
             if let Some(value) = context::get(&format!("rate-limit.{header}")) {
-                modified_resp.headers.insert((*header).to_string(), value);
+                modified_resp.set_header(*header, value);
             }
         }
         modified_resp
@@ -231,10 +231,9 @@ impl RateLimit {
         .into_response();
 
         // IETF draft rate limit headers
-        resp.headers
-            .insert("ratelimit-policy".to_string(), policy_header.to_string());
-        resp.headers.insert(
-            "ratelimit".to_string(),
+        resp.set_header("ratelimit-policy", policy_header.to_string());
+        resp.set_header(
+            "ratelimit",
             format!(
                 "limit={}, remaining=0, reset={}",
                 result.limit, result.reset
@@ -243,8 +242,7 @@ impl RateLimit {
 
         // Retry-After header
         if let Some(retry_after) = result.retry_after {
-            resp.headers
-                .insert("retry-after".to_string(), retry_after.to_string());
+            resp.set_header("retry-after", retry_after.to_string());
         }
 
         resp
@@ -534,15 +532,15 @@ mod tests {
         let response = rate_limit.too_many_requests_response(&result, "default;q=10;w=60");
 
         assert_eq!(
-            response.headers.get("content-type").unwrap(),
+            response.header("content-type").unwrap(),
             "application/problem+json"
         );
         assert_eq!(
-            response.headers.get("ratelimit-policy").unwrap(),
+            response.header("ratelimit-policy").unwrap(),
             "default;q=10;w=60"
         );
         assert_eq!(
-            response.headers.get("ratelimit").unwrap(),
+            response.header("ratelimit").unwrap(),
             "limit=10, remaining=0, reset=1234567890"
         );
         assert!(!response.headers.contains_key("retry-after"));
@@ -568,7 +566,7 @@ mod tests {
 
         let response = rate_limit.too_many_requests_response(&result, "default;q=10;w=60");
 
-        assert_eq!(response.headers.get("retry-after").unwrap(), "30");
+        assert_eq!(response.header("retry-after").unwrap(), "30");
     }
 
     #[test]
@@ -710,9 +708,9 @@ mod tests {
         match action {
             Action::ShortCircuit(response) => {
                 assert_eq!(response.status, 429);
-                assert_eq!(response.headers.get("retry-after").unwrap(), "30");
+                assert_eq!(response.header("retry-after").unwrap(), "30");
                 assert_eq!(
-                    response.headers.get("ratelimit-policy").unwrap(),
+                    response.header("ratelimit-policy").unwrap(),
                     "test-policy;q=10;w=60"
                 );
             }
@@ -774,7 +772,10 @@ mod tests {
         };
 
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
 
         let response = Response::new(200)
             .with_headers(headers.clone())
@@ -812,12 +813,12 @@ mod tests {
         let resp = rate_limit.on_response(Response::new(200));
 
         assert_eq!(
-            resp.headers.get("x-ratelimit-policy").unwrap(),
+            resp.header("x-ratelimit-policy").unwrap(),
             "test-policy;q=10;w=60"
         );
-        assert_eq!(resp.headers.get("x-ratelimit-limit").unwrap(), "10");
-        assert_eq!(resp.headers.get("x-ratelimit-remaining").unwrap(), "5");
-        assert_eq!(resp.headers.get("x-ratelimit-reset").unwrap(), "1234567890");
+        assert_eq!(resp.header("x-ratelimit-limit").unwrap(), "10");
+        assert_eq!(resp.header("x-ratelimit-remaining").unwrap(), "5");
+        assert_eq!(resp.header("x-ratelimit-reset").unwrap(), "1234567890");
     }
 
     #[test]
@@ -882,12 +883,12 @@ mod tests {
             }
 
             assert_eq!(
-                resp.headers.get("x-ratelimit-policy").unwrap(),
+                resp.header("x-ratelimit-policy").unwrap(),
                 "burst;q=10;w=60"
             );
-            assert_eq!(resp.headers.get("x-ratelimit-remaining").unwrap(), "4");
-            assert_eq!(resp.headers.get("x-ratelimit-limit").unwrap(), "10");
-            assert_eq!(resp.headers.get("x-ratelimit-reset").unwrap(), "1000");
+            assert_eq!(resp.header("x-ratelimit-remaining").unwrap(), "4");
+            assert_eq!(resp.header("x-ratelimit-limit").unwrap(), "10");
+            assert_eq!(resp.header("x-ratelimit-reset").unwrap(), "1000");
         }
     }
 
@@ -895,7 +896,7 @@ mod tests {
         Response::new(status).with_headers(
             headers
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .map(|(k, v)| (k.to_string(), vec![v.to_string()]))
                 .collect(),
         )
     }
@@ -931,14 +932,11 @@ mod tests {
         assert_eq!(resp.status, 429);
         assert!(resp.headers.keys().all(|k| !k.starts_with("x-ratelimit-")));
         assert_eq!(
-            resp.headers.get("ratelimit-policy").map(String::as_str),
+            resp.header("ratelimit-policy"),
             Some("daily;q=1000;w=60"),
             "the rejecting policy's headers are kept"
         );
-        assert_eq!(
-            resp.headers.get("retry-after").map(String::as_str),
-            Some("30")
-        );
+        assert_eq!(resp.header("retry-after"), Some("30"));
     }
 
     #[test]
@@ -947,16 +945,8 @@ mod tests {
         let mut rate_limit = stacked("default", 10);
         allow(&mut rate_limit, 7);
         let resp = rate_limit.on_response(response_with(429, &[("retry-after", "5")]));
-        assert_eq!(
-            resp.headers
-                .get("x-ratelimit-remaining")
-                .map(String::as_str),
-            Some("7")
-        );
-        assert_eq!(
-            resp.headers.get("retry-after").map(String::as_str),
-            Some("5")
-        );
+        assert_eq!(resp.header("x-ratelimit-remaining"), Some("7"));
+        assert_eq!(resp.header("retry-after"), Some("5"));
     }
 
     #[test]
@@ -970,7 +960,7 @@ mod tests {
         ));
         assert!(resp.headers.keys().all(|k| !k.starts_with("x-ratelimit-")));
         assert_eq!(
-            resp.headers.get("ratelimit").map(String::as_str),
+            resp.header("ratelimit"),
             Some("limit=5, remaining=0, reset=9")
         );
     }
@@ -984,12 +974,7 @@ mod tests {
             200,
             &[("ratelimit", "limit=5, remaining=4, reset=9")],
         ));
-        assert_eq!(
-            resp.headers
-                .get("x-ratelimit-remaining")
-                .map(String::as_str),
-            Some("7")
-        );
+        assert_eq!(resp.header("x-ratelimit-remaining"), Some("7"));
     }
 
     #[test]
@@ -1000,15 +985,7 @@ mod tests {
         allow(&mut rate_limit, 7);
         let resp = rate_limit.on_response(response_with(403, &[]));
         assert_eq!(resp.status, 403);
-        assert_eq!(
-            resp.headers
-                .get("x-ratelimit-remaining")
-                .map(String::as_str),
-            Some("7")
-        );
-        assert_eq!(
-            resp.headers.get("x-ratelimit-limit").map(String::as_str),
-            Some("10")
-        );
+        assert_eq!(resp.header("x-ratelimit-remaining"), Some("7"));
+        assert_eq!(resp.header("x-ratelimit-limit"), Some("10"));
     }
 }

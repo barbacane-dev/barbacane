@@ -699,14 +699,19 @@ enum Commands {
         #[arg(long, default_value = "json")]
         log_format: String,
 
-        /// OTLP endpoint for telemetry export (e.g., http://localhost:4317).
-        /// If not set, telemetry is collected locally but not exported.
-        #[arg(long)]
+        /// OTLP collector to export spans to (e.g., http://localhost:4317 for
+        /// gRPC, http://localhost:4318 for HTTP). Without one, spans are not
+        /// exported, and requests still carry trace context.
+        #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
         otlp_endpoint: Option<String>,
 
-        /// Trace sampling rate (0.0 to 1.0). Default: 1.0 (100% sampling).
-        /// Set to 0.0 to disable tracing, 0.1 for 10% sampling, etc.
-        #[arg(long, default_value = "1.0")]
+        /// OTLP transport: `grpc`, or `http/protobuf` (`http`).
+        #[arg(long, env = "OTEL_EXPORTER_OTLP_PROTOCOL", default_value = "grpc", value_parser = parse_otlp_protocol)]
+        otlp_protocol: barbacane_telemetry::OtlpProtocol,
+
+        /// Share of the traces a request starts that are recorded, from 0.0 to
+        /// 1.0. A request whose `traceparent` says sampled or not keeps that.
+        #[arg(long, default_value = "1.0", value_parser = parse_sampling_rate)]
         trace_sampling: f64,
 
         /// Maximum request body size in bytes (default: 1048576 = 1MB).
@@ -909,8 +914,6 @@ struct Gateway {
     balancer: Arc<Balancer>,
     /// Metrics registry for observability.
     metrics: Arc<MetricsRegistry>,
-    /// API name from the first spec's title (for metrics labels).
-    api_name: String,
 }
 
 /// The default plugin limits and the instance pool a WASM engine is built
@@ -1345,20 +1348,6 @@ impl Gateway {
             }
         }
 
-        // Extract API name from manifest (first source spec file or "default")
-        let api_name = manifest
-            .source_specs
-            .first()
-            .map(|s| {
-                // Remove extension and path, just keep the file name
-                Path::new(&s.file)
-                    .file_stem()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("default")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "default".to_string());
-
         // Keep pool state for the pools this artifact's configs list, drop the
         // rest with their metric series (ADR-0035). Done last, so a load that
         // fails leaves it as it was.
@@ -1388,7 +1377,6 @@ impl Gateway {
             plugin_instance_pool,
             balancer,
             metrics,
-            api_name,
         })
     }
 
@@ -1429,16 +1417,19 @@ impl Gateway {
         response
     }
 
-    /// Add the lifecycle headers of the operation: `Deprecation: true` when it
-    /// is deprecated (draft-ietf-httpapi-deprecation-header), and `Sunset`
-    /// when it has an `x-sunset` date (RFC 8594), deprecated or not.
+    /// Add the lifecycle headers of the operation: `Deprecation: @<seconds>`
+    /// when it has an `x-deprecation` date (RFC 9745), and `Sunset` when it
+    /// has an `x-sunset` date (RFC 8594).
     fn add_deprecation_headers<B>(
         mut response: Response<B>,
         operation: &CompiledOperation,
     ) -> Response<B> {
         let headers = response.headers_mut();
-        if operation.deprecated {
-            headers.insert("deprecation", HeaderValue::from_static("true"));
+        if let Some(value) = operation
+            .deprecation
+            .and_then(|seconds| HeaderValue::try_from(format!("@{seconds}")).ok())
+        {
+            headers.insert("deprecation", value);
         }
         if let Some(sunset) = operation.sunset.as_deref().and_then(|s| s.parse().ok()) {
             headers.insert("sunset", sunset);
@@ -1483,22 +1474,75 @@ impl Gateway {
             .and_then(client_request_id)
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let trace_id = req
-            .headers()
-            .get("traceparent")
-            .and_then(|v| v.to_str().ok())
-            .and_then(trace_id_from_traceparent)
-            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
-
+        // The request's span is the OpenTelemetry server span: the client's
+        // `traceparent` names its parent, and its trace id is the one logged.
+        let trace_context: HashMap<String, String> = barbacane_telemetry::tracing::TRACE_HEADERS
+            .iter()
+            .filter_map(|name| {
+                let value = req.headers().get(*name)?.to_str().ok()?;
+                Some((name.to_string(), value.to_string()))
+            })
+            .collect();
         let span = tracing::error_span!(
             "request",
+            otel.name = %req.method(),
+            otel.kind = "server",
             request_id = %request_id,
-            trace_id = %trace_id,
+            trace_id = tracing::field::Empty,
             upstream_endpoint = tracing::field::Empty
         );
-        self.handle_request_in_span(req, client_ip, arrival, start_time, request_id, trace_id)
-            .instrument(span)
-            .await
+        let trace_id = barbacane_telemetry::tracing::adopt_parent(&span, &trace_context)
+            .or_else(|| {
+                trace_context
+                    .get("traceparent")
+                    .and_then(|value| trace_id_from_traceparent(value))
+            })
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+        span.record("trace_id", trace_id.as_str());
+        {
+            use barbacane_telemetry::attributes::*;
+            use barbacane_telemetry::tracing::set_attribute;
+            set_attribute(&span, HTTP_REQUEST_METHOD, req.method().to_string());
+            set_attribute(&span, URL_PATH, req.uri().path().to_string());
+            set_attribute(&span, REQUEST_ID, request_id.clone());
+            set_attribute(
+                &span,
+                NETWORK_PROTOCOL_VERSION,
+                http_version_label(req.version()),
+            );
+            if let Some(ip) = client_ip {
+                set_attribute(&span, CLIENT_ADDRESS, ip.to_string());
+            }
+        }
+
+        let (method, path) = (req.method().clone(), req.uri().path().to_string());
+        let response = self
+            .handle_request_in_span(req, client_ip, arrival, start_time, request_id, trace_id)
+            .instrument(span.clone())
+            .await;
+        if let Ok(response) = &response {
+            let status = response.status();
+            // The access log: one line per request, its request and trace ids
+            // from the span. For a streamed response, once its headers are sent.
+            tracing::info!(
+                target: "barbacane::access",
+                parent: &span,
+                method = %method,
+                path = %path,
+                status = status.as_u16(),
+                duration_ms = u64::try_from(start_time.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "request completed"
+            );
+            barbacane_telemetry::tracing::set_attribute(
+                &span,
+                barbacane_telemetry::attributes::HTTP_RESPONSE_STATUS_CODE,
+                i64::from(status.as_u16()),
+            );
+            if status.is_server_error() {
+                barbacane_telemetry::tracing::set_error(&span, status.to_string());
+            }
+        }
+        response
     }
 
     async fn handle_request_in_span(
@@ -1523,6 +1567,7 @@ impl Gateway {
             self.record_request_metrics(
                 &method_str,
                 UNMATCHED_ROUTE_LABEL,
+                UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
                 0,
@@ -1541,6 +1586,7 @@ impl Gateway {
             self.record_request_metrics(
                 &method_str,
                 // Bounded label: raw paths would let a scanner explode metric cardinality.
+                UNMATCHED_ROUTE_LABEL,
                 UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
@@ -1632,6 +1678,7 @@ impl Gateway {
             self.record_request_metrics(
                 &method_str,
                 UNMATCHED_ROUTE_LABEL,
+                UNMATCHED_ROUTE_LABEL,
                 response.status().as_u16(),
                 0,
                 0,
@@ -1651,6 +1698,7 @@ impl Gateway {
                     let response = self.payload_too_large_response(self.limits.max_body_size);
                     self.record_request_metrics(
                         &method_str,
+                        UNMATCHED_ROUTE_LABEL,
                         UNMATCHED_ROUTE_LABEL,
                         response.status().as_u16(),
                         0,
@@ -1679,6 +1727,21 @@ impl Gateway {
                 let operation = &self.operations[entry.operation_index];
                 let validator = &self.validators[entry.operation_index];
                 let route_path = operation.path.clone();
+                {
+                    use barbacane_telemetry::attributes::*;
+                    use barbacane_telemetry::tracing::{set_attribute, set_name};
+                    let span = tracing::Span::current();
+                    set_name(&span, format!("{method_str} {route_path}"));
+                    set_attribute(&span, HTTP_ROUTE, route_path.clone());
+                    if let Some(operation_id) = &operation.operation_id {
+                        set_attribute(&span, OPERATION_ID, operation_id.clone());
+                    }
+                    set_attribute(&span, API, operation.api.clone());
+                }
+                if operation.deprecated {
+                    self.metrics
+                        .record_deprecated_route(&method_str, &route_path, &operation.api);
+                }
 
                 let content_type = headers.get("content-type").map(|s| s.as_str());
 
@@ -1721,6 +1784,7 @@ impl Gateway {
                             self.record_request_metrics(
                                 &method_str,
                                 &route_path,
+                                &operation.api,
                                 response.status().as_u16(),
                                 0,
                                 0,
@@ -1749,6 +1813,7 @@ impl Gateway {
                             self.record_request_metrics(
                                 &method_str,
                                 &route_path,
+                                &operation.api,
                                 response.status().as_u16(),
                                 0,
                                 0,
@@ -1776,6 +1841,7 @@ impl Gateway {
                     self.record_request_metrics(
                         &method_str,
                         &route_path,
+                        &operation.api,
                         response.status().as_u16(),
                         request_size,
                         0,
@@ -1858,6 +1924,7 @@ impl Gateway {
                         self.record_request_metrics(
                             &method_str,
                             &route_path,
+                            &operation.api,
                             response.status().as_u16(),
                             request_size,
                             0,
@@ -1909,6 +1976,7 @@ impl Gateway {
                     self.record_request_metrics(
                         &method_str,
                         &route_path,
+                        &operation.api,
                         response.status().as_u16(),
                         request_size,
                         0,
@@ -1919,6 +1987,18 @@ impl Gateway {
                         &request_id,
                         &trace_id,
                     )));
+                }
+
+                // Plugins and upstreams see the request id the gateway logs
+                // and the trace context of the request's span, in place of
+                // the client's values (validation above read those).
+                headers.insert("x-request-id".to_string(), request_id.clone());
+                let trace_headers = barbacane_telemetry::tracing::current_trace_headers();
+                if !trace_headers.is_empty() {
+                    for name in barbacane_telemetry::tracing::TRACE_HEADERS {
+                        headers.remove(name);
+                    }
+                    headers.extend(trace_headers);
                 }
 
                 let response: Response<AnyBody> = self
@@ -1934,7 +2014,7 @@ impl Gateway {
                     )
                     .await?;
 
-                // Add deprecation headers if the operation is deprecated
+                // The operation's lifecycle headers (Deprecation, Sunset).
                 let response = Self::add_deprecation_headers(response, operation);
 
                 // Response-phase WAF inspection (phases 3, 4 and 5).
@@ -1961,6 +2041,7 @@ impl Gateway {
                         self.record_request_metrics(
                             &method_str,
                             &route_path,
+                            &operation.api,
                             response.status().as_u16(),
                             request_size,
                             response_size,
@@ -1970,7 +2051,7 @@ impl Gateway {
                     }
                     None => {
                         let metrics = Arc::clone(&self.metrics);
-                        let api = self.api_name.clone();
+                        let api = operation.api.clone();
                         let status = response.status().as_u16();
                         let (method, route) = (method_str.clone(), route_path.clone());
                         response.map(|body| {
@@ -2021,6 +2102,7 @@ impl Gateway {
                                 self.record_request_metrics(
                                     &method_str,
                                     UNMATCHED_ROUTE_LABEL,
+                                    UNMATCHED_ROUTE_LABEL,
                                     response.status().as_u16(),
                                     0,
                                     0,
@@ -2036,6 +2118,7 @@ impl Gateway {
                 let response = self.method_not_allowed_response(allowed, &method_str, &path);
                 self.record_request_metrics(
                     &method_str,
+                    UNMATCHED_ROUTE_LABEL,
                     UNMATCHED_ROUTE_LABEL,
                     response.status().as_u16(),
                     0,
@@ -2053,6 +2136,7 @@ impl Gateway {
                 self.record_request_metrics(
                     &method_str,
                     UNMATCHED_ROUTE_LABEL,
+                    UNMATCHED_ROUTE_LABEL,
                     response.status().as_u16(),
                     0,
                     0,
@@ -2068,10 +2152,15 @@ impl Gateway {
     }
 
     /// Record request metrics.
+    /// Record a request: `path` is the route template, or
+    /// `UNMATCHED_ROUTE_LABEL`, and the `api` label is that of the matched
+    /// operation's spec, or the same unmatched label.
+    #[allow(clippy::too_many_arguments)]
     fn record_request_metrics(
         &self,
         method: &str,
         path: &str,
+        api: &str,
         status: u16,
         request_size: u64,
         response_size: u64,
@@ -2082,7 +2171,7 @@ impl Gateway {
             method,
             path,
             status,
-            &self.api_name,
+            api,
             duration,
             request_size,
             response_size,
@@ -2289,21 +2378,25 @@ impl Gateway {
                     let output = instance.take_output();
                     match barbacane_wasm::parse_middleware_output(&output, result_code) {
                         Ok(barbacane_wasm::OnRequestResult::Continue(new_request)) => {
-                            self.metrics.record_middleware(
+                            observe_middleware(
+                                &self.metrics,
                                 &middleware_name,
                                 "request",
                                 start.elapsed().as_secs_f64(),
+                                false,
                                 false,
                             );
                             current_context = instance.get_context();
                             body_ctrl.collect_after(instance, new_request, has_body_access);
                         }
                         Ok(barbacane_wasm::OnRequestResult::ShortCircuit(response)) => {
-                            self.metrics.record_middleware(
+                            observe_middleware(
+                                &self.metrics,
                                 &middleware_name,
                                 "request",
                                 start.elapsed().as_secs_f64(),
                                 true,
+                                false,
                             );
                             // Always collect short-circuit response body from side-channel.
                             // body_access only controls whether the plugin *receives* the
@@ -2337,11 +2430,13 @@ impl Gateway {
                             };
                         }
                         Err(e) => {
-                            self.metrics.record_middleware(
+                            observe_middleware(
+                                &self.metrics,
                                 &middleware_name,
                                 "request",
                                 start.elapsed().as_secs_f64(),
                                 false,
+                                true,
                             );
                             tracing::error!(error = %e, "middleware chain execution failed");
                             return Err(self.dev_error_response(format_args!(
@@ -2352,11 +2447,13 @@ impl Gateway {
                     }
                 }
                 Err(e) => {
-                    self.metrics.record_middleware(
+                    observe_middleware(
+                        &self.metrics,
                         &middleware_name,
                         "request",
                         start.elapsed().as_secs_f64(),
                         false,
+                        true,
                     );
                     tracing::error!(error = %e, "middleware chain execution failed");
                     return Err(
@@ -2409,21 +2506,25 @@ impl Gateway {
 
             match instance.on_response(&response_for_wasm) {
                 Ok(_result_code) => {
-                    metrics.record_middleware(
+                    observe_middleware(
+                        metrics,
                         &middleware_name,
                         "response",
                         start.elapsed().as_secs_f64(),
+                        false,
                         false,
                     );
                     let output = instance.take_output();
                     body_ctrl.collect_after(instance, output, has_body_access);
                 }
                 Err(e) => {
-                    metrics.record_middleware(
+                    observe_middleware(
+                        metrics,
                         &middleware_name,
                         "response",
                         start.elapsed().as_secs_f64(),
                         false,
+                        true,
                     );
                     return Err(self.dev_error_response(format_args!(
                         "plugin '{middleware_name}' on_response failed: {e}"
@@ -2442,6 +2543,43 @@ impl Gateway {
         Ok(resp)
     }
 
+    /// The header fields of a plugin's response as `http` values, each value
+    /// its own field, in order.
+    ///
+    /// Framing headers are left out: the plugin (or its upstream) may have set
+    /// them for another body, and hyper computes them for the one it sends; a
+    /// stale `content-length` would truncate the response after a middleware
+    /// such as `response-transformer` changed the body. A name or value the
+    /// `http` crate rejects (empty, whitespace, control byte, CR or LF) is left
+    /// out too: plugins are untrusted, and `http` defers that check to
+    /// `.body()`, where it would fail the response.
+    fn plugin_header_fields(
+        headers: &std::collections::BTreeMap<String, Vec<String>>,
+    ) -> Vec<(HeaderName, HeaderValue)> {
+        let mut fields = Vec::new();
+        for (key, values) in headers {
+            if matches!(
+                key.to_ascii_lowercase().as_str(),
+                "content-length" | "transfer-encoding" | "connection" | "keep-alive"
+            ) {
+                continue;
+            }
+            let Ok(name) = HeaderName::from_bytes(key.as_bytes()) else {
+                tracing::debug!(header = %key, "skipping invalid plugin response header name");
+                continue;
+            };
+            for value in values {
+                match HeaderValue::from_str(value) {
+                    Ok(value) => fields.push((name.clone(), value)),
+                    Err(_) => {
+                        tracing::debug!(header = %key, "skipping invalid plugin response header value")
+                    }
+                }
+            }
+        }
+        fields
+    }
+
     /// Build an HTTP response from a plugin Response.
     ///
     /// Does not use `self` (associated fn) so it can be unit-tested directly for
@@ -2452,42 +2590,8 @@ impl Gateway {
         let status = StatusCode::from_u16(plugin_response.status).unwrap_or(StatusCode::OK);
         let mut builder = Response::builder().status(status);
 
-        for (key, value) in &plugin_response.headers {
-            // Skip framing headers that the plugin (or its upstream) may have
-            // set for a different body. hyper recomputes `content-length` from
-            // the actual `Full<Bytes>` payload; keeping a stale value would
-            // cause the client to see a truncated response (`IncompleteMessage`)
-            // when a middleware (for example `response-transformer`)
-            // modifies the body length.
-            let key_lc = key.to_ascii_lowercase();
-            if matches!(
-                key_lc.as_str(),
-                "content-length" | "transfer-encoding" | "connection" | "keep-alive"
-            ) {
-                continue;
-            }
-            // Validate the plugin-supplied header before insertion. The `http`
-            // crate defers validation to `.body()`, so an illegal name/value
-            // (empty, whitespace, control byte, or a value with CR/LF) would
-            // otherwise surface as a panic there. Plugins are untrusted, so skip
-            // invalid headers instead of aborting the connection task (a plugin
-            // reflecting an attacker field into a header could otherwise DoS the
-            // route). Mirrors add_standard_headers' defensive handling.
-            let name = match HeaderName::from_bytes(key.as_bytes()) {
-                Ok(name) => name,
-                Err(_) => {
-                    tracing::debug!(header = %key, "skipping invalid plugin response header name");
-                    continue;
-                }
-            };
-            let header_value = match HeaderValue::from_str(value) {
-                Ok(v) => v,
-                Err(_) => {
-                    tracing::debug!(header = %key, "skipping invalid plugin response header value");
-                    continue;
-                }
-            };
-            builder = builder.header(name, header_value);
+        for (name, value) in Self::plugin_header_fields(&plugin_response.headers) {
+            builder = builder.header(name, value);
         }
 
         let body = plugin_response.body.clone().unwrap_or_default();
@@ -2577,9 +2681,23 @@ impl Gateway {
         // Run WASM dispatch on a blocking thread (WASM execution is synchronous),
         // inside the request's span so host calls can record on it.
         let span = tracing::Span::current();
+        // Ends when the dispatcher returns: for a streamed response, when the
+        // stream does.
+        let mut dispatch_span = barbacane_telemetry::tracing::start_dispatch_span(plugin_name);
+        let (dispatch_metrics, dispatcher) = (Arc::clone(&self.metrics), plugin_name.to_string());
+        let dispatch_started = Instant::now();
         let mut wasm_handle = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
             let result = instance.dispatch(&request_json);
+            if result.is_err() {
+                dispatch_span.set_error("dispatch failed");
+            }
+            drop(dispatch_span);
+            dispatch_metrics.record_dispatch(
+                &dispatcher,
+                dispatch_started.elapsed().as_secs_f64(),
+                result.is_err(),
+            );
             let output = instance.take_output();
             let output_body = instance.take_output_body();
             let last_http = instance.take_last_http_result();
@@ -2614,31 +2732,7 @@ impl Gateway {
             Some(StreamEvent::Headers { status, headers }) => {
                 let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
                 let mut builder = Response::builder().status(status_code);
-                for (k, v) in &headers {
-                    // Same defensive validation as build_response_from_plugin:
-                    // skip framing headers and any name/value the `http` crate
-                    // would reject (which would otherwise panic at `.body()`).
-                    let k_lc = k.to_ascii_lowercase();
-                    if matches!(
-                        k_lc.as_str(),
-                        "content-length" | "transfer-encoding" | "connection" | "keep-alive"
-                    ) {
-                        continue;
-                    }
-                    let name = match HeaderName::from_bytes(k.as_bytes()) {
-                        Ok(name) => name,
-                        Err(_) => {
-                            tracing::debug!(header = %k, "skipping invalid streamed response header name");
-                            continue;
-                        }
-                    };
-                    let value = match HeaderValue::from_str(v) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            tracing::debug!(header = %k, "skipping invalid streamed response header value");
-                            continue;
-                        }
-                    };
+                for (name, value) in Self::plugin_header_fields(&headers) {
                     builder = builder.header(name, value);
                 }
 
@@ -2680,21 +2774,27 @@ impl Gateway {
                 // Strip the response body to avoid WASM OOM with large streamed payloads.
                 let wh = wasm_handle;
                 let metrics = Arc::clone(&self.metrics);
+                let span = tracing::Span::current();
                 background().spawn(async move {
                     match wh.await {
                         Ok((Ok(_), _, _, Some(last_http), _, post_ctx))
                             if !middleware_instances.is_empty() =>
                         {
-                            if let Ok(plugin_resp) =
-                                serde_json::from_slice::<barbacane_wasm::Response>(&last_http)
-                            {
-                                // Strip body: observability-only, modifications discarded.
+                            // WASM and its host calls block: run them on a blocking
+                            // thread, as every other plugin call does.
+                            let on_response = tokio::task::spawn_blocking(move || {
+                                let _entered = span.enter();
+                                let Ok(plugin_resp) =
+                                    serde_json::from_slice::<barbacane_wasm::Response>(&last_http)
+                                else {
+                                    return;
+                                };
                                 // Body is already None (side-channel), just pass metadata.
                                 let mut instances = middleware_instances;
                                 let resp_json =
                                     serde_json::to_vec(&plugin_resp).unwrap_or_default();
                                 let cb = |name: &str, phase: &str, dur: f64, sc: bool| {
-                                    metrics.record_middleware(name, phase, dur, sc);
+                                    observe_middleware(&metrics, name, phase, dur, sc, false);
                                 };
                                 if let Err(e) = barbacane_wasm::execute_on_response_with_metrics(
                                     &mut instances,
@@ -2707,6 +2807,12 @@ impl Gateway {
                                         "middleware failed after a streamed response was sent"
                                     );
                                 }
+                            });
+                            if let Err(e) = on_response.await {
+                                tracing::warn!(
+                                    error = %e,
+                                    "streamed on_response task panicked (response already sent)"
+                                );
                             }
                         }
                         Ok((Err(e), _, _, _, _, _)) => {
@@ -3768,7 +3874,7 @@ fn run_validate(specs: &[String], output_format: &str) -> ExitCode {
                     barbacane_compiler::ParseError::MisplacedExtension(_) => {
                         ("E1017".to_string(), e.to_string())
                     }
-                    barbacane_compiler::ParseError::InvalidSunset(_) => {
+                    barbacane_compiler::ParseError::InvalidLifecycleDate(_) => {
                         ("E1018".to_string(), e.to_string())
                     }
                     barbacane_compiler::ParseError::Io(io_err) => {
@@ -4005,7 +4111,7 @@ async fn run_init(name: &str, template: &str, fetch_plugins: bool) -> ExitCode {
     // Create barbacane.yaml with downloaded plugins or empty template
     let manifest_content = if downloaded_plugins.is_empty() {
         r#"# Barbacane project manifest
-# See https://barbacane.dev/docs/guide/spec-configuration for details
+# See https://docs.barbacane.dev/guide/spec-configuration.html for details
 
 specs: ./specs/
 
@@ -4018,7 +4124,7 @@ plugins: {}
     } else {
         let mut content = String::from(
             "# Barbacane project manifest\n\
-             # See https://barbacane.dev/docs/guide/spec-configuration for details\n\n\
+             # See https://docs.barbacane.dev/guide/spec-configuration.html for details\n\n\
              specs: ./specs/\n\n\
              plugins:\n",
         );
@@ -6027,6 +6133,7 @@ async fn main() -> ExitCode {
             log_level,
             log_format,
             otlp_endpoint,
+            otlp_protocol,
             trace_sampling,
             max_body_size,
             max_headers,
@@ -6061,7 +6168,8 @@ async fn main() -> ExitCode {
             let mut telemetry_config = barbacane_telemetry::TelemetryConfig::new()
                 .with_log_level(&log_level)
                 .with_log_format(log_fmt)
-                .with_trace_sampling(trace_sampling);
+                .with_trace_sampling(trace_sampling)
+                .with_otlp_protocol(otlp_protocol);
 
             if let Some(endpoint) = otlp_endpoint {
                 telemetry_config = telemetry_config.with_otlp_endpoint(endpoint);
@@ -6185,7 +6293,7 @@ async fn main() -> ExitCode {
                 }
             };
 
-            run_serve(
+            let code = run_serve(
                 artifact.as_deref(),
                 artifact_dir,
                 &listen,
@@ -6204,7 +6312,10 @@ async fn main() -> ExitCode {
                 allow_unsigned,
                 trusted_proxies.with_header(client_ip_header),
             )
-            .await
+            .await;
+            // Export the spans still buffered.
+            telemetry.shutdown();
+            code
         }
     }
 }
@@ -6227,6 +6338,24 @@ enum KeyAction {
         #[arg(long)]
         key: std::path::PathBuf,
     },
+}
+
+/// `--otlp-protocol`: the values `OTEL_EXPORTER_OTLP_PROTOCOL` takes, and
+/// `http` for `http/protobuf`.
+fn parse_otlp_protocol(value: &str) -> Result<barbacane_telemetry::OtlpProtocol, String> {
+    match value {
+        "grpc" => Ok(barbacane_telemetry::OtlpProtocol::Grpc),
+        "http/protobuf" | "http" => Ok(barbacane_telemetry::OtlpProtocol::Http),
+        other => Err(format!("{other:?} is not `grpc` or `http/protobuf`")),
+    }
+}
+
+/// `--trace-sampling`: a share from 0.0 to 1.0.
+fn parse_sampling_rate(value: &str) -> Result<f64, String> {
+    match value.parse::<f64>() {
+        Ok(rate) if (0.0..=1.0).contains(&rate) => Ok(rate),
+        _ => Err(format!("{value:?} is not a number from 0.0 to 1.0")),
+    }
 }
 
 fn run_key(action: KeyAction) -> ExitCode {
@@ -6330,6 +6459,37 @@ fn client_request_id(value: &str) -> Option<String> {
     well_formed.then(|| value.to_string())
 }
 
+/// Record a middleware call that ran for `seconds`: its metric, and its span
+/// under the request's.
+fn observe_middleware(
+    metrics: &barbacane_telemetry::MetricsRegistry,
+    name: &str,
+    phase: &str,
+    seconds: f64,
+    short_circuit: bool,
+    failed: bool,
+) {
+    metrics.record_middleware(name, phase, seconds, short_circuit);
+    barbacane_telemetry::tracing::record_middleware_span(
+        name,
+        phase,
+        seconds,
+        short_circuit,
+        failed,
+    );
+}
+
+/// The HTTP version as OpenTelemetry's `network.protocol.version` writes it.
+fn http_version_label(version: hyper::Version) -> &'static str {
+    match version {
+        hyper::Version::HTTP_09 => "0.9",
+        hyper::Version::HTTP_10 => "1.0",
+        hyper::Version::HTTP_2 => "2",
+        hyper::Version::HTTP_3 => "3",
+        _ => "1.1",
+    }
+}
+
 /// The trace id of a W3C `traceparent` (`00-<trace-id>-<parent-id>-<flags>`,
 /// version 00 and nothing after the flags): 32 lowercase hex digits, not all
 /// zero, followed by a 16-digit parent id and 2-digit flags.
@@ -6431,7 +6591,7 @@ mod reload_tests {
         assert!(first.rate_limiter.check("scope", "client", 1, 60).allowed);
         let entry = barbacane_wasm::CacheEntry {
             status: 200,
-            headers: HashMap::new(),
+            headers: Default::default(),
             body: Some(b"cached".to_vec()),
             metadata: None,
         };
@@ -7184,12 +7344,13 @@ mod tests {
         // An untrusted plugin returns headers with an illegal name, an illegal
         // value (embedded newline), and framing headers — none may panic the
         // task, and the invalid/framing ones must be dropped.
+        let field = |value: &str| vec![value.to_string()];
         let mut headers = BTreeMap::new();
-        headers.insert("x-ok".to_string(), "fine".to_string());
-        headers.insert("bad name".to_string(), "1".to_string()); // space in name
-        headers.insert("".to_string(), "empty-name".to_string()); // empty name
-        headers.insert("x-inject".to_string(), "a\r\nb".to_string()); // CRLF in value
-        headers.insert("content-length".to_string(), "999".to_string()); // framing
+        headers.insert("x-ok".to_string(), field("fine"));
+        headers.insert("bad name".to_string(), field("1")); // space in name
+        headers.insert("".to_string(), field("empty-name")); // empty name
+        headers.insert("x-inject".to_string(), field("a\r\nb")); // CRLF in value
+        headers.insert("content-length".to_string(), field("999")); // framing
         let plugin_response = barbacane_wasm::Response::new(200)
             .with_headers(headers)
             .with_body(b"hello".to_vec());
@@ -7201,6 +7362,27 @@ mod tests {
         assert!(resp.headers().get("x-inject").is_none());
         // Framing header is dropped (hyper recomputes content-length).
         assert!(resp.headers().get("content-length").is_none());
+    }
+
+    /// A header with several values is sent as one field per value, in order;
+    /// an invalid value is dropped without the others.
+    #[test]
+    fn build_response_from_plugin_sends_each_value_as_a_field() {
+        let mut plugin_response = barbacane_wasm::Response::new(200);
+        plugin_response.append_header("set-cookie", "a=1; Path=/");
+        plugin_response.append_header("set-cookie", "bad\nvalue");
+        plugin_response.append_header("set-cookie", "b=2; Path=/");
+        plugin_response.set_header("link", "</a>; rel=next");
+
+        let resp = Gateway::build_response_from_plugin(&plugin_response);
+        let cookies: Vec<&str> = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(cookies, ["a=1; Path=/", "b=2; Path=/"]);
+        assert_eq!(resp.headers().get("link").unwrap(), "</a>; rel=next");
     }
 
     #[test]

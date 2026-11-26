@@ -28,7 +28,7 @@ On the control plane, set `BARBACANE_SIGNING_KEY` so compilations are signed. Fo
 
 ### Recompile every artifact
 
-The artifact format is 8. A 1.0 data plane refuses an artifact built by an earlier compiler, with a message saying to recompile. From 1.0.0 on, a data plane of the same major version loads every format from 8 up to the one it writes, so this is the last recompilation an upgrade requires.
+A 1.0 data plane refuses an artifact built by an earlier compiler, with a message saying to recompile. That includes the 1.0.0 release candidates: their artifacts bundle plugins built for plugin ABI 1, and 1.0 loads ABI 2. From 1.0.0 on, a data plane of the same major version loads every artifact a compiler of that major writes, so this is the last recompilation an upgrade requires.
 
 An artifact compiled without a manifest, with `barbacane_compiler::compile` from your own code, carries no plugin capabilities and is refused: compile with `--manifest barbacane.yaml` or `compile_with_manifest`.
 
@@ -89,6 +89,10 @@ A parameter without `name` or `in`, with an `in` other than `path`, `query`, `he
 
 `x-barbacane-dispatch` outside an operation, `x-barbacane-middlewares` on a path item, and `x-barbacane-waf` anywhere but the document root fail compilation with `E1017`; they had no effect. Every `x-barbacane-waf` key is checked (`E1080`): an unknown key or a value of the wrong type or out of range is refused, where it fell back to a default. An `x-sunset` that is not a date fails with `E1018`; a valid one is sent as a `Sunset` header even on an operation that is not deprecated.
 
+### The Deprecation header is a date
+
+`Deprecation` follows RFC 9745: its value is the date of the deprecation, `@` and the Unix time (`Deprecation: @1782777600`), taken from the operation's new `x-deprecation` extension. `deprecated: true` carries no date and no longer sends `Deprecation: true`. To keep the header, add `x-deprecation` with the date the operation was deprecated; a client that read `true` reads a date. An `x-deprecation` that is not a date, or an `x-sunset` earlier than it, fails with `E1018`.
+
 ### YAML is read by a different parser
 
 Specs are read by serde-saphyr, configured to read documents as libyaml did. The constructs a spec can meet that read differently, and what to do:
@@ -112,6 +116,9 @@ The full list of twenty-five classes is in `barbacane_compiler::yaml::differenti
 Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 
 - **Imports.** A plugin may import the `barbacane` host functions and seven WASI functions (`random_get`, `clock_time_get`, `fd_write`, `sched_yield`, `environ_get`, `environ_sizes_get`, `proc_exit`). Anything else fails compilation with `E1043`, which names the import. A plugin built with `wasm32-wasip1` and a standard library that imports more needs the `wasm32-unknown-unknown` target.
+- **SDK types are `#[non_exhaustive]`**: `Request`, `Response`, `HttpRequest`, `HttpResponse`, `Endpoint`, `TlsSettings`, `ldap::Connection`, `ldap::SearchRequest` and `ldap::Entry`, and the error enums `HttpError`, `LdapError` and `JwtDecodeError`. Build them with their constructors (`Request::new(method, path)`, `Response::new(status)`, `Endpoint::new(url)`) and the `with_*` methods, not as struct literals, and give a `match` on an error enum a `_` arm.
+- **`log::log`** takes a `log::Level` (`log::log(log::Level::Warn, "...")`), not a number; `log::warn`, `log::info` and the others are unchanged.
+- **`alloc`** must be exported: the gateway writes the configuration and each request through it and no longer grows a plugin's memory on its own. The SDK macros export it; a plugin written without them exports `alloc(len) -> ptr`.
 - **`HttpRequest`** has `tls`, `endpoints` and `retries` fields and implements `Default`: a struct literal adds `..Default::default()`.
 - **`init` runs once** per plugin and configuration, and each request runs in a fresh instance started from the memory `init` left. Nothing one request writes is seen by the next. State that must carry across requests goes through the host (`context`, `cache`, `rate_limit`). The [plugin guide](../contributing/plugins.md#instances-and-state) states the contract.
 - **`body_access`** must be declared by a middleware that reads the request or response body; without it the host hands it no body.
@@ -120,10 +127,13 @@ Rebuild every plugin against `barbacane-plugin-sdk` 1.0 and check these.
 - **Timeouts.** `timeout_ms` on an outbound call is cut to 60 seconds and a WebSocket `connect_timeout_ms` to 30.
 - **`host_log`** messages are cut at 4 KiB and their control characters replaced.
 - **Metrics** emitted through the `telemetry` capability are their own Prometheus families, `barbacane_plugin_<plugin>_<metric>`, with the plugin's labels as labels (see [Observability](#observability)).
+- **Response headers are lists.** `Response.headers` and `HttpResponse.headers` map each name to its values (`BTreeMap<String, Vec<String>>`), one per header field, so an upstream's repeated `set-cookie`, `link` or `www-authenticate` fields reach the client as they were sent. Read with `header(name)` or `header_values(name)`; write with `with_header`, `set_header` or `append_header`. Request headers keep one value per name. The plugin ABI is version 2: a plugin built with an earlier SDK, release candidates included, is refused with `E1045` until it is rebuilt.
 - **`resolve_client_ip`** is gone from the SDK. `req.client_ip` is the address the gateway attributes the request to, already resolved behind its `--trusted-proxies`; read it instead.
 
 ### Official plugins
 
+- `cors` lets a request from an origin outside `allowed_origins` through, without CORS headers, where it answered `403`; the browser then withholds the response from the page. A same-origin `POST` from an application served next to the API no longer needs the API's own origin listed. A preflight from such an origin is still refused with `403`.
+- `oauth2-auth` answers `503` (`urn:barbacane:error:introspection-unavailable`) when the introspection endpoint cannot be reached or answers something it cannot read, where it answered `401`. A token the endpoint rejects is still `401`. A client that retried only on `5xx` now retries these.
 - `ws-upstream` follows the plaintext rules of `http-upstream`: a `ws://` URL needs `--allow-plaintext` to compile and `--allow-plaintext-upstream` to connect. The handshake sends the upstream URL's host as `Host`, not the client's.
 - A plugin's outbound HTTP call waits at most 60 seconds. A `timeout` above 60 in `http-upstream`, `lambda`, `s3`, `oidc-auth`, `oauth2-auth` or `opa-authz`, a `fire-and-forget` `timeout_ms` above 60000, or a `ws-upstream` `connect_timeout` above 30 fails compilation with `E1023`.
 - `jwt-auth` refuses `public_key_pem` and `jwks_url`, which it never used. Supply `public_key_jwk`, or use `oidc-auth` for JWKS. ES512 is not accepted (the host verifies ES256 and ES384).
@@ -190,6 +200,8 @@ A request whose body did not arrive in time answers `urn:barbacane:error:request
 
 - The control plane logs every request that changes something at `info`, with method, path and status.
 - A plugin's log line cut at 4 KiB carries `truncated=true`.
+- A JSON log line carries `request_id` and `trace_id` at the top level, where 0.12 nested them in `span`; a log pipeline that read `span.request_id` reads `request_id`.
+- Each request ends with a `request completed` line at `info` (target `barbacane::access`) with method, path, status and duration; `RUST_LOG=info,barbacane::access=off` leaves it out.
 
 ## Removed features
 
@@ -206,7 +218,7 @@ A request whose body did not arrive in time answers `urn:barbacane:error:request
 | signing | every compiler and the control plane have `BARBACANE_SIGNING_KEY`; every data plane has `BARBACANE_TRUSTED_PUBKEY` and starts without `--allow-unsigned` |
 | artifacts | every artifact recompiled with the 1.0 compiler and loaded by a 1.0 data plane |
 | `barbacane.yaml` and specs | compile without errors; middleware entries checked for `@version`; YAML constructs from the table checked |
-| custom plugins | rebuilt on SDK 1.0; `E1043` clean; `body_access` declared where a body is read; `HttpRequest` literals use `Default`; `resolve_client_ip` calls replaced by `req.client_ip` |
+| custom plugins | rebuilt on SDK 1.0 (plugin ABI 2); response header code reads and writes lists; `E1043` clean; `body_access` declared where a body is read; `HttpRequest` literals use `Default`; `resolve_client_ip` calls replaced by `req.client_ip` |
 | proxies | `trusted_proxies` removed from `ip-restriction` and `rate-limit`; the proxies listed in the data plane's `--trusted-proxies` |
 | control plane | port 9090; token of 32 bytes or more; clients regenerated from `/openapi`; probes on `/health` and `/ready`; data planes use `BARBACANE_CONTROL_API_KEY` and `wss://` |
 | observability | dashboards and alerts updated for the problem types, the `method` label and the plugin metric families; probes parse `/__barbacane/health` for `status` only |

@@ -53,7 +53,7 @@ The `body` field supports `{{placeholder}}` interpolation with values from the i
 | `{{request.path}}` | Request path |
 | `{{request.query}}` | Query string (unresolved if absent) |
 | `{{request.client_ip}}` | Client IP address |
-| `{{headers.<name>}}` | Request header value (case-insensitive fallback) |
+| `{{headers.<name>}}` | Request header value (case-insensitive fallback). The operation must admit the header, with an `in: header` parameter or a security scheme naming it; another header is absent and the placeholder stays unresolved |
 | `{{path_params.<name>}}` | Path parameter value |
 
 Unresolved placeholders are left as-is in the response body.
@@ -293,7 +293,7 @@ The dispatcher returns RFC 9457 error responses:
 
 ### lambda
 
-Invokes AWS Lambda functions via Lambda Function URLs. Implemented as a WASM plugin.
+Invokes AWS Lambda functions via Lambda Function URLs. Implemented as a WASM plugin. The request's path and query follow the Function URL, so the function reads them as `rawPath` and `rawQueryString`.
 
 ```yaml
 x-barbacane-dispatch:
@@ -372,7 +372,7 @@ Lambda response format:
 
 ### kafka
 
-Publishes messages to Apache Kafka topics. Designed for AsyncAPI specs using the sync-to-async bridge pattern: HTTP POST requests publish messages and return 202 Accepted. Uses a pure-Rust Kafka client with connection caching and a dedicated runtime.
+Publishes messages to Apache Kafka topics. Designed for AsyncAPI specs using the sync-to-async bridge pattern: HTTP POST requests publish messages and return 202 Accepted. Uses a pure-Rust Kafka client with connection caching and a dedicated runtime. The request body is the message value as the client sent it, text or bytes.
 
 ```yaml
 x-barbacane-dispatch:
@@ -391,7 +391,7 @@ x-barbacane-dispatch:
 | `key` | string | No | - | Message key expression (see below) |
 | `ack_response` | object | No | - | Custom acknowledgment response |
 | `include_metadata` | boolean | No | false | Include partition/offset in response |
-| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
+| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers, matched in any case and sent under the name written here |
 
 Broker connections pass the plugin egress guard ([`BARBACANE_ALLOW_INTERNAL_EGRESS`](../reference/configuration.md#security-environment-variables)): those to the brokers in `brokers` and those to every broker the cluster advertises. While the guard is on, the gateway relays each Kafka connection through a SOCKS5 relay it runs on a loopback port, and a broker in `brokers` is named by a host name or an IPv4 address, not an IPv6 address.
 
@@ -401,7 +401,7 @@ The `key` property supports dynamic expressions:
 
 | Expression | Description |
 |------------|-------------|
-| `$request.header.X-Key` | Extract key from request header |
+| `$request.header.X-Key` | Extract key from request header (the name matches in any case) |
 | `$request.path.userId` | Extract key from path parameter |
 | `literal-value` | Use a literal string value |
 
@@ -504,9 +504,11 @@ x-barbacane-dispatch:
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `url` | string | Yes | - | NATS server URL (e.g. `"nats://localhost:4222"`) |
-| `subject` | string | Yes | - | NATS subject to publish to (supports wildcards) |
+| `subject` | string | Yes | - | NATS subject to publish to: dot-separated tokens, without wildcards (`*`, `>`), empty tokens or whitespace, since a message is published to one subject. Any other value fails the plugin's `init` |
 | `ack_response` | object | No | - | Custom acknowledgment response |
-| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers |
+| `headers_from_request` | array | No | `[]` | Request headers to forward as message headers, matched in any case and sent under the name written here |
+
+The request body is the message payload as the client sent it, text or bytes.
 
 #### Examples
 
@@ -749,6 +751,7 @@ paths:
           bucket: my-spa
           access_key_id: env://AWS_ACCESS_KEY_ID
           secret_access_key: env://AWS_SECRET_ACCESS_KEY
+          key_param: path
           fallback_key: index.html
 ```
 
@@ -766,7 +769,7 @@ paths:
 - **Session tokens**: Support for STS, AssumeRole, and IRSA (IAM Roles for Service Accounts) via `session_token`
 - **Query parameters**: only those listed in `query_params` reach S3, signed with the gateway's credentials. By default none does, so a client cannot add `response-content-type` or `response-content-disposition` overrides, a `versionId`, or a subresource such as `acl` to a request the gateway signs
 - **Signing**: All requests are signed with AWS Signature Version 4. The signed headers are `host`, `x-amz-content-sha256`, `x-amz-date`, and `x-amz-security-token` (when a session token is present)
-- **Binary objects**: The current implementation returns the response body as a UTF-8 string. Binary objects (images, archives, etc.) are not suitable for this dispatcher — use pre-signed URLs for binary downloads
+- **Binary objects**: bodies travel as bytes, so images, archives and other binary objects are served as stored
 
 ### ws-upstream
 
@@ -928,7 +931,7 @@ x-barbacane-dispatch:
 
 1. The request arrives (already processed by the middleware chain)
 2. The dispatcher forwards method, headers, and body to the configured `url`
-3. The upstream response is discarded — errors are logged as warnings
+3. The upstream response is discarded; a connection failure, a timeout or a status of 400 or above is logged as a warning
 4. The configured static response is returned to the client
 
 Because the upstream call happens synchronously in the WASM runtime, the client does wait for the HTTP call to complete (or time out). For truly decoupled async processing, consider using the `kafka` or `nats` dispatchers with a consumer behind them.

@@ -101,7 +101,7 @@ impl Observability {
             let headers_count = req.headers.len();
             let body_size = req.body.as_ref().map(|b| b.len()).unwrap_or(0);
             log_message(
-                Level::Warn, // INFO
+                Level::Info,
                 &format!(
                     "observability: request method={} path={} headers={} body_size={}",
                     req.method, req.path, headers_count, body_size
@@ -131,7 +131,7 @@ impl Observability {
                 host_metric_counter_inc("slo_violation", &labels, 1);
 
                 log_message(
-                    Level::Info, // WARN
+                    Level::Warn,
                     &format!(
                         "observability: SLO violation slo_ms={} actual_ms={}",
                         slo_ms, duration_ms
@@ -148,10 +148,10 @@ impl Observability {
 
         // Log detailed response info if enabled
         if self.detailed_response_logs {
-            let headers_count = resp.headers.len();
+            let headers_count: usize = resp.headers.values().map(Vec::len).sum();
             let body_size = resp.body.as_ref().map(|b| b.len()).unwrap_or(0);
             log_message(
-                Level::Warn, // INFO
+                Level::Info,
                 &format!(
                     "observability: response status={} headers={} body_size={} duration_ms={}",
                     resp.status, headers_count, body_size, duration_ms
@@ -329,7 +329,7 @@ mod tests {
         let logs = mock_host::get_log_messages();
         assert_eq!(logs.len(), 1);
         let (level, msg) = &logs[0];
-        assert_eq!(*level, 1); // INFO
+        assert_eq!(*level, Level::Info as i32);
         assert!(msg.contains("observability: request"));
         assert!(msg.contains("method=GET"));
         assert!(msg.contains("path=/api/test"));
@@ -411,7 +411,7 @@ mod tests {
         let logs = mock_host::get_log_messages();
         assert_eq!(logs.len(), 1);
         let (level, msg) = &logs[0];
-        assert_eq!(*level, 2); // WARN
+        assert_eq!(*level, Level::Warn as i32);
         assert!(msg.contains("observability: SLO violation"));
         assert!(msg.contains("slo_ms=200"));
         assert!(msg.contains("actual_ms=500"));
@@ -538,8 +538,7 @@ mod tests {
         mock_host::set_time(250);
 
         let mut resp = create_test_response();
-        resp.headers
-            .insert("Content-Type".to_string(), "application/json".to_string());
+        resp.set_header("Content-Type", "application/json");
 
         let _ = plugin.on_response(resp);
 
@@ -547,7 +546,7 @@ mod tests {
         let logs = mock_host::get_log_messages();
         assert_eq!(logs.len(), 1);
         let (level, msg) = &logs[0];
-        assert_eq!(*level, 1); // INFO
+        assert_eq!(*level, Level::Info as i32);
         assert!(msg.contains("observability: response"));
         assert!(msg.contains("status=200"));
         assert!(msg.contains("headers=1"));
@@ -595,15 +594,14 @@ mod tests {
 
         let mut resp = create_test_response();
         resp.status = 404;
-        resp.headers
-            .insert("X-Custom".to_string(), "value".to_string());
+        resp.set_header("X-Custom", "value");
         resp.body = Some(b"not found".to_vec());
 
         let result = plugin.on_response(resp);
 
         // Verify response is completely unchanged
         assert_eq!(result.status, 404);
-        assert_eq!(result.headers.get("X-Custom"), Some(&"value".to_string()));
+        assert_eq!(result.header("X-Custom"), Some("value"));
         assert_eq!(result.body, Some(b"not found".to_vec()));
     }
 
@@ -640,8 +638,8 @@ mod tests {
         // Verify logs (SLO warning + response info)
         let logs = mock_host::get_log_messages();
         assert_eq!(logs.len(), 2);
-        assert_eq!(logs[0].0, 2); // WARN - SLO violation
-        assert_eq!(logs[1].0, 1); // INFO - response details
+        assert_eq!(logs[0].0, Level::Warn as i32); // SLO violation
+        assert_eq!(logs[1].0, Level::Info as i32); // response details
     }
 
     #[test]

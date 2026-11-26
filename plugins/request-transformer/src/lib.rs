@@ -67,8 +67,22 @@ struct PathConfig {
 /// Path regex replace configuration.
 #[derive(Debug, Clone, Deserialize)]
 struct PathReplaceConfig {
-    pattern: String,
+    pattern: Pattern,
     replacement: String,
+}
+
+/// A regular expression, compiled when `init` reads the configuration: an
+/// invalid one fails `init`.
+#[derive(Debug, Clone)]
+struct Pattern(Regex);
+
+impl<'de> Deserialize<'de> for Pattern {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let pattern = String::deserialize(deserializer)?;
+        Regex::new(&pattern).map(Pattern).map_err(|e| {
+            serde::de::Error::custom(format!("invalid regex pattern '{pattern}': {e}"))
+        })
+    }
 }
 
 /// Body transformation configuration (JSON Pointer).
@@ -109,10 +123,6 @@ pub struct RequestTransformer {
     /// references resolves to an empty string, missing values included.
     #[serde(default)]
     skip_if_empty: bool,
-
-    /// Compiled regex for path replacement (lazy-initialized on first request).
-    #[serde(skip)]
-    compiled_replace: Option<Regex>,
 }
 
 impl RequestTransformer {
@@ -132,28 +142,8 @@ impl RequestTransformer {
         // so that transforms don't interfere with each other.
         let original = req.clone();
 
-        // Lazy-compile the path regex on first invocation
-        if self.compiled_replace.is_none() {
-            if let Some(path_config) = &self.path {
-                if let Some(replace_config) = &path_config.replace {
-                    match Regex::new(&replace_config.pattern) {
-                        Ok(re) => self.compiled_replace = Some(re),
-                        Err(e) => {
-                            log_message(
-                                Level::Error,
-                                &format!(
-                                    "Invalid regex pattern '{}': {}",
-                                    replace_config.pattern, e
-                                ),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
         if let Some(path_config) = &self.path {
-            req.path = transform_path(&req.path, path_config, self.compiled_replace.as_ref());
+            req.path = transform_path(&req.path, path_config);
         }
 
         if let Some(header_config) = &self.headers {
@@ -170,7 +160,9 @@ impl RequestTransformer {
         }
 
         if let Some(body_config) = &self.body {
-            req.body = transform_body(&req.body, body_config, &original, self.skip_if_empty);
+            if is_json(original.headers.get("content-type").map(String::as_str)) {
+                req.body = transform_body(&req.body, body_config, &original, self.skip_if_empty);
+            }
         }
 
         Action::Continue(req)
@@ -466,7 +458,7 @@ fn build_query_string(params: Vec<(String, String)>) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Transform path. Order: strip_prefix → add_prefix → regex replace.
-fn transform_path(path: &str, config: &PathConfig, compiled_re: Option<&Regex>) -> String {
+fn transform_path(path: &str, config: &PathConfig) -> String {
     let mut result = path.to_string();
 
     if let Some(prefix) = &config.strip_prefix {
@@ -495,12 +487,12 @@ fn transform_path(path: &str, config: &PathConfig, compiled_re: Option<&Regex>) 
         result = format!("{}{}", normalized_prefix, normalized_path);
     }
 
-    if let Some(re) = compiled_re {
-        if let Some(replace_config) = &config.replace {
-            result = re
-                .replace_all(&result, &replace_config.replacement)
-                .to_string();
-        }
+    if let Some(replace_config) = &config.replace {
+        result = replace_config
+            .pattern
+            .0
+            .replace_all(&result, &replace_config.replacement)
+            .to_string();
     }
 
     result
@@ -509,6 +501,16 @@ fn transform_path(path: &str, config: &PathConfig, compiled_re: Option<&Regex>) 
 // ---------------------------------------------------------------------------
 // Body transformations (JSON Pointer — RFC 6901)
 // ---------------------------------------------------------------------------
+
+/// Whether a `content-type` names JSON: `application/json`, or a `+json`
+/// suffix such as `application/merge-patch+json`, parameters aside.
+fn is_json(content_type: Option<&str>) -> bool {
+    let Some(media_type) = content_type.and_then(|value| value.split(';').next()) else {
+        return false;
+    };
+    let media_type = media_type.trim().to_ascii_lowercase();
+    media_type == "application/json" || media_type.ends_with("+json")
+}
 
 /// Transform JSON body. Order: remove → rename → add.
 ///
@@ -669,6 +671,13 @@ mod mock_host {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+impl Pattern {
+    fn new(pattern: &str) -> Self {
+        Pattern(Regex::new(pattern).expect("valid regex"))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1141,13 +1150,10 @@ mod tests {
             replace: None,
         };
 
-        assert_eq!(transform_path("/api/v2/users", &config, None), "/users");
-        assert_eq!(
-            transform_path("/api/v2/users/123", &config, None),
-            "/users/123"
-        );
-        assert_eq!(transform_path("/api/v2", &config, None), "/");
-        assert_eq!(transform_path("/other/path", &config, None), "/other/path");
+        assert_eq!(transform_path("/api/v2/users", &config), "/users");
+        assert_eq!(transform_path("/api/v2/users/123", &config), "/users/123");
+        assert_eq!(transform_path("/api/v2", &config), "/");
+        assert_eq!(transform_path("/other/path", &config), "/other/path");
     }
 
     #[test]
@@ -1158,11 +1164,8 @@ mod tests {
             replace: None,
         };
 
-        assert_eq!(transform_path("/users", &config, None), "/internal/users");
-        assert_eq!(
-            transform_path("/users/123", &config, None),
-            "/internal/users/123"
-        );
+        assert_eq!(transform_path("/users", &config), "/internal/users");
+        assert_eq!(transform_path("/users/123", &config), "/internal/users/123");
     }
 
     #[test]
@@ -1173,10 +1176,10 @@ mod tests {
             replace: None,
         };
 
-        assert_eq!(transform_path("/users", &config, None), "/internal/users");
+        assert_eq!(transform_path("/users", &config), "/internal/users");
 
         config.add_prefix = Some("/internal/".to_string());
-        assert_eq!(transform_path("/users", &config, None), "/internal/users");
+        assert_eq!(transform_path("/users", &config), "/internal/users");
     }
 
     #[test]
@@ -1187,12 +1190,9 @@ mod tests {
             replace: None,
         };
 
+        assert_eq!(transform_path("/api/v2/users", &config), "/internal/users");
         assert_eq!(
-            transform_path("/api/v2/users", &config, None),
-            "/internal/users"
-        );
-        assert_eq!(
-            transform_path("/api/v2/users/123", &config, None),
+            transform_path("/api/v2/users/123", &config),
             "/internal/users/123"
         );
     }
@@ -1203,25 +1203,14 @@ mod tests {
             strip_prefix: None,
             add_prefix: None,
             replace: Some(PathReplaceConfig {
-                pattern: r"/v\d+/".to_string(),
+                pattern: Pattern::new(r"/v\d+/"),
                 replacement: "/".to_string(),
             }),
         };
-        let re =
-            Regex::new(&config.replace.as_ref().expect("set above").pattern).expect("valid regex");
 
-        assert_eq!(
-            transform_path("/api/v1/users", &config, Some(&re)),
-            "/api/users"
-        );
-        assert_eq!(
-            transform_path("/api/v2/orders", &config, Some(&re)),
-            "/api/orders"
-        );
-        assert_eq!(
-            transform_path("/api/users", &config, Some(&re)),
-            "/api/users"
-        );
+        assert_eq!(transform_path("/api/v1/users", &config), "/api/users");
+        assert_eq!(transform_path("/api/v2/orders", &config), "/api/orders");
+        assert_eq!(transform_path("/api/users", &config), "/api/users");
     }
 
     #[test]
@@ -1230,19 +1219,14 @@ mod tests {
             strip_prefix: None,
             add_prefix: None,
             replace: Some(PathReplaceConfig {
-                pattern: r"/users/(\d+)".to_string(),
+                pattern: Pattern::new(r"/users/(\d+)"),
                 replacement: "/user/$1/profile".to_string(),
             }),
         };
-        let re =
-            Regex::new(&config.replace.as_ref().expect("set above").pattern).expect("valid regex");
 
+        assert_eq!(transform_path("/users/123", &config), "/user/123/profile");
         assert_eq!(
-            transform_path("/users/123", &config, Some(&re)),
-            "/user/123/profile"
-        );
-        assert_eq!(
-            transform_path("/users/456/data", &config, Some(&re)),
+            transform_path("/users/456/data", &config),
             "/user/456/profile/data"
         );
     }
@@ -1253,17 +1237,12 @@ mod tests {
             strip_prefix: Some("/api".to_string()),
             add_prefix: Some("/internal".to_string()),
             replace: Some(PathReplaceConfig {
-                pattern: r"/v\d+".to_string(),
+                pattern: Pattern::new(r"/v\d+"),
                 replacement: "".to_string(),
             }),
         };
-        let re =
-            Regex::new(&config.replace.as_ref().expect("set above").pattern).expect("valid regex");
 
-        assert_eq!(
-            transform_path("/api/v2/users", &config, Some(&re)),
-            "/internal/users"
-        );
+        assert_eq!(transform_path("/api/v2/users", &config), "/internal/users");
     }
 
     #[test]
@@ -1274,7 +1253,7 @@ mod tests {
             replace: None,
         };
 
-        assert_eq!(transform_path("", &config, None), "/api/");
+        assert_eq!(transform_path("", &config), "/api/");
     }
 
     #[test]
@@ -1285,7 +1264,7 @@ mod tests {
             replace: None,
         };
 
-        assert_eq!(transform_path("/", &config, None), "/api/");
+        assert_eq!(transform_path("/", &config), "/api/");
     }
 
     // -- Body transformation tests ------------------------------------------
@@ -1639,11 +1618,11 @@ mod tests {
                 rename: BTreeMap::new(),
             }),
             skip_if_empty: false,
-            compiled_replace: None,
         };
 
         let req = Request::new("POST", "/query-to-body")
             .with_query("userId=42")
+            .with_header("content-type", "application/json")
             .with_body(br#"{"existing":"data"}"#.to_vec())
             .with_client_ip("127.0.0.1");
 
@@ -1663,37 +1642,51 @@ mod tests {
         }
     }
 
+    /// An invalid `path.replace` pattern fails `init`, where the configuration
+    /// is read.
     #[test]
-    fn test_on_request_lazy_regex_compilation() {
-        let mut plugin = RequestTransformer {
-            headers: None,
-            querystring: None,
-            path: Some(PathConfig {
-                strip_prefix: None,
-                add_prefix: None,
-                replace: Some(PathReplaceConfig {
-                    pattern: r"/v\d+".to_string(),
-                    replacement: "".to_string(),
-                }),
-            }),
-            body: None,
-            skip_if_empty: false,
-            compiled_replace: None,
-        };
+    fn an_invalid_path_pattern_fails_init() {
+        let error = serde_json::from_str::<RequestTransformer>(
+            r#"{"path": {"replace": {"pattern": "(", "replacement": ""}}}"#,
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            error.to_string().contains("invalid regex pattern '('"),
+            "{error}"
+        );
 
-        assert!(plugin.compiled_replace.is_none());
-
+        let mut plugin: RequestTransformer = serde_json::from_str(
+            r#"{"path": {"replace": {"pattern": "/v\\d+", "replacement": ""}}}"#,
+        )
+        .expect("valid");
         let req = Request::new("GET", "/api/v2/users").with_client_ip("127.0.0.1");
-
-        let result = plugin.on_request(req);
-        if let Action::Continue(modified) = result {
-            assert_eq!(modified.path, "/api/users");
-        } else {
-            panic!("Expected Action::Continue");
+        match plugin.on_request(req) {
+            Action::Continue(modified) => assert_eq!(modified.path, "/api/users"),
+            Action::ShortCircuit(_) => panic!("Expected Action::Continue"),
         }
+    }
 
-        // Regex should now be compiled and cached
-        assert!(plugin.compiled_replace.is_some());
+    /// Body transforms apply to a JSON body only, as the content type says;
+    /// another body passes unchanged even when it parses as JSON.
+    #[test]
+    fn body_transforms_follow_the_content_type() {
+        let mut plugin: RequestTransformer =
+            serde_json::from_str(r#"{"body": {"add": {"/added": "yes"}}}"#).unwrap();
+        let send = |plugin: &mut RequestTransformer, content_type: &str| {
+            let mut headers = BTreeMap::new();
+            headers.insert("content-type".to_string(), content_type.to_string());
+            let req = Request::new("POST", "/x")
+                .with_headers(headers)
+                .with_body(br#"{"a":1}"#.to_vec());
+            match plugin.on_request(req) {
+                Action::Continue(modified) => modified.body_string().unwrap_or_default(),
+                Action::ShortCircuit(_) => panic!("Expected Action::Continue"),
+            }
+        };
+        assert!(send(&mut plugin, "application/json; charset=utf-8").contains("added"));
+        assert!(send(&mut plugin, "application/merge-patch+json").contains("added"));
+        assert_eq!(send(&mut plugin, "text/plain"), r#"{"a":1}"#);
     }
 
     #[test]

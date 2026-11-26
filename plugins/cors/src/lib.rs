@@ -112,33 +112,28 @@ impl Cors {
     pub fn on_response(&mut self, mut resp: Response) -> Response {
         if self.wildcard_active() {
             // Non-credentialed wildcard: a constant `*` works without the origin.
-            resp.headers
-                .insert("access-control-allow-origin".to_string(), "*".to_string());
+            resp.set_header("access-control-allow-origin", "*");
         } else if let Some(origin) = context::get("cors.origin") {
             // Reflect the specific origin validated in on_request, and Vary on it
             // so caches don't serve one origin's response to another.
-            resp.headers.insert(
-                "access-control-allow-origin".to_string(),
+            resp.set_header(
+                "access-control-allow-origin",
                 self.allow_origin_value(&origin),
             );
-            resp.headers
-                .insert("vary".to_string(), "Origin".to_string());
+            vary_on_origin(&mut resp);
         }
 
         // Expose headers if configured
         if !self.expose_headers.is_empty() {
-            resp.headers.insert(
-                "access-control-expose-headers".to_string(),
+            resp.set_header(
+                "access-control-expose-headers",
                 self.expose_headers.join(", "),
             );
         }
 
         // Credentials
         if self.allow_credentials {
-            resp.headers.insert(
-                "access-control-allow-credentials".to_string(),
-                "true".to_string(),
-            );
+            resp.set_header("access-control-allow-credentials", "true");
         }
 
         resp
@@ -207,12 +202,11 @@ impl Cors {
     }
 
     /// Check if all requested headers are allowed.
+    /// Whether every header a preflight names may be sent: a CORS-safelisted
+    /// name always (a browser names one whose value is not safelisted, such as
+    /// `content-type: application/json`), any other one when
+    /// `allowed_headers` lists it or `*`.
     fn are_headers_allowed(&self, requested_headers: &str) -> bool {
-        if self.allowed_headers.is_empty() {
-            // Only simple headers allowed by default
-            return requested_headers.is_empty();
-        }
-
         // Check each requested header
         for header in requested_headers.split(',') {
             let header = header.trim().to_lowercase();
@@ -269,41 +263,54 @@ impl Cors {
         // Set origin header (never `*` when credentials are allowed)
         headers.insert(
             "access-control-allow-origin".to_string(),
-            self.allow_origin_value(origin),
+            vec![self.allow_origin_value(origin)],
         );
 
         // Allow methods
         headers.insert(
             "access-control-allow-methods".to_string(),
-            self.allowed_methods.join(", "),
+            vec![self.allowed_methods.join(", ")],
         );
 
-        // Allow headers
-        if !self.allowed_headers.is_empty() {
+        // Allow headers: the ones the preflight names, all admitted above, so
+        // the browser finds each of them; without any, the configured list.
+        let requested: Vec<&str> = requested_headers
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect();
+        if !requested.is_empty() {
             headers.insert(
                 "access-control-allow-headers".to_string(),
-                self.allowed_headers.join(", "),
+                vec![requested.join(", ")],
+            );
+        } else if !self.allowed_headers.is_empty() {
+            headers.insert(
+                "access-control-allow-headers".to_string(),
+                vec![self.allowed_headers.join(", ")],
             );
         }
 
         // Max age
         headers.insert(
             "access-control-max-age".to_string(),
-            self.max_age.to_string(),
+            vec![self.max_age.to_string()],
         );
 
         // Credentials
         if self.allow_credentials {
             headers.insert(
                 "access-control-allow-credentials".to_string(),
-                "true".to_string(),
+                vec!["true".to_string()],
             );
         }
 
         // Vary header for caching
         headers.insert(
             "vary".to_string(),
-            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers".to_string(),
+            vec![
+                "Origin, Access-Control-Request-Method, Access-Control-Request-Headers".to_string(),
+            ],
         );
 
         Response::new(204).with_headers(headers)
@@ -318,9 +325,22 @@ impl Cors {
         )
         .detail(format!("Origin '{}' is not allowed by CORS policy", origin))
         .into_response();
-        resp.headers
-            .insert("vary".to_string(), "Origin".to_string());
+        resp.set_header("vary", "Origin");
         resp
+    }
+}
+
+/// Add `Origin` to the response's `Vary`, keeping what the upstream varies on.
+/// A `Vary` that already names it, or `*`, is left as it is.
+fn vary_on_origin(resp: &mut Response) {
+    let varies = resp
+        .header_values("vary")
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|token| token == "*" || token.eq_ignore_ascii_case("origin"));
+    if !varies {
+        resp.append_header("vary", "Origin");
     }
 }
 
@@ -479,6 +499,65 @@ mod tests {
         assert!(cors.are_headers_allowed("content-language"));
     }
 
+    /// Without `allowed_headers`, a preflight naming a safelisted header is
+    /// admitted and the header echoed; any other is refused.
+    #[test]
+    fn a_default_preflight_admits_safelisted_names_and_echoes_them() {
+        mock_host::reset();
+        let preflight = |requested: &str| {
+            let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+            let mut req = create_request("OPTIONS", Some("https://example.com"));
+            req.headers.insert(
+                "access-control-request-method".to_string(),
+                "POST".to_string(),
+            );
+            req.headers.insert(
+                "access-control-request-headers".to_string(),
+                requested.to_string(),
+            );
+            match cors.on_request(req) {
+                Action::ShortCircuit(response) => response,
+                Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+            }
+        };
+
+        let response = preflight("content-type");
+        assert_eq!(response.status, 204);
+        assert_eq!(
+            response.header("access-control-allow-headers"),
+            Some("content-type")
+        );
+        assert_eq!(preflight("x-custom").status, 403);
+    }
+
+    /// With a list, a safelisted header the preflight names is echoed beside
+    /// the listed ones.
+    #[test]
+    fn a_preflight_echoes_every_header_it_names() {
+        mock_host::reset();
+        let mut cors = create_test_cors(vec!["https://example.com".to_string()]);
+        cors.allowed_headers = vec!["Authorization".to_string()];
+        let mut req = create_request("OPTIONS", Some("https://example.com"));
+        req.headers.insert(
+            "access-control-request-method".to_string(),
+            "POST".to_string(),
+        );
+        req.headers.insert(
+            "access-control-request-headers".to_string(),
+            "authorization,content-type".to_string(),
+        );
+        match cors.on_request(req) {
+            Action::ShortCircuit(response) => {
+                assert_eq!(response.status, 204);
+                assert_eq!(
+                    response.header("access-control-allow-headers"),
+                    Some("authorization, content-type")
+                );
+            }
+            Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
+        }
+    }
+
     #[test]
     fn test_are_headers_allowed_custom_headers() {
         let mut cors = create_test_cors(vec!["*".to_string()]);
@@ -524,10 +603,10 @@ mod tests {
 
         assert_eq!(response.status, 403);
         assert_eq!(
-            response.headers.get("content-type"),
-            Some(&"application/problem+json".to_string())
+            response.header("content-type"),
+            Some("application/problem+json")
         );
-        assert_eq!(response.headers.get("vary"), Some(&"Origin".to_string()));
+        assert_eq!(response.header("vary"), Some("Origin"));
 
         let body = String::from_utf8(response.body.expect("Response should have a body")).unwrap();
         assert!(body.contains("urn:barbacane:error:cors-not-allowed"));
@@ -596,13 +675,13 @@ mod tests {
         let _ = cors.on_request(create_request("GET", Some("https://app.example.com")));
         let resp = cors.on_response(Response::new(200));
         assert_eq!(
-            resp.headers.get("access-control-allow-origin"),
-            Some(&"https://app.example.com".to_string())
+            resp.header("access-control-allow-origin"),
+            Some("https://app.example.com")
         );
-        assert_eq!(resp.headers.get("vary"), Some(&"Origin".to_string()));
+        assert_eq!(resp.header("vary"), Some("Origin"));
         assert_eq!(
-            resp.headers.get("access-control-allow-credentials"),
-            Some(&"true".to_string())
+            resp.header("access-control-allow-credentials"),
+            Some("true")
         );
     }
 
@@ -656,8 +735,8 @@ mod tests {
             Action::ShortCircuit(response) => {
                 assert_eq!(response.status, 204);
                 assert_eq!(
-                    response.headers.get("access-control-allow-origin"),
-                    Some(&"https://example.com".to_string())
+                    response.header("access-control-allow-origin"),
+                    Some("https://example.com")
                 );
                 assert!(response
                     .headers
@@ -702,8 +781,8 @@ mod tests {
             Action::ShortCircuit(response) => {
                 assert_eq!(response.status, 204);
                 assert_eq!(
-                    response.headers.get("access-control-allow-headers"),
-                    Some(&"authorization".to_string())
+                    response.header("access-control-allow-headers"),
+                    Some("authorization")
                 );
             }
             Action::Continue(_) => panic!("Expected ShortCircuit, got Continue"),
@@ -717,10 +796,7 @@ mod tests {
         let response = Response::new(200).with_body(b"test".to_vec());
 
         let modified = cors.on_response(response);
-        assert_eq!(
-            modified.headers.get("access-control-allow-origin"),
-            Some(&"*".to_string())
-        );
+        assert_eq!(modified.header("access-control-allow-origin"), Some("*"));
     }
 
     #[test]
@@ -731,8 +807,8 @@ mod tests {
 
         let modified = cors.on_response(response);
         assert_eq!(
-            modified.headers.get("access-control-expose-headers"),
-            Some(&"x-custom, x-other".to_string())
+            modified.header("access-control-expose-headers"),
+            Some("x-custom, x-other")
         );
     }
 
@@ -744,8 +820,8 @@ mod tests {
 
         let modified = cors.on_response(response);
         assert_eq!(
-            modified.headers.get("access-control-allow-credentials"),
-            Some(&"true".to_string())
+            modified.header("access-control-allow-credentials"),
+            Some("true")
         );
     }
 
@@ -760,8 +836,8 @@ mod tests {
         // Should not add wildcard ACAO when credentials are enabled
         assert!(!modified.headers.contains_key("access-control-allow-origin"));
         assert_eq!(
-            modified.headers.get("access-control-allow-credentials"),
-            Some(&"true".to_string())
+            modified.header("access-control-allow-credentials"),
+            Some("true")
         );
     }
 
@@ -774,24 +850,42 @@ mod tests {
         assert_eq!(response.status, 204);
         assert_eq!(response.body, None);
         assert_eq!(
-            response.headers.get("access-control-allow-origin"),
-            Some(&"https://example.com".to_string())
+            response.header("access-control-allow-origin"),
+            Some("https://example.com")
         );
         assert_eq!(
-            response.headers.get("access-control-allow-methods"),
-            Some(&"GET, POST".to_string())
+            response.header("access-control-allow-methods"),
+            Some("GET, POST")
         );
+        assert_eq!(response.header("access-control-max-age"), Some("3600"));
         assert_eq!(
-            response.headers.get("access-control-max-age"),
-            Some(&"3600".to_string())
+            response.header("vary"),
+            Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
         );
+    }
+
+    /// A reflected origin is added to the upstream's `Vary`, not put in its
+    /// place; one already named, or `*`, is not repeated.
+    #[test]
+    fn vary_keeps_what_the_upstream_varies_on() {
+        let mut upstream = Response::new(200);
+        upstream.set_header("vary", "Accept-Encoding");
+        vary_on_origin(&mut upstream);
         assert_eq!(
-            response.headers.get("vary"),
-            Some(
-                &"Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
-                    .to_string()
-            )
+            upstream.header_values("vary"),
+            ["Accept-Encoding", "Origin"]
         );
+
+        for already in ["origin", "Accept-Encoding, Origin", "*"] {
+            let mut upstream = Response::new(200);
+            upstream.set_header("vary", already);
+            vary_on_origin(&mut upstream);
+            assert_eq!(upstream.header_values("vary"), [already], "{already}");
+        }
+
+        let mut bare = Response::new(200);
+        vary_on_origin(&mut bare);
+        assert_eq!(bare.header_values("vary"), ["Origin"]);
     }
 
     #[test]
@@ -800,10 +894,7 @@ mod tests {
         let req = create_request("OPTIONS", Some("https://example.com"));
         let response = cors.preflight_response("https://example.com", "GET", &req);
 
-        assert_eq!(
-            response.headers.get("access-control-allow-origin"),
-            Some(&"*".to_string())
-        );
+        assert_eq!(response.header("access-control-allow-origin"), Some("*"));
     }
 
     #[test]
@@ -814,13 +905,13 @@ mod tests {
         let response = cors.preflight_response("https://example.com", "GET", &req);
 
         assert_eq!(
-            response.headers.get("access-control-allow-credentials"),
-            Some(&"true".to_string())
+            response.header("access-control-allow-credentials"),
+            Some("true")
         );
         // Should use specific origin, not wildcard
         assert_eq!(
-            response.headers.get("access-control-allow-origin"),
-            Some(&"https://example.com".to_string())
+            response.header("access-control-allow-origin"),
+            Some("https://example.com")
         );
     }
 

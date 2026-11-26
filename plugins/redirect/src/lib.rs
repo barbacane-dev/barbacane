@@ -120,8 +120,8 @@ fn join_below(target: &str, rest: &str) -> String {
 
 fn redirect_response(status: u16, location: &str) -> Response {
     let mut headers = BTreeMap::new();
-    headers.insert("location".to_string(), location.to_string());
-    headers.insert("content-type".to_string(), "text/plain".to_string());
+    headers.insert("location".to_string(), vec![location.to_string()]);
+    headers.insert("content-type".to_string(), vec!["text/plain".to_string()]);
 
     let body = match status {
         301 => "Moved Permanently",
@@ -172,7 +172,7 @@ mod tests {
         match plugin.on_request(make_request("/old", None)) {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 302);
-                assert_eq!(r.headers["location"], "https://example.com/new");
+                assert_eq!(r.header("location").unwrap(), "https://example.com/new");
             }
             _ => panic!("expected ShortCircuit"),
         }
@@ -200,7 +200,7 @@ mod tests {
 
         match plugin.on_request(make_request("/api/v1/users/42", None)) {
             Action::ShortCircuit(r) => {
-                assert_eq!(r.headers["location"], "/api/v2/users/42");
+                assert_eq!(r.header("location").unwrap(), "/api/v2/users/42");
             }
             _ => panic!("expected ShortCircuit"),
         }
@@ -224,7 +224,7 @@ mod tests {
         ] {
             match plugin.on_request(make_request(path, None)) {
                 Action::ShortCircuit(resp) => {
-                    assert_eq!(resp.headers["location"], expected, "{path}")
+                    assert_eq!(resp.header("location").unwrap(), expected, "{path}")
                 }
                 Action::Continue(_) => panic!("{path} was not redirected"),
             }
@@ -266,7 +266,7 @@ mod tests {
         match plugin.on_request(make_request("/anything", None)) {
             Action::ShortCircuit(r) => {
                 assert_eq!(r.status, 301);
-                assert_eq!(r.headers["location"], "https://new-domain.com");
+                assert_eq!(r.header("location").unwrap(), "https://new-domain.com");
                 assert_eq!(r.body_str(), Some("Moved Permanently"));
             }
             _ => panic!("expected ShortCircuit"),
@@ -283,7 +283,7 @@ mod tests {
 
         match plugin.on_request(make_request("/old", Some("foo=bar&baz=1"))) {
             Action::ShortCircuit(r) => {
-                assert_eq!(r.headers["location"], "/new?foo=bar&baz=1");
+                assert_eq!(r.header("location").unwrap(), "/new?foo=bar&baz=1");
             }
             _ => panic!("expected ShortCircuit"),
         }
@@ -298,7 +298,7 @@ mod tests {
 
         match plugin.on_request(make_request("/old", Some("foo=bar"))) {
             Action::ShortCircuit(r) => {
-                assert_eq!(r.headers["location"], "/new");
+                assert_eq!(r.header("location").unwrap(), "/new");
             }
             _ => panic!("expected ShortCircuit"),
         }
@@ -356,7 +356,7 @@ mod tests {
 
         match plugin.on_request(make_request("/test", None)) {
             Action::ShortCircuit(r) => {
-                assert_eq!(r.headers["location"], "/first");
+                assert_eq!(r.header("location").unwrap(), "/first");
             }
             _ => panic!("expected ShortCircuit"),
         }
@@ -372,7 +372,7 @@ mod tests {
 
         match plugin.on_request(make_request("/v1/search", Some("q=hello"))) {
             Action::ShortCircuit(r) => {
-                assert_eq!(r.headers["location"], "/v2/search?q=hello");
+                assert_eq!(r.header("location").unwrap(), "/v2/search?q=hello");
             }
             _ => panic!("expected ShortCircuit"),
         }

@@ -814,15 +814,38 @@ fn check_extension_placement(
     Ok(())
 }
 
-/// An operation's `x-sunset`, as the IMF-fixdate the `Sunset` header carries
-/// (RFC 8594, RFC 9110). An HTTP-date is read without its day name, which is
-/// written from the date; an RFC 3339 date-time, or a full date read as
-/// midnight UTC, is accepted too. Anything else is E1018.
-fn parse_sunset(
+/// An operation's lifecycle dates: `x-sunset` as the IMF-fixdate the
+/// `Sunset` header carries (RFC 8594), and `x-deprecation` as the Unix
+/// seconds the `Deprecation` header carries (RFC 9745). The sunset must not
+/// be earlier than the deprecation (RFC 9745 section 4). E1018 otherwise.
+fn parse_lifecycle(
     op_obj: &serde_json::Map<String, Value>,
     location: &str,
-) -> Result<Option<String>, ParseError> {
-    let Some(value) = op_obj.get("x-sunset") else {
+) -> Result<(Option<String>, Option<i64>), ParseError> {
+    let sunset = parse_lifecycle_date(op_obj, "x-sunset", location)?;
+    let deprecation = parse_lifecycle_date(op_obj, "x-deprecation", location)?;
+    if let (Some(sunset), Some(deprecation)) = (sunset, deprecation) {
+        if sunset < deprecation {
+            return Err(ParseError::InvalidLifecycleDate(format!(
+                "x-sunset on {location} is earlier than its x-deprecation"
+            )));
+        }
+    }
+    Ok((
+        sunset.map(|date| date.format("%a, %d %b %Y %H:%M:%S GMT").to_string()),
+        deprecation.map(|date| date.and_utc().timestamp()),
+    ))
+}
+
+/// The date of an operation's `key`, in UTC. An HTTP-date is read without its
+/// day name; an RFC 3339 date-time, or a full date read as midnight UTC, is
+/// accepted too. Anything else is E1018.
+fn parse_lifecycle_date(
+    op_obj: &serde_json::Map<String, Value>,
+    key: &str,
+    location: &str,
+) -> Result<Option<chrono::NaiveDateTime>, ParseError> {
+    let Some(value) = op_obj.get(key) else {
         return Ok(None);
     };
     let date = value.as_str().map(str::trim).and_then(|text| {
@@ -845,9 +868,9 @@ fn parse_sunset(
             })
     });
     match date {
-        Some(date) => Ok(Some(date.format("%a, %d %b %Y %H:%M:%S GMT").to_string())),
-        None => Err(ParseError::InvalidSunset(format!(
-            "x-sunset {value} on {location} is not a date: write an HTTP-date such as \
+        Some(date) => Ok(Some(date)),
+        None => Err(ParseError::InvalidLifecycleDate(format!(
+            "{key} {value} on {location} is not a date: write an HTTP-date such as \
              \"Thu, 31 Dec 2026 23:59:59 GMT\", or an RFC 3339 date such as \"2026-12-31\""
         ))),
     }
@@ -1006,7 +1029,8 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                let sunset = parse_sunset(op_obj, &format!("{} {}", method.to_uppercase(), path))?;
+                let (sunset, deprecation) =
+                    parse_lifecycle(op_obj, &format!("{} {}", method.to_uppercase(), path))?;
 
                 let extensions = extract_extensions(op_obj);
 
@@ -1029,6 +1053,7 @@ fn parse_openapi_paths(
                     middlewares,
                     deprecated,
                     sunset,
+                    deprecation,
                     extensions,
                     messages: Vec::new(), // OpenAPI doesn't use AsyncAPI messages
                     bindings: BTreeMap::new(), // OpenAPI doesn't use protocol bindings
@@ -1090,8 +1115,8 @@ fn parse_openapi_paths(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                let sunset =
-                    parse_sunset(op_obj, &format!("{} {}", method_name.to_uppercase(), path))?;
+                let (sunset, deprecation) =
+                    parse_lifecycle(op_obj, &format!("{} {}", method_name.to_uppercase(), path))?;
 
                 let extensions = extract_extensions(op_obj);
 
@@ -1114,6 +1139,7 @@ fn parse_openapi_paths(
                     middlewares,
                     deprecated,
                     sunset,
+                    deprecation,
                     extensions,
                     messages: Vec::new(),
                     bindings: BTreeMap::new(),
@@ -1528,7 +1554,7 @@ fn parse_asyncapi_channels(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let sunset = parse_sunset(op_obj, &format!("operation '{op_id}'"))?;
+        let (sunset, deprecation) = parse_lifecycle(op_obj, &format!("operation '{op_id}'"))?;
 
         let extensions = extract_extensions(op_obj);
 
@@ -1555,6 +1581,7 @@ fn parse_asyncapi_channels(
             middlewares,
             deprecated,
             sunset,
+            deprecation,
             extensions,
             messages,
             bindings,
@@ -3272,6 +3299,43 @@ paths:
             let err = sunset(value).expect_err(value).to_string();
             assert!(err.starts_with("E1018"), "{value}: {err}");
         }
+    }
+
+    /// `x-deprecation` is the Unix seconds of its date, read as `x-sunset` is.
+    #[test]
+    fn x_deprecation_is_read_as_a_date() {
+        let deprecation = |value: &str| {
+            let yaml = format!(
+                "openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\npaths:\n  /x:\n    get:\n      x-deprecation: {value}\n      x-barbacane-dispatch: {{ name: mock }}\n"
+            );
+            parse_spec(&yaml).map(|spec| spec.operations[0].deprecation)
+        };
+        for (value, expected) in [
+            ("\"Tue, 31 Dec 2024 23:59:59 GMT\"", 1_735_689_599),
+            ("\"2025-06-30\"", 1_751_241_600),
+            ("\"2029-01-01T12:00:00+02:00\"", 1_861_956_000),
+        ] {
+            assert_eq!(deprecation(value).unwrap(), Some(expected), "{value}");
+        }
+        for value in ["true", "\"soon\"", "1751241600"] {
+            let err = deprecation(value).expect_err(value).to_string();
+            assert!(err.starts_with("E1018"), "{value}: {err}");
+        }
+    }
+
+    /// A sunset earlier than the deprecation is E1018 (RFC 9745 section 4);
+    /// the same date is accepted.
+    #[test]
+    fn x_sunset_is_not_earlier_than_x_deprecation() {
+        let parse = |deprecation: &str, sunset: &str| {
+            parse_spec(&format!(
+                "openapi: \"3.1.0\"\ninfo: {{ title: T, version: \"1\" }}\npaths:\n  /x:\n    get:\n      x-deprecation: \"{deprecation}\"\n      x-sunset: \"{sunset}\"\n      x-barbacane-dispatch: {{ name: mock }}\n"
+            ))
+        };
+        let err = parse("2026-06-30", "2026-01-01").unwrap_err().to_string();
+        assert!(err.starts_with("E1018"), "{err}");
+        assert!(parse("2026-06-30", "2026-06-30").is_ok());
+        assert!(parse("2026-06-30", "2026-12-31").is_ok());
     }
 
     /// A server URL's path is the prefix its operations are served under.

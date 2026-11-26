@@ -133,13 +133,18 @@ fn transform_status(status: u16, mapping: &BTreeMap<String, u16>) -> u16 {
 ///
 /// Normalizes all incoming header keys to lowercase first, since HTTP headers
 /// are case-insensitive (RFC 7230 §3.2) but BTreeMap lookups are case-sensitive.
-fn transform_headers(headers: &mut BTreeMap<String, String>, config: &HeaderConfig) {
+fn transform_headers(headers: &mut ResponseHeaders, config: &HeaderConfig) {
     // Normalize all keys to lowercase so remove/rename lookups work regardless
-    // of the case used by the upstream dispatcher.
-    *headers = std::mem::take(headers)
-        .into_iter()
-        .map(|(k, v)| (k.to_lowercase(), v))
-        .collect();
+    // of the case used by the upstream dispatcher; names that differ only in
+    // case are one header, its values kept in order.
+    let mut normalized = ResponseHeaders::new();
+    for (name, values) in std::mem::take(headers) {
+        normalized
+            .entry(name.to_lowercase())
+            .or_default()
+            .extend(values);
+    }
+    *headers = normalized;
 
     for header_name in &config.remove {
         headers.remove(&header_name.to_lowercase());
@@ -154,11 +159,11 @@ fn transform_headers(headers: &mut BTreeMap<String, String>, config: &HeaderConf
     for (header_name, value) in &config.set {
         headers
             .entry(header_name.to_lowercase())
-            .or_insert(value.clone());
+            .or_insert_with(|| vec![value.clone()]);
     }
 
     for (header_name, value) in &config.add {
-        headers.insert(header_name.to_lowercase(), value.clone());
+        headers.insert(header_name.to_lowercase(), vec![value.clone()]);
     }
 }
 
@@ -298,9 +303,12 @@ mod tests {
 
     fn create_test_response() -> Response {
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-        headers.insert("server".to_string(), "upstream/1.0".to_string());
-        headers.insert("x-powered-by".to_string(), "Express".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
+        headers.insert("server".to_string(), vec!["upstream/1.0".to_string()]);
+        headers.insert("x-powered-by".to_string(), vec!["Express".to_string()]);
 
         Response::new(200)
             .with_headers(headers)
@@ -359,7 +367,10 @@ mod tests {
 
         transform_headers(&mut headers, &config);
 
-        assert_eq!(headers.get("x-gateway"), Some(&"barbacane".to_string()));
+        assert_eq!(
+            headers.get("x-gateway"),
+            Some(&vec!["barbacane".to_string()])
+        );
     }
 
     #[test]
@@ -374,7 +385,10 @@ mod tests {
 
         transform_headers(&mut headers, &config);
 
-        assert_eq!(headers.get("server"), Some(&"barbacane/1.0".to_string()));
+        assert_eq!(
+            headers.get("server"),
+            Some(&vec!["barbacane/1.0".to_string()])
+        );
     }
 
     #[test]
@@ -392,8 +406,54 @@ mod tests {
 
         transform_headers(&mut headers, &config);
 
-        assert_eq!(headers.get("server"), Some(&"upstream/1.0".to_string()));
-        assert_eq!(headers.get("x-new-header"), Some(&"new-value".to_string()));
+        assert_eq!(
+            headers.get("server"),
+            Some(&vec!["upstream/1.0".to_string()])
+        );
+        assert_eq!(
+            headers.get("x-new-header"),
+            Some(&vec!["new-value".to_string()])
+        );
+    }
+
+    /// A header the upstream repeats keeps every value through renames and
+    /// `set`; `add` replaces them with its one value.
+    #[test]
+    fn test_headers_keep_repeated_values() {
+        let mut headers = ResponseHeaders::new();
+        headers.insert(
+            "Set-Cookie".to_string(),
+            vec!["a=1".to_string(), "b=2".to_string()],
+        );
+        headers.insert(
+            "link".to_string(),
+            vec!["</a>".to_string(), "</b>".to_string()],
+        );
+
+        let mut config = HeaderConfig::default();
+        config
+            .rename
+            .insert("link".to_string(), "x-link".to_string());
+        config
+            .set
+            .insert("set-cookie".to_string(), "ignored".to_string());
+        transform_headers(&mut headers, &config);
+
+        assert_eq!(
+            headers.get("set-cookie"),
+            Some(&vec!["a=1".to_string(), "b=2".to_string()])
+        );
+        assert_eq!(
+            headers.get("x-link"),
+            Some(&vec!["</a>".to_string(), "</b>".to_string()])
+        );
+
+        let mut config = HeaderConfig::default();
+        config
+            .add
+            .insert("set-cookie".to_string(), "c=3".to_string());
+        transform_headers(&mut headers, &config);
+        assert_eq!(headers.get("set-cookie"), Some(&vec!["c=3".to_string()]));
     }
 
     #[test]
@@ -411,7 +471,7 @@ mod tests {
         assert_eq!(headers.get("x-powered-by"), None);
         assert_eq!(
             headers.get("content-type"),
-            Some(&"application/json".to_string())
+            Some(&vec!["application/json".to_string()])
         );
     }
 
@@ -443,7 +503,7 @@ mod tests {
         transform_headers(&mut headers, &config);
 
         assert_eq!(headers.get("x-powered-by"), None);
-        assert_eq!(headers.get("x-engine"), Some(&"Express".to_string()));
+        assert_eq!(headers.get("x-engine"), Some(&vec!["Express".to_string()]));
     }
 
     #[test]
@@ -467,7 +527,7 @@ mod tests {
     fn test_headers_transformation_order() {
         let resp = create_test_response();
         let mut headers = resp.headers.clone();
-        headers.insert("to-rename".to_string(), "value".to_string());
+        headers.insert("to-rename".to_string(), vec!["value".to_string()]);
 
         let mut config = HeaderConfig::default();
         config.remove.push("server".to_string());
@@ -484,16 +544,16 @@ mod tests {
         transform_headers(&mut headers, &config);
 
         assert_eq!(headers.get("server"), None);
-        assert_eq!(headers.get("renamed"), Some(&"value".to_string()));
-        assert_eq!(headers.get("x-set"), Some(&"set-value".to_string()));
-        assert_eq!(headers.get("x-add"), Some(&"add-value".to_string()));
+        assert_eq!(headers.get("renamed"), Some(&vec!["value".to_string()]));
+        assert_eq!(headers.get("x-set"), Some(&vec!["set-value".to_string()]));
+        assert_eq!(headers.get("x-add"), Some(&vec!["add-value".to_string()]));
     }
 
     #[test]
     fn test_headers_combined_add_and_remove() {
         let mut headers = BTreeMap::new();
-        headers.insert("server".to_string(), "nginx".to_string());
-        headers.insert("x-powered-by".to_string(), "PHP".to_string());
+        headers.insert("server".to_string(), vec!["nginx".to_string()]);
+        headers.insert("x-powered-by".to_string(), vec!["PHP".to_string()]);
 
         let mut config = HeaderConfig::default();
         config.remove.push("server".to_string());
@@ -509,14 +569,20 @@ mod tests {
 
         assert_eq!(headers.get("server"), None);
         assert_eq!(headers.get("x-powered-by"), None);
-        assert_eq!(headers.get("x-gateway"), Some(&"barbacane".to_string()));
-        assert_eq!(headers.get("x-frame-options"), Some(&"DENY".to_string()));
+        assert_eq!(
+            headers.get("x-gateway"),
+            Some(&vec!["barbacane".to_string()])
+        );
+        assert_eq!(
+            headers.get("x-frame-options"),
+            Some(&vec!["DENY".to_string()])
+        );
     }
 
     #[test]
     fn test_headers_remove_and_readd_same_key() {
         let mut headers = BTreeMap::new();
-        headers.insert("x-token".to_string(), "old-value".to_string());
+        headers.insert("x-token".to_string(), vec!["old-value".to_string()]);
 
         let mut config = HeaderConfig::default();
         config.remove.push("x-token".to_string());
@@ -527,7 +593,7 @@ mod tests {
         transform_headers(&mut headers, &config);
 
         // remove runs before add — key is re-added with the new value
-        assert_eq!(headers.get("x-token"), Some(&"new-value".to_string()));
+        assert_eq!(headers.get("x-token"), Some(&vec!["new-value".to_string()]));
     }
 
     // -- Body transformation tests ------------------------------------------
@@ -891,8 +957,11 @@ mod tests {
         };
 
         let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-        headers.insert("server".to_string(), "nginx".to_string());
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json".to_string()],
+        );
+        headers.insert("server".to_string(), vec!["nginx".to_string()]);
 
         let resp = Response::new(200)
             .with_headers(headers)
@@ -903,7 +972,7 @@ mod tests {
         assert_eq!(result.status, 201);
         assert_eq!(
             result.headers.get("x-gateway"),
-            Some(&"barbacane".to_string())
+            Some(&vec!["barbacane".to_string()])
         );
         assert_eq!(result.headers.get("server"), None);
 

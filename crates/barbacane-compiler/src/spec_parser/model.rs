@@ -202,6 +202,9 @@ pub struct Operation {
     /// Sunset date for deprecated operations (from `x-sunset` per RFC 8594).
     /// Format: HTTP-date per RFC 9110 (e.g., "Sat, 31 Dec 2024 23:59:59 GMT").
     pub sunset: Option<String>,
+    /// Deprecation date from `x-deprecation`, in Unix seconds (RFC 9745).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecation: Option<i64>,
     /// Operation-level `x-barbacane-*` extensions.
     pub extensions: BTreeMap<String, serde_json::Value>,
     /// AsyncAPI messages (for async operations only).

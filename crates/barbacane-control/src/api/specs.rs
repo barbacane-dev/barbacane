@@ -527,6 +527,7 @@ mod tests {
             middlewares: None,
             deprecated: false,
             sunset: None,
+            deprecation: None,
             extensions: BTreeMap::new(),
             messages: vec![],
             bindings: BTreeMap::new(),

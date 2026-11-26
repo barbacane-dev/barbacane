@@ -106,22 +106,30 @@ impl FireAndForgetDispatcher {
         request.headers = forwarding::upstream_headers(req);
 
         // Best-effort: the request body travels via the side-channel inside
-        // `http::call`, and the response is ignored (fire-and-forget). A
-        // connection failure is logged but never affects the client response.
-        if host::http_call(&request, req.body.as_deref()).is_err() {
-            log_message(
-                Level::Info, // WARN
-                "fire-and-forget: upstream call failed (connection error)",
-            );
+        // `http::call`. A failure is logged but never affects the client
+        // response; the host answers a connection failure or a timeout with
+        // 502 or 504.
+        match host::http_call(&request, req.body.as_deref()) {
+            Ok(status) if status < 400 => {}
+            Ok(status) => log_message(
+                Level::Warn,
+                &format!("fire-and-forget: the upstream answered {status}"),
+            ),
+            Err(()) => log_message(Level::Warn, "fire-and-forget: upstream call failed"),
         }
     }
 
     /// Build the configured static response.
     fn build_response(&self) -> Response {
-        let mut headers = self.response.headers.clone();
+        let mut headers: ResponseHeaders = self
+            .response
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), vec![value.clone()]))
+            .collect();
         headers.insert(
             "content-type".to_string(),
-            self.response.content_type.clone(),
+            vec![self.response.content_type.clone()],
         );
 
         let body = if self.response.body.is_empty() {
@@ -145,14 +153,14 @@ impl FireAndForgetDispatcher {
 
 #[cfg(target_arch = "wasm32")]
 mod host {
-    /// Forward the request through the shared SDK HTTP helper. The response is
-    /// discarded (fire-and-forget); any transport error maps to `Err(())`.
+    /// Forward the request through the shared SDK HTTP helper, returning the
+    /// status the upstream (or the host, for a failed call) answered.
     pub fn http_call(
         request: &barbacane_plugin_sdk::http::HttpRequest,
         body: Option<&[u8]>,
-    ) -> Result<(), ()> {
+    ) -> Result<u16, ()> {
         barbacane_plugin_sdk::http::call(request, body)
-            .map(|_| ())
+            .map(|response| response.status)
             .map_err(|_| ())
     }
 }
@@ -165,6 +173,7 @@ mod host {
         static HTTP_CALLS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
         static LOG_MESSAGES: RefCell<Vec<(i32, String)>> = const { RefCell::new(Vec::new()) };
         static HTTP_CALL_SHOULD_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static STATUS: std::cell::Cell<u16> = const { std::cell::Cell::new(200) };
     }
 
     /// Mock HTTP call: serializes and records the request, returns Ok (or Err
@@ -173,13 +182,13 @@ mod host {
     pub fn http_call(
         request: &barbacane_plugin_sdk::http::HttpRequest,
         _body: Option<&[u8]>,
-    ) -> Result<(), ()> {
+    ) -> Result<u16, ()> {
         if HTTP_CALL_SHOULD_FAIL.with(|f| f.get()) {
             return Err(());
         }
         let json = serde_json::to_vec(request).unwrap_or_default();
         HTTP_CALLS.with(|calls| calls.borrow_mut().push(json));
-        Ok(())
+        Ok(STATUS.with(|s| s.get()))
     }
 
     pub fn log_message(level: barbacane_plugin_sdk::log::Level, msg: &str) {
@@ -193,6 +202,12 @@ mod host {
         HTTP_CALLS.with(|calls| calls.borrow_mut().clear());
         LOG_MESSAGES.with(|logs| logs.borrow_mut().clear());
         HTTP_CALL_SHOULD_FAIL.with(|f| f.set(false));
+        STATUS.with(|s| s.set(200));
+    }
+
+    #[cfg(test)]
+    pub fn set_upstream_status(status: u16) {
+        STATUS.with(|s| s.set(status));
     }
 
     #[cfg(test)]
@@ -310,8 +325,8 @@ mod tests {
 
         assert_eq!(resp.status, 202);
         assert_eq!(resp.body_str(), Some("{\"accepted\":true}"));
-        assert_eq!(resp.headers["content-type"], "application/json");
-        assert_eq!(resp.headers["x-request-id"], "abc");
+        assert_eq!(resp.header("content-type"), Some("application/json"));
+        assert_eq!(resp.header("x-request-id"), Some("abc"));
     }
 
     #[test]
@@ -383,7 +398,23 @@ mod tests {
         let logs = host::get_log_messages();
         assert!(logs
             .iter()
-            .any(|(level, msg)| *level == 2 && msg.contains("connection error")));
+            .any(|(level, msg)| *level == Level::Warn as i32 && msg.contains("call failed")));
+    }
+
+    /// The host answers a connection failure or a timeout with 502 or 504:
+    /// an upstream error status is a warning too.
+    #[test]
+    fn an_upstream_error_status_is_a_warning() {
+        for (status, warned) in [(502, true), (504, true), (404, true), (201, false)] {
+            host::reset_mock_state();
+            host::set_upstream_status(status);
+            let resp = minimal_plugin().dispatch(test_request());
+            assert_eq!(resp.status, 202);
+            let warned_now = host::get_log_messages().iter().any(|(level, msg)| {
+                *level == Level::Warn as i32 && msg.contains(&status.to_string())
+            });
+            assert_eq!(warned_now, warned, "{status}");
+        }
     }
 
     #[test]
