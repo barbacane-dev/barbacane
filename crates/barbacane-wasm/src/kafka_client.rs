@@ -79,7 +79,7 @@ impl KafkaPublisher {
         brokers: &str,
         topic: &str,
         key: Option<String>,
-        payload: &str,
+        payload: &[u8],
         headers: BTreeMap<String, String>,
     ) -> Result<PublishResult, BrokerError> {
         self.runtime()
@@ -92,7 +92,7 @@ impl KafkaPublisher {
         brokers: &str,
         topic: &str,
         key: Option<String>,
-        payload: &str,
+        payload: &[u8],
         headers: BTreeMap<String, String>,
     ) -> Result<PublishResult, BrokerError> {
         let client = self.get_or_connect(brokers).await?;
@@ -104,7 +104,7 @@ impl KafkaPublisher {
 
         let record = Record {
             key: key.map(|k| k.into_bytes()),
-            value: Some(payload.as_bytes().to_vec()),
+            value: Some(payload.to_vec()),
             headers: headers
                 .into_iter()
                 .map(|(k, v)| (k, v.into_bytes()))
@@ -306,7 +306,7 @@ mod tests {
             "169.254.169.254:9092",
             "test-topic",
             None,
-            "hello",
+            b"hello",
             BTreeMap::new(),
         );
         assert!(matches!(result, Err(BrokerError::Blocked(_))));
@@ -319,7 +319,7 @@ mod tests {
             "127.0.0.1:19092",
             "test-topic",
             None,
-            "hello",
+            b"hello",
             BTreeMap::new(),
         );
         assert!(result.is_err());
@@ -336,7 +336,7 @@ mod tests {
                     "127.0.0.1:19092",
                     "test-topic",
                     None,
-                    "hello",
+                    b"hello",
                     BTreeMap::new(),
                 )
             })
@@ -356,7 +356,7 @@ mod tests {
             "127.0.0.1:19092",
             "test-topic",
             Some("order-456".to_string()),
-            r#"{"orderId":"456"}"#,
+            br#"{"orderId":"456"}"#,
             headers,
         );
         // Connection refused, but validates the key/headers path compiles and runs
@@ -460,7 +460,7 @@ mod tests {
             &bootstrap.to_string(),
             "test-topic",
             None,
-            "hello",
+            b"hello",
             BTreeMap::new(),
         );
 
@@ -481,7 +481,7 @@ mod tests {
         let publisher =
             KafkaPublisher::with_permit(Some(Arc::new(|_: &SocketAddr| true))).expect("publisher");
         let result =
-            publisher.publish_blocking("[::1]:9092", "test-topic", None, "hello", BTreeMap::new());
+            publisher.publish_blocking("[::1]:9092", "test-topic", None, b"hello", BTreeMap::new());
         assert!(
             matches!(&result, Err(BrokerError::ConnectionFailed(m)) if m.contains("use a host name")),
             "{result:?}"
@@ -495,7 +495,7 @@ mod tests {
             "127.0.0.1:19092, 127.0.0.1:19093",
             "test-topic",
             None,
-            "hello",
+            b"hello",
             BTreeMap::new(),
         );
         // Connection refused, but validates comma-separated broker parsing

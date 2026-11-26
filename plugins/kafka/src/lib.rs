@@ -50,6 +50,12 @@ struct BrokerMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<String>,
     payload: String,
+    /// The body when it is not UTF-8; the host publishes these bytes.
+    #[serde(
+        with = "barbacane_plugin_sdk::types::base64_body",
+        skip_serializing_if = "Option::is_none"
+    )]
+    payload_base64: Option<Vec<u8>>,
     headers: BTreeMap<String, String>,
 }
 
@@ -69,33 +75,7 @@ struct PublishResult {
 impl KafkaDispatcher {
     /// Dispatch a request by publishing to Kafka and returning 202 Accepted.
     pub fn dispatch(&mut self, req: Request) -> Response {
-        // Resolve the message key
-        let key = self.resolve_key(&req);
-
-        // Build message headers from request headers
-        let mut msg_headers = BTreeMap::new();
-        for header_name in &self.headers_from_request {
-            if let Some(value) = req.headers.get(header_name) {
-                msg_headers.insert(header_name.clone(), value.clone());
-            }
-        }
-
-        // Add standard metadata headers
-        if let Some(request_id) = req.headers.get("x-request-id") {
-            msg_headers.insert("x-request-id".to_string(), request_id.clone());
-        }
-        if let Some(trace_id) = req.headers.get("x-trace-id") {
-            msg_headers.insert("x-trace-id".to_string(), trace_id.clone());
-        }
-
-        // Build the broker message
-        let message = BrokerMessage {
-            url: self.brokers.clone(),
-            topic: self.topic.clone(),
-            key,
-            payload: req.body_string().unwrap_or_default(),
-            headers: msg_headers,
-        };
+        let message = self.message(&req);
 
         // Serialize and publish
         let message_json = match serde_json::to_vec(&message) {
@@ -148,13 +128,39 @@ impl KafkaDispatcher {
         self.accepted_response(&publish_result)
     }
 
+    /// The message for `req`: its key, its body, and the request headers it
+    /// carries. Request header names are lower-case, so configured names are
+    /// matched in any case.
+    fn message(&self, req: &Request) -> BrokerMessage {
+        let mut msg_headers = BTreeMap::new();
+        for header_name in &self.headers_from_request {
+            if let Some(value) = req.headers.get(&header_name.to_ascii_lowercase()) {
+                msg_headers.insert(header_name.clone(), value.clone());
+            }
+        }
+        for name in ["x-request-id", "x-trace-id"] {
+            if let Some(value) = req.headers.get(name) {
+                msg_headers.insert(name.to_string(), value.clone());
+            }
+        }
+        let (payload, payload_base64) = payload(req.body.clone());
+        BrokerMessage {
+            url: self.brokers.clone(),
+            topic: self.topic.clone(),
+            key: self.resolve_key(req),
+            payload,
+            payload_base64,
+            headers: msg_headers,
+        }
+    }
+
     /// Resolve the message key from config and request.
     fn resolve_key(&self, req: &Request) -> Option<String> {
         let key_expr = self.key.as_ref()?;
 
         if key_expr.starts_with("$request.header.") {
             let header_name = key_expr.strip_prefix("$request.header.")?;
-            req.headers.get(header_name).cloned()
+            req.headers.get(&header_name.to_ascii_lowercase()).cloned()
         } else if key_expr.starts_with("$request.path.") {
             let param_name = key_expr.strip_prefix("$request.path.")?;
             req.path_params.get(param_name).cloned()
@@ -251,6 +257,16 @@ unsafe fn host_broker_read_result(_buf_ptr: i32, _buf_len: i32) -> i32 {
     0
 }
 
+/// The request body as a message payload: text when it is UTF-8, otherwise
+/// the bytes, which the host receives as base64.
+fn payload(body: Option<Vec<u8>>) -> (String, Option<Vec<u8>>) {
+    match body.map(String::from_utf8) {
+        None => (String::new(), None),
+        Some(Ok(text)) => (text, None),
+        Some(Err(not_text)) => (String::new(), Some(not_text.into_bytes())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +289,44 @@ mod tests {
             req.path_params = path_params;
             req
         }
+    }
+
+    /// Request header names are lower-case; a configured name matches in any
+    /// case, for the key and for the headers the message carries.
+    #[test]
+    fn configured_header_names_match_in_any_case() {
+        let dispatcher: KafkaDispatcher = serde_json::from_value(serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "orders",
+            "key": "$request.header.X-Custom-Header",
+            "headers_from_request": ["X-Trace-Id"]
+        }))
+        .unwrap();
+        let message = dispatcher.message(&create_test_request());
+        assert_eq!(message.key.as_deref(), Some("custom-value"));
+        assert_eq!(
+            message.headers.get("X-Trace-Id").map(String::as_str),
+            Some("trace-456")
+        );
+    }
+
+    /// A body that is not UTF-8 goes to the host as its bytes, not as an empty
+    /// text payload.
+    #[test]
+    fn a_body_that_is_not_text_is_sent_as_bytes() {
+        let dispatcher: KafkaDispatcher = serde_json::from_value(serde_json::json!({
+            "brokers": "kafka:9092",
+            "topic": "orders"
+        }))
+        .unwrap();
+        let binary = create_test_request().with_body(vec![0xff, 0x00]);
+        let json = serde_json::to_value(dispatcher.message(&binary)).unwrap();
+        assert_eq!(json["payload"], "");
+        assert_eq!(json["payload_base64"], "/wA=");
+
+        let json = serde_json::to_value(dispatcher.message(&create_test_request())).unwrap();
+        assert_eq!(json["payload"], r#"{"name":"test"}"#);
+        assert!(json.get("payload_base64").is_none());
     }
 
     fn create_publish_result(success: bool) -> PublishResult {
