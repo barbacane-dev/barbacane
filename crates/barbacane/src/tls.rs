@@ -115,11 +115,26 @@ pub fn fingerprint(settings: &TlsSettings) -> Option<[u8; 32]> {
 }
 
 /// Rebuild `config` from `settings` on SIGHUP, and when the files change,
-/// checked every `interval` (never when it is zero). Runs until the task is
-/// dropped.
-pub async fn reload(settings: TlsSettings, config: SharedServerConfig, interval: Duration) {
-    let mut last = fingerprint(&settings);
-    let mut hangup = hangup_signal();
+/// checked every `interval` (never when it is zero). The SIGHUP handler and
+/// the files' fingerprint are taken when this is called, so a signal or a
+/// change after the call is not missed; the future runs until it is dropped.
+pub fn reload(
+    settings: TlsSettings,
+    config: SharedServerConfig,
+    interval: Duration,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    let last = fingerprint(&settings);
+    let hangup = hangup_signal();
+    watch(settings, config, interval, last, hangup)
+}
+
+async fn watch(
+    settings: TlsSettings,
+    config: SharedServerConfig,
+    interval: Duration,
+    mut last: Option<[u8; 32]>,
+    mut hangup: Hangup,
+) {
     let mut ticker = (!interval.is_zero()).then(|| {
         let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -271,5 +286,34 @@ mod tests {
         let other = rcgen::KeyPair::generate().unwrap();
         std::fs::write(&settings.key_path, other.serialize_pem()).unwrap();
         assert!(server_config(&settings).is_err());
+    }
+
+    /// A SIGHUP that arrives after `reload` returns, before its future first
+    /// runs, reloads the configuration.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_sighup_before_the_first_poll_reloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = settings(dir.path(), false);
+        let shared: SharedServerConfig = Arc::new(ArcSwap::new(server_config(&settings).unwrap()));
+        let before = shared.load_full();
+        let watcher = reload(settings, Arc::clone(&shared), Duration::ZERO);
+
+        let sent = std::process::Command::new("kill")
+            .args(["-HUP", &std::process::id().to_string()])
+            .status()
+            .unwrap();
+        assert!(sent.success());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let task = tokio::spawn(watcher);
+        let reloaded = tokio::time::timeout(Duration::from_secs(5), async {
+            while Arc::ptr_eq(&shared.load_full(), &before) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        task.abort();
+        assert!(reloaded.is_ok(), "the SIGHUP was lost");
     }
 }
