@@ -192,20 +192,23 @@ impl Cache {
     }
 
     /// Build cache key from request.
+    /// The cache key of `req`: `METHOD:path?query|name=value…` for each vary
+    /// header present. `%`, `?` and `|` inside a part are percent-encoded, so
+    /// they only separate parts and two requests never share a key by accident.
     fn build_cache_key(&self, req: &Request) -> String {
-        let mut key = format!("{}:{}", req.method, req.path);
+        let mut key = format!("{}:{}", req.method, key_part(&req.path));
 
         // Add query string if present
         if let Some(query) = &req.query {
             key.push('?');
-            key.push_str(query);
+            key.push_str(&key_part(query));
         }
 
         // Add vary header values
         for header_name in &self.vary {
             let lower_name = header_name.to_lowercase();
             if let Some(value) = req.headers.get(&lower_name) {
-                key.push_str(&format!("|{}={}", lower_name, value));
+                key.push_str(&format!("|{}={}", key_part(&lower_name), key_part(value)));
             }
         }
 
@@ -237,6 +240,13 @@ impl Cache {
 
         call_cache_set(key, &entry_json, self.ttl) == 0
     }
+}
+
+/// `part` with `%`, `?` and `|` percent-encoded, for a cache key.
+fn key_part(part: &str) -> String {
+    part.replace('%', "%25")
+        .replace('?', "%3F")
+        .replace('|', "%7C")
 }
 
 /// Lowercased directive names of the `Cache-Control` fields, without their
@@ -420,6 +430,29 @@ mod tests {
         let req = create_test_request("GET", "/api/users");
         let key = cache.build_cache_key(&req);
         assert_eq!(key, "GET:/api/users");
+    }
+
+    /// A `|` in the path, the query or a vary value cannot make one request's
+    /// key another's.
+    #[test]
+    fn keys_do_not_collide_through_separators() {
+        let cache: Cache = serde_json::from_str(r#"{"vary": ["accept"]}"#).unwrap();
+        let mut varied = create_test_request("GET", "/api");
+        varied.query = Some("a=1".to_string());
+        varied
+            .headers
+            .insert("accept".to_string(), "json".to_string());
+        let mut in_query = create_test_request("GET", "/api");
+        in_query.query = Some("a=1|accept=json".to_string());
+        let in_path = create_test_request("GET", "/api?a=1|accept=json");
+        let keys = [
+            cache.build_cache_key(&varied),
+            cache.build_cache_key(&in_query),
+            cache.build_cache_key(&in_path),
+        ];
+        assert_ne!(keys[0], keys[1]);
+        assert_ne!(keys[0], keys[2]);
+        assert_ne!(keys[1], keys[2]);
     }
 
     #[test]

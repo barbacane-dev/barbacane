@@ -126,6 +126,11 @@ struct IntrospectionResponse {
     /// OPTIONAL. JWT ID.
     #[serde(default)]
     jti: Option<String>,
+
+    /// Every other member of the response (RFC 7662 section 2.2 lets the
+    /// server add its own), carried in `x-auth-claims`.
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// OAuth2 validation error.
@@ -507,6 +512,21 @@ mod tests {
         assert_eq!(no_audience_warnings(), before + 1);
     }
 
+    /// `x-auth-claims` carries the members the server adds beside the
+    /// standard ones.
+    #[test]
+    fn the_claims_header_keeps_every_member() {
+        let introspection: IntrospectionResponse = serde_json::from_str(
+            r#"{"active": true, "sub": "alice", "tenant": "acme", "roles": ["admin"]}"#,
+        )
+        .unwrap();
+        let claims: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&introspection).unwrap()).unwrap();
+        assert_eq!(claims["sub"], "alice");
+        assert_eq!(claims["tenant"], "acme");
+        assert_eq!(claims["roles"], serde_json::json!(["admin"]));
+    }
+
     #[test]
     fn audience_unset_accepts_any() {
         let config = create_test_config();
@@ -630,6 +650,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "read write");
@@ -652,6 +673,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "read write");
@@ -678,6 +700,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "read");
@@ -704,6 +727,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let result = config.check_scopes(&introspection, "");
@@ -945,6 +969,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         // Simulate on_request header logic: sub takes precedence over username
@@ -970,6 +995,7 @@ mod tests {
             aud: None,
             iss: None,
             jti: None,
+            extra: Default::default(),
         };
 
         let consumer = introspection

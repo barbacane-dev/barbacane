@@ -25,7 +25,7 @@ x-barbacane-middlewares:
 |----------|------|---------|-------------|
 | `header_name` | string | `X-Correlation-ID` | Header name for the correlation ID |
 | `generate_if_missing` | boolean | `true` | Generate new UUID v7 if not provided |
-| `trust_incoming` | boolean | `true` | Trust and propagate incoming correlation IDs |
+| `trust_incoming` | boolean | `true` | Trust and propagate incoming correlation IDs. When `false`, the client's header is removed, and replaced only when `generate_if_missing` is set |
 | `include_in_response` | boolean | `true` | Include correlation ID in response headers |
 
 ---

@@ -53,7 +53,7 @@ The `body` field supports `{{placeholder}}` interpolation with values from the i
 | `{{request.path}}` | Request path |
 | `{{request.query}}` | Query string (unresolved if absent) |
 | `{{request.client_ip}}` | Client IP address |
-| `{{headers.<name>}}` | Request header value (case-insensitive fallback) |
+| `{{headers.<name>}}` | Request header value (case-insensitive fallback). The operation must admit the header, with an `in: header` parameter or a security scheme naming it; another header is absent and the placeholder stays unresolved |
 | `{{path_params.<name>}}` | Path parameter value |
 
 Unresolved placeholders are left as-is in the response body.
@@ -293,7 +293,7 @@ The dispatcher returns RFC 9457 error responses:
 
 ### lambda
 
-Invokes AWS Lambda functions via Lambda Function URLs. Implemented as a WASM plugin.
+Invokes AWS Lambda functions via Lambda Function URLs. Implemented as a WASM plugin. The request's path and query follow the Function URL, so the function reads them as `rawPath` and `rawQueryString`.
 
 ```yaml
 x-barbacane-dispatch:
@@ -751,6 +751,7 @@ paths:
           bucket: my-spa
           access_key_id: env://AWS_ACCESS_KEY_ID
           secret_access_key: env://AWS_SECRET_ACCESS_KEY
+          key_param: path
           fallback_key: index.html
 ```
 
@@ -768,7 +769,7 @@ paths:
 - **Session tokens**: Support for STS, AssumeRole, and IRSA (IAM Roles for Service Accounts) via `session_token`
 - **Query parameters**: only those listed in `query_params` reach S3, signed with the gateway's credentials. By default none does, so a client cannot add `response-content-type` or `response-content-disposition` overrides, a `versionId`, or a subresource such as `acl` to a request the gateway signs
 - **Signing**: All requests are signed with AWS Signature Version 4. The signed headers are `host`, `x-amz-content-sha256`, `x-amz-date`, and `x-amz-security-token` (when a session token is present)
-- **Binary objects**: The current implementation returns the response body as a UTF-8 string. Binary objects (images, archives, etc.) are not suitable for this dispatcher — use pre-signed URLs for binary downloads
+- **Binary objects**: bodies travel as bytes, so images, archives and other binary objects are served as stored
 
 ### ws-upstream
 
