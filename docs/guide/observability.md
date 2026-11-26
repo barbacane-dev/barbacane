@@ -64,7 +64,7 @@ curl http://localhost:8081/metrics
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `barbacane_requests_total` | counter | Total requests by method, path, status, api |
+| `barbacane_requests_total` | counter | Total requests by method, path, status, api (the spec of the matched operation) |
 | `barbacane_request_duration_seconds` | histogram | Request latency; for a streamed response, until its last byte is sent |
 | `barbacane_request_size_bytes` | histogram | Request body size |
 | `barbacane_response_size_bytes` | histogram | Response body size; for a streamed response, the bytes sent |
@@ -72,8 +72,11 @@ curl http://localhost:8081/metrics
 | `barbacane_connections_total` | counter | Total connections accepted |
 | `barbacane_validation_failures_total` | counter | Validation errors by reason |
 | `barbacane_middleware_duration_seconds` | histogram | Middleware execution time |
-| `barbacane_dispatch_duration_seconds` | histogram | Dispatcher execution time |
-| `barbacane_wasm_execution_duration_seconds` | histogram | WASM plugin execution time |
+| `barbacane_dispatch_duration_seconds` | histogram | Dispatcher execution time, by dispatcher |
+| `barbacane_dispatch_errors_total` | counter | Dispatches that failed (trap, fuel, deadline), by dispatcher |
+| `barbacane_wasm_execution_duration_seconds` | histogram | Time of each plugin call, by plugin and function (`init`, `on_request`, `on_response`, `dispatch`) |
+| `barbacane_wasm_traps_total` | counter | Plugin calls that trapped, ran out of fuel or passed their deadline |
+| `barbacane_deprecated_route_requests_total` | counter | Requests to deprecated operations, by method, path, api |
 | `barbacane_wasm_instances` | gauge | Plugin instances alive now |
 | `barbacane_wasm_instances_unpooled_total` | counter | Plugin instances allocated per request because the [instance pool](../reference/cli.md#plugin-instance-pool) was full |
 | `barbacane_upstream_endpoint_requests_total` | counter | Attempts sent to an `endpoints` pool member, by endpoint and outcome (`success`, `failure`) |

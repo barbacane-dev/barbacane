@@ -104,7 +104,6 @@ pub struct MiddlewareLabels {
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct DispatchLabels {
     pub dispatcher: String,
-    pub upstream: String,
 }
 
 /// WASM execution labels.
@@ -637,16 +636,9 @@ impl MetricsRegistry {
     }
 
     /// Record dispatch execution.
-    pub fn record_dispatch(
-        &self,
-        dispatcher: &str,
-        upstream: &str,
-        duration_secs: f64,
-        error: bool,
-    ) {
+    pub fn record_dispatch(&self, dispatcher: &str, duration_secs: f64, error: bool) {
         let labels = DispatchLabels {
             dispatcher: dispatcher.to_string(),
-            upstream: upstream.to_string(),
         };
         self.dispatch_duration_seconds
             .get_or_create(&labels)
