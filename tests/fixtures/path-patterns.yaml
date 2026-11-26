@@ -40,3 +40,27 @@ paths:
       responses:
         "200":
           description: OK
+
+  # Parameter names with `-` and `.`
+  /members/{member-id}/items/{item.id}:
+    get:
+      operationId: getMemberItem
+      parameters:
+        - name: member-id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: item.id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"member":"{{path_params.member-id}}","item":"{{path_params.item.id}}"}'
+      responses:
+        "200":
+          description: OK
