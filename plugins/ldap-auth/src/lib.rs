@@ -12,13 +12,8 @@ use barbacane_plugin_sdk::ldap::{self, Connection, Entry, LdapError, SearchReque
 use barbacane_plugin_sdk::log;
 use barbacane_plugin_sdk::prelude::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::collections::HashMap;
-
-/// Upper bound on cached credentials, so a credential-stuffing run cannot grow
-/// plugin memory without limit.
-const MAX_CACHE_ENTRIES: usize = 10_000;
 
 /// Identity headers this plugin owns. Any client-supplied value is removed
 /// before the verified identity is written.
@@ -104,10 +99,6 @@ pub struct LdapAuth {
     /// Remove the Authorization header before forwarding to upstream.
     #[serde(default = "default_true")]
     strip_credentials: bool,
-
-    /// Credential cache keyed by username.
-    #[serde(skip)]
-    cache: HashMap<String, CacheEntry>,
 }
 
 fn default_user_filter() -> String {
@@ -147,19 +138,19 @@ fn default_realm() -> String {
 }
 
 /// A verified user.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Identity {
     consumer: String,
     dn: String,
     groups: Vec<String>,
 }
 
-/// A remembered verification outcome for one username. `None` is a rejected
-/// credential.
-struct CacheEntry {
+/// A remembered verification outcome for one username: the fingerprint of the
+/// password it was for, and the identity it proved (`None` when rejected).
+#[derive(Serialize, Deserialize)]
+struct CachedOutcome {
     password_hash: [u8; 32],
     outcome: Option<Identity>,
-    expires_at_ms: u64,
 }
 
 /// Authentication failure.
@@ -257,18 +248,17 @@ impl LdapAuth {
             return Err(AuthError::InvalidCredentials);
         }
 
-        let now = clock::now_ms();
         let password_hash = self.hash_password(&password);
 
-        let outcome = match self.cache_lookup(&username, &password_hash, now) {
+        let outcome = match self.cache_lookup(&username, &password_hash) {
             Some(cached) => cached,
             None => match self.verify(&username, &password) {
                 Ok(identity) => {
-                    self.cache_store(&username, password_hash, Some(identity.clone()), now);
+                    self.cache_store(&username, password_hash, Some(identity.clone()));
                     Some(identity)
                 }
                 Err(AuthError::InvalidCredentials) => {
-                    self.cache_store(&username, password_hash, None, now);
+                    self.cache_store(&username, password_hash, None);
                     None
                 }
                 Err(e) => return Err(e),
@@ -385,50 +375,29 @@ impl LdapAuth {
         conn
     }
 
-    fn cache_lookup(
-        &mut self,
-        username: &str,
-        password_hash: &[u8; 32],
-        now: u64,
-    ) -> Option<Option<Identity>> {
+    /// The outcome cached for `username` with this password, if any. The cache
+    /// is the host's, so it outlives the instance of one request.
+    fn cache_lookup(&self, username: &str, password_hash: &[u8; 32]) -> Option<Option<Identity>> {
         if self.cache_ttl_seconds == 0 {
             return None;
         }
-        let entry = self.cache.get(username)?;
-        if entry.expires_at_ms <= now {
-            self.cache.remove(username);
-            return None;
-        }
-        if !constant_time_eq(&entry.password_hash, password_hash) {
-            return None;
-        }
-        Some(entry.outcome.clone())
+        let cached = store::get(&self.cache_key(username))?;
+        let cached: CachedOutcome = serde_json::from_slice(&cached).ok()?;
+        constant_time_eq(&cached.password_hash, password_hash).then_some(cached.outcome)
     }
 
-    fn cache_store(
-        &mut self,
-        username: &str,
-        password_hash: [u8; 32],
-        outcome: Option<Identity>,
-        now: u64,
-    ) {
+    fn cache_store(&self, username: &str, password_hash: [u8; 32], outcome: Option<Identity>) {
         if self.cache_ttl_seconds == 0 {
             return;
         }
-        if self.cache.len() >= MAX_CACHE_ENTRIES && !self.cache.contains_key(username) {
-            self.cache.retain(|_, e| e.expires_at_ms > now);
-            if self.cache.len() >= MAX_CACHE_ENTRIES {
-                return;
-            }
+        let cached = CachedOutcome {
+            password_hash,
+            outcome,
+        };
+        if let Ok(value) = serde_json::to_vec(&cached) {
+            let ttl = u32::try_from(self.cache_ttl_seconds).unwrap_or(u32::MAX);
+            store::set(&self.cache_key(username), &value, ttl);
         }
-        self.cache.insert(
-            username.to_string(),
-            CacheEntry {
-                password_hash,
-                outcome,
-                expires_at_ms: now.saturating_add(self.cache_ttl_seconds.saturating_mul(1000)),
-            },
-        );
     }
 
     /// Build the error response: 401 with a Basic challenge, 403, or 503.
@@ -516,6 +485,171 @@ impl LdapAuth {
         let mut out = [0u8; 32];
         out.copy_from_slice(&mac.finalize().into_bytes());
         out
+    }
+
+    /// The cache key of `username`: an HMAC, keyed with the service bind
+    /// password, of every setting that decides the identity and of the
+    /// username. Two configurations never share an entry, and the store holds
+    /// no username in clear.
+    fn cache_key(&self, username: &str) -> String {
+        use hmac::{Hmac, Mac};
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.bind_password.as_bytes())
+            .expect("HMAC takes a key of any length");
+        let from_dn = if self.group_name_from_dn { "1" } else { "0" };
+        for part in [
+            self.url.as_str(),
+            &self.bind_dn,
+            &self.user_base_dn,
+            &self.user_filter,
+            &self.user_attr,
+            &self.group_attr,
+            &self.group_base_dn,
+            &self.group_filter,
+            &self.group_name_attr,
+            from_dn,
+            username,
+        ] {
+            mac.update(&(part.len() as u64).to_be_bytes());
+            mac.update(part.as_bytes());
+        }
+        let digest = mac.finalize().into_bytes();
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        format!("credential:{hex}")
+    }
+}
+
+/// The host's cache store (`cache` capability), where verification outcomes
+/// live between requests. Values travel as the body of a host cache entry.
+mod store {
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+
+    #[derive(Serialize, Deserialize)]
+    struct HostEntry {
+        status: u16,
+        headers: BTreeMap<String, String>,
+        #[serde(with = "barbacane_plugin_sdk::types::base64_body")]
+        body: Option<Vec<u8>>,
+    }
+
+    #[derive(Deserialize)]
+    struct HostResult {
+        hit: bool,
+        entry: Option<HostEntry>,
+    }
+
+    /// The value stored under `key`, unless it expired.
+    pub fn get(key: &str) -> Option<Vec<u8>> {
+        let result: HostResult = serde_json::from_slice(&host::get(key)?).ok()?;
+        if !result.hit {
+            return None;
+        }
+        result.entry?.body
+    }
+
+    /// Store `value` under `key` for `ttl_secs` seconds.
+    pub fn set(key: &str, value: &[u8], ttl_secs: u32) {
+        let entry = HostEntry {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: Some(value.to_vec()),
+        };
+        if let Ok(entry) = serde_json::to_vec(&entry) {
+            host::set(key, &entry, ttl_secs);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    mod host {
+        #[link(wasm_import_module = "barbacane")]
+        extern "C" {
+            fn host_cache_get(key_ptr: i32, key_len: i32) -> i32;
+            fn host_cache_read_result(buf_ptr: i32, buf_len: i32) -> i32;
+            fn host_cache_set(
+                key_ptr: i32,
+                key_len: i32,
+                entry_ptr: i32,
+                entry_len: i32,
+                ttl_secs: u32,
+            ) -> i32;
+        }
+
+        /// The host's lookup result for `key`, as JSON.
+        pub fn get(key: &str) -> Option<Vec<u8>> {
+            // SAFETY: the pointer and length describe `key`, alive for the call.
+            let len = unsafe { host_cache_get(key.as_ptr() as i32, key.len() as i32) };
+            if len <= 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; len as usize];
+            // SAFETY: `buf` is writable for its length.
+            let read = unsafe { host_cache_read_result(buf.as_mut_ptr() as i32, buf.len() as i32) };
+            if read <= 0 {
+                return None;
+            }
+            buf.truncate(read as usize);
+            Some(buf)
+        }
+
+        pub fn set(key: &str, entry: &[u8], ttl_secs: u32) {
+            // SAFETY: both pointers and lengths describe live slices.
+            unsafe {
+                host_cache_set(
+                    key.as_ptr() as i32,
+                    key.len() as i32,
+                    entry.as_ptr() as i32,
+                    entry.len() as i32,
+                    ttl_secs,
+                );
+            }
+        }
+    }
+
+    /// The host's store, in process, on the mock clock.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub mod host {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        thread_local! {
+            static STORE: RefCell<HashMap<String, (Vec<u8>, u64)>> = RefCell::new(HashMap::new());
+        }
+
+        pub fn get(key: &str) -> Option<Vec<u8>> {
+            let now = super::super::clock::now_ms();
+            let entry = STORE.with(|s| {
+                s.borrow()
+                    .get(key)
+                    .filter(|(_, expires)| *expires > now)
+                    .map(|(entry, _)| entry.clone())
+            });
+            let result = match entry {
+                Some(entry) => format!(
+                    r#"{{"hit":true,"entry":{}}}"#,
+                    String::from_utf8(entry).ok()?
+                ),
+                None => r#"{"hit":false}"#.to_string(),
+            };
+            Some(result.into_bytes())
+        }
+
+        pub fn set(key: &str, entry: &[u8], ttl_secs: u32) {
+            let expires = super::super::clock::now_ms() + u64::from(ttl_secs) * 1000;
+            STORE.with(|s| {
+                s.borrow_mut()
+                    .insert(key.to_string(), (entry.to_vec(), expires))
+            });
+        }
+
+        #[cfg(test)]
+        pub fn clear() {
+            STORE.with(|s| s.borrow_mut().clear());
+        }
+
+        #[cfg(test)]
+        pub fn len() -> usize {
+            STORE.with(|s| s.borrow().len())
+        }
     }
 }
 
@@ -727,17 +861,7 @@ mod directory {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-mod clock {
-    pub fn now_ms() -> u64 {
-        #[link(wasm_import_module = "barbacane")]
-        extern "C" {
-            fn host_clock_now() -> i64;
-        }
-        unsafe { host_clock_now().max(0) as u64 }
-    }
-}
-
+/// The mock clock the in-process store and the tests read.
 #[cfg(not(target_arch = "wasm32"))]
 mod clock {
     use std::cell::Cell;
@@ -813,6 +937,7 @@ mod tests {
         });
         clock::NOW_MS.with(|n| n.set(1_000_000));
         context::clear();
+        store::host::clear();
     }
 
     fn calls() -> (u32, u32) {
@@ -1182,7 +1307,27 @@ mod tests {
         expect_continue(p.on_request(request(Some(&basic("alice", "wonderland")))));
         expect_continue(p.on_request(request(Some(&basic("alice", "wonderland")))));
         assert_eq!(calls(), (2, 2));
-        assert!(p.cache.is_empty());
+        assert_eq!(store::host::len(), 0);
+    }
+
+    /// Each request runs in a fresh instance: the cache is the host's, so the
+    /// next instance with the same configuration finds the outcome.
+    #[test]
+    fn the_cache_outlives_the_instance() {
+        seed_directory();
+        expect_continue(plugin().on_request(request(Some(&basic("alice", "wonderland")))));
+        expect_continue(plugin().on_request(request(Some(&basic("alice", "wonderland")))));
+        assert_eq!(calls(), (1, 1));
+    }
+
+    /// Another directory configuration does not read this one's outcomes.
+    #[test]
+    fn configurations_do_not_share_cached_outcomes() {
+        seed_directory();
+        expect_continue(plugin().on_request(request(Some(&basic("alice", "wonderland")))));
+        let mut other = plugin();
+        other.user_filter = "(mail={username}@example.org)".into();
+        assert_ne!(other.cache_key("alice"), plugin().cache_key("alice"));
     }
 
     #[test]

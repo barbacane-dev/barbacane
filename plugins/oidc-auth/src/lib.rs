@@ -21,7 +21,7 @@ pub struct OidcAuth {
     issuer_url: String,
 
     /// Expected audience (aud claim). If set, tokens must match.
-    #[serde(default)]
+    #[serde(default = "no_audience", deserialize_with = "audience")]
     audience: Option<String>,
 
     /// Required scopes (space-separated). If set, token must have all.
@@ -162,23 +162,39 @@ struct JwksDocument {
     keys: Vec<Jwk>,
 }
 
-/// Warn (once) that no `audience` is configured, so tokens for any relying party
-/// at the issuer are accepted (confused-deputy risk on shared IdPs).
+/// The `audience` setting. Without one, tokens for any audience at the issuer are
+/// accepted (confused-deputy risk on shared IdPs), which `init` warns about.
+fn audience<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    let audience = Option::<String>::deserialize(deserializer)?;
+    if audience.is_none() {
+        warn_no_audience();
+    }
+    Ok(audience)
+}
+
+/// No `audience` setting: `init` warns.
+fn no_audience() -> Option<String> {
+    warn_no_audience();
+    None
+}
+
 #[cfg(target_arch = "wasm32")]
-fn warn_once_no_audience() {
-    use core::cell::Cell;
-    thread_local! { static WARNED: Cell<bool> = const { Cell::new(false) }; }
-    WARNED.with(|w| {
-        if !w.get() {
-            w.set(true);
-            let msg = "oidc-auth: no 'audience' configured; tokens for any audience at this issuer are accepted (confused-deputy risk). Set 'audience' for multi-RP IdPs.";
-            barbacane_plugin_sdk::log::warn(msg);
-        }
-    });
+fn warn_no_audience() {
+    barbacane_plugin_sdk::log::warn(
+        "oidc-auth: no 'audience' configured; tokens for any audience at this issuer are accepted (confused-deputy risk). Set 'audience' for multi-RP IdPs.",
+    );
+}
+
+/// Counts the warnings, for the tests.
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_no_audience() {
+    NO_AUDIENCE_WARNINGS.with(|count| count.set(count.get() + 1));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn warn_once_no_audience() {}
+thread_local! {
+    static NO_AUDIENCE_WARNINGS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 /// Whether a JWK may be used to verify a token with the given algorithm:
 /// the key type must match the algorithm family, the key's declared `alg` (if
@@ -730,15 +746,12 @@ impl OidcAuth {
         }
 
         // Validate audience. When unset, a token minted for any relying party at
-        // this issuer is accepted (confused-deputy risk on shared IdPs); warn
-        // once to surface the gap.
+        // this issuer is accepted; `init` warned about it.
         if let Some(expected_aud) = &self.audience {
             match &claims.aud {
                 Some(aud) if aud.contains(expected_aud) => {}
                 _ => return Err(OidcError::InvalidAudience),
             }
-        } else {
-            warn_once_no_audience();
         }
 
         Ok(())
@@ -1367,6 +1380,46 @@ mod tests {
     }
 
     // --- Claims validation tests ---
+
+    fn no_audience_warnings() -> u32 {
+        NO_AUDIENCE_WARNINGS.with(|count| count.get())
+    }
+
+    /// A configuration without `audience` is warned about when `init` reads
+    /// it, not on each request it validates.
+    #[test]
+    fn a_missing_audience_is_warned_about_once_per_configuration() {
+        mock_time::set_mock_timestamp(1000);
+        let before = no_audience_warnings();
+        let _: OidcAuth =
+            serde_json::from_str(r#"{"issuer_url": "https://auth.example.com"}"#).unwrap();
+        let _: OidcAuth = serde_json::from_str(
+            r#"{"issuer_url": "https://auth.example.com", "audience": "api"}"#,
+        )
+        .unwrap();
+        assert_eq!(no_audience_warnings(), before + 1);
+
+        let mut config = create_test_config();
+        config.discovery = Some(DiscoveryDoc {
+            issuer: "https://auth.example.com".to_string(),
+            jwks_uri: "https://auth.example.com/.well-known/jwks.json".to_string(),
+        });
+        let claims = JwtClaims {
+            sub: Some("user123".to_string()),
+            iss: Some("https://auth.example.com".to_string()),
+            aud: Some(Audience::Single("any".to_string())),
+            exp: Some(2000),
+            nbf: Some(500),
+            iat: Some(500),
+            jti: None,
+            scope: None,
+            extra: BTreeMap::new(),
+        };
+        for _ in 0..3 {
+            assert!(config.validate_claims(&claims).is_ok());
+        }
+        assert_eq!(no_audience_warnings(), before + 1);
+    }
 
     #[test]
     fn validate_claims_valid() {

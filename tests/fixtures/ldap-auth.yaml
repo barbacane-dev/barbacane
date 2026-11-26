@@ -85,6 +85,35 @@ paths:
         "403":
           description: Forbidden
 
+  /cached:
+    get:
+      summary: Protected endpoint whose verified credentials are cached for 60 s
+      operationId: getCached
+      x-barbacane-middlewares:
+        - name: ldap-auth
+          config:
+            url: "env://BARBACANE_TEST_LDAP_URL"
+            bind_dn: "cn=serviceuser,ou=svcaccts,dc=glauth,dc=com"
+            bind_password: "env://BARBACANE_TEST_LDAP_BIND_PASSWORD"
+            user_base_dn: "dc=glauth,dc=com"
+            user_filter: "(cn={username})"
+            user_attr: "cn"
+            realm: "test-api"
+            timeout: 3
+            cache_ttl_seconds: 60
+            allow_plaintext: true
+      x-barbacane-dispatch:
+        name: mock
+        config:
+          status: 200
+          body: '{"message": "Access granted"}'
+          content_type: application/json
+      responses:
+        "200":
+          description: Success
+        "401":
+          description: Unauthorized
+
   /public:
     get:
       summary: Public endpoint (overrides global middleware)

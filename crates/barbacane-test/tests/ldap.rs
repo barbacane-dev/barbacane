@@ -152,6 +152,77 @@ async fn test_ldap_auth_valid_credentials() {
     }
 }
 
+/// The credential cache outlives the instance of a request: once the
+/// directory verified a credential, the next request with it is answered
+/// without the directory. A relay in front of it is shut, connections and
+/// all, after the first request.
+#[tokio::test]
+async fn test_ldap_auth_verified_credentials_are_cached() {
+    use tokio::net::{TcpListener, TcpStream};
+
+    let url = directory_url();
+    if !barbacane_test::require(
+        directory_reachable(&url),
+        &format!("an LDAP directory at {url} (`BARBACANE_TEST_LDAP_URL`)"),
+    ) {
+        return;
+    }
+    let target = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(&url)
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+
+    let relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay_url = format!("ldap://{}", relay.local_addr().unwrap());
+    let (shut, shut_rx) = tokio::sync::watch::channel(false);
+    let relaying = tokio::spawn(async move {
+        let mut shut_rx = shut_rx;
+        loop {
+            tokio::select! {
+                _ = shut_rx.changed() => return,
+                accepted = relay.accept() => {
+                    let Ok((mut client, _)) = accepted else { return };
+                    let target = target.clone();
+                    let mut shut_rx = shut_rx.clone();
+                    tokio::spawn(async move {
+                        let Ok(mut directory) = TcpStream::connect(&target).await else { return };
+                        tokio::select! {
+                            _ = tokio::io::copy_bidirectional(&mut client, &mut directory) => {}
+                            _ = shut_rx.changed() => {}
+                        }
+                    });
+                }
+            }
+        }
+    });
+
+    let gateway = gateway(&relay_url).await;
+    let get_cached = || {
+        gateway
+            .request_builder(reqwest::Method::GET, "/cached")
+            .header("Authorization", basic("johndoe", "dogood"))
+            .send()
+    };
+
+    assert_eq!(get_cached().await.unwrap().status(), 200);
+    shut.send(true).unwrap();
+    relaying.await.unwrap();
+
+    // The directory is out of reach now: an uncached request would get 503.
+    assert_eq!(get_cached().await.unwrap().status(), 200);
+    let other = gateway
+        .request_builder(reqwest::Method::GET, "/cached")
+        .header("Authorization", basic("serviceuser", "mysecret"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(other.status(), 503);
+}
+
 #[tokio::test]
 async fn test_ldap_auth_wrong_password_is_401() {
     let Some(gateway) = live_gateway().await else {
